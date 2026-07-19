@@ -731,7 +731,7 @@ function ManifestEditorContent() {
 						variant="ghost"
 						size="icon"
 						className="rounded-full"
-						onClick={() => router.push("/store/packages?tab=projects")}
+						onClick={() => router.push("/developer")}
 					>
 						<ArrowLeft className="h-5 w-5" />
 					</Button>

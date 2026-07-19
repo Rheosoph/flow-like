@@ -291,9 +291,8 @@ impl NodeLogic for MqttSubscribeNode {
                             })
                             .map(|(_, p)| p.clone())
                             .collect();
-                        for pin in pins {
+                        if let Some(pin) = pins.first() {
                             pin.set_value(json!(payload_bytes)).await;
-                            break;
                         }
                     } else if only_payload {
                         let parsed =

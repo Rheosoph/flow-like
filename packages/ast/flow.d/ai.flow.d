@@ -845,6 +845,16 @@ declare function aiGenerativeBuildHyperbolic({ endpoint?: string, apiKey?: strin
 declare function aiGenerativeBuildLmstudio({ endpoint?: string, modelId?: string }): Struct;
 
 /**
+ * Prepares a Bit for MiniMax's OpenAI-compatible API using the provided credentials
+ * @param endpoint (optional) — MiniMax OpenAI-compatible base URL (override only for a proxy)
+ * @param apiKey (optional) — MiniMax API key used for authentication
+ * @param modelId (optional) — MiniMax model identifier to request
+ * @returns model — Bit containing the provider configuration
+ * @impure has side effects / drives control flow
+ */
+declare function aiGenerativeBuildMinimax({ endpoint?: string, apiKey?: string, modelId?: string }): Struct;
+
+/**
  * Builds the Mira model based on certain selection criteria
  * @param endpoint (optional) — Public Mira API endpoint or private gateway override
  * @param apiKey (optional) — Token used for authenticating against Mira
@@ -1682,8 +1692,8 @@ declare function imageClassification({ model: Struct, imageIn: Struct, mean?: fl
  * Load ONNX Model from Path
  * @param path — Path ONNX File
  * @returns model — ONNX Model Session
- * @returns accelerated — Whether GPU/NPU acceleration is active
- * @returns activeProvider — The execution provider(s) that are actually in use
+ * @returns accelerated — Whether a GPU/NPU execution provider was configured; individual sessions may still fall back to CPU
+ * @returns activeProvider — Execution providers configured in priority order, including CPU fallback
  * @impure has side effects / drives control flow
  */
 declare function loadOnnx({ path: Struct }): { model: Struct, accelerated: bool, activeProvider: string };
@@ -1847,6 +1857,42 @@ declare function compareFaces({ embeddingA: Struct, embeddingB: Struct, threshol
  * @impure has side effects / drives control flow
  */
 declare function cropFaces({ image: Struct, faces: any, margin?: float }): any;
+
+/**
+ * Detect faces and extract embeddings, gender and age using a face_id analyzer
+ * @param analyzer — Face analyzer handle
+ * @param image — Input Image
+ * @param maxFaces (optional) — Maximum number of faces to embed and analyze
+ * @returns faces — Analyzed faces
+ * @returns count — Number of detected faces
+ * @impure has side effects / drives control flow
+ */
+declare function faceIdAnalyze({ analyzer: Struct, image: Struct, maxFaces?: int }): { faces: Struct[], count: int };
+
+/**
+ * Load a face_id analyzer (SCRFD detector + ArcFace embedder + gender/age). Weights are verified and cached when a session identity is first built; equivalent analyzers reuse process-wide sessions.
+ * @param cacheDir — FlowPath used when this analyzer identity needs to build its ONNX sessions. If it is already resident, an alternate cache directory is not populated.
+ * @param detectorUrl (optional) — Immutable SCRFD detector weights URL
+ * @param detectorSha256 (optional) — Required SHA-256 checksum for the detector weights
+ * @param embedderUrl (optional) — Immutable ArcFace recognition weights URL
+ * @param embedderSha256 (optional) — Required SHA-256 checksum for the recognition weights
+ * @param genderAgeUrl (optional) — Immutable gender & age estimation weights URL
+ * @param genderAgeSha256 (optional) — Required SHA-256 checksum for the gender & age weights
+ * @param inputSize (optional) — Square detector input size
+ * @param scoreThreshold (optional) — Detector confidence threshold
+ * @param iouThreshold (optional) — Detector non-maximum-suppression IoU threshold
+ * @returns analyzer — Cached face analyzer handle
+ * @impure has side effects / drives control flow
+ */
+declare function faceIdLoadAnalyzer({ cacheDir: Struct, detectorUrl?: string, detectorSha256?: string, embedderUrl?: string, embedderSha256?: string, genderAgeUrl?: string, genderAgeSha256?: string, inputSize?: int, scoreThreshold?: float, iouThreshold?: float }): Struct;
+
+/**
+ * Release a cached face analyzer and its three ONNX sessions. Equivalent analyzer handles share the same cache entry and are invalidated together.
+ * @param analyzer — Face analyzer handle to unload
+ * @returns success — Whether a face analyzer cache entry was removed
+ * @impure has side effects / drives control flow
+ */
+declare function faceIdUnloadAnalyzer({ analyzer: Struct }): bool;
 
 /**
  * Detect faces in images. Download models from: UltraFace (https://github.com/onnx/models/tree/main/validated/vision/body_analysis/ultraface), RetinaFace (https://huggingface.co/arnabdhar/retinaface-onnx), SCRFD (https://huggingface.co/onnx-community/scrfd_10g_bnkps)

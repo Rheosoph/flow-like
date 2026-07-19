@@ -30,7 +30,7 @@ use crate::{
         },
         copilot::{BoardCommand, NodeMetadata, NodePosition, PlaceholderPinDef, node_to_metadata},
         node::{FnRefs, Node, NodeLogic},
-        pin::{Pin, PinType, ValueType},
+        pin::{Pin, PinOptions, PinType, ValueType},
         variable::{Variable, VariableType},
     },
     state::FlowLikeState,
@@ -84,6 +84,10 @@ pub fn blocked_destructive_flowscript_message(summaries: &[String]) -> String {
         "FlowScript edit would delete {} existing board item(s): {preview}{more}. Deletions are blocked by default so incomplete model edits cannot remove existing work. Re-submit the full current FlowScript with every kept `//@n:<id>` anchor preserved, or set `allow_deletions` only for an explicit delete request.",
         summaries.len()
     )
+}
+
+fn reconcile_is_safe_to_apply(commands: &[BoardCommand], diagnostics: &[String]) -> bool {
+    !commands.is_empty() && diagnostics.is_empty()
 }
 
 pub async fn apply_flowscript_to_board(
@@ -174,12 +178,11 @@ pub async fn apply_flowscript_to_board(
         None => super::reconcile_text_with_catalog(board, flowscript, &catalog_metadata),
     };
 
-    // Block only when nothing is derivable (parse errors / fully-unresolvable input yield no
-    // commands). Non-fatal diagnostics — a skipped argument, a dangling execution warning — must not
-    // discard the whole apply; the derivable commands are applied and the diagnostics are surfaced as
-    // warnings in the result so partial progress is not lost. (Matches dev's behavior; HEAD's original
-    // gate here treated any diagnostic as fatal, which blocked the whole edit on one skipped arg.)
-    if reconcile.commands.is_empty() {
+    // FlowScript is a program, not a bag of best-effort mutations. Every reconcile diagnostic means
+    // some requested call, pin, connection, execution edge or boundary could not be represented.
+    // Applying the remaining setup commands is how empty function layers and disconnected nodes were
+    // created, so the server apply boundary is atomic even if a caller bypasses the agent tool gate.
+    if !reconcile_is_safe_to_apply(&reconcile.commands, &reconcile.diagnostics) {
         return Ok(ApplyFlowScriptResult {
             commands: Vec::new(),
             board_commands: reconcile.commands,
@@ -200,8 +203,32 @@ pub async fn apply_flowscript_to_board(
         }
     }
 
+    apply_board_commands_to_board(
+        board,
+        reconcile.commands,
+        catalog_nodes,
+        state,
+        current_layer,
+    )
+    .await
+}
+
+/// Apply an exact, already-validated [`BoardCommand`] batch without reconciling FlowScript again.
+///
+/// This is the execution half of the typed-IR commit boundary. Callers must obtain the batch from
+/// the retained pending claim while holding the live board lock; arbitrary client commands must
+/// continue through reconciliation and deletion approval in [`apply_flowscript_to_board`]. The
+/// planner still performs its normal two-phase execution, rollback, and Function-layer
+/// postcondition validation.
+pub async fn apply_board_commands_to_board(
+    board: &mut Board,
+    board_commands: Vec<BoardCommand>,
+    catalog_nodes: &[Node],
+    state: Arc<FlowLikeState>,
+    current_layer: Option<String>,
+) -> flow_like_types::Result<ApplyFlowScriptResult> {
     let mut planner = FlowScriptApplyPlanner::new(board, catalog_nodes, current_layer);
-    let setup_commands = planner.build_setup_commands(board, &reconcile.commands)?;
+    let setup_commands = planner.build_setup_commands(board, &board_commands)?;
     let mut applied_commands = Vec::new();
 
     if !setup_commands.is_empty() {
@@ -211,13 +238,13 @@ pub async fn apply_flowscript_to_board(
         }
     }
 
-    let remaining_commands = match planner.build_remaining_commands(board, &reconcile.commands) {
+    let remaining_commands = match planner.build_remaining_commands(board, &board_commands) {
         Ok(commands) => commands,
         Err(error) => {
             rollback_applied(board, &applied_commands, state.clone(), error).await?;
             return Ok(ApplyFlowScriptResult {
                 commands: Vec::new(),
-                board_commands: reconcile.commands,
+                board_commands,
                 diagnostics: vec!["FlowScript apply failed and was rolled back".to_string()],
             });
         }
@@ -235,10 +262,14 @@ pub async fn apply_flowscript_to_board(
         }
     }
 
+    if let Err(error) = planner.validate_new_function_layers(board, &board_commands) {
+        rollback_applied(board, &applied_commands, state.clone(), error).await?;
+    }
+
     Ok(ApplyFlowScriptResult {
         commands: applied_commands,
-        board_commands: reconcile.commands,
-        diagnostics: reconcile.diagnostics,
+        board_commands,
+        diagnostics: Vec::new(),
     })
 }
 
@@ -310,7 +341,9 @@ impl FlowScriptApplyPlanner {
         }
 
         for node in board.nodes.values() {
-            planner.register_node_aliases(&[Some(node.id.as_str())], &node.id);
+            let friendly_name =
+                (!node.friendly_name.trim().is_empty()).then_some(node.friendly_name.as_str());
+            planner.register_node_aliases(&[Some(node.id.as_str()), friendly_name], &node.id);
         }
         for layer in board.layers.values() {
             planner.register_node_aliases(
@@ -331,6 +364,28 @@ impl FlowScriptApplyPlanner {
         commands: &[BoardCommand],
     ) -> flow_like_types::Result<Vec<GenericCommand>> {
         let mut generic_commands = Vec::new();
+        // Reconciliation assigns stable explicit refs before it reorders setup commands (for
+        // example, moving the Event entry to the end). Reserve every explicit ref up front so an
+        // order-derived positional alias can never shadow it, even when that explicit command is
+        // encountered later in this loop.
+        let explicit_refs = commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::AddNode {
+                    ref_id: Some(ref_id),
+                    ..
+                }
+                | BoardCommand::AddPlaceholder {
+                    ref_id: Some(ref_id),
+                    ..
+                }
+                | BoardCommand::CreateLayer {
+                    ref_id: Some(ref_id),
+                    ..
+                } => Some(ref_id.as_str()),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
 
         for command in commands {
             match command {
@@ -339,6 +394,7 @@ impl FlowScriptApplyPlanner {
                     ref_id,
                     position,
                     friendly_name,
+                    additional_pins,
                     target_layer,
                     ..
                 } => {
@@ -349,6 +405,7 @@ impl FlowScriptApplyPlanner {
                     };
 
                     let mut add_command = AddNodeCommand::new(catalog_node.clone());
+                    append_additional_node_pins(&mut add_command.node, additional_pins.as_deref())?;
                     let coordinates = self.position_or_next(position.as_ref());
                     add_command.node.coordinates = Some(coordinates);
                     if let Some(friendly_name) = friendly_name {
@@ -356,16 +413,25 @@ impl FlowScriptApplyPlanner {
                     }
                     add_command.current_layer =
                         self.target_layer_or_current(board, target_layer.as_deref())?;
+                    // Setup-phase pin updates resolve this staged clone before AddNode executes.
+                    // Mirror AddNodeCommand::execute's layer assignment now; otherwise the first
+                    // UpdateNode built from `staged_nodes` replaces the live node with layer=None
+                    // and silently ejects every configured function-body node back to root.
+                    add_command.node.layer = add_command.current_layer.clone();
 
                     let node_id = add_command.node.id.clone();
                     self.staged_nodes
                         .insert(node_id.clone(), add_command.node.clone());
                     let index_alias = format!("${}", self.next_node_index);
                     self.next_node_index += 1;
+                    let positional_alias = (ref_id.is_none()
+                        && !explicit_refs.contains(index_alias.as_str()))
+                    .then_some(index_alias.as_str());
                     self.register_node_aliases(
                         &[
                             ref_id.as_deref(),
-                            Some(index_alias.as_str()),
+                            positional_alias,
+                            friendly_name.as_deref(),
                             Some(node_type.as_str()),
                             Some(node_id.as_str()),
                         ],
@@ -394,10 +460,13 @@ impl FlowScriptApplyPlanner {
 
                     let index_alias = format!("${}", self.next_node_index);
                     self.next_node_index += 1;
+                    let positional_alias = (ref_id.is_none()
+                        && !explicit_refs.contains(index_alias.as_str()))
+                    .then_some(index_alias.as_str());
                     self.register_node_aliases(
                         &[
                             ref_id.as_deref(),
-                            Some(index_alias.as_str()),
+                            positional_alias,
                             Some(name.as_str()),
                             Some(layer_id.as_str()),
                         ],
@@ -434,10 +503,13 @@ impl FlowScriptApplyPlanner {
                     self.staged_layers.insert(layer_id.clone(), layer);
                     let index_alias = format!("${}", self.next_node_index);
                     self.next_node_index += 1;
+                    let positional_alias = (ref_id.is_none()
+                        && !explicit_refs.contains(index_alias.as_str()))
+                    .then_some(index_alias.as_str());
                     self.register_node_aliases(
                         &[
                             ref_id.as_deref(),
-                            Some(index_alias.as_str()),
+                            positional_alias,
                             Some(name.as_str()),
                             Some(layer_id.as_str()),
                         ],
@@ -484,153 +556,6 @@ impl FlowScriptApplyPlanner {
                     command.layer_id =
                         self.resolve_optional_layer(board, target_layer.as_deref())?;
                     generic_commands.push(GenericCommand::UpsertVariable(command));
-                }
-                BoardCommand::UpdateNodePin {
-                    node_id,
-                    pin_id,
-                    value,
-                    ..
-                } => {
-                    let node_id = self.resolve_node_id(board, node_id)?;
-                    let mut node = self.resolve_node(board, &node_id)?.clone();
-                    // The pin may not exist yet: a node's `on_update` mints dynamic pins (e.g. a
-                    // `string_format` placeholder) only after the config pin is applied and the
-                    // batch runs. Defer such writes to the remaining phase instead of failing.
-                    let Ok(pin_id) = resolve_pin_id_in_node(&node, pin_id, Some(PinType::Input))
-                    else {
-                        self.deferred_pin_updates
-                            .push((node_id, pin_id.clone(), value.clone()));
-                        continue;
-                    };
-                    let Some(pin) = node.pins.get_mut(&pin_id) else {
-                        return Err(flow_like_types::anyhow!(
-                            "Pin `{pin_id}` not found on node `{node_id}`"
-                        ));
-                    };
-                    pin.default_value = Some(flow_like_types::json::to_vec(value)?);
-                    self.staged_nodes.insert(node_id.clone(), node.clone());
-                    generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
-                }
-                _ => {}
-            }
-        }
-
-        Ok(generic_commands)
-    }
-
-    /// Apply pin writes deferred from setup, now that `on_update` has minted their target pins.
-    /// Multiple pins on one node are folded into a single `UpdateNode` (each command is a whole-node
-    /// replace, so per-pin commands would overwrite each other). Node order is first-seen.
-    fn build_deferred_pin_updates(
-        &mut self,
-        board: &Board,
-    ) -> flow_like_types::Result<Vec<GenericCommand>> {
-        let deferred = std::mem::take(&mut self.deferred_pin_updates);
-        let mut order: Vec<String> = Vec::new();
-        let mut nodes: HashMap<String, Node> = HashMap::new();
-
-        for (node_id, pin_ref, value) in deferred {
-            let node = match nodes.entry(node_id.clone()) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    order.push(node_id.clone());
-                    entry.insert(self.resolve_node(board, &node_id)?.clone())
-                }
-            };
-            let pin_id = resolve_pin_id_in_node(node, &pin_ref, Some(PinType::Input))?;
-            let Some(pin) = node.pins.get_mut(&pin_id) else {
-                return Err(flow_like_types::anyhow!(
-                    "Pin `{pin_ref}` not found on node `{node_id}` after node update"
-                ));
-            };
-            pin.default_value = Some(flow_like_types::json::to_vec(&value)?);
-        }
-
-        Ok(order
-            .into_iter()
-            .filter_map(|node_id| nodes.remove(&node_id))
-            .map(|node| GenericCommand::UpdateNode(UpdateNodeCommand::new(node)))
-            .collect())
-    }
-
-    fn build_remaining_commands(
-        &mut self,
-        board: &Board,
-        commands: &[BoardCommand],
-    ) -> flow_like_types::Result<Vec<GenericCommand>> {
-        self.staged_nodes.clear();
-        // Writes deferred from setup target pins that `on_update` has since minted. Apply them
-        // first, before ConnectPins: an `UpdateNode` replaces the whole node, so running it after a
-        // connect in this batch would clobber that freshly-made edge.
-        let mut generic_commands = self.build_deferred_pin_updates(board)?;
-
-        for command in commands {
-            match command {
-                BoardCommand::AddNode { .. }
-                | BoardCommand::AddPlaceholder { .. }
-                | BoardCommand::CreateVariable { .. }
-                | BoardCommand::UpdateNodePin { .. } => {}
-                BoardCommand::RemoveNode { node_id, .. } => {
-                    let node_id = self.resolve_node_id(board, node_id)?;
-                    let node = self.resolve_node(board, &node_id)?.clone();
-                    generic_commands.push(GenericCommand::RemoveNode(RemoveNodeCommand::new(node)));
-                }
-                BoardCommand::ConnectPins {
-                    from_node,
-                    from_pin,
-                    to_node,
-                    to_pin,
-                    ..
-                } => {
-                    let from_node_id = self.resolve_node_id(board, from_node)?;
-                    let to_node_id = self.resolve_node_id(board, to_node)?;
-                    let from_pin_id =
-                        self.resolve_pin_id(board, &from_node_id, from_pin, Some(PinType::Output))?;
-                    let to_pin_id =
-                        self.resolve_pin_id(board, &to_node_id, to_pin, Some(PinType::Input))?;
-                    generic_commands.push(GenericCommand::ConnectPin(ConnectPinsCommand::new(
-                        from_node_id,
-                        to_node_id,
-                        from_pin_id,
-                        to_pin_id,
-                    )));
-                }
-                BoardCommand::DisconnectPins {
-                    from_node,
-                    from_pin,
-                    to_node,
-                    to_pin,
-                    ..
-                } => {
-                    let from_node_id = self.resolve_node_id(board, from_node)?;
-                    let to_node_id = self.resolve_node_id(board, to_node)?;
-                    let from_pin_id =
-                        self.resolve_pin_id(board, &from_node_id, from_pin, Some(PinType::Output))?;
-                    let to_pin_id =
-                        self.resolve_pin_id(board, &to_node_id, to_pin, Some(PinType::Input))?;
-                    generic_commands.push(GenericCommand::DisconnectPin(
-                        DisconnectPinsCommand::new(
-                            from_node_id,
-                            to_node_id,
-                            from_pin_id,
-                            to_pin_id,
-                        ),
-                    ));
-                }
-                BoardCommand::MoveNode {
-                    node_id,
-                    position,
-                    target_layer,
-                    ..
-                } => {
-                    let node_id = self.resolve_node_id(board, node_id)?;
-                    let current_layer =
-                        self.target_layer_or_current(board, target_layer.as_deref())?;
-                    generic_commands.push(GenericCommand::MoveNode(MoveNodeCommand::new(
-                        node_id,
-                        (position.x as f32, position.y as f32, 0.0),
-                        current_layer,
-                    )));
                 }
                 BoardCommand::UpdateVariable {
                     variable_id,
@@ -703,6 +628,187 @@ impl FlowScriptApplyPlanner {
                     generic_commands.push(GenericCommand::UpsertVariable(
                         UpsertVariableCommand::new(variable),
                     ));
+                }
+                BoardCommand::UpdateNodePin {
+                    node_id,
+                    pin_id,
+                    value,
+                    ..
+                } => {
+                    let node_id = self.resolve_node_id(board, node_id)?;
+                    let mut node = self.resolve_node(board, &node_id)?.clone();
+                    // The pin may not exist yet: a node's `on_update` mints dynamic pins (e.g. a
+                    // `string_format` placeholder) only after the config pin is applied and the
+                    // batch runs. Defer such writes to the remaining phase instead of failing.
+                    let Ok(pin_id) = resolve_pin_id_in_node(&node, pin_id, Some(PinType::Input))
+                    else {
+                        self.deferred_pin_updates
+                            .push((node_id, pin_id.clone(), value.clone()));
+                        continue;
+                    };
+                    let value =
+                        self.resolve_layer_reference_pin_value(board, &node, &pin_id, value);
+                    let Some(pin) = node.pins.get_mut(&pin_id) else {
+                        return Err(flow_like_types::anyhow!(
+                            "Pin `{pin_id}` not found on node `{node_id}`"
+                        ));
+                    };
+                    pin.default_value = Some(flow_like_types::json::to_vec(&value)?);
+                    self.staged_nodes.insert(node_id.clone(), node.clone());
+                    generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
+                }
+                BoardCommand::RenameNode {
+                    node_id,
+                    friendly_name,
+                    ..
+                } => {
+                    let node_id = self.resolve_node_id(board, node_id)?;
+                    let mut node = self.resolve_node(board, &node_id)?.clone();
+                    node.friendly_name = friendly_name.clone();
+                    self.staged_nodes.insert(node_id.clone(), node.clone());
+                    generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(generic_commands)
+    }
+
+    /// Apply pin writes deferred from setup, now that `on_update` has minted their target pins.
+    /// Multiple pins on one node are folded into a single `UpdateNode` (each command is a whole-node
+    /// replace, so per-pin commands would overwrite each other). Node order is first-seen.
+    fn build_deferred_pin_updates(
+        &mut self,
+        board: &Board,
+    ) -> flow_like_types::Result<Vec<GenericCommand>> {
+        let deferred = std::mem::take(&mut self.deferred_pin_updates);
+        let mut order: Vec<String> = Vec::new();
+        let mut nodes: HashMap<String, Node> = HashMap::new();
+
+        for (node_id, pin_ref, value) in deferred {
+            let node = match nodes.entry(node_id.clone()) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    order.push(node_id.clone());
+                    entry.insert(self.resolve_node(board, &node_id)?.clone())
+                }
+            };
+            let pin_id = resolve_pin_id_in_node(node, &pin_ref, Some(PinType::Input))?;
+            let value = {
+                let node_ref = &*node;
+                self.resolve_layer_reference_pin_value(board, node_ref, &pin_id, &value)
+            };
+            let Some(pin) = node.pins.get_mut(&pin_id) else {
+                return Err(flow_like_types::anyhow!(
+                    "Pin `{pin_ref}` not found on node `{node_id}` after node update"
+                ));
+            };
+            pin.default_value = Some(flow_like_types::json::to_vec(&value)?);
+        }
+
+        Ok(order
+            .into_iter()
+            .filter_map(|node_id| nodes.remove(&node_id))
+            .map(|node| GenericCommand::UpdateNode(UpdateNodeCommand::new(node)))
+            .collect())
+    }
+
+    fn build_remaining_commands(
+        &mut self,
+        board: &Board,
+        commands: &[BoardCommand],
+    ) -> flow_like_types::Result<Vec<GenericCommand>> {
+        self.staged_nodes.clear();
+        // Compose every whole-node mutation per node before creating UpdateNode commands. Both a
+        // deferred dynamic-pin write and SetNodeFunctionRefs replace the entire persisted node; if
+        // they are built independently from `board`, the later replacement silently erases the
+        // earlier one. Emit the composed replacements before moves/removals and connections so a
+        // MoveNode remains authoritative and no freshly-created pin edge can be clobbered.
+        let mut node_update_order = Vec::new();
+        let mut node_updates = HashMap::<String, Node>::new();
+        for command in self.build_deferred_pin_updates(board)? {
+            let GenericCommand::UpdateNode(command) = command else {
+                unreachable!("deferred pin updates only produce UpdateNode commands");
+            };
+            node_update_order.push(command.node.id.clone());
+            node_updates.insert(command.node.id.clone(), command.node);
+        }
+        let mut fn_refs_initialized = HashSet::new();
+        let mut generic_commands = Vec::new();
+        // Every Connect/Disconnect must execute after all whole-node UpdateNode commands and all
+        // moves/removals. Connections are the final persisted graph mutations in this batch.
+        let mut connection_commands = Vec::new();
+
+        for command in commands {
+            match command {
+                BoardCommand::AddNode { .. }
+                | BoardCommand::AddPlaceholder { .. }
+                | BoardCommand::CreateVariable { .. }
+                | BoardCommand::UpdateVariable { .. }
+                | BoardCommand::UpdateNodePin { .. }
+                | BoardCommand::RenameNode { .. } => {}
+                BoardCommand::RemoveNode { node_id, .. } => {
+                    let node_id = self.resolve_node_id(board, node_id)?;
+                    let node = self.resolve_node(board, &node_id)?.clone();
+                    generic_commands.push(GenericCommand::RemoveNode(RemoveNodeCommand::new(node)));
+                }
+                BoardCommand::ConnectPins {
+                    from_node,
+                    from_pin,
+                    to_node,
+                    to_pin,
+                    ..
+                } => {
+                    let from_node_id = self.resolve_node_id(board, from_node)?;
+                    let to_node_id = self.resolve_node_id(board, to_node)?;
+                    let from_pin_id =
+                        self.resolve_pin_id(board, &from_node_id, from_pin, Some(PinType::Output))?;
+                    let to_pin_id =
+                        self.resolve_pin_id(board, &to_node_id, to_pin, Some(PinType::Input))?;
+                    connection_commands.push(GenericCommand::ConnectPin(ConnectPinsCommand::new(
+                        from_node_id,
+                        to_node_id,
+                        from_pin_id,
+                        to_pin_id,
+                    )));
+                }
+                BoardCommand::DisconnectPins {
+                    from_node,
+                    from_pin,
+                    to_node,
+                    to_pin,
+                    ..
+                } => {
+                    let from_node_id = self.resolve_node_id(board, from_node)?;
+                    let to_node_id = self.resolve_node_id(board, to_node)?;
+                    let from_pin_id =
+                        self.resolve_pin_id(board, &from_node_id, from_pin, Some(PinType::Output))?;
+                    let to_pin_id =
+                        self.resolve_pin_id(board, &to_node_id, to_pin, Some(PinType::Input))?;
+                    connection_commands.push(GenericCommand::DisconnectPin(
+                        DisconnectPinsCommand::new(
+                            from_node_id,
+                            to_node_id,
+                            from_pin_id,
+                            to_pin_id,
+                        ),
+                    ));
+                }
+                BoardCommand::MoveNode {
+                    node_id,
+                    position,
+                    target_layer,
+                    ..
+                } => {
+                    let node_id = self.resolve_node_id(board, node_id)?;
+                    let current_layer =
+                        self.target_layer_or_current(board, target_layer.as_deref())?;
+                    generic_commands.push(GenericCommand::MoveNode(MoveNodeCommand::new(
+                        node_id,
+                        (position.x as f32, position.y as f32, 0.0),
+                        current_layer,
+                    )));
                 }
                 BoardCommand::RemoveVariable { variable_id, .. } => {
                     let Some(variable) = board.variables.get(variable_id) else {
@@ -793,19 +899,30 @@ impl FlowScriptApplyPlanner {
                     node_id, fn_refs, ..
                 } => {
                     let node_id = self.resolve_node_id(board, node_id)?;
-                    let mut node = self.resolve_node(board, &node_id)?.clone();
                     let mut resolved: Vec<String> = Vec::new();
                     for reference in fn_refs {
-                        // Unresolvable references (e.g. a tool the model named but never defined)
-                        // are skipped rather than failing the whole apply.
-                        let Ok(target_id) = self.resolve_node_id(board, reference) else {
-                            continue;
-                        };
+                        // A requested tool is part of the executable contract. Silently dropping
+                        // an unresolved name leaves a visually plausible agent with fewer tools
+                        // than authored, so fail the atomic FlowScript apply instead.
+                        let target_id = self.resolve_node_id(board, reference).map_err(|error| {
+                            flow_like_types::anyhow!(
+                                "Could not resolve requested function reference `{reference}`: {error}"
+                            )
+                        })?;
                         // Functions are authored as layers; reference the layer's referenceable
                         // entry node so runtime function-reference resolution finds a concrete node.
-                        let entry_id = self
-                            .referenceable_entry_in_layer(board, &target_id)
-                            .unwrap_or(target_id);
+                        let entry_id = if board.layers.contains_key(&target_id)
+                            || self.staged_layers.contains_key(&target_id)
+                        {
+                            self.referenceable_entry_in_layer(board, &target_id)?
+                                .ok_or_else(|| {
+                                    flow_like_types::anyhow!(
+                                        "Function layer `{reference}` has no referenceable event/handler entry"
+                                    )
+                                })?
+                        } else {
+                            target_id
+                        };
                         if !resolved.contains(&entry_id) {
                             resolved.push(entry_id);
                         }
@@ -813,42 +930,127 @@ impl FlowScriptApplyPlanner {
                     if resolved.is_empty() {
                         continue;
                     }
+                    let node = match node_updates.entry(node_id.clone()) {
+                        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            node_update_order.push(node_id.clone());
+                            entry.insert(self.resolve_node(board, &node_id)?.clone())
+                        }
+                    };
                     let can_be_referenced_by_fns = node
                         .fn_refs
                         .as_ref()
                         .map(|refs| refs.can_be_referenced_by_fns)
                         .unwrap_or(false);
-                    node.fn_refs = Some(FnRefs {
-                        fn_refs: resolved,
+                    if fn_refs_initialized.insert(node_id) {
+                        // The first SetNodeFunctionRefs retains the existing replacement semantics;
+                        // subsequent commands for the same node add their independently-authored
+                        // targets instead of replacing the previous command's targets.
+                        node.fn_refs = Some(FnRefs {
+                            fn_refs: resolved,
+                            can_reference_fns: true,
+                            can_be_referenced_by_fns,
+                        });
+                        continue;
+                    }
+                    let existing_refs = node.fn_refs.get_or_insert_with(|| FnRefs {
+                        fn_refs: Vec::new(),
                         can_reference_fns: true,
                         can_be_referenced_by_fns,
                     });
-                    generic_commands.push(GenericCommand::UpdateNode(UpdateNodeCommand::new(node)));
+                    for entry_id in resolved {
+                        if !existing_refs.fn_refs.contains(&entry_id) {
+                            existing_refs.fn_refs.push(entry_id);
+                        }
+                    }
+                    existing_refs.can_reference_fns = true;
+                    existing_refs.can_be_referenced_by_fns = can_be_referenced_by_fns;
                 }
             }
         }
 
+        let mut composed_commands = node_update_order
+            .into_iter()
+            .filter_map(|node_id| node_updates.remove(&node_id))
+            .map(|node| GenericCommand::UpdateNode(UpdateNodeCommand::new(node)))
+            .collect::<Vec<_>>();
+        composed_commands.append(&mut generic_commands);
+        let mut generic_commands = composed_commands;
+        generic_commands.extend(connection_commands);
+
         Ok(generic_commands)
+    }
+
+    /// `function_layer_id` pins (on `control_call_function` nodes) authored from FlowScript carry
+    /// a `$n` ref or function name for layers created in the same batch; resolve it to the real
+    /// layer id. Other pins pass through untouched.
+    fn resolve_layer_reference_pin_value(
+        &self,
+        board: &Board,
+        node: &Node,
+        pin_id: &str,
+        value: &flow_like_types::Value,
+    ) -> flow_like_types::Value {
+        let is_layer_ref_pin = node
+            .pins
+            .get(pin_id)
+            .map(|pin| pin.name == "function_layer_id")
+            .unwrap_or(pin_id == "function_layer_id");
+        if is_layer_ref_pin
+            && let Some(reference) = value.as_str()
+            && let Ok(resolved) = self.resolve_node_id(board, reference)
+        {
+            return flow_like_types::Value::String(resolved);
+        }
+        value.clone()
     }
 
     /// If `id` refers to a layer (e.g. an authored FlowScript function), return the id of its
     /// referenceable entry node — an event-type node flagged `can_be_referenced_by_fns`. Returns
-    /// `None` when `id` is not a layer or the layer has no referenceable entry.
-    fn referenceable_entry_in_layer(&self, board: &Board, id: &str) -> Option<String> {
-        let layer = board
-            .layers
-            .get(id)
-            .or_else(|| self.staged_layers.get(id))?;
-        layer
+    /// `None` when `id` is not a layer or the layer has no referenceable entry. FlowScript uses
+    /// the canonical flat board representation (`board.nodes[*].layer`); `layer.nodes` is retained
+    /// only for legacy boards, so inspect and de-duplicate both stores.
+    fn referenceable_entry_in_layer(
+        &self,
+        board: &Board,
+        id: &str,
+    ) -> flow_like_types::Result<Option<String>> {
+        let layer = board.layers.get(id).or_else(|| self.staged_layers.get(id));
+        let Some(layer) = layer else {
+            return Ok(None);
+        };
+
+        let is_referenceable = |node: &Node| {
+            node.fn_refs
+                .as_ref()
+                .map(|refs| refs.can_be_referenced_by_fns)
+                .unwrap_or(false)
+        };
+        let mut entries = layer
             .nodes
             .values()
-            .find(|node| {
-                node.fn_refs
-                    .as_ref()
-                    .map(|refs| refs.can_be_referenced_by_fns)
-                    .unwrap_or(false)
-            })
+            .filter(|node| is_referenceable(node))
             .map(|node| node.id.clone())
+            .chain(
+                board
+                    .nodes
+                    .values()
+                    .filter(|node| node.layer.as_deref() == Some(id) && is_referenceable(node))
+                    .map(|node| node.id.clone()),
+            )
+            .collect::<Vec<_>>();
+        entries.sort();
+        entries.dedup();
+
+        match entries.as_slice() {
+            [] => Ok(None),
+            [entry] => Ok(Some(entry.clone())),
+            _ => Err(flow_like_types::anyhow!(
+                "Function layer `{}` has multiple referenceable event/handler entries: {}. Reference the intended handler by name instead of the enclosing layer",
+                layer.name,
+                entries.join(", ")
+            )),
+        }
     }
 
     fn register_node_aliases(&mut self, aliases: &[Option<&str>], node_id: &str) {
@@ -922,11 +1124,17 @@ impl FlowScriptApplyPlanner {
         }
 
         if let Some(layer) = board.layers.get(entity_id) {
-            return resolve_pin_id_in_pins(&layer.name, &layer.pins, pin_ref, None);
+            // Function boundary directions are intentionally inverted from an inner-body edge:
+            // layer Inputs provide parameter values to body nodes, while layer Outputs receive
+            // body return values. Preserve that distinction so a same-named parameter/return can
+            // never resolve through HashMap iteration order.
+            let boundary_direction = expected.map(invert_boundary_pin_direction);
+            return resolve_pin_id_in_pins(&layer.name, &layer.pins, pin_ref, boundary_direction);
         }
 
         if let Some(layer) = self.staged_layers.get(entity_id) {
-            return resolve_pin_id_in_pins(&layer.name, &layer.pins, pin_ref, None);
+            let boundary_direction = expected.map(invert_boundary_pin_direction);
+            return resolve_pin_id_in_pins(&layer.name, &layer.pins, pin_ref, boundary_direction);
         }
 
         Err(flow_like_types::anyhow!("Entity `{entity_id}` not found"))
@@ -966,6 +1174,89 @@ impl FlowScriptApplyPlanner {
             .collect()
     }
 
+    /// Verify the persisted canonical graph for every Function layer created by this edit. The
+    /// reconciler validates its command plan, but whole-node updates can still accidentally erase
+    /// `node.layer` while applying. Treat that as an atomic apply failure so an apparently valid
+    /// Function can never be committed with an empty runtime body or severed boundaries.
+    fn validate_new_function_layers(
+        &self,
+        board: &Board,
+        commands: &[BoardCommand],
+    ) -> flow_like_types::Result<()> {
+        for command in commands {
+            let BoardCommand::CreateLayer {
+                name,
+                ref_id: Some(ref_id),
+                layer_type,
+                ..
+            } = command
+            else {
+                continue;
+            };
+            if !matches!(layer_type.as_deref(), Some("Function") | Some("function")) {
+                continue;
+            }
+
+            let layer_id = self.resolve_node_id(board, ref_id)?;
+            let layer = board.layers.get(&layer_id).ok_or_else(|| {
+                flow_like_types::anyhow!(
+                    "Applied Function `{name}` resolved to missing layer `{layer_id}`"
+                )
+            })?;
+            let body_nodes = board
+                .nodes
+                .values()
+                .filter(|node| node.layer.as_deref() == Some(layer_id.as_str()))
+                .collect::<Vec<_>>();
+            if body_nodes.is_empty() {
+                return Err(flow_like_types::anyhow!(
+                    "Applied Function `{name}` has no canonical body nodes assigned to layer `{layer_id}`"
+                ));
+            }
+
+            let exec_in = layer
+                .pins
+                .values()
+                .find(|pin| pin.name == "exec_in" && pin.data_type == VariableType::Execution);
+            let exec_out = layer
+                .pins
+                .values()
+                .find(|pin| pin.name == "exec_out" && pin.data_type == VariableType::Execution);
+            if exec_in.is_none() && exec_out.is_none() {
+                continue;
+            }
+            let (Some(exec_in), Some(exec_out)) = (exec_in, exec_out) else {
+                return Err(flow_like_types::anyhow!(
+                    "Applied Function `{name}` has an incomplete execution boundary"
+                ));
+            };
+            let body_pin_ids = body_nodes
+                .iter()
+                .flat_map(|node| node.pins.values().map(|pin| pin.id.as_str()))
+                .collect::<HashSet<_>>();
+            if !exec_in
+                .connected_to
+                .iter()
+                .any(|pin_id| body_pin_ids.contains(pin_id.as_str()))
+            {
+                return Err(flow_like_types::anyhow!(
+                    "Applied Function `{name}` exec_in is not connected to a body node"
+                ));
+            }
+            if !exec_out
+                .depends_on
+                .iter()
+                .any(|pin_id| body_pin_ids.contains(pin_id.as_str()))
+            {
+                return Err(flow_like_types::anyhow!(
+                    "Applied Function `{name}` exec_out does not depend on a body node"
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
     fn position_or_next(&mut self, position: Option<&NodePosition>) -> (f32, f32, f32) {
         if let Some(position) = position {
             return (position.x as f32, position.y as f32, 0.0);
@@ -997,6 +1288,8 @@ fn placeholder_pins(defs: Option<&[PlaceholderPinDef]>) -> HashMap<String, Pin> 
         PinType::Input,
         VariableType::Execution,
         ValueType::Normal,
+        None,
+        false,
         0,
     );
     insert_placeholder_pin(
@@ -1007,6 +1300,8 @@ fn placeholder_pins(defs: Option<&[PlaceholderPinDef]>) -> HashMap<String, Pin> 
         PinType::Output,
         VariableType::Execution,
         ValueType::Normal,
+        None,
+        false,
         1,
     );
 
@@ -1015,6 +1310,61 @@ fn placeholder_pins(defs: Option<&[PlaceholderPinDef]>) -> HashMap<String, Pin> 
     };
     insert_layer_pins(&mut pins, defs, 2);
     pins
+}
+
+fn append_additional_node_pins(
+    node: &mut Node,
+    defs: Option<&[PlaceholderPinDef]>,
+) -> flow_like_types::Result<()> {
+    let Some(defs) = defs else {
+        return Ok(());
+    };
+    if !defs.is_empty() && node.name != "events_generic" {
+        return Err(flow_like_types::anyhow!(
+            "Additional catalog-node pins are only supported on events_generic"
+        ));
+    }
+
+    for def in defs {
+        if def.pin_type != "Output" || def.data_type == "Execution" {
+            return Err(flow_like_types::anyhow!(
+                "Additional events_generic pin `{}` must be a non-execution Output",
+                def.name
+            ));
+        }
+        if node
+            .pins
+            .values()
+            .any(|pin| pin.pin_type == PinType::Output && pin.name == def.name)
+        {
+            return Err(flow_like_types::anyhow!(
+                "events_generic already has an output pin named `{}`",
+                def.name
+            ));
+        }
+
+        let pin = node.add_output_pin(
+            &def.name,
+            &def.friendly_name,
+            def.description.as_deref().unwrap_or(""),
+            variable_type_from_str(&def.data_type),
+        );
+        pin.set_value_type(
+            def.value_type
+                .as_deref()
+                .map(value_type_from_str)
+                .unwrap_or(ValueType::Normal),
+        );
+        pin.schema = def.schema.clone();
+        if def.enforce_schema {
+            pin.set_options(PinOptions {
+                enforce_schema: Some(true),
+                ..PinOptions::default()
+            });
+        }
+    }
+
+    Ok(())
 }
 
 fn layer_pins(defs: Option<&[PlaceholderPinDef]>) -> HashMap<String, Pin> {
@@ -1042,6 +1392,8 @@ fn insert_layer_pins(
                 .as_deref()
                 .map(value_type_from_str)
                 .unwrap_or(ValueType::Normal),
+            def.schema.clone(),
+            def.enforce_schema,
             (offset + start_index) as u16,
         );
     }
@@ -1055,6 +1407,8 @@ fn insert_placeholder_pin(
     pin_type: PinType,
     data_type: VariableType,
     value_type: ValueType,
+    schema: Option<String>,
+    enforce_schema: bool,
     index: u16,
 ) {
     let id = create_id();
@@ -1067,16 +1421,26 @@ fn insert_placeholder_pin(
             description: description.to_string(),
             pin_type,
             data_type,
-            schema: None,
+            schema,
             value_type,
             depends_on: Default::default(),
             connected_to: Default::default(),
             default_value: None,
             index,
-            options: None,
+            options: enforce_schema.then(|| PinOptions {
+                enforce_schema: Some(true),
+                ..PinOptions::default()
+            }),
             value: None,
         },
     );
+}
+
+fn invert_boundary_pin_direction(direction: PinType) -> PinType {
+    match direction {
+        PinType::Input => PinType::Output,
+        PinType::Output => PinType::Input,
+    }
 }
 
 fn resolve_pin_id_in_node(
@@ -1102,6 +1466,30 @@ fn resolve_pin_id_in_pins(
         if pin_matches_direction(pin, expected.as_ref()) {
             return Ok(pin_ref.to_string());
         }
+    }
+
+    if let Some((name, occurrence)) = super::reconcile::parse_pin_occurrence_ref(pin_ref) {
+        let requested = pin_lookup_keys(name);
+        let mut matching = pins
+            .values()
+            .filter(|pin| pin_matches_direction(pin, expected.as_ref()))
+            .filter(|pin| {
+                pin_lookup_keys(&pin.name)
+                    .iter()
+                    .chain(pin_lookup_keys(&pin.friendly_name).iter())
+                    .any(|key| requested.contains(key))
+            })
+            .collect::<Vec<_>>();
+        // Pin ids are regenerated when a node is added, but the catalog pin indices survive.
+        // Sorting by index (then id for malformed duplicate indices) makes the selector stable
+        // across setup-time default writes and later connections.
+        matching.sort_by_key(|pin| (pin.index, pin.id.clone()));
+        if let Some(pin) = matching.get(occurrence) {
+            return Ok(pin.id.clone());
+        }
+        return Err(flow_like_types::anyhow!(
+            "Pin occurrence `{pin_ref}` not found on `{entity_name}`"
+        ));
     }
 
     let requested = pin_lookup_keys(pin_ref);
@@ -1208,10 +1596,13 @@ fn pin_type_from_str(value: &str) -> PinType {
 mod tests {
     use super::*;
     use crate::flow::board::{ExecutionMode, ExecutionStage};
-    use crate::flow::execution::LogLevel;
+    use crate::flow::execution::{LogLevel, context::ExecutionContext};
     use crate::flow::variable::VariableType;
+    use crate::state::FlowLikeConfig;
+    use crate::utils::http::HTTPClient;
     use flow_like_storage::Path;
     use flow_like_types::json::json;
+    use flow_like_types::tokio;
     use std::time::SystemTime;
 
     fn empty_board() -> Board {
@@ -1249,12 +1640,1413 @@ mod tests {
         node
     }
 
+    fn generic_event_catalog_node() -> Node {
+        let mut node = Node::new("events_generic", "Generic Event", "", "events");
+        node.set_can_be_referenced_by_fns(true);
+        node.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        node.add_output_pin("payload", "Payload", "", VariableType::Struct);
+        node
+    }
+
+    fn function_ref_consumer_catalog_node() -> Node {
+        let mut node = Node::new("function_ref_consumer", "Function Ref Consumer", "", "test");
+        node.set_can_reference_fns(true);
+        node
+    }
+
     fn decode_default(pin: &Pin) -> flow_like_types::Value {
         let bytes = pin
             .default_value
             .as_deref()
             .expect("pin has a default value");
         flow_like_types::json::from_slice(bytes).expect("default value decodes")
+    }
+
+    struct TestVariableGetLogic;
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for TestVariableGetLogic {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("variable_get", "Get Variable", "", "test");
+            node.add_input_pin("var_ref", "Variable Reference", "", VariableType::String);
+            node.add_output_pin("value_ref", "Value", "", VariableType::Generic);
+            node
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut Node, board: &Board) {
+            let Some(variable) = test_referenced_variable(node, board) else {
+                return;
+            };
+            let Some(current) = node.get_pin_by_name("value_ref").cloned() else {
+                return;
+            };
+            if current.data_type == variable.data_type
+                && current.value_type == variable.value_type
+                && current.schema == variable.schema
+            {
+                return;
+            }
+
+            let mut connected_to = current.connected_to;
+            connected_to.retain(|pin_id| {
+                board.get_pin_by_id(pin_id).is_some_and(|pin| {
+                    pin.data_type == variable.data_type
+                        && pin.value_type == variable.value_type
+                        && (variable.schema.is_none()
+                            || pin.schema.is_none()
+                            || pin.schema == variable.schema)
+                })
+            });
+            let output = node
+                .get_pin_mut_by_name("value_ref")
+                .expect("test variable getter output");
+            output.data_type = variable.data_type;
+            output.value_type = variable.value_type;
+            output.schema = variable.schema;
+            output.connected_to = connected_to;
+        }
+    }
+
+    struct TestVariableSetLogic;
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for TestVariableSetLogic {
+        fn get_node(&self) -> Node {
+            let mut node = Node::new("variable_set", "Set Variable", "", "test");
+            node.add_input_pin("var_ref", "Variable Reference", "", VariableType::String);
+            node.add_input_pin("value_in", "Value", "", VariableType::Generic);
+            node
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut Node, board: &Board) {
+            let Some(variable) = test_referenced_variable(node, board) else {
+                return;
+            };
+            let Some(current) = node.get_pin_by_name("value_in").cloned() else {
+                return;
+            };
+            if current.data_type == variable.data_type
+                && current.value_type == variable.value_type
+                && current.schema == variable.schema
+            {
+                return;
+            }
+
+            let mut depends_on = current.depends_on;
+            depends_on.retain(|pin_id| {
+                board.get_pin_by_id(pin_id).is_some_and(|pin| {
+                    pin.data_type == variable.data_type
+                        && pin.value_type == variable.value_type
+                        && (variable.schema.is_none()
+                            || pin.schema.is_none()
+                            || pin.schema == variable.schema)
+                })
+            });
+            let input = node
+                .get_pin_mut_by_name("value_in")
+                .expect("test variable setter input");
+            input.data_type = variable.data_type;
+            input.value_type = variable.value_type;
+            input.schema = variable.schema;
+            input.depends_on = depends_on;
+        }
+    }
+
+    fn test_referenced_variable(node: &Node, board: &Board) -> Option<Variable> {
+        let variable_id = node
+            .get_pin_by_name("var_ref")?
+            .default_value
+            .as_deref()
+            .and_then(|bytes| flow_like_types::json::from_slice::<String>(bytes).ok())?;
+        board.get_any_variable(&variable_id)
+    }
+
+    fn set_test_variable_reference(node: &mut Node, variable_id: &str) {
+        let encoded =
+            flow_like_types::json::to_vec(variable_id).expect("variable reference serializes");
+        node.get_pin_mut_by_name("var_ref")
+            .expect("test variable reference input")
+            .default_value = Some(encoded);
+    }
+
+    fn update_variable_data_type(variable_id: &str, data_type: &str) -> BoardCommand {
+        BoardCommand::UpdateVariable {
+            variable_id: variable_id.to_string(),
+            name: None,
+            data_type: Some(data_type.to_string()),
+            value_type: None,
+            default_value: None,
+            clear_default_value: false,
+            description: None,
+            clear_description: false,
+            category: None,
+            clear_category: false,
+            schema: None,
+            clear_schema: false,
+            exposed: None,
+            secret: None,
+            editable: None,
+            runtime_configured: None,
+            value: None,
+            summary: None,
+        }
+    }
+
+    #[test]
+    fn any_reconcile_diagnostic_prevents_application() {
+        let commands = vec![BoardCommand::AddNode {
+            node_type: "log".to_string(),
+            ref_id: Some("$0".to_string()),
+            position: None,
+            friendly_name: None,
+            additional_pins: None,
+            target_layer: None,
+            summary: None,
+        }];
+
+        assert!(reconcile_is_safe_to_apply(&commands, &[]));
+        assert!(!reconcile_is_safe_to_apply(
+            &commands,
+            &["even an unfamiliar diagnostic is atomic".to_string()]
+        ));
+        assert!(!reconcile_is_safe_to_apply(&[], &[]));
+    }
+
+    #[tokio::test]
+    async fn exact_board_command_batch_uses_atomic_apply_planner_without_reconcile() {
+        let mut board = empty_board();
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.add_input_pin("message", "Message", "", VariableType::String);
+        let catalog = vec![log];
+        let board_commands = vec![
+            BoardCommand::AddNode {
+                node_type: "log".to_string(),
+                ref_id: Some("$exact".to_string()),
+                position: None,
+                friendly_name: Some("Exact retained node".to_string()),
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::UpdateNodePin {
+                node_id: "$exact".to_string(),
+                pin_id: "message".to_string(),
+                value: json!("retained value"),
+                summary: None,
+            },
+        ];
+        let expected = serde_json::to_value(&board_commands).unwrap();
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+
+        let result =
+            apply_board_commands_to_board(&mut board, board_commands, &catalog, state, None)
+                .await
+                .expect("exact retained command batch applies");
+
+        assert!(result.diagnostics.is_empty());
+        assert!(!result.commands.is_empty());
+        assert_eq!(
+            serde_json::to_value(&result.board_commands).unwrap(),
+            expected
+        );
+        let node = board.nodes.values().next().expect("applied node");
+        assert_eq!(node.friendly_name, "Exact retained node");
+        let message = node
+            .pins
+            .values()
+            .find(|pin| pin.name == "message")
+            .expect("message pin");
+        assert_eq!(decode_default(message), json!("retained value"));
+    }
+
+    #[tokio::test]
+    async fn variable_update_refreshes_dynamic_pin_contracts_before_reconnecting_edges() {
+        let mut board = empty_board();
+        let mut variable = Variable::new("ticket", VariableType::String, ValueType::Normal);
+        variable.id = "ticket-variable".to_string();
+        board.variables.insert(variable.id.clone(), variable);
+
+        let mut getter = TestVariableGetLogic.get_node();
+        getter.id = "getter".to_string();
+        set_test_variable_reference(&mut getter, "ticket-variable");
+        getter
+            .get_pin_mut_by_name("value_ref")
+            .expect("getter output")
+            .data_type = VariableType::String;
+        let getter_pin_id = getter
+            .get_pin_by_name("value_ref")
+            .expect("getter output")
+            .id
+            .clone();
+
+        let mut setter = TestVariableSetLogic.get_node();
+        setter.id = "setter".to_string();
+        set_test_variable_reference(&mut setter, "ticket-variable");
+        setter
+            .get_pin_mut_by_name("value_in")
+            .expect("setter input")
+            .data_type = VariableType::String;
+        let setter_pin_id = setter
+            .get_pin_by_name("value_in")
+            .expect("setter input")
+            .id
+            .clone();
+        getter
+            .pins
+            .get_mut(&getter_pin_id)
+            .expect("getter output")
+            .connected_to
+            .insert(setter_pin_id.clone());
+        setter
+            .pins
+            .get_mut(&setter_pin_id)
+            .expect("setter input")
+            .depends_on
+            .insert(getter_pin_id.clone());
+        board.nodes.insert(getter.id.clone(), getter);
+        board.nodes.insert(setter.id.clone(), setter);
+
+        let commands = vec![
+            update_variable_data_type("ticket-variable", "Date"),
+            BoardCommand::ConnectPins {
+                from_node: "getter".to_string(),
+                from_pin: "value_ref".to_string(),
+                to_node: "setter".to_string(),
+                to_pin: "value_in".to_string(),
+                summary: None,
+            },
+        ];
+
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("variable update is planned in setup");
+        assert!(matches!(
+            setup.as_slice(),
+            [GenericCommand::UpsertVariable(_)]
+        ));
+        let remaining = planner
+            .build_remaining_commands(&board, &commands)
+            .expect("only the edge remains after setup planning");
+        assert!(matches!(
+            remaining.as_slice(),
+            [GenericCommand::ConnectPin(_)]
+        ));
+
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        {
+            let registry = state.node_registry();
+            let mut registry = registry.write().await;
+            registry.push_node(Arc::new(TestVariableGetLogic));
+            registry.push_node(Arc::new(TestVariableSetLogic));
+        }
+
+        let result = apply_board_commands_to_board(&mut board, commands, &[], state, None)
+            .await
+            .expect("variable update and reconnect apply");
+        assert!(result.diagnostics.is_empty());
+        assert_eq!(
+            board.variables["ticket-variable"].data_type,
+            VariableType::Date
+        );
+        let getter_pin = &board.nodes["getter"].pins[&getter_pin_id];
+        let setter_pin = &board.nodes["setter"].pins[&setter_pin_id];
+        assert_eq!(getter_pin.data_type, VariableType::Date);
+        assert_eq!(setter_pin.data_type, VariableType::Date);
+        assert!(getter_pin.connected_to.contains(&setter_pin_id));
+        assert!(setter_pin.depends_on.contains(&getter_pin_id));
+    }
+
+    #[test]
+    fn positional_pin_refs_resolve_duplicate_names_by_stable_index() {
+        let mut node = Node::new("equal_string", "Equal String", "", "logic");
+        let first_id = node
+            .add_input_pin("string", "String", "", VariableType::String)
+            .id
+            .clone();
+        let second_id = node
+            .add_input_pin("string", "String", "", VariableType::String)
+            .id
+            .clone();
+
+        assert_eq!(
+            resolve_pin_id_in_node(&node, "string[#1]", Some(PinType::Input)).unwrap(),
+            first_id
+        );
+        assert_eq!(
+            resolve_pin_id_in_node(&node, "string[#2]", Some(PinType::Input)).unwrap(),
+            second_id
+        );
+
+        // Setup may configure one input before a later connection is resolved. Population state
+        // must not reorder the occurrence selector.
+        node.pins
+            .get_mut(&second_id)
+            .expect("second input")
+            .default_value = Some(b"\"configured\"".to_vec());
+        assert_eq!(
+            resolve_pin_id_in_node(&node, "string[#1]", Some(PinType::Input)).unwrap(),
+            first_id
+        );
+        assert_eq!(
+            resolve_pin_id_in_node(&node, "string[#2]", Some(PinType::Input)).unwrap(),
+            second_id
+        );
+    }
+
+    #[test]
+    fn event_last_explicit_refs_do_not_collide_with_positional_aliases() {
+        let board = empty_board();
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.add_input_pin("exec_in", "Exec In", "", VariableType::Execution);
+        let catalog = vec![event, log];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &catalog, None);
+        let commands = vec![
+            // Event-last setup order is intentionally the opposite of ref-allocation order.
+            BoardCommand::AddNode {
+                node_type: "log".to_string(),
+                ref_id: Some("$1".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::AddNode {
+                node_type: "events_simple".to_string(),
+                ref_id: Some("$0".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::ConnectPins {
+                from_node: "$0".to_string(),
+                from_pin: "exec_out".to_string(),
+                to_node: "$1".to_string(),
+                to_pin: "exec_in".to_string(),
+                summary: None,
+            },
+        ];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("out-of-order explicit refs must remain unambiguous");
+        assert!(!planner.ambiguous_node_refs.contains("$0"));
+        assert!(!planner.ambiguous_node_refs.contains("$1"));
+
+        let mut staged_board = board;
+        for command in setup {
+            if let GenericCommand::AddNode(command) = command {
+                staged_board
+                    .nodes
+                    .insert(command.node.id.clone(), command.node);
+            }
+        }
+        let remaining = planner
+            .build_remaining_commands(&staged_board, &commands)
+            .expect("event-last refs must resolve when connections are built");
+        assert_eq!(
+            remaining
+                .iter()
+                .filter(|command| matches!(command, GenericCommand::ConnectPin(_)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn layered_add_followed_by_pin_update_retains_function_layer() {
+        let board = empty_board();
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.add_input_pin("message", "Message", "", VariableType::String);
+        let catalog = vec![log];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &catalog, None);
+        let commands = vec![
+            BoardCommand::CreateLayer {
+                name: "configuredHelper".to_string(),
+                ref_id: Some("$0".to_string()),
+                layer_type: Some("Function".to_string()),
+                node_ids: Vec::new(),
+                pins: None,
+                position: None,
+                color: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::AddNode {
+                node_type: "log".to_string(),
+                ref_id: Some("$1".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: Some("$0".to_string()),
+                summary: None,
+            },
+            BoardCommand::UpdateNodePin {
+                node_id: "$1".to_string(),
+                pin_id: "message".to_string(),
+                value: flow_like_types::Value::String("configured".to_string()),
+                summary: None,
+            },
+        ];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("layered configured node should plan");
+        let layer_id = planner
+            .node_refs
+            .get("$0")
+            .cloned()
+            .expect("function layer ref");
+
+        let added = setup.iter().find_map(|command| match command {
+            GenericCommand::AddNode(command) => Some(&command.node),
+            _ => None,
+        });
+        let updated = setup.iter().find_map(|command| match command {
+            GenericCommand::UpdateNode(command) => Some(&command.node),
+            _ => None,
+        });
+        assert_eq!(
+            added.and_then(|node| node.layer.as_deref()),
+            Some(layer_id.as_str())
+        );
+        assert_eq!(
+            updated.and_then(|node| node.layer.as_deref()),
+            Some(layer_id.as_str()),
+            "pin-update staging must not clear function-layer membership"
+        );
+    }
+
+    #[test]
+    fn referenceable_entry_resolves_canonical_flat_function_member() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "function-layer".to_string(),
+            "fetchPage".to_string(),
+            LayerType::Function,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+
+        let mut entry = generic_event_catalog_node();
+        entry.id = "flat-entry".to_string();
+        entry.layer = Some("function-layer".to_string());
+        board.nodes.insert(entry.id.clone(), entry);
+
+        let planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        assert_eq!(
+            planner
+                .referenceable_entry_in_layer(&board, "function-layer")
+                .expect("flat entry lookup succeeds"),
+            Some("flat-entry".to_string())
+        );
+    }
+
+    #[test]
+    fn referenceable_entry_rejects_ambiguous_function_layer() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "function-layer".to_string(),
+            "toolScope".to_string(),
+            LayerType::Function,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+
+        for id in ["first-entry", "second-entry"] {
+            let mut entry = generic_event_catalog_node();
+            entry.id = id.to_string();
+            entry.layer = Some("function-layer".to_string());
+            board.nodes.insert(entry.id.clone(), entry);
+        }
+
+        let planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let error = planner
+            .referenceable_entry_in_layer(&board, "function-layer")
+            .expect_err("ambiguous layer must not choose a random HashMap entry");
+        let message = error.to_string();
+        assert!(message.contains("multiple referenceable"));
+        assert!(message.contains("first-entry, second-entry"));
+    }
+
+    #[test]
+    fn named_flat_handler_resolves_to_concrete_function_reference() {
+        let board = empty_board();
+        let catalog = vec![
+            generic_event_catalog_node(),
+            function_ref_consumer_catalog_node(),
+        ];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &catalog, None);
+        let commands = vec![
+            BoardCommand::CreateLayer {
+                name: "toolScope".to_string(),
+                ref_id: Some("$0".to_string()),
+                layer_type: Some("Function".to_string()),
+                node_ids: Vec::new(),
+                pins: None,
+                position: None,
+                color: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::AddNode {
+                node_type: "events_generic".to_string(),
+                ref_id: Some("$1".to_string()),
+                position: None,
+                friendly_name: Some("fetchPage".to_string()),
+                additional_pins: None,
+                target_layer: Some("$0".to_string()),
+                summary: None,
+            },
+            BoardCommand::AddNode {
+                node_type: "function_ref_consumer".to_string(),
+                ref_id: Some("$2".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::SetNodeFunctionRefs {
+                node_id: "$2".to_string(),
+                // Both names resolve to the same concrete entry and must de-duplicate.
+                fn_refs: vec!["fetchPage".to_string(), "$0".to_string()],
+                summary: None,
+            },
+        ];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("function and named handler setup plans");
+        let handler_id = planner
+            .node_refs
+            .get("fetchPage")
+            .cloned()
+            .expect("friendly handler name is a same-batch alias");
+
+        let mut staged_board = board;
+        for command in setup {
+            match command {
+                GenericCommand::UpsertLayer(command) => {
+                    staged_board
+                        .layers
+                        .insert(command.layer.id.clone(), command.layer);
+                }
+                GenericCommand::AddNode(command) => {
+                    staged_board
+                        .nodes
+                        .insert(command.node.id.clone(), command.node);
+                }
+                _ => {}
+            }
+        }
+
+        let remaining = planner
+            .build_remaining_commands(&staged_board, &commands)
+            .expect("flat handler function reference resolves");
+        let updated = remaining
+            .iter()
+            .find_map(|command| match command {
+                GenericCommand::UpdateNode(command)
+                    if command.node.name == "function_ref_consumer" =>
+                {
+                    Some(&command.node)
+                }
+                _ => None,
+            })
+            .expect("function-reference update exists");
+        let refs = updated.fn_refs.as_ref().expect("consumer has fn refs");
+        assert_eq!(refs.fn_refs, vec![handler_id]);
+
+        let mut validated = refs.clone();
+        assert!(
+            !crate::flow::board::commands::nodes::validate_and_deduplicate_fn_refs(
+                &mut validated,
+                &staged_board,
+            ),
+            "the concrete flat entry survives command-time fn-ref validation"
+        );
+    }
+
+    #[test]
+    fn unresolved_function_reference_rejects_remaining_plan() {
+        let board = empty_board();
+        let catalog = vec![function_ref_consumer_catalog_node()];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &catalog, None);
+        let commands = vec![
+            BoardCommand::AddNode {
+                node_type: "function_ref_consumer".to_string(),
+                ref_id: Some("$0".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::SetNodeFunctionRefs {
+                node_id: "$0".to_string(),
+                fn_refs: vec!["missingTool".to_string()],
+                summary: None,
+            },
+        ];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("consumer setup plans");
+        let mut staged_board = board;
+        for command in setup {
+            if let GenericCommand::AddNode(command) = command {
+                staged_board
+                    .nodes
+                    .insert(command.node.id.clone(), command.node);
+            }
+        }
+
+        let error = match planner.build_remaining_commands(&staged_board, &commands) {
+            Ok(_) => panic!("an authored but missing tool must reject the atomic edit"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("Could not resolve requested function reference `missingTool`")
+        );
+    }
+
+    #[test]
+    fn existing_named_flat_handler_is_a_function_reference_alias() {
+        let mut board = empty_board();
+        let mut handler = generic_event_catalog_node();
+        handler.id = "existing-handler".to_string();
+        handler.friendly_name = "fetchPage".to_string();
+        board.nodes.insert(handler.id.clone(), handler);
+
+        let catalog = vec![function_ref_consumer_catalog_node()];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &catalog, None);
+        let commands = vec![
+            BoardCommand::AddNode {
+                node_type: "function_ref_consumer".to_string(),
+                ref_id: Some("$0".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::SetNodeFunctionRefs {
+                node_id: "$0".to_string(),
+                fn_refs: vec!["fetchPage".to_string()],
+                summary: None,
+            },
+        ];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("consumer setup plans");
+        let mut staged_board = board;
+        for command in setup {
+            if let GenericCommand::AddNode(command) = command {
+                staged_board
+                    .nodes
+                    .insert(command.node.id.clone(), command.node);
+            }
+        }
+        let remaining = planner
+            .build_remaining_commands(&staged_board, &commands)
+            .expect("existing friendly handler name resolves");
+        let refs = remaining
+            .iter()
+            .find_map(|command| match command {
+                GenericCommand::UpdateNode(command)
+                    if command.node.name == "function_ref_consumer" =>
+                {
+                    command.node.fn_refs.as_ref()
+                }
+                _ => None,
+            })
+            .expect("function refs are applied");
+        assert_eq!(refs.fn_refs, vec!["existing-handler".to_string()]);
+    }
+
+    #[test]
+    fn function_postcondition_rejects_nodes_whose_layer_was_cleared() {
+        let board = empty_board();
+        let log = Node::new("log", "Log", "", "debug");
+        let catalog = vec![log];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &catalog, None);
+        let commands = vec![
+            BoardCommand::CreateLayer {
+                name: "brokenHelper".to_string(),
+                ref_id: Some("$0".to_string()),
+                layer_type: Some("Function".to_string()),
+                node_ids: Vec::new(),
+                pins: None,
+                position: None,
+                color: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::AddNode {
+                node_type: "log".to_string(),
+                ref_id: Some("$1".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: Some("$0".to_string()),
+                summary: None,
+            },
+        ];
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("setup commands");
+        let mut applied_board = board;
+        for command in setup {
+            match command {
+                GenericCommand::UpsertLayer(command) => {
+                    applied_board
+                        .layers
+                        .insert(command.layer.id.clone(), command.layer);
+                }
+                GenericCommand::AddNode(command) => {
+                    let mut node = command.node;
+                    node.layer = None; // Reproduce the former staged UpdateNode corruption.
+                    applied_board.nodes.insert(node.id.clone(), node);
+                }
+                _ => {}
+            }
+        }
+
+        let error = planner
+            .validate_new_function_layers(&applied_board, &commands)
+            .expect_err("runtime-empty applied Function must be rejected");
+        assert!(error.to_string().contains("no canonical body nodes"));
+    }
+
+    #[tokio::test]
+    async fn applying_function_keeps_body_nodes_and_exec_boundary_connections() {
+        let mut board = empty_board();
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+
+        let mut call = Node::new("control_call_function", "Call Function", "", "control");
+        call.add_input_pin("exec_in", "Exec In", "", VariableType::Execution);
+        call.add_input_pin(
+            "function_layer_id",
+            "Function Layer",
+            "",
+            VariableType::String,
+        );
+        call.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.add_input_pin("exec_in", "Exec In", "", VariableType::Execution);
+        log.add_input_pin("message", "Message", "", VariableType::String);
+        log.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        let catalog = vec![event, call, log];
+
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let result = apply_flowscript_to_board(
+            &mut board,
+            r#"function configuredHelper() {
+    log({ message: "configured" })
+}
+
+eventsSimple() {
+    configuredHelper()
+}
+"#,
+            &catalog,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("function FlowScript should apply");
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(!result.commands.is_empty());
+        let layer = board
+            .layers
+            .values()
+            .find(|layer| layer.name == "configuredHelper")
+            .expect("configuredHelper Function layer");
+        let body_nodes = board
+            .nodes
+            .values()
+            .filter(|node| node.layer.as_deref() == Some(layer.id.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(body_nodes.len(), 1, "function body nodes: {body_nodes:?}");
+        let body = body_nodes[0];
+        assert_eq!(body.name, "log");
+
+        let layer_exec_in = layer
+            .pins
+            .values()
+            .find(|pin| pin.name == "exec_in")
+            .expect("Function exec_in boundary");
+        let layer_exec_out = layer
+            .pins
+            .values()
+            .find(|pin| pin.name == "exec_out")
+            .expect("Function exec_out boundary");
+        let body_exec_in = body
+            .pins
+            .values()
+            .find(|pin| pin.name == "exec_in")
+            .expect("body exec_in");
+        let body_exec_out = body
+            .pins
+            .values()
+            .find(|pin| pin.name == "exec_out")
+            .expect("body exec_out");
+
+        assert!(layer_exec_in.connected_to.contains(&body_exec_in.id));
+        assert!(body_exec_in.depends_on.contains(&layer_exec_in.id));
+        assert!(body_exec_out.connected_to.contains(&layer_exec_out.id));
+        assert!(layer_exec_out.depends_on.contains(&body_exec_out.id));
+    }
+
+    #[tokio::test]
+    async fn applying_multiple_events_persists_every_entry_and_its_wiring() {
+        let mut board = empty_board();
+
+        let mut simple = Node::new("events_simple", "Simple Event", "", "events");
+        simple.set_start(true);
+        simple.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+
+        let mut generic = Node::new("events_generic", "Generic Event", "", "events");
+        generic.set_start(true);
+        generic.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        generic.add_output_pin("payload", "Payload", "", VariableType::Struct);
+
+        let mut chat = Node::new("events_chat", "Chat Event", "", "events");
+        chat.set_start(true);
+        chat.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        chat.add_output_pin("history", "History", "", VariableType::Struct);
+
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.add_input_pin("exec_in", "Exec In", "", VariableType::Execution);
+        log.add_input_pin("message", "Message", "", VariableType::String);
+        log.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+
+        let catalog = vec![simple, generic, chat, log];
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let result = apply_flowscript_to_board(
+            &mut board,
+            r#"eventsSimple() {
+    log({ message: "simple one" })
+}
+
+eventsSimple() {
+    log({ message: "simple two" })
+}
+
+eventsGeneric(payload: Struct, ticketId: string) {
+    log({ message: ticketId })
+}
+
+eventsChat() {
+    log({ message: "chat" })
+}
+"#,
+            &catalog,
+            state,
+            None,
+            false,
+        )
+        .await
+        .expect("multiple Event FlowScript should apply atomically");
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(!result.commands.is_empty());
+        assert_eq!(board.nodes.len(), 8, "four entries plus four body nodes");
+
+        let event_nodes = board
+            .nodes
+            .values()
+            .filter(|node| {
+                matches!(
+                    node.name.as_str(),
+                    "events_simple" | "events_generic" | "events_chat"
+                )
+            })
+            .collect::<Vec<_>>();
+        let event_positions = event_nodes
+            .iter()
+            .map(|node| {
+                let (x, y, _) = node.coordinates.expect("Event placement coordinates");
+                (x.round() as i32, y.round() as i32)
+            })
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            event_positions.len(),
+            4,
+            "multiple Event entries must not overlap"
+        );
+
+        let mut event_counts: HashMap<&str, usize> = HashMap::new();
+        for event in event_nodes {
+            *event_counts.entry(event.name.as_str()).or_default() += 1;
+            assert!(event.layer.is_none(), "top-level Event must remain at root");
+
+            let exec_out = event
+                .pins
+                .values()
+                .find(|pin| pin.name == "exec_out")
+                .expect("Event execution output");
+            assert_eq!(
+                exec_out.connected_to.len(),
+                1,
+                "every Event must retain its own executable body connection"
+            );
+            let target_pin_id = exec_out.connected_to.iter().next().unwrap();
+            let target = board
+                .nodes
+                .values()
+                .find(|node| node.pins.contains_key(target_pin_id))
+                .expect("Event body target persists on the board");
+            assert_eq!(target.name, "log");
+        }
+        assert_eq!(event_counts.get("events_simple"), Some(&2));
+        assert_eq!(event_counts.get("events_generic"), Some(&1));
+        assert_eq!(event_counts.get("events_chat"), Some(&1));
+
+        let generic_event = board
+            .nodes
+            .values()
+            .find(|node| node.name == "events_generic")
+            .expect("Generic Event persists");
+        let ticket_id = generic_event
+            .pins
+            .values()
+            .find(|pin| pin.name == "ticketId")
+            .expect("Generic Event custom output persists");
+        assert_eq!(ticket_id.connected_to.len(), 1);
+        let message_pin = board
+            .nodes
+            .values()
+            .flat_map(|node| node.pins.values())
+            .find(|pin| ticket_id.connected_to.contains(&pin.id))
+            .expect("Generic Event payload field target persists");
+        assert_eq!(message_pin.name, "message");
+        assert!(message_pin.depends_on.contains(&ticket_id.id));
+
+        let lowered = super::super::lower_to_ast(&board);
+        assert_eq!(lowered.events.len(), 4, "all persisted Events lower back");
+        let mut lowered_counts: HashMap<&str, usize> = HashMap::new();
+        for event in &lowered.events {
+            *lowered_counts.entry(event.node_type.as_str()).or_default() += 1;
+            assert!(
+                !event.body.stmts.is_empty(),
+                "no Event may lower as an empty handler"
+            );
+        }
+        assert_eq!(lowered_counts.get("events_simple"), Some(&2));
+        assert_eq!(lowered_counts.get("events_generic"), Some(&1));
+        assert_eq!(lowered_counts.get("events_chat"), Some(&1));
+    }
+
+    #[tokio::test]
+    async fn function_ref_update_executes_before_new_pin_connections() {
+        let mut board = empty_board();
+        let mut source = Node::new("source", "Source", "", "test");
+        source.id = "source".to_string();
+        let source_out = source
+            .add_output_pin("exec_out", "Exec Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let mut sink = Node::new("sink", "Sink", "", "test");
+        sink.id = "sink".to_string();
+        let sink_in = sink
+            .add_input_pin("exec_in", "Exec In", "", VariableType::Execution)
+            .id
+            .clone();
+        let mut function_target = Node::new("target", "Target", "", "test");
+        function_target.id = "function_target".to_string();
+        function_target.fn_refs = Some(FnRefs {
+            fn_refs: Vec::new(),
+            can_reference_fns: false,
+            can_be_referenced_by_fns: true,
+        });
+        board.nodes.insert(source.id.clone(), source);
+        board.nodes.insert(sink.id.clone(), sink);
+        board
+            .nodes
+            .insert(function_target.id.clone(), function_target);
+
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let commands = vec![
+            BoardCommand::ConnectPins {
+                from_node: "source".to_string(),
+                from_pin: "exec_out".to_string(),
+                to_node: "sink".to_string(),
+                to_pin: "exec_in".to_string(),
+                summary: None,
+            },
+            BoardCommand::SetNodeFunctionRefs {
+                node_id: "source".to_string(),
+                fn_refs: vec!["function_target".to_string()],
+                summary: None,
+            },
+        ];
+        let remaining = planner
+            .build_remaining_commands(&board, &commands)
+            .expect("remaining commands");
+        let update_index = remaining
+            .iter()
+            .position(|command| matches!(command, GenericCommand::UpdateNode(_)))
+            .expect("function-ref UpdateNode");
+        let connect_index = remaining
+            .iter()
+            .position(|command| matches!(command, GenericCommand::ConnectPin(_)))
+            .expect("ConnectPin");
+        assert!(update_index < connect_index);
+
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        board
+            .execute_commands(remaining, state)
+            .await
+            .expect("remaining commands execute");
+        let source_pin = board.nodes["source"]
+            .pins
+            .get(&source_out)
+            .expect("source pin");
+        let sink_pin = board.nodes["sink"].pins.get(&sink_in).expect("sink pin");
+        assert!(source_pin.connected_to.contains(&sink_in));
+        assert!(sink_pin.depends_on.contains(&source_out));
+    }
+
+    #[test]
+    fn deferred_pin_write_and_function_refs_compose_into_one_node_update() {
+        let mut board = empty_board();
+        let mut target = Node::new("target", "Target", "", "test");
+        target.id = "function_target".to_string();
+        target.set_can_be_referenced_by_fns(true);
+        board.nodes.insert(target.id.clone(), target);
+
+        let mut consumer = Node::new("dynamic_consumer", "Dynamic Consumer", "", "test");
+        consumer.set_can_reference_fns(true);
+        let catalog = vec![consumer];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &catalog, None);
+        let commands = vec![
+            BoardCommand::AddNode {
+                node_type: "dynamic_consumer".to_string(),
+                ref_id: Some("$0".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            // `late_value` represents a pin minted by the node's setup-time on_update.
+            BoardCommand::UpdateNodePin {
+                node_id: "$0".to_string(),
+                pin_id: "late_value".to_string(),
+                value: json!("preserved"),
+                summary: None,
+            },
+            BoardCommand::SetNodeFunctionRefs {
+                node_id: "$0".to_string(),
+                fn_refs: vec!["function_target".to_string()],
+                summary: None,
+            },
+        ];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("setup plans and defers the dynamic pin write");
+        assert_eq!(planner.deferred_pin_updates.len(), 1);
+        let mut staged_board = board;
+        for command in setup {
+            if let GenericCommand::AddNode(command) = command {
+                staged_board
+                    .nodes
+                    .insert(command.node.id.clone(), command.node);
+            }
+        }
+        let consumer_id = planner.node_refs["$0"].clone();
+        staged_board
+            .nodes
+            .get_mut(&consumer_id)
+            .expect("new consumer")
+            .add_input_pin("late_value", "Late Value", "", VariableType::String);
+
+        let remaining = planner
+            .build_remaining_commands(&staged_board, &commands)
+            .expect("deferred pin and function refs compose");
+        let updates = remaining
+            .iter()
+            .filter_map(|command| match command {
+                GenericCommand::UpdateNode(command) if command.node.id == consumer_id => {
+                    Some(&command.node)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(updates.len(), 1, "same-node replacements must be composed");
+        let updated = updates[0];
+        let late_pin = updated
+            .pins
+            .values()
+            .find(|pin| pin.name == "late_value")
+            .expect("dynamic pin survives function-ref update");
+        assert_eq!(decode_default(late_pin), json!("preserved"));
+        assert_eq!(
+            updated.fn_refs.as_ref().expect("function refs").fn_refs,
+            vec!["function_target".to_string()]
+        );
+    }
+
+    #[test]
+    fn multiple_function_ref_commands_merge_into_one_node_update() {
+        let mut board = empty_board();
+        let mut consumer = function_ref_consumer_catalog_node();
+        consumer.id = "consumer".to_string();
+        board.nodes.insert(consumer.id.clone(), consumer);
+        for id in ["target_a", "target_b"] {
+            let mut target = Node::new(id, id, "", "test");
+            target.id = id.to_string();
+            target.set_can_be_referenced_by_fns(true);
+            board.nodes.insert(target.id.clone(), target);
+        }
+
+        let commands = vec![
+            BoardCommand::SetNodeFunctionRefs {
+                node_id: "consumer".to_string(),
+                fn_refs: vec!["target_a".to_string()],
+                summary: None,
+            },
+            BoardCommand::SetNodeFunctionRefs {
+                node_id: "consumer".to_string(),
+                fn_refs: vec!["target_b".to_string(), "target_a".to_string()],
+                summary: None,
+            },
+        ];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let remaining = planner
+            .build_remaining_commands(&board, &commands)
+            .expect("function references merge");
+        let updates = remaining
+            .iter()
+            .filter_map(|command| match command {
+                GenericCommand::UpdateNode(command) => Some(&command.node),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(
+            updates[0].fn_refs.as_ref().expect("function refs").fn_refs,
+            vec!["target_a".to_string(), "target_b".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn composed_node_updates_execute_before_moves_and_removals() {
+        let mut board = empty_board();
+        let mut target = Node::new("target", "Target", "", "test");
+        target.id = "function_target".to_string();
+        target.set_can_be_referenced_by_fns(true);
+        board.nodes.insert(target.id.clone(), target);
+        for id in ["moved", "removed"] {
+            let mut consumer = function_ref_consumer_catalog_node();
+            consumer.id = id.to_string();
+            consumer.coordinates = Some((0.0, 0.0, 0.0));
+            board.nodes.insert(consumer.id.clone(), consumer);
+        }
+
+        let commands = vec![
+            BoardCommand::MoveNode {
+                node_id: "moved".to_string(),
+                position: NodePosition { x: 420.0, y: 240.0 },
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::SetNodeFunctionRefs {
+                node_id: "moved".to_string(),
+                fn_refs: vec!["function_target".to_string()],
+                summary: None,
+            },
+            BoardCommand::RemoveNode {
+                node_id: "removed".to_string(),
+                summary: None,
+            },
+            BoardCommand::SetNodeFunctionRefs {
+                node_id: "removed".to_string(),
+                fn_refs: vec!["function_target".to_string()],
+                summary: None,
+            },
+        ];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        let remaining = planner
+            .build_remaining_commands(&board, &commands)
+            .expect("remaining commands");
+        let last_update = remaining
+            .iter()
+            .rposition(|command| matches!(command, GenericCommand::UpdateNode(_)))
+            .expect("composed updates");
+        let first_move_or_remove = remaining
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    GenericCommand::MoveNode(_) | GenericCommand::RemoveNode(_)
+                )
+            })
+            .expect("move/remove command");
+        assert!(last_update < first_move_or_remove);
+
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        board
+            .execute_commands(remaining, state)
+            .await
+            .expect("composed batch executes");
+        assert_eq!(board.nodes["moved"].coordinates, Some((420.0, 240.0, 0.0)));
+        assert_eq!(
+            board.nodes["moved"]
+                .fn_refs
+                .as_ref()
+                .expect("moved node refs")
+                .fn_refs,
+            vec!["function_target".to_string()]
+        );
+        assert!(!board.nodes.contains_key("removed"));
+    }
+
+    #[test]
+    fn add_node_materializes_additional_generic_event_outputs() {
+        let board = empty_board();
+        let catalog = vec![generic_event_catalog_node()];
+        let mut planner = FlowScriptApplyPlanner::new(&board, &catalog, None);
+        let commands = vec![BoardCommand::AddNode {
+            node_type: "events_generic".to_string(),
+            ref_id: Some("$0".to_string()),
+            position: None,
+            friendly_name: None,
+            additional_pins: Some(vec![
+                PlaceholderPinDef {
+                    name: "ticketIds".to_string(),
+                    friendly_name: "ticketIds".to_string(),
+                    description: None,
+                    pin_type: "Output".to_string(),
+                    data_type: "String".to_string(),
+                    value_type: Some("Array".to_string()),
+                    schema: None,
+                    enforce_schema: false,
+                },
+                PlaceholderPinDef {
+                    name: "ticket".to_string(),
+                    friendly_name: "ticket".to_string(),
+                    description: None,
+                    pin_type: "Output".to_string(),
+                    data_type: "Struct".to_string(),
+                    value_type: Some("Normal".to_string()),
+                    schema: Some(
+                        r#"{"type":"object","properties":{"id":{"type":"string"}}}"#.to_string(),
+                    ),
+                    enforce_schema: true,
+                },
+            ]),
+            target_layer: None,
+            summary: None,
+        }];
+
+        let setup = planner
+            .build_setup_commands(&board, &commands)
+            .expect("additional event output is valid");
+        let GenericCommand::AddNode(command) = &setup[0] else {
+            panic!("expected AddNode");
+        };
+        let pin = command
+            .node
+            .pins
+            .values()
+            .find(|pin| pin.name == "ticketIds")
+            .expect("custom output exists before node creation");
+        assert_eq!(pin.pin_type, PinType::Output);
+        assert_eq!(pin.data_type, VariableType::String);
+        assert_eq!(pin.value_type, ValueType::Array);
+        let typed_pin = command
+            .node
+            .pins
+            .values()
+            .find(|pin| pin.name == "ticket")
+            .expect("schema-bearing custom output exists before node creation");
+        assert!(typed_pin.schema.is_some());
+        assert_eq!(
+            typed_pin
+                .options
+                .as_ref()
+                .and_then(|options| options.enforce_schema),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn function_layer_pin_resolution_inverts_boundary_direction() {
+        let mut board = empty_board();
+        let mut layer = Layer::new(
+            "function".to_string(),
+            "Function".to_string(),
+            LayerType::Function,
+        );
+        let mut template = Node::new("boundary", "Boundary", "", "test");
+        let parameter = template
+            .add_input_pin("value", "Value", "", VariableType::String)
+            .clone();
+        let returned = template
+            .add_output_pin("value", "Value", "", VariableType::String)
+            .clone();
+        let parameter_id = parameter.id.clone();
+        let return_id = returned.id.clone();
+        layer.pins.insert(parameter.id.clone(), parameter);
+        layer.pins.insert(returned.id.clone(), returned);
+        board.layers.insert(layer.id.clone(), layer);
+
+        let planner = FlowScriptApplyPlanner::new(&board, &[], None);
+        assert_eq!(
+            planner
+                .resolve_pin_id(&board, "function", "value", Some(PinType::Output))
+                .unwrap(),
+            parameter_id,
+            "a layer used as the edge source exposes its boundary Input parameter"
+        );
+        assert_eq!(
+            planner
+                .resolve_pin_id(&board, "function", "value", Some(PinType::Input))
+                .unwrap(),
+            return_id,
+            "a layer used as the edge target exposes its boundary Output return"
+        );
     }
 
     /// The full Part B flow without a node registry: setup defers a write to a not-yet-minted
@@ -1272,6 +3064,7 @@ mod tests {
                 ref_id: Some("$0".to_string()),
                 position: None,
                 friendly_name: None,
+                additional_pins: None,
                 target_layer: None,
                 summary: None,
             },

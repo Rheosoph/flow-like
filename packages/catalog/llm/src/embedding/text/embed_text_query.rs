@@ -103,7 +103,7 @@ impl NodeLogic for EmbedQueryNode {
             embeddings = vecs;
         }
 
-        if embeddings.len() <= 0 {
+        if embeddings.is_empty() {
             bail!("Failed to embed the query");
         }
 

@@ -88,7 +88,7 @@ impl NodeLogic for RegisterLanceTableNode {
         let mut table_name: String = context.evaluate_pin("table_name").await?;
 
         let cached_session = session.load(context).await?;
-        let cached_db = database.load(context).await?;
+        let (cached_db, generation) = database.load_with_generation(context).await?;
         cached_db.ensure_flushed().await?;
         let db_guard = cached_db.db.read().await;
         let inner = db_guard.inner();
@@ -99,9 +99,13 @@ impl NodeLogic for RegisterLanceTableNode {
 
         let df_adapter = inner.to_datafusion().await?;
 
+        cached_session.ctx.register_table(
+            TableReference::bare(table_name.clone()),
+            Arc::new(df_adapter),
+        )?;
         cached_session
-            .ctx
-            .register_table(TableReference::bare(table_name), Arc::new(df_adapter))?;
+            .track_lance_table(table_name, database, generation)
+            .await;
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())

@@ -2,18 +2,19 @@ use super::{
     execution::LogLevel,
     node::{Node, NodeLogic},
     pin::Pin,
-    variable::Variable,
+    variable::{Variable, VariableType},
 };
 use crate::{
     a2ui::widget::Page,
     app::App,
     state::FlowLikeState,
     utils::compression::{
-        compress_to_file, from_compressed, from_compressed_json, from_compressed_with_meta,
+        compress_to_file, compress_to_file_create, compress_to_file_update, from_compressed,
+        from_compressed_json, from_compressed_with_meta,
     },
 };
 use commands::GenericCommand;
-use flow_like_storage::object_store::{ObjectStore, path::Path};
+use flow_like_storage::object_store::{self, ObjectStore, UpdateVersion, path::Path};
 use flow_like_types::proto;
 use flow_like_types::{FromProto, ToProto, create_id, sync::Mutex};
 use futures::StreamExt;
@@ -33,6 +34,30 @@ pub mod commands;
 #[derive(Debug, Clone)]
 pub enum BoardParent {
     App(Weak<Mutex<App>>),
+}
+
+/// An immutable board snapshot that has been fully written but has not yet
+/// been made the floating draft's current version.
+///
+/// Callers that publish other metadata referring to the snapshot should commit
+/// that metadata first, then call [`Board::commit_prepared_snapshot`]. Keeping
+/// these two phases separate prevents a failed metadata write from advancing
+/// the user's draft and losing the fact that it still differs from the
+/// previously published action implementation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PreparedBoardSnapshot {
+    board_id: String,
+    version: (u32, u32, u32),
+}
+
+impl PreparedBoardSnapshot {
+    pub fn board_id(&self) -> &str {
+        &self.board_id
+    }
+
+    pub fn version(&self) -> (u32, u32, u32) {
+        self.version
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
@@ -269,6 +294,53 @@ impl Board {
     pub fn mark_changed(&mut self) {
         self.updated_at = SystemTime::now();
         self.hash();
+    }
+
+    /// Derives a governed ontology action's parameter schema from the start
+    /// node's `parameters` struct pin.
+    ///
+    /// This is the authoritative source: the schema is read from the pinned,
+    /// published board that actually executes, so a governed action can never
+    /// advertise a contract its implementation board does not honor. Returns
+    /// `None` when the start node has no typed `parameters` pin, which callers
+    /// treat as "accepts any object payload". A present but malformed schema
+    /// is an error: silently treating it as absent would widen the governed
+    /// action contract.
+    pub fn action_parameter_schema(
+        &self,
+        start_node_id: &str,
+    ) -> flow_like_types::Result<Option<flow_like_types::Value>> {
+        let node = self.nodes.get(start_node_id).ok_or_else(|| {
+            flow_like_types::anyhow!(
+                "Start node '{}' does not exist in the action implementation board",
+                start_node_id
+            )
+        })?;
+        let Some(pin) = node.pins.values().find(|pin| {
+            pin.name == "parameters"
+                && pin.data_type == VariableType::Struct
+                && pin.schema.is_some()
+        }) else {
+            return Ok(None);
+        };
+        let raw_schema = pin
+            .schema
+            .as_deref()
+            .expect("the selected parameters pin has a schema");
+        let parsed: flow_like_types::Value =
+            flow_like_types::json::from_str(raw_schema).map_err(|error| {
+                flow_like_types::anyhow!(
+                    "The parameters schema on start node '{}' is invalid JSON: {error}",
+                    start_node_id
+                )
+            })?;
+        if !parsed.is_object() {
+            return Err(flow_like_types::anyhow!(
+                "The parameters schema on start node '{}' must be a JSON object",
+                start_node_id
+            ));
+        }
+        Ok(Some(parsed))
     }
 
     pub fn hash(&mut self) {
@@ -743,13 +815,23 @@ impl Board {
         None
     }
 
-    pub async fn create_version(
-        &mut self,
-        version_type: VersionType,
+    /// Writes an immutable snapshot of the current board (and its pages) at the
+    /// given version without changing the working `version` or touching the
+    /// floating "latest" board. Used to publish the exact version a governed
+    /// ontology action pins, so it can be validated and invoked reproducibly.
+    pub async fn snapshot_at_version(
+        &self,
+        version: (u32, u32, u32),
         store: Option<Arc<dyn ObjectStore>>,
-    ) -> flow_like_types::Result<(u32, u32, u32)> {
-        let version = self.version;
+    ) -> flow_like_types::Result<()> {
         let store = self.get_store(store).await?;
+
+        // Always serialize a board whose embedded version agrees with the
+        // immutable path. In particular, the two-phase action publisher calls
+        // this while the floating draft still points at its previous version.
+        let mut published = self.clone();
+        published.version = version;
+        published.hash();
 
         let board_version_path = self
             .board_dir
@@ -757,21 +839,453 @@ impl Board {
             .child(self.id.clone())
             .child(format!("{}_{}_{}.board", version.0, version.1, version.2));
 
-        let board = self.to_proto();
-        compress_to_file(store.clone(), board_version_path, &board).await?;
+        match store.head(&board_version_path).await {
+            Ok(_) => {
+                if published
+                    .snapshot_matches_current(version, Some(store.clone()))
+                    .await?
+                    && published
+                        .snapshot_matches_persisted_draft(version, Some(store.clone()))
+                        .await?
+                {
+                    // A previous attempt may have committed the immutable
+                    // snapshot and lost its response. Identical retries are
+                    // safe, provided the persisted floating draft still names
+                    // that content. A stale process-local board must not make
+                    // an old implementation look current.
+                    return Ok(());
+                }
+                return Err(Self::immutable_snapshot_conflict(version));
+            }
+            Err(object_store::Error::NotFound { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
 
+        // Copy pages first and atomically create the board last. The board file
+        // is the snapshot's existence marker; once present it can never be
+        // replaced by a later draft or a racing publisher.
         for page_id in &self.page_ids {
             let src_path = self.page_path(page_id);
             let dst_path = self.versioned_page_path(version, page_id);
             let page_proto: proto::Page = from_compressed(store.clone(), src_path).await?;
-            compress_to_file(store.clone(), dst_path, &page_proto).await?;
+            match store.head(&dst_path).await {
+                Ok(_) => {
+                    let existing: proto::Page =
+                        from_compressed(store.clone(), dst_path.clone()).await?;
+                    if existing != page_proto {
+                        return Err(Self::immutable_snapshot_conflict(version));
+                    }
+                }
+                Err(object_store::Error::NotFound { .. }) => {
+                    if let Err(create_error) =
+                        compress_to_file_create(store.clone(), dst_path.clone(), &page_proto).await
+                    {
+                        // A racing identical publisher is success. A racing
+                        // different publisher owns this version slot and must
+                        // not be overwritten.
+                        let raced: flow_like_types::Result<proto::Page> =
+                            from_compressed(store.clone(), dst_path).await;
+                        if !matches!(raced, Ok(ref existing) if existing == &page_proto) {
+                            return Err(create_error);
+                        }
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            }
         }
 
-        let new_version = match version_type {
-            VersionType::Major => (version.0 + 1, 0, 0),
-            VersionType::Minor => (version.0, version.1 + 1, 0),
-            VersionType::Patch => (version.0, version.1, version.2 + 1),
+        let board = published.to_proto();
+        if let Err(create_error) =
+            compress_to_file_create(store.clone(), board_version_path, &board).await
+        {
+            if !published
+                .snapshot_matches_current(version, Some(store.clone()))
+                .await
+                .unwrap_or(false)
+            {
+                return Err(create_error);
+            }
+        }
+
+        // The board object is the publication marker, so do one final read of
+        // the authoritative floating draft (and all current page objects)
+        // before returning a snapshot that callers may reference from other
+        // metadata. This detects a board/page edit that raced the page-first
+        // copy and prevents a torn immutable snapshot from being installed as
+        // an action implementation. The already-created version remains an
+        // inert immutable orphan and a later attempt advances to a fresh patch.
+        if !published
+            .snapshot_matches_persisted_draft(version, Some(store))
+            .await?
+        {
+            return Err(flow_like_types::anyhow!(
+                "Board draft changed while publishing immutable version {}.{}.{}",
+                version.0,
+                version.1,
+                version.2
+            ));
+        }
+
+        Ok(())
+    }
+
+    fn immutable_snapshot_conflict(version: (u32, u32, u32)) -> flow_like_types::Error {
+        flow_like_types::anyhow!(
+            "Board version {}.{}.{} already contains different immutable snapshot data",
+            version.0,
+            version.1,
+            version.2
+        )
+    }
+
+    /// Return whether a version slot is empty or contains only immutable
+    /// artifacts identical to this draft. A board-last publication can leave
+    /// page objects behind when interrupted; identical retries resume them,
+    /// while different drafts skip the occupied patch rather than poisoning
+    /// all future retries.
+    pub async fn snapshot_version_slot_is_compatible(
+        &self,
+        version: (u32, u32, u32),
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<bool> {
+        let store = self.get_store(store).await?;
+        self.snapshot_version_slot_is_compatible_with_store(version, store)
+            .await
+    }
+
+    async fn snapshot_version_slot_is_compatible_with_store(
+        &self,
+        version: (u32, u32, u32),
+        store: Arc<dyn ObjectStore>,
+    ) -> flow_like_types::Result<bool> {
+        let board_path = Self::proto_path(&self.board_dir, &self.id, Some(version));
+        match store.head(&board_path).await {
+            Ok(_) => {
+                return self.snapshot_matches_current(version, Some(store)).await;
+            }
+            Err(object_store::Error::NotFound { .. }) => {}
+            Err(error) => return Err(error.into()),
+        }
+
+        for page_id in &self.page_ids {
+            let path = self.versioned_page_path(version, page_id);
+            match store.head(&path).await {
+                Ok(_) => {
+                    let current: proto::Page =
+                        from_compressed(store.clone(), self.page_path(page_id)).await?;
+                    let existing: proto::Page = from_compressed(store.clone(), path).await?;
+                    if current != existing {
+                        return Ok(false);
+                    }
+                }
+                Err(object_store::Error::NotFound { .. }) => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(true)
+    }
+
+    /// Recompute the deterministic board hash instead of trusting a possibly
+    /// stale serialized `hash` field.
+    pub fn content_hash(&self) -> u64 {
+        let mut board = self.clone();
+        board.hash();
+        board.hash.expect("Board::hash always sets a hash")
+    }
+
+    /// Return whether an existing immutable snapshot contains the same board
+    /// and page content as the current draft when assigned `version`.
+    /// Normalizing the draft version makes this useful between the prepare and
+    /// commit phases, while the floating board still carries its old version.
+    pub async fn snapshot_matches_current(
+        &self,
+        version: (u32, u32, u32),
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<bool> {
+        let store = self.get_store(store).await?;
+        let proto: proto::Board = from_compressed(
+            store.clone(),
+            Self::proto_path(&self.board_dir, &self.id, Some(version)),
+        )
+        .await?;
+        let snapshot = Self::from_proto(proto);
+        let mut current = self.clone();
+        current.version = version;
+        current.hash();
+        if snapshot.content_hash() != current.content_hash() {
+            return Ok(false);
+        }
+        for page_id in &self.page_ids {
+            let current: proto::Page =
+                from_compressed(store.clone(), self.page_path(page_id)).await?;
+            let published: proto::Page =
+                from_compressed(store.clone(), self.versioned_page_path(version, page_id)).await?;
+            if current != published {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// Compare an immutable version with the authoritative floating board
+    /// object and its current page objects, bypassing any process-local board
+    /// registry entry. If no floating object exists (only possible for a
+    /// not-yet-saved in-memory board), fall back to the caller's draft.
+    pub async fn snapshot_matches_persisted_draft(
+        &self,
+        version: (u32, u32, u32),
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<bool> {
+        let store = self.get_store(store).await?;
+        let floating_path = Self::proto_path(&self.board_dir, &self.id, None);
+        match store.head(&floating_path).await {
+            Ok(_) => {}
+            Err(object_store::Error::NotFound { .. }) => {
+                return self.snapshot_matches_current(version, Some(store)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+
+        let proto: proto::Board = from_compressed(store.clone(), floating_path).await?;
+        let mut floating = if let Some(app_state) = self.app_state.clone() {
+            Self::from_loaded_proto(proto, self.board_dir.clone(), app_state).await
+        } else {
+            let mut floating = Self::from_proto(proto);
+            floating.board_dir = self.board_dir.clone();
+            floating
         };
+        floating.app_state = self.app_state.clone();
+        floating
+            .snapshot_matches_current(version, Some(store))
+            .await
+    }
+
+    /// Validate an already-created snapshot as the current draft's prepared
+    /// publication. This is used to finish a commit whose floating-board save
+    /// previously failed after the referring ontology was persisted.
+    pub async fn prepared_snapshot_at_version(
+        &self,
+        version: (u32, u32, u32),
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<PreparedBoardSnapshot> {
+        if !self.snapshot_matches_current(version, store).await? {
+            return Err(Self::immutable_snapshot_conflict(version));
+        }
+        Ok(PreparedBoardSnapshot {
+            board_id: self.id.clone(),
+            version,
+        })
+    }
+
+    /// Prepare a fresh immutable patch snapshot without changing or saving the
+    /// floating board. Interrupted page-first attempts are resumed when their
+    /// content matches and skipped when another draft owns the candidate slot.
+    pub async fn prepare_snapshot_at_fresh_patch_version(
+        &self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<PreparedBoardSnapshot> {
+        let store = self.get_store(store).await?;
+        let first_patch = self
+            .version
+            .2
+            .checked_add(1)
+            .ok_or_else(|| flow_like_types::anyhow!("Board patch version overflow"))?;
+        let mut next = (self.version.0, self.version.1, first_patch);
+
+        loop {
+            if self
+                .snapshot_version_slot_is_compatible_with_store(next, store.clone())
+                .await?
+            {
+                match self.snapshot_at_version(next, Some(store.clone())).await {
+                    Ok(()) => {
+                        return Ok(PreparedBoardSnapshot {
+                            board_id: self.id.clone(),
+                            version: next,
+                        });
+                    }
+                    Err(error) => {
+                        // If a different publisher won the race, advance to a
+                        // new patch. Preserve unrelated storage failures.
+                        if self
+                            .snapshot_version_slot_is_compatible_with_store(next, store.clone())
+                            .await?
+                        {
+                            return Err(error);
+                        }
+                    }
+                }
+            }
+            next.2 = next
+                .2
+                .checked_add(1)
+                .ok_or_else(|| flow_like_types::anyhow!("Board patch version overflow"))?;
+        }
+    }
+
+    /// Advance the floating board to a prepared immutable snapshot after the
+    /// metadata that refers to it has committed. If the user edited the draft
+    /// in the meantime, leave it untouched; a subsequent publication will
+    /// create another patch from that newer content.
+    pub async fn commit_prepared_snapshot(
+        &mut self,
+        prepared: &PreparedBoardSnapshot,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<bool> {
+        if prepared.board_id != self.id || prepared.version < self.version {
+            return Ok(false);
+        }
+        let store = self.get_store(store).await?;
+        // Protect unsaved in-process edits first.
+        if !self
+            .snapshot_matches_current(prepared.version, Some(store.clone()))
+            .await?
+        {
+            return Ok(false);
+        }
+
+        // Then compare and conditionally update the authoritative floating
+        // object. `open_board` may return a process-local cached board, so an
+        // unconditional save here could otherwise overwrite another process's
+        // edit made after the immutable snapshot was prepared.
+        let floating_path = self.board_dir.child(format!("{}.board", self.id));
+        let (floating_proto, floating_meta): (proto::Board, _) =
+            match from_compressed_with_meta(store.clone(), floating_path.clone()).await {
+                Ok(loaded) => loaded,
+                Err(load_error) => match store.head(&floating_path).await {
+                    Err(object_store::Error::NotFound { .. }) => {
+                        let mut floating = self.clone();
+                        floating.version = prepared.version;
+                        floating.mark_changed();
+                        compress_to_file_create(store, floating_path, &floating.to_proto()).await?;
+                        self.version = prepared.version;
+                        self.updated_at = floating.updated_at;
+                        self.hash();
+                        return Ok(true);
+                    }
+                    _ => return Err(load_error),
+                },
+            };
+        let mut floating = Self::from_proto(floating_proto);
+        floating.board_dir = self.board_dir.clone();
+        if floating.version > prepared.version
+            || !floating
+                .snapshot_matches_current(prepared.version, Some(store.clone()))
+                .await?
+        {
+            return Ok(false);
+        }
+        if floating.version == prepared.version {
+            self.version = prepared.version;
+            self.hash();
+            return Ok(true);
+        }
+
+        floating.version = prepared.version;
+        floating.mark_changed();
+        if floating_meta.e_tag.is_none() && floating_meta.version.is_none() {
+            // This backend cannot offer a compare-and-swap token. Leaving the
+            // pointer behind is safe because reconciliation recognizes the
+            // prepared patch; an unconditional write could lose another
+            // writer's draft.
+            return Ok(false);
+        }
+        compress_to_file_update(
+            store,
+            floating_path,
+            &floating.to_proto(),
+            UpdateVersion {
+                e_tag: floating_meta.e_tag,
+                version: floating_meta.version,
+            },
+        )
+        .await?;
+        self.version = prepared.version;
+        self.updated_at = floating.updated_at;
+        self.hash();
+        Ok(true)
+    }
+
+    /// Publish the current draft under a fresh patch version without touching
+    /// any existing versioned object. This is used when an ontology action's
+    /// current pin already names an older immutable snapshot but the working
+    /// board has since changed.
+    pub async fn snapshot_at_fresh_patch_version(
+        &mut self,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<(u32, u32, u32)> {
+        let store = self.get_store(store).await?;
+        let prepared = self
+            .prepare_snapshot_at_fresh_patch_version(Some(store.clone()))
+            .await?;
+        let version = prepared.version();
+        if !self
+            .commit_prepared_snapshot(&prepared, Some(store))
+            .await?
+        {
+            return Err(flow_like_types::anyhow!(
+                "Board draft changed while publishing version {}.{}.{}",
+                version.0,
+                version.1,
+                version.2
+            ));
+        }
+        Ok(version)
+    }
+
+    pub async fn create_version(
+        &mut self,
+        version_type: VersionType,
+        store: Option<Arc<dyn ObjectStore>>,
+    ) -> flow_like_types::Result<(u32, u32, u32)> {
+        let store = self.get_store(store).await?;
+        let existing = self.get_versions(Some(store.clone())).await?;
+        let mut published = self.version;
+        if existing.contains(&published) {
+            if !self
+                .snapshot_matches_current(published, Some(store.clone()))
+                .await?
+            {
+                published = self
+                    .snapshot_at_fresh_patch_version(Some(store.clone()))
+                    .await?;
+            }
+        } else {
+            self.snapshot_at_version(published, Some(store.clone()))
+                .await?;
+        }
+
+        let bump =
+            |version: (u32, u32, u32)| -> flow_like_types::Result<_> {
+                Ok(match &version_type {
+                    VersionType::Major => (
+                        version.0.checked_add(1).ok_or_else(|| {
+                            flow_like_types::anyhow!("Board major version overflow")
+                        })?,
+                        0,
+                        0,
+                    ),
+                    VersionType::Minor => (
+                        version.0,
+                        version.1.checked_add(1).ok_or_else(|| {
+                            flow_like_types::anyhow!("Board minor version overflow")
+                        })?,
+                        0,
+                    ),
+                    VersionType::Patch => (
+                        version.0,
+                        version.1,
+                        version.2.checked_add(1).ok_or_else(|| {
+                            flow_like_types::anyhow!("Board patch version overflow")
+                        })?,
+                    ),
+                })
+            };
+        let existing = self.get_versions(Some(store.clone())).await?;
+        let mut new_version = bump(published)?;
+        while existing.contains(&new_version) {
+            new_version = bump(new_version)?;
+        }
 
         self.version = new_version;
         self.mark_changed();
@@ -808,7 +1322,8 @@ impl Board {
         let mut versions = store.list(Some(&versions_dir));
         let mut version_list = Vec::new();
 
-        while let Some(Ok(meta)) = versions.next().await {
+        while let Some(meta) = versions.next().await {
+            let meta = meta?;
             let file_name = match meta.location.filename() {
                 Some(name) => name,
                 None => continue,
@@ -951,7 +1466,7 @@ impl Board {
         Ok(())
     }
 
-    /// PAGE FUNCTIONS
+    // PAGE FUNCTIONS
 
     fn pages_dir(&self) -> Path {
         self.board_dir.child(format!("_{}", self.id))
@@ -1226,7 +1741,7 @@ impl Board {
         Ok(elements)
     }
 
-    /// TEMPLATE FUNCTIONS
+    // TEMPLATE FUNCTIONS
 
     pub async fn save_as_template(
         &self,
@@ -1591,5 +2106,353 @@ mod tests {
             super::Board::from_proto(flow_like_types::proto::Board::decode(&buf[..]).unwrap());
 
         assert_eq!(board.id, deser_board.id);
+    }
+
+    #[tokio::test]
+    async fn governed_action_parameter_schema_fails_closed_when_authored_schema_is_malformed() {
+        use crate::flow::{node::Node, variable::VariableType};
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+        assert!(board.action_parameter_schema("missing-start").is_err());
+        let mut start = Node::new("start", "Start", "", "events");
+        let start_id = start.id.clone();
+        let parameters_pin = start
+            .add_output_pin("parameters", "Parameters", "", VariableType::Struct)
+            .id
+            .clone();
+        start.pins.get_mut(&parameters_pin).unwrap().schema = Some("not-json".to_string());
+        board.nodes.insert(start_id.clone(), start);
+
+        assert!(board.action_parameter_schema(&start_id).is_err());
+        board
+            .nodes
+            .get_mut(&start_id)
+            .unwrap()
+            .pins
+            .get_mut(&parameters_pin)
+            .unwrap()
+            .schema = Some("[]".to_string());
+        assert!(board.action_parameter_schema(&start_id).is_err());
+    }
+
+    #[tokio::test]
+    async fn immutable_snapshot_rejects_overwrite_and_publishes_fresh_patch() {
+        use crate::a2ui::widget::Page;
+
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = super::Board::new(None, base_dir.clone(), state.clone());
+        let original_version = board.version;
+        let original_name = board.name.clone();
+        let mut page = Page::new("page-1", "Original page", "/");
+        board.save_page(&page, None).await.unwrap();
+
+        board
+            .snapshot_at_version(original_version, None)
+            .await
+            .unwrap();
+        board
+            .snapshot_at_version(original_version, None)
+            .await
+            .expect("an identical retry must be idempotent");
+        assert!(
+            board
+                .snapshot_matches_current(original_version, None)
+                .await
+                .unwrap()
+        );
+        page.name = "Edited page".to_string();
+        board.save_page(&page, None).await.unwrap();
+        assert!(
+            !board
+                .snapshot_matches_current(original_version, None)
+                .await
+                .unwrap(),
+            "page-only edits must make the snapshot stale"
+        );
+        board.name = "Edited draft".to_string();
+        board.mark_changed();
+
+        assert!(
+            board
+                .snapshot_at_version(original_version, None)
+                .await
+                .is_err(),
+            "an existing version must never be overwritten"
+        );
+        let original = super::Board::load(
+            base_dir.clone(),
+            &board.id,
+            state.clone(),
+            Some(original_version),
+        )
+        .await
+        .unwrap();
+        assert_eq!(original.name, original_name);
+        let original_page = board
+            .load_versioned_page("page-1", original_version, None)
+            .await
+            .unwrap();
+        assert_eq!(original_page.name, "Original page");
+
+        let fresh = board.snapshot_at_fresh_patch_version(None).await.unwrap();
+        assert_eq!(
+            fresh,
+            (
+                original_version.0,
+                original_version.1,
+                original_version.2 + 1
+            )
+        );
+        let published = super::Board::load(base_dir, &board.id, state, Some(fresh))
+            .await
+            .unwrap();
+        assert_eq!(published.name, "Edited draft");
+        let published_page = board
+            .load_versioned_page("page-1", fresh, None)
+            .await
+            .unwrap();
+        assert_eq!(published_page.name, "Edited page");
+    }
+
+    #[tokio::test]
+    async fn prepared_snapshot_advances_only_after_commit_and_never_overwrites_newer_draft() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = super::Board::new(None, base_dir.clone(), state.clone());
+        let original_version = board.version;
+        board.save(None).await.unwrap();
+        board
+            .snapshot_at_version(original_version, None)
+            .await
+            .unwrap();
+
+        board.name = "Prepared action implementation".to_string();
+        board.mark_changed();
+        board.save(None).await.unwrap();
+        let prepared = board
+            .prepare_snapshot_at_fresh_patch_version(None)
+            .await
+            .unwrap();
+        assert_eq!(board.version, original_version);
+        assert_eq!(prepared.version(), (0, 0, 2));
+
+        let floating = super::Board::load(base_dir.clone(), &board.id, state.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(floating.version, original_version);
+        assert_eq!(floating.name, "Prepared action implementation");
+
+        assert!(
+            board
+                .commit_prepared_snapshot(&prepared, None)
+                .await
+                .unwrap()
+        );
+        assert_eq!(board.version, prepared.version());
+        let committed = super::Board::load(base_dir.clone(), &board.id, state.clone(), None)
+            .await
+            .unwrap();
+        assert_eq!(committed.version, prepared.version());
+
+        committed
+            .snapshot_at_version(committed.version, None)
+            .await
+            .unwrap();
+        let mut newer_draft = committed;
+        newer_draft.name = "Concurrent edit".to_string();
+        newer_draft.mark_changed();
+        newer_draft.save(None).await.unwrap();
+        let second_prepared = newer_draft
+            .prepare_snapshot_at_fresh_patch_version(None)
+            .await
+            .unwrap();
+        newer_draft.name = "Edit after prepare".to_string();
+        newer_draft.mark_changed();
+        newer_draft.save(None).await.unwrap();
+        assert!(
+            !newer_draft
+                .commit_prepared_snapshot(&second_prepared, None)
+                .await
+                .unwrap(),
+            "a post-prepare edit must keep the floating draft at its current version"
+        );
+        assert_eq!(newer_draft.version, prepared.version());
+    }
+
+    #[tokio::test]
+    async fn snapshot_publication_rejects_a_stale_cached_floating_board() {
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut persisted = super::Board::new(None, base_dir.clone(), state.clone());
+        persisted.name = "Original draft".to_string();
+        persisted.mark_changed();
+        persisted.save(None).await.unwrap();
+
+        // Simulate a second API process retaining an older in-memory board
+        // after another process has committed a newer floating draft at the
+        // same semantic version.
+        let stale = super::Board::load(base_dir.clone(), &persisted.id, state.clone(), None)
+            .await
+            .unwrap();
+        persisted.name = "Newer authoritative draft".to_string();
+        persisted.mark_changed();
+        persisted.save(None).await.unwrap();
+
+        let candidate = (stale.version.0, stale.version.1, stale.version.2 + 1);
+        let error = stale
+            .snapshot_at_version(candidate, None)
+            .await
+            .expect_err("stale cached content must never become a publishable snapshot");
+        assert!(error.to_string().contains("Board draft changed"));
+        assert!(
+            !stale
+                .snapshot_matches_persisted_draft(candidate, None)
+                .await
+                .unwrap(),
+            "the immutable orphan must not be mistaken for the authoritative draft"
+        );
+    }
+
+    #[tokio::test]
+    async fn interrupted_page_snapshot_resumes_or_skips_conflicting_patch() {
+        use crate::{a2ui::widget::Page, utils::compression::compress_to_file_create};
+
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = super::Board::new(None, base_dir, state);
+        let page = Page::new("page-1", "Current page", "/");
+        board.save_page(&page, None).await.unwrap();
+        board.save(None).await.unwrap();
+        let store = board.get_store(None).await.unwrap();
+        let first_candidate = (board.version.0, board.version.1, board.version.2 + 1);
+
+        // Simulate a process that copied a page and stopped before writing the
+        // board existence marker. The next attempt must finish that version.
+        let page_proto: flow_like_types::proto::Page = page.clone().into();
+        compress_to_file_create(
+            store.clone(),
+            board.versioned_page_path(first_candidate, "page-1"),
+            &page_proto,
+        )
+        .await
+        .unwrap();
+        let resumed = board
+            .prepare_snapshot_at_fresh_patch_version(Some(store.clone()))
+            .await
+            .unwrap();
+        assert_eq!(resumed.version(), first_candidate);
+
+        board
+            .commit_prepared_snapshot(&resumed, Some(store.clone()))
+            .await
+            .unwrap();
+        board.name = "Another draft".to_string();
+        board.mark_changed();
+        board.save(Some(store.clone())).await.unwrap();
+        let conflicting_candidate = (board.version.0, board.version.1, board.version.2 + 1);
+        let conflicting_page = Page::new("page-1", "Other publisher's page", "/");
+        let conflicting_page_proto: flow_like_types::proto::Page = conflicting_page.into();
+        compress_to_file_create(
+            store.clone(),
+            board.versioned_page_path(conflicting_candidate, "page-1"),
+            &conflicting_page_proto,
+        )
+        .await
+        .unwrap();
+
+        let prepared = board
+            .prepare_snapshot_at_fresh_patch_version(Some(store))
+            .await
+            .unwrap();
+        assert_eq!(
+            prepared.version(),
+            (
+                conflicting_candidate.0,
+                conflicting_candidate.1,
+                conflicting_candidate.2 + 1
+            ),
+            "a conflicting orphan page must not permanently poison publication"
+        );
+    }
+
+    #[tokio::test]
+    async fn undo_against_diverged_board_errors_and_restores_undone_tail() {
+        use crate::flow::{
+            board::{
+                Comment, CommentType,
+                commands::{
+                    GenericCommand, comments::upsert_comment::UpsertCommentCommand,
+                    pins::connect_pins::ConnectPinsCommand,
+                },
+            },
+            node::Node,
+            variable::VariableType,
+        };
+        use std::time::SystemTime;
+
+        let state = flow_state().await;
+        let base_dir = Path::from("boards");
+        let mut board = super::Board::new(None, base_dir, state.clone());
+
+        let mut from_node = Node::new("test_from", "From", "", "test");
+        let from_pin = from_node
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let mut to_node = Node::new("test_to", "To", "", "test");
+        let to_pin = to_node
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let from_id = from_node.id.clone();
+        let to_id = to_node.id.clone();
+        board.nodes.insert(from_id.clone(), from_node);
+        board.nodes.insert(to_id.clone(), to_node);
+
+        let comment = Comment {
+            id: "comment-1".to_string(),
+            author: None,
+            content: "recorded after the connect".to_string(),
+            comment_type: CommentType::Text,
+            timestamp: SystemTime::now(),
+            coordinates: (0.0, 0.0, 0.0),
+            width: None,
+            height: None,
+            layer: None,
+            color: None,
+            z_index: None,
+            hash: None,
+            is_locked: None,
+        };
+
+        let commands = vec![
+            GenericCommand::ConnectPin(ConnectPinsCommand::new(
+                from_id.clone(),
+                to_id.clone(),
+                from_pin.clone(),
+                to_pin.clone(),
+            )),
+            GenericCommand::UpsertComment(UpsertCommentCommand::new(comment)),
+        ];
+
+        let executed = board
+            .execute_commands(commands, state.clone())
+            .await
+            .unwrap();
+        assert!(board.comments.contains_key("comment-1"));
+
+        // Divergence: the board was rewritten underneath the recorded history —
+        // the connection's source node no longer exists.
+        board.nodes.remove(&from_id);
+
+        let result = board.undo(executed, state.clone()).await;
+
+        assert!(result.is_err(), "undo against a diverged board must fail");
+        assert!(
+            board.comments.contains_key("comment-1"),
+            "commands undone before the failure must be re-applied so the board is not left partially rolled back"
+        );
     }
 }

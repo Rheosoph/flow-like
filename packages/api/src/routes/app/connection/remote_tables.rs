@@ -75,7 +75,13 @@ pub async fn get_remote_tables(
     let credentials = state.master_credentials().await?;
     let builder = credentials.to_db(&target_app_id).await?;
     let db_connection = builder.execute().await?;
-    let tables = db_connection.table_names().execute().await?;
+    let tables = db_connection
+        .table_names()
+        .execute()
+        .await?
+        .into_iter()
+        .filter(|name| !flow_like_catalog_core::is_reserved_table(name))
+        .collect();
 
     Ok(Json(tables))
 }

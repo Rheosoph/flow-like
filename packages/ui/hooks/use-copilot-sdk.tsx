@@ -8,6 +8,7 @@ import type {
 	CopilotModel,
 } from "../components/flowpilot/types";
 import { isTauri } from "../lib/platform";
+import { copilotBackendConnectionCoordinator } from "./copilot-backend-coordinator";
 
 // Offline / loading fallback only. The authoritative list is fetched from the
 // backend (`flowpilot_agent_backend_list_models`), which discovers the
@@ -72,8 +73,12 @@ interface UseCopilotSDKResult {
 export function useCopilotSDK(
 	backend: AgentBackendProvider = "github-copilot",
 ): UseCopilotSDKResult {
-	const [isRunning, setIsRunning] = useState(false);
-	const [isConnecting, setIsConnecting] = useState(false);
+	const initialConnection =
+		copilotBackendConnectionCoordinator.snapshot(backend);
+	const [isRunning, setIsRunning] = useState(initialConnection.isRunning);
+	const [isConnecting, setIsConnecting] = useState(
+		initialConnection.isConnecting,
+	);
 	const [models, setModels] = useState<CopilotModel[]>(() =>
 		staticModelsForBackend(backend),
 	);
@@ -82,41 +87,50 @@ export function useCopilotSDK(
 
 	const isTauriEnv = isTauri();
 
+	useEffect(
+		() =>
+			copilotBackendConnectionCoordinator.subscribe(backend, (snapshot) => {
+				setIsRunning(snapshot.isRunning);
+				setIsConnecting(snapshot.isConnecting);
+				setError(snapshot.error);
+			}),
+		[backend],
+	);
+
 	useEffect(() => {
 		setModels(staticModelsForBackend(backend));
 		setAuthStatus(null);
-		setError(null);
 	}, [backend]);
 
 	const start = useCallback(
 		async (config?: CopilotConnectionConfig) => {
 			if (!isTauriEnv) {
-				setError("FlowPilot agent backends are only available in the desktop app");
+				setError(
+					"FlowPilot agent backends are only available in the desktop app",
+				);
 				return;
 			}
 
-			setIsConnecting(true);
 			setError(null);
 
 			try {
 				const { invoke } = await import("@tauri-apps/api/core");
 				const targetBackend = config?.backend ?? backend;
 				await withTimeout(
-					invoke("flowpilot_agent_backend_start", {
-						backend: targetBackend,
-						useStdio: config?.useStdio ?? true,
-						cliUrl: config?.serverUrl,
-					}),
+					copilotBackendConnectionCoordinator.start(targetBackend, () =>
+						invoke("flowpilot_agent_backend_start", {
+							backend: targetBackend,
+							useStdio: config?.useStdio ?? true,
+							cliUrl: config?.serverUrl,
+						}),
+					),
 					15_000,
 					`Starting ${targetBackend}`,
 				);
-				setIsRunning(true);
 			} catch (e) {
 				const errMsg = e instanceof Error ? e.message : String(e);
 				setError(errMsg);
 				throw e;
-			} finally {
-				setIsConnecting(false);
 			}
 		},
 		[backend, isTauriEnv],
@@ -125,25 +139,23 @@ export function useCopilotSDK(
 	const stop = useCallback(async () => {
 		if (!isTauriEnv) return;
 
-		setIsConnecting(true);
 		setError(null);
 
 		try {
 			const { invoke } = await import("@tauri-apps/api/core");
 			await withTimeout(
-				invoke("flowpilot_agent_backend_stop", { backend }),
+				copilotBackendConnectionCoordinator.stop(backend, () =>
+					invoke("flowpilot_agent_backend_stop", { backend }),
+				),
 				10_000,
 				`Stopping ${backend}`,
 			);
-			setIsRunning(false);
 			setModels(staticModelsForBackend(backend));
 			setAuthStatus(null);
 		} catch (e) {
 			const errMsg = e instanceof Error ? e.message : String(e);
 			setError(errMsg);
 			throw e;
-		} finally {
-			setIsConnecting(false);
 		}
 	}, [backend, isTauriEnv]);
 
@@ -201,7 +213,7 @@ export function useCopilotSDK(
 					5_000,
 					`Checking ${backend}`,
 				);
-				setIsRunning(running);
+				copilotBackendConnectionCoordinator.reconcile(backend, running);
 				if (!running) {
 					setModels(staticModelsForBackend(backend));
 					setAuthStatus(null);

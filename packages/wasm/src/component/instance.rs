@@ -24,6 +24,13 @@ pub struct WasmComponentInstance {
     fuel_limit: u64,
 }
 
+fn cli_child_host_state(parent: &HostState) -> HostState {
+    let mut child = HostState::new(parent.capabilities);
+    child.model_context = parent.model_context.clone();
+    child.model_usage_context = parent.model_usage_context.clone();
+    child
+}
+
 impl WasmComponentInstance {
     pub async fn new(
         engine: &WasmEngine,
@@ -98,10 +105,11 @@ impl WasmComponentInstance {
                 WasmError::execution("wasi:cli/run", format!("Failed to preopen cwd: {}", e))
             })?;
 
+        let child_host_state = cli_child_host_state(&self.store.data().host_state);
         let mut store = Store::new(
             &self.engine,
             ComponentStoreData {
-                host_state: HostState::new(self.store.data().host_state.capabilities),
+                host_state: child_host_state,
                 wasi_ctx: builder.build(),
                 http_ctx: wasmtime_wasi_http::WasiHttpCtx::new(),
                 resource_table: wasmtime::component::ResourceTable::new(),
@@ -336,5 +344,44 @@ impl std::fmt::Debug for WasmComponentInstance {
             .field("component_hash", &self.component.hash())
             .field("remaining_fuel", &self.remaining_fuel())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::host_functions::ModelContext;
+    use crate::limits::WasmCapabilities;
+    use flow_like::models::llm::ModelUsageContext;
+    use flow_like::state::{FlowLikeConfig, FlowLikeState};
+    use flow_like::utils::http::HTTPClient;
+
+    #[test]
+    fn cli_child_keeps_hosted_model_usage_attribution() {
+        let mut parent = HostState::new(WasmCapabilities::MODELS);
+        parent.model_usage_context = Some(ModelUsageContext {
+            app_id: Some("app-1".to_string()),
+            run_id: Some("run-1".to_string()),
+        });
+        parent.model_context = Some(ModelContext {
+            app_state: Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            )),
+            token: Some("token".to_string()),
+            cache: None,
+        });
+
+        let child = cli_child_host_state(&parent);
+
+        assert_eq!(child.model_usage_context, parent.model_usage_context);
+        assert_eq!(
+            child
+                .model_context
+                .as_ref()
+                .and_then(|context| context.token.as_deref()),
+            Some("token")
+        );
+        assert!(child.has_capability(WasmCapabilities::MODELS));
     }
 }

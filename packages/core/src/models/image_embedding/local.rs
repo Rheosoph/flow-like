@@ -10,6 +10,7 @@ use flow_like_model_provider::fastembed::{
 use flow_like_model_provider::{
     embedding::{EmbeddingModelLogic, GeneralTextSplitter},
     image_embedding::ImageEmbeddingModelLogic,
+    ml::ort_runtime::{ensure_ort_initialized, session_execution_providers},
 };
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::{Cacheable, Result, async_trait, sync::Mutex};
@@ -75,7 +76,14 @@ impl LocalImageEmbeddingModel {
 
         let user_embedding_model =
             UserDefinedImageEmbeddingModel::new(loaded_model, loaded_preprocessor);
-        let init_options = ImageInitOptionsUserDefined::new();
+        ensure_ort_initialized().map_err(|error| {
+            flow_like_types::anyhow!("Failed to configure ONNX Runtime: {error}")
+        })?;
+        let init_options = ImageInitOptionsUserDefined::new().with_execution_providers(
+            session_execution_providers(true).map_err(|error| {
+                flow_like_types::anyhow!("Failed to select ONNX providers: {error}")
+            })?,
+        );
 
         let loaded_model = ImageEmbedding::try_new_from_user_defined(
             user_embedding_model.clone(),

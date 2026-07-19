@@ -6,6 +6,12 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SRC_TAURI_DIR = path.resolve(SCRIPT_DIR, "../src-tauri");
+const WORKSPACE_DIR = path.resolve(SRC_TAURI_DIR, "../../..");
+const ORT_STAGER_MANIFEST = path.join(
+	SCRIPT_DIR,
+	"ort-runtime-stager/Cargo.toml",
+);
+const ORT_STAGER_LOCK = path.join(SCRIPT_DIR, "ort-runtime-stager/Cargo.lock");
 
 const RUNTIME_DLLS = [
 	"msvcp140.dll",
@@ -77,7 +83,14 @@ function parseArgs(): CliOptions {
 }
 
 function selectedArchitectures(options: CliOptions): Architecture[] {
-	if (!options.arch) return Object.keys(ARCHITECTURES) as Architecture[];
+	if (!options.arch) {
+		if (process.arch === "arm64") return ["arm64"];
+		if (process.arch === "x64") return ["x64"];
+
+		throw new Error(
+			`Unsupported Windows architecture: ${process.arch}. Pass --arch x64 or --arch arm64 explicitly.`,
+		);
+	}
 
 	return [options.arch];
 }
@@ -85,11 +98,12 @@ function selectedArchitectures(options: CliOptions): Architecture[] {
 function printHelp(): void {
 	console.log(`Usage: bun run scripts/prepare-windows-prereqs.ts [--arch x64|arm64] [--redist-dir PATH] [--force]
 
-Stages app-local Microsoft Visual C++ runtime DLLs into:
+Stages app-local Microsoft Visual C++ and ONNX Runtime/DirectML DLLs into:
   ${path.relative(process.cwd(), path.join(SRC_TAURI_DIR, "binaries/win"))}
 
 The Windows Tauri configs bundle these files as resources so MSI, NSIS
-and updater installs include the VC runtime DLLs with the app.
+and updater installs include the native runtime DLLs with the app. Without
+--arch, the script stages DLLs for the current machine architecture.
 
 By default this script locates the Visual Studio Redistributable directory
 from VCToolsRedistDir, VCINSTALLDIR or vswhere. Set FLOWLIKE_VC_REDIST_DIR
@@ -320,11 +334,77 @@ function stageRuntimeDlls(arch: Architecture, options: CliOptions): void {
 	}
 }
 
+function cargoTargetDir(): string {
+	const configured = process.env.CARGO_TARGET_DIR;
+	const base = configured
+		? path.resolve(WORKSPACE_DIR, configured)
+		: path.join(WORKSPACE_DIR, "target");
+	// ort-sys intentionally avoids overwriting an existing copied DLL. Isolating the
+	// helper by its lockfile hash guarantees an ORT dependency update cannot reuse a
+	// DirectML.dll left behind by the previous runtime version.
+	const runtimeKey = fileHash(ORT_STAGER_LOCK).slice(0, 16);
+	return path.join(base, "ort-runtime-stager", runtimeKey);
+}
+
+function stageDirectMlDll(arch: Architecture, options: CliOptions): void {
+	const config = ARCHITECTURES[arch];
+	execFileSync(
+		"cargo",
+		[
+			"check",
+			"--manifest-path",
+			ORT_STAGER_MANIFEST,
+			"--target",
+			config.targetTriple,
+			"--target-dir",
+			cargoTargetDir(),
+			"--locked",
+		],
+		{
+			cwd: WORKSPACE_DIR,
+			stdio: "inherit",
+		},
+	);
+
+	const source = path.join(
+		cargoTargetDir(),
+		config.targetTriple,
+		"debug",
+		"DirectML.dll",
+	);
+	if (!fs.existsSync(source)) {
+		throw new Error(
+			`ort-sys did not stage DirectML.dll at the expected path: ${source}`,
+		);
+	}
+
+	fs.mkdirSync(config.outputDir, { recursive: true });
+	const destination = path.join(
+		config.outputDir,
+		`DirectML.dll-${config.targetTriple}`,
+	);
+	if (!options.force && fs.existsSync(destination)) {
+		if (fileHash(source) === fileHash(destination)) {
+			console.log(`Already staged: ${path.relative(process.cwd(), destination)}`);
+			return;
+		}
+		console.log(
+			`Refreshing ${path.relative(process.cwd(), destination)} from ort-sys`,
+		);
+	}
+
+	fs.copyFileSync(source, destination);
+	console.log(
+		`Staged DirectML.dll -> ${path.relative(process.cwd(), destination)}`,
+	);
+}
+
 async function main(): Promise<void> {
 	const options = parseArgs();
 
 	for (const arch of selectedArchitectures(options)) {
 		stageRuntimeDlls(arch, options);
+		stageDirectMlDll(arch, options);
 	}
 }
 

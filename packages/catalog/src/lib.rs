@@ -41,7 +41,10 @@ pub use flow_like_catalog_core::NodeLogic;
 pub use flow_like_catalog_core::{
     Attachment, BoundingBox, CachedDB, DEFAULT_GRAPH_NEIGHBORS_DIRECTION,
     DEFAULT_GRAPH_OVERLAY_LIMIT, DEFAULT_GRAPH_QUERY_LIMIT, DEFAULT_GRAPH_SAMPLE_SIZE, FlowPath,
-    FlowPathRuntime, FlowPathStore, NodeDBConnection, NodeImage, NodeImageWrapper, register_node,
+    FlowPathRuntime, FlowPathStore, GraphOverlay, NodeDBConnection, NodeImage, NodeImageWrapper,
+    ObjectViewDefinition, OntologyActionDefinition, RemoteOntologyImport, is_reserved_table,
+    ontology_action_parameter_validator, ontology_binding_nodes, register_node,
+    remote_ontology_binding_nodes, validate_ontology_action_parameters,
 };
 
 // Re-export standard library
@@ -367,8 +370,8 @@ pub fn get_catalog_without(packages: &[CatalogPackage]) -> Vec<Arc<dyn NodeLogic
 ///
 /// fn main() {
 ///     let info = initialize();
-///     println!("Active providers: {:?}", info.onnx_providers);
-///     println!("GPU acceleration: {}", info.onnx_accelerated);
+///     println!("Configured providers: {:?}", info.onnx_providers);
+///     println!("Acceleration configured: {}", info.onnx_accelerated);
 /// }
 /// ```
 #[cfg(feature = "execute")]
@@ -390,9 +393,9 @@ pub fn initialize() -> InitInfo {
 #[cfg(feature = "execute")]
 #[derive(Debug, Clone, Default)]
 pub struct InitInfo {
-    /// Active ONNX execution providers
+    /// Configured ONNX execution providers, including CPU fallback
     pub onnx_providers: Vec<String>,
-    /// Whether ONNX has GPU/NPU acceleration
+    /// Whether ONNX has a GPU/NPU provider configured
     pub onnx_accelerated: bool,
     /// Any warnings during ONNX initialization
     pub onnx_warnings: Vec<String>,

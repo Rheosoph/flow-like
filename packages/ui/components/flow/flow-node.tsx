@@ -83,7 +83,6 @@ import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { LayerEditMenu } from "./layer-editing-menu";
 import { typeToColor } from "./utils";
 
-
 export interface RemoteSelectionParticipant {
 	clientId: number;
 	/** The sub (subject) from the auth token - use to resolve user info via API */
@@ -138,7 +137,12 @@ const FlowNodeInner = memo(
 		const { pushCommand } = useUndoRedo(props.data.appId, props.data.boardId);
 		const { resolvedTheme } = useTheme();
 		const invalidate = useInvalidateInvoke();
-		const { currentMetadata, heatmapEnabled, heatmap } = useLogAggregation();
+		// Field selectors: subscribing to the whole log store re-renders every
+		// node on currentLogs/isLoading churn during runs — with hundreds of
+		// nodes that bypasses the memo comparator on every log tick.
+		const currentMetadata = useLogAggregation((state) => state.currentMetadata);
+		const heatmapEnabled = useLogAggregation((state) => state.heatmapEnabled);
+		const heatmap = useLogAggregation((state) => state.heatmap);
 
 		const [payload, setPayload] = useState({
 			open: false,
@@ -545,6 +549,7 @@ const FlowNodeInner = memo(
 				pinRemoveCallback,
 				isReroute,
 				props.data.version,
+				props.data.currentLayerId,
 				props.data.selectorDataVersion,
 			],
 		);
@@ -585,6 +590,7 @@ const FlowNodeInner = memo(
 				pinRemoveCallback,
 				isReroute,
 				props.data.version,
+				props.data.currentLayerId,
 				props.data.selectorDataVersion,
 			],
 		);
@@ -1494,6 +1500,7 @@ function flowNodeAreEqual(
 		prev.data.remoteSelections === next.data.remoteSelections &&
 		prev.data.peerUsers === next.data.peerUsers &&
 		prev.data.remoteExecuting === next.data.remoteExecuting &&
+		prev.data.currentLayerId === next.data.currentLayerId &&
 		prev.data.selectorDataVersion === next.data.selectorDataVersion
 	);
 }

@@ -1,12 +1,12 @@
 "use client";
 
-import type { CSSProperties, ElementType, ReactNode } from "react";
 import { Fragment } from "react";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
-import { resolveChildSpecs } from "../children";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { resolveChildSpecs } from "../children";
+import { normalizeSemanticBoxTag } from "../semantic-box-tags";
 import type { BoxComponent } from "../types";
 
 export function A2UIBox({
@@ -16,14 +16,12 @@ export function A2UIBox({
 }: ComponentProps<BoxComponent>) {
 	const { resolve } = useData();
 
-	const as = component.as ? (resolve(component.as) as string) : "div";
+	// `as` may come from generated JSON or a live data binding. Never pass an
+	// arbitrary resolved string to React as an intrinsic element name.
+	const Tag = normalizeSemanticBoxTag(
+		component.as ? resolve(component.as) : undefined,
+	);
 	const children = resolveChildSpecs(component.children, resolve);
-
-	const Tag = as as ElementType<{
-		className?: string;
-		style?: CSSProperties;
-		children?: ReactNode;
-	}>;
 
 	return (
 		<Tag className={cn(resolveStyle(style))} style={resolveInlineStyle(style)}>

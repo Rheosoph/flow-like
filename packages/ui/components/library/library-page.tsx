@@ -325,6 +325,19 @@ export function LibraryPage({
 	}, []);
 	const handleCreateProject = useCallback(
 		async (projectName: string, isOnline: boolean) => {
+			if (!currentProfile.data) {
+				throw new Error("Profile is not ready yet");
+			}
+
+			let embeddingBits = bits.data;
+			if (!embeddingBits) {
+				const refreshedBits = await bits.refetch();
+				if (!refreshedBits.data) {
+					throw new Error("Embedding models could not be loaded");
+				}
+				embeddingBits = refreshedBits.data;
+			}
+
 			const meta = {
 				name: projectName,
 				description: `Coding project: ${projectName}`,
@@ -335,8 +348,8 @@ export function LibraryPage({
 				preview_media: [],
 			};
 
-			const profileBits = new Set(currentProfile.data?.hub_profile.bits ?? []);
-			const allBits = bits.data?.filter((bit) => profileBits.has(bit.id)) ?? [];
+			const profileBits = new Set(currentProfile.data.hub_profile.bits ?? []);
+			const allBits = embeddingBits.filter((bit) => profileBits.has(bit.id));
 
 			const app = await backend.appState.createApp(
 				meta,
@@ -373,7 +386,7 @@ export function LibraryPage({
 			backend.appState,
 			backend.boardState,
 			backend.userState,
-			bits.data,
+			bits,
 			currentProfile,
 			queryClient,
 			router,

@@ -1,4 +1,4 @@
-use flow_like::app::App;
+use flow_like::app::{App, AppVisibility};
 use flow_like::credentials::SharedCredentials;
 use flow_like::flow::execution::log::LogMessage;
 use flow_like::flow::execution::{
@@ -48,7 +48,20 @@ struct ExecutionOverrides {
     run_sub_override: Option<String>,
 }
 
-async fn report_run_to_backend(app_handle: &AppHandle, token: &str, meta: &LogMeta) {
+fn should_report_run_to_backend(visibility: &AppVisibility) -> bool {
+    !matches!(visibility, AppVisibility::Offline)
+}
+
+async fn report_run_to_backend(
+    app_handle: &AppHandle,
+    token: &str,
+    meta: &LogMeta,
+    visibility: &AppVisibility,
+) {
+    if !should_report_run_to_backend(visibility) {
+        return;
+    }
+
     let hub_url = match TauriSettingsState::current_profile(app_handle).await {
         Ok(profile) => profile.hub_profile.hub.clone(),
         Err(_) => return,
@@ -188,6 +201,7 @@ async fn execute_internal(
     app_id: String,
     mut board_id: String,
     mut payload: RunPayload,
+    requested_version: Option<(u32, u32, u32)>,
     events: Option<tauri::ipc::Channel<Vec<InterComEvent>>>,
     event_id: Option<String>,
     stream_state: bool,
@@ -199,7 +213,7 @@ async fn execute_internal(
     let mut event = None;
     let shared_flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
     let flow_like_state = Arc::new(shared_flow_like_state.for_execution_run());
-    let mut version = None;
+    let mut version = requested_version;
     let Ok(app) = App::load(app_id.clone(), flow_like_state.clone()).await else {
         return Err(TauriFunctionError::new("App not found"));
     };
@@ -225,6 +239,7 @@ async fn execute_internal(
 
     let app_handle_for_report = app_handle.clone();
     let token_for_report = token.clone();
+    let app_visibility_for_report = app.visibility.clone();
 
     let buffered_sender = Arc::new(BufferedInterComHandler::new(
         Arc::new(move |event| {
@@ -281,6 +296,10 @@ async fn execute_internal(
         oauth_tokens.unwrap_or_default().into_iter().collect(),
     )
     .await?;
+
+    internal_run
+        .set_usage_attribution_from_visibility(&app.visibility)
+        .await;
 
     if let Some(run_sub_override) = overrides.run_sub_override {
         internal_run.set_execution_sub(run_sub_override).await;
@@ -397,7 +416,7 @@ async fn execute_internal(
         println!("Error flushing buffered sender: {}", err);
     }
 
-    if let Some(meta) = &meta {
+    let flush_result: flow_like_types::Result<()> = if let Some(meta) = &meta {
         let (db_fn, write_options) = {
             let guard = flow_like_state.config.read().await;
             (
@@ -405,33 +424,44 @@ async fn execute_internal(
                 guard.callbacks.lance_write_options.clone(),
             )
         };
-        let db_fn = db_fn
-            .as_ref()
-            .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
-        let base_path = Path::from("runs").child(app_id).child(board_id);
-        let db = flow_like_state
-            .with_lance_session(db_fn(base_path.clone()))
-            .execute()
-            .await
-            .map_err(|e| {
-                flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+        async {
+            let db_fn = db_fn
+                .as_ref()
+                .ok_or_else(|| flow_like_types::anyhow!("No log database configured"))?;
+            let base_path = Path::from("runs").child(app_id).child(board_id);
+            let db = flow_like_state
+                .with_lance_session(db_fn(base_path.clone()))
+                .execute()
+                .await
+                .map_err(|e| {
+                    flow_like_types::anyhow!("Failed to open database: {}, {:?}", base_path, e)
+                })?;
+            meta.flush(db, write_options.as_ref()).await.map_err(|e| {
+                flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e)
             })?;
-        meta.flush(db, write_options.as_ref())
-            .await
-            .map_err(|e| flow_like_types::anyhow!("Failed to flush run: {}, {:?}", base_path, e))?;
-    }
+            Ok(())
+        }
+        .await
+    } else {
+        Ok(())
+    };
 
     // Report online local runs so backend analytics can count executions.
     if let (Some(meta), Some(token)) = (&meta, &token_for_report) {
         let app_handle = app_handle_for_report.clone();
         let token = token.clone();
         let meta = meta.clone();
+        let visibility = app_visibility_for_report.clone();
         tokio::spawn(async move {
-            report_run_to_backend(&app_handle, &token, &meta).await;
+            report_run_to_backend(&app_handle, &token, &meta, &visibility).await;
         });
     }
 
+    // Always release the finished run from the registry, even if flushing its
+    // logs failed. Otherwise the run stays flagged "in use" and its logs can
+    // never be deleted from storage management until the app restarts.
     let _res = shared_flow_like_state.remove_and_cancel_run(&run_id);
+    flush_result?;
 
     Ok(meta)
 }
@@ -519,6 +549,7 @@ pub(crate) async fn execute_daemon_event(
             filter_secrets: Some(false),
         },
         None,
+        None,
         Some(event_id),
         false,
         credentials,
@@ -542,6 +573,7 @@ pub async fn execute_board(
     app_id: String,
     board_id: String,
     payload: RunPayload,
+    version: Option<(u32, u32, u32)>,
     stream_state: Option<bool>,
     events: tauri::ipc::Channel<Vec<InterComEvent>>,
     credentials: Option<SharedCredentials>,
@@ -554,6 +586,7 @@ pub async fn execute_board(
         app_id,
         board_id,
         payload,
+        version,
         Some(events),
         None,
         stream_state,
@@ -583,6 +616,7 @@ pub async fn execute_event(
         app_id,
         String::new(), // Will be read from the event anyways
         payload,
+        None,
         Some(events),
         Some(event_id),
         stream_state,
@@ -751,4 +785,26 @@ pub async fn query_run(
     let state = TauriFlowLikeState::construct(&app_handle).await?;
     let logs = state.query_run(&log_meta, &query, limit, offset).await?;
     Ok(logs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offline_apps_are_not_reported_to_the_backend() {
+        assert!(!should_report_run_to_backend(&AppVisibility::Offline));
+    }
+
+    #[test]
+    fn server_backed_apps_are_reported_to_the_backend() {
+        for visibility in [
+            AppVisibility::Public,
+            AppVisibility::PublicRequestAccess,
+            AppVisibility::Private,
+            AppVisibility::Prototype,
+        ] {
+            assert!(should_report_run_to_backend(&visibility));
+        }
+    }
 }

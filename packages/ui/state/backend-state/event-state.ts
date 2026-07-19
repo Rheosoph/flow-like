@@ -84,6 +84,11 @@ export interface IEventState {
 	): Promise<IEvent>;
 	/** Check OAuth requirements for an event's board. Returns missing providers. */
 	checkEventOAuth?(appId: string, event: IEvent): Promise<IOAuthCheckResult>;
+	/** Check OAuth requirements resolved by a governed pre-run endpoint. */
+	checkOAuthRequirements?(
+		appId: string,
+		requirements: Array<{ provider_id: string; scopes: string[] }>,
+	): Promise<IOAuthCheckResult>;
 	deleteEvent(appId: string, eventId: string): Promise<void>;
 	validateEvent(
 		appId: string,
@@ -151,7 +156,11 @@ export interface IEventState {
 	): Promise<IEventAlias>;
 
 	/** Delete a vanity alias from an event. */
-	deleteEventAlias?(appId: string, eventId: string, slug: string): Promise<void>;
+	deleteEventAlias?(
+		appId: string,
+		eventId: string,
+		slug: string,
+	): Promise<void>;
 
 	/** Pre-run analysis: get required runtime variables and OAuth for an event */
 	prerunEvent?(

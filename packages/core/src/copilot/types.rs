@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 
 /// Re-export commonly used types from the board copilot
 pub use crate::flow::copilot::{
-    BoardCommand, ChatImage, ChatRole, NodeMetadata, NodePosition, PinMetadata, PlaceholderPinDef,
-    PlanStep, PlanStepStatus, RunContext, Suggestion, TemplateInfo,
+    BoardCommand, ChatImage, ChatRole, FlowIrCommitToken, NodeMetadata, NodePosition, PinMetadata,
+    PlaceholderPinDef, PlanStep, PlanStepStatus, RunContext, Suggestion, TemplateInfo,
 };
 
 /// The scope of what the copilot agent can modify
@@ -19,6 +19,9 @@ pub enum CopilotScope {
     Frontend,
     /// Both board and UI modifications
     Both,
+    /// Only data-layer work (databases, ontologies/overlays, graph queries,
+    /// analytics and ontology actions). No board or UI modifications.
+    DataStudio,
 }
 
 /// A unified chat message that can contain both text and images
@@ -85,6 +88,11 @@ pub struct UnifiedCopilotResponse {
     /// Last FlowScript document submitted by the workflow agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flowscript_workspace: Option<String>,
+
+    /// Exact typed-IR batch awaiting host review. The host must preflight this token immediately
+    /// before Apply and resolve it as applied or dismissed afterward.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flow_ir_commit: Option<FlowIrCommitToken>,
 
     /// Suggested follow-up prompts
     #[serde(default)]

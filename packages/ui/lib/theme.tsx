@@ -131,6 +131,14 @@ ${lightVars}
 ${darkVars}
 }
 
+[data-fl-chat-color-scheme="light"] {
+${lightVars}
+}
+
+[data-fl-chat-color-scheme="dark"] {
+${darkVars}
+}
+
 /* Apply theme fonts to body and font classes */
 body {
     font-family: var(--font-sans, inherit) !important;

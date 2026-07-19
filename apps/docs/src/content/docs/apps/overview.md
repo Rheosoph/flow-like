@@ -16,7 +16,7 @@ Each **Flow-Like App** enables you to:
 - Link **Flows** to the outside world through [Events](/apps/events/),
 - Configure [secrets and API keys](/apps/runtime-variables/) securely per device,
 - [Upload files and folders](/apps/storage/),
-- Manage and inspect [databases](/apps/storage/),
+- Model, explore, and share data in [Data Studio](/apps/data-studio/),
 - [Share and collaborate](/apps/share/) with your team,
 - Create [releases](/apps/versioning/) of your app,
 - Reuse your ideas and automations with [Templates](/apps/templates/).

@@ -1,8 +1,9 @@
 use super::chat_event::Attachment;
 use crate::data::path::FlowPath;
 use crate::remote_util::{
-    RemoteAppSession, error_for_status, follow_get_redirect_without_credentials, http_client,
-    http_client_no_redirect, validate_path_id, with_event_registration_headers,
+    RemoteAppSession, error_for_status, follow_get_redirect_without_credentials,
+    http_client_no_redirect, invoke_and_collect, post_json, remote_app_session, validate_path_id,
+    with_event_registration_headers,
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use flow_like::flow::{
@@ -13,10 +14,9 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_model_provider::history::History;
-use flow_like_types::{Value, async_trait, json::json, tokio};
-use futures::StreamExt;
+use flow_like_types::{Value, async_trait, json::json};
 use serde::Deserialize;
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 /// Pin names special-cased by the flow editor. The project/event pins render
 /// interactive dropdowns; the meta pin is auto-filled with the event's typed
@@ -236,7 +236,7 @@ fn timeout_spec() -> PinSpec {
     PinSpec::new(
         "timeout_seconds",
         "Timeout (s)",
-        "Maximum time to wait for the remote run to finish",
+        "Maximum time to wait for the remote request to finish",
         VariableType::Integer,
     )
     .default(json!(120))
@@ -672,7 +672,7 @@ impl NodeLogic for CallRemoteEventNode {
             .unwrap_or_default();
         let meta: EventMeta = flow_like_types::json::from_str(&meta_raw).unwrap_or_default();
 
-        let session = RemoteAppSession::open(context, &remote_app_id).await?;
+        let session = remote_app_session(context, &remote_app_id).await?;
 
         match meta.event_type.as_str() {
             "simple_chat" => self.run_chat(context, &session, &event_id).await,
@@ -705,8 +705,21 @@ impl CallRemoteEventNode {
 
         if !wait_for_result {
             let url = session.url(&format!("events/{}/invoke/async", event_id));
-            let response = post_json(session, &url, &body).await?;
-            let queued: Value = response.json().await?;
+            let queued: Value = flow_like_types::tokio::time::timeout(
+                std::time::Duration::from_secs(timeout),
+                async {
+                    let response = post_json(session, &url, &body).await?;
+                    let queued: Value = response.json().await?;
+                    Ok::<_, flow_like_types::Error>(queued)
+                },
+            )
+            .await
+            .map_err(|_| {
+                flow_like_types::anyhow!(
+                    "Remote event request did not finish within {} seconds",
+                    timeout
+                )
+            })??;
             context
                 .set_pin_value(
                     "run_id",
@@ -837,12 +850,14 @@ impl CallRemoteEventNode {
                 .evaluate_pin(&format!("param_{}", param))
                 .await
                 .unwrap_or_default();
-            path = path.replace(&format!("{{{}}}", param), value.trim());
+            let value = encode_path_parameter(&value)?;
+            path = path.replace(&format!("{{{}}}", param), &value);
         }
 
         let query: Value = context.evaluate_pin("query").await.unwrap_or(Value::Null);
         let body: Value = context.evaluate_pin("body").await.unwrap_or(Value::Null);
         let headers: Value = context.evaluate_pin("headers").await.unwrap_or(Value::Null);
+        let timeout = self.timeout_secs(context).await;
 
         let url = session.url(&format!(
             "events/{}/rest{}",
@@ -867,49 +882,63 @@ impl CallRemoteEventNode {
             request = request.json(&body);
         }
 
-        let mut response = request
-            .send()
+        let (status, header_map, content_type, bytes) =
+            flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(timeout), async {
+                let mut response = request
+                    .send()
+                    .await
+                    .map_err(|err| flow_like_types::anyhow!("Remote REST call failed: {}", err))?;
+
+                // Static file registrations redirect to a short-lived object-store URL.
+                // Follow it with a new request that carries neither the app token nor
+                // registration credentials. Custom headers are otherwise retained by
+                // reqwest across cross-origin redirects.
+                if is_file && response.status().is_redirection() {
+                    response = follow_get_redirect_without_credentials(response).await?;
+                }
+
+                // Non-file redirects are returned to the flow as status + Location
+                // rather than followed with credentials or treated as API failures.
+                let response = if response.status().is_redirection() {
+                    response
+                } else {
+                    error_for_status(response, "Remote REST call").await?
+                };
+
+                let status = response.status().as_u16() as i64;
+                let header_map: flow_like_types::json::Map<String, Value> = response
+                    .headers()
+                    .iter()
+                    .filter_map(|(name, value)| {
+                        value
+                            .to_str()
+                            .ok()
+                            .map(|value| (name.to_string(), json!(value)))
+                    })
+                    .collect();
+                let content_type = response
+                    .headers()
+                    .get(flow_like_types::reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let bytes = response.bytes().await.map_err(|err| {
+                    flow_like_types::anyhow!("Failed to read REST response: {}", err)
+                })?;
+                Ok::<_, flow_like_types::Error>((status, header_map, content_type, bytes))
+            })
             .await
-            .map_err(|err| flow_like_types::anyhow!("Remote REST call failed: {}", err))?;
-
-        // Static file registrations redirect to a short-lived object-store URL.
-        // Follow it with a new request that carries neither the app token nor
-        // registration credentials. Custom headers are otherwise retained by
-        // reqwest across cross-origin redirects.
-        if is_file && response.status().is_redirection() {
-            response = follow_get_redirect_without_credentials(response).await?;
-        }
-
-        // Non-file redirects are returned to the flow as status + Location
-        // rather than followed with credentials or treated as API failures.
-        let response = if response.status().is_redirection() {
-            response
-        } else {
-            error_for_status(response, "Remote REST call").await?
-        };
-
-        let status = response.status().as_u16() as i64;
-        let header_map: flow_like_types::json::Map<String, Value> = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.to_string(), json!(v))))
-            .collect();
-        let content_type = response
-            .headers()
-            .get(flow_like_types::reqwest::header::CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
+            .map_err(|_| {
+                flow_like_types::anyhow!(
+                    "Remote REST call did not finish within {} seconds",
+                    timeout
+                )
+            })??;
 
         context.set_pin_value("status", json!(status)).await?;
         context
             .set_pin_value("response_headers", json!(header_map))
             .await?;
-
-        let bytes = response
-            .bytes()
-            .await
-            .map_err(|err| flow_like_types::anyhow!("Failed to read REST response: {}", err))?;
 
         if is_file || is_binary_content(&content_type) {
             let file =
@@ -936,15 +965,24 @@ impl CallRemoteEventNode {
     ) -> flow_like_types::Result<()> {
         let mode: String = context.evaluate_pin("mode").await.unwrap_or_default();
         let headers: Value = context.evaluate_pin("headers").await.unwrap_or(Value::Null);
+        let timeout = self.timeout_secs(context).await;
 
         if mode == MCP_MODE_READ_RESOURCE {
             let uri: String = context.evaluate_pin("resource").await.unwrap_or_default();
             if uri.trim().is_empty() {
                 return Err(flow_like_types::anyhow!("No resource selected"));
             }
-            let result = session
-                .mcp_request(event_id, "resources/read", json!({ "uri": uri }), &headers)
-                .await?;
+            let result = flow_like_types::tokio::time::timeout(
+                std::time::Duration::from_secs(timeout),
+                session.mcp_request(event_id, "resources/read", json!({ "uri": uri }), &headers),
+            )
+            .await
+            .map_err(|_| {
+                flow_like_types::anyhow!(
+                    "Remote MCP request did not finish within {} seconds",
+                    timeout
+                )
+            })??;
             let contents = result
                 .get("contents")
                 .and_then(|c| c.as_array())
@@ -1010,14 +1048,22 @@ impl CallRemoteEventNode {
             }
         }
 
-        let result = session
-            .mcp_request(
+        let result = flow_like_types::tokio::time::timeout(
+            std::time::Duration::from_secs(timeout),
+            session.mcp_request(
                 event_id,
                 "tools/call",
                 json!({ "name": tool, "arguments": arguments }),
                 &headers,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            flow_like_types::anyhow!(
+                "Remote MCP request did not finish within {} seconds",
+                timeout
             )
-            .await?;
+        })??;
 
         if result
             .get("isError")
@@ -1042,157 +1088,6 @@ impl CallRemoteEventNode {
 }
 
 // ---------------------------------------------------------------------------
-// Invocation helpers (SSE collection)
-// ---------------------------------------------------------------------------
-
-struct SseOutcome {
-    run_id: Option<String>,
-    status: Option<String>,
-    error_message: Option<String>,
-    generic_result: Option<Value>,
-    chat_out: Option<Value>,
-    chat_stream: Option<Value>,
-}
-
-impl SseOutcome {
-    fn status_str(&self) -> String {
-        self.status
-            .clone()
-            .unwrap_or_else(|| "Completed".to_string())
-    }
-
-    fn ensure_ok(&self) -> flow_like_types::Result<()> {
-        if matches!(
-            self.status.as_deref(),
-            Some("Failed") | Some("Cancelled") | Some("Timeout")
-        ) {
-            return Err(flow_like_types::anyhow!(
-                "Remote run {} ended with status {}: {}",
-                self.run_id.clone().unwrap_or_default(),
-                self.status_str(),
-                self.error_message.clone().unwrap_or_default()
-            ));
-        }
-        Ok(())
-    }
-
-    fn chat_result(&self) -> Option<Value> {
-        self.chat_out
-            .clone()
-            .or_else(|| self.chat_stream.clone())
-            .or_else(|| self.generic_result.clone())
-    }
-}
-
-async fn post_json(
-    session: &RemoteAppSession,
-    url: &str,
-    body: &Value,
-) -> flow_like_types::Result<flow_like_types::reqwest::Response> {
-    let response = http_client()
-        .post(url)
-        .bearer_auth(&session.token)
-        .json(body)
-        .send()
-        .await
-        .map_err(|err| flow_like_types::anyhow!("Failed to invoke remote event: {}", err))?;
-    error_for_status(response, "Remote event invocation").await
-}
-
-async fn invoke_and_collect(
-    session: &RemoteAppSession,
-    url: &str,
-    body: &Value,
-    timeout: u64,
-) -> flow_like_types::Result<SseOutcome> {
-    let response = post_json(session, url, body).await?;
-    tokio::time::timeout(Duration::from_secs(timeout), collect_sse_outcome(response))
-        .await
-        .map_err(|_| {
-            flow_like_types::anyhow!("Remote event did not finish within {} seconds", timeout)
-        })?
-}
-
-async fn collect_sse_outcome(
-    response: flow_like_types::reqwest::Response,
-) -> flow_like_types::Result<SseOutcome> {
-    let mut outcome = SseOutcome {
-        run_id: None,
-        status: None,
-        error_message: None,
-        generic_result: None,
-        chat_out: None,
-        chat_stream: None,
-    };
-    let mut stream = response.bytes_stream();
-    let mut buffer = String::new();
-
-    'outer: while let Some(chunk) = stream.next().await {
-        let chunk = chunk
-            .map_err(|err| flow_like_types::anyhow!("Failed to read event stream: {}", err))?;
-        buffer.push_str(&String::from_utf8_lossy(&chunk));
-        // SSE allows CRLF line endings; normalize so frame detection below
-        // ("\n\n") also matches "\r\n\r\n"-terminated frames.
-        if buffer.contains('\r') {
-            buffer = buffer.replace("\r\n", "\n");
-        }
-
-        while let Some(pos) = buffer.find("\n\n") {
-            let frame = buffer[..pos].to_string();
-            buffer.drain(..pos + 2);
-
-            for line in frame.lines() {
-                let Some(data) = line.strip_prefix("data:") else {
-                    continue;
-                };
-                let Ok(parsed) = flow_like_types::json::from_str::<Value>(data.trim()) else {
-                    continue;
-                };
-
-                if outcome.run_id.is_none()
-                    && let Some(run_id) = parsed.get("run_id").and_then(|v| v.as_str())
-                {
-                    outcome.run_id = Some(run_id.to_string());
-                }
-
-                let event_type = parsed
-                    .get("event_type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-
-                match event_type {
-                    "generic_result" if outcome.generic_result.is_none() => {
-                        outcome.generic_result = parsed.get("payload").cloned();
-                    }
-                    "chat_out" => {
-                        outcome.chat_out = parsed.get("payload").cloned();
-                    }
-                    "chat_stream" => {
-                        outcome.chat_stream = parsed.get("payload").cloned();
-                    }
-                    "completed" => {
-                        outcome.status = parsed
-                            .get("payload")
-                            .and_then(|p| p.get("status"))
-                            .and_then(|s| s.as_str())
-                            .map(|s| s.to_string());
-                        outcome.error_message = parsed
-                            .get("payload")
-                            .and_then(|p| p.get("error_message"))
-                            .and_then(|s| s.as_str())
-                            .map(|s| s.to_string());
-                        break 'outer;
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    Ok(outcome)
-}
-
-// ---------------------------------------------------------------------------
 // Small utilities
 // ---------------------------------------------------------------------------
 
@@ -1202,6 +1097,18 @@ fn ensure_leading_slash(path: &str) -> String {
     } else {
         format!("/{}", path)
     }
+}
+
+fn encode_path_parameter(value: &str) -> flow_like_types::Result<String> {
+    // URL parsers normalize literal and percent-encoded dot-only segments
+    // before sending the request. Reject them explicitly so a dynamic route
+    // value can never escape the trusted event REST proxy path.
+    if value == "." || value == ".." {
+        return Err(flow_like_types::anyhow!(
+            "Remote REST path parameters cannot be '.' or '..'"
+        ));
+    }
+    Ok(urlencoding::encode(value).into_owned())
 }
 
 fn value_to_query(value: &Value) -> String {
@@ -1330,4 +1237,29 @@ fn extract_mcp_text(result: &Value) -> String {
                 .join("\n")
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_path_parameter;
+
+    #[test]
+    fn remote_rest_path_parameters_stay_in_one_segment() {
+        assert_eq!(
+            encode_path_parameter("folder/name?x=1%done").unwrap(),
+            "folder%2Fname%3Fx%3D1%25done"
+        );
+        assert_eq!(
+            encode_path_parameter(" already-safe ").unwrap(),
+            "%20already-safe%20"
+        );
+    }
+
+    #[test]
+    fn remote_rest_path_parameters_reject_dot_segments() {
+        assert!(encode_path_parameter(".").is_err());
+        assert_eq!(encode_path_parameter(" .. ").unwrap(), "%20..%20");
+        assert_eq!(encode_path_parameter("...").unwrap(), "...");
+        assert_eq!(encode_path_parameter("%2e%2e").unwrap(), "%252e%252e");
+    }
 }

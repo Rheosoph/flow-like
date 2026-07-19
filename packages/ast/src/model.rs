@@ -119,6 +119,10 @@ pub struct EventBlock {
     pub name: String,
     /// The entry node's catalog type.
     pub node_type: String,
+    /// The event's given name (`eventsSimple dashboardLoad() { }`), applied to the entry node as
+    /// its friendly name. `None` keeps the catalog default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_name: Option<String>,
     /// The event's payload outputs, surfaced as a typed parameter list (`name: Type`). These are
     /// the entry node's data output pins (often user-configured) that the body consumes.
     #[serde(default)]

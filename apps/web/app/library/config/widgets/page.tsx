@@ -663,6 +663,7 @@ function WidgetPreview({
 							{isEditing ? (
 								<div className="min-h-[200px] border rounded-md">
 									<TextEditor
+										appId={appId}
 										editable
 										isMarkdown
 										initialContent={

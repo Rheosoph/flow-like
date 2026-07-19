@@ -563,7 +563,10 @@ impl NodeLogic for NerNode {
             let attention_mask_value = Value::from_array(attention_mask_arr)?;
 
             // Check for token_type_ids input (BERT has it, RoBERTa doesn't)
-            let has_token_type_ids = session.inputs.iter().any(|i| i.name == "token_type_ids");
+            let has_token_type_ids = session
+                .inputs()
+                .iter()
+                .any(|i| i.name() == "token_type_ids");
 
             // Run inference
             let outputs = if has_token_type_ids {

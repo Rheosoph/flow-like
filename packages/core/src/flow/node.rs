@@ -433,17 +433,26 @@ impl Node {
     }
 
     pub fn harmonize_type(&mut self, pins: Vec<&str>, schema: bool) -> Option<VariableType> {
-        let mut found_schema: Option<String> = None;
-        let variable_type = match self.pins.iter().find(|(_, pin)| {
-            pins.contains(&pin.name.as_str()) && pin.data_type != VariableType::Generic
-        }) {
-            Some((_, pin)) => {
-                if schema {
-                    found_schema = pin.schema.clone();
-                }
-                pin.data_type.clone()
-            }
-            None => return None,
+        // Scan in the caller's pin order, not map iteration order, so the
+        // donor pin is deterministic. The type comes from the first
+        // non-generic pin; the schema from the first pin that actually has
+        // one — a schema-less sibling must never wipe another pin's schema.
+        let variable_type = pins.iter().find_map(|name| {
+            self.pins
+                .values()
+                .find(|pin| pin.name == *name && pin.data_type != VariableType::Generic)
+                .map(|pin| pin.data_type.clone())
+        })?;
+
+        let found_schema = if schema {
+            pins.iter().find_map(|name| {
+                self.pins
+                    .values()
+                    .filter(|pin| pin.name == *name)
+                    .find_map(|pin| pin.schema.clone())
+            })
+        } else {
+            None
         };
 
         for pin in self.pins.values_mut() {

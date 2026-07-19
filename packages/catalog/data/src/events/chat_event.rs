@@ -34,6 +34,8 @@ pub mod push_stat;
 pub mod push_stats;
 pub mod push_step;
 pub mod push_text_to_step;
+pub mod push_widget;
+pub mod push_widgets;
 pub mod remove_step;
 
 /// URL processing utilities for converting Tauri local file URLs to base64 data URLs
@@ -566,6 +568,114 @@ pub struct Chat {
     pub attachments: Option<Vec<Attachment>>,
 }
 
+/// An a2ui widget instance embedded inside a chat message. `component` is the
+/// self-contained `widgetInstance` component (with `inlineWidgetDef` and
+/// `actionBindings`) produced by the Instantiate Widget node, so the chat can
+/// render it without touching the a2ui surface channel.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+pub struct ChatWidget {
+    pub instance_id: String,
+    pub widget_id: String,
+    pub surface_id: String,
+    pub component: Value,
+    /// Ordered a2ui update messages targeting this widget that were streamed
+    /// earlier in the run (before the push). The frontend replays them over the
+    /// snapshot so element nodes (Set Element Value, Update GeoMap, Push CSV To
+    /// Chart, …) work in the same run that pushes the widget.
+    #[serde(default)]
+    pub updates: Vec<Value>,
+}
+
+impl ChatWidget {
+    /// Build a `ChatWidget` from an `element_ref` produced by the Instantiate
+    /// Widget node. The ref carries the self-contained `widgetInstance` component
+    /// under `component`, which the chat renders directly.
+    pub fn from_element_ref(value: &Value) -> flow_like_types::Result<Self> {
+        let instance_id = value
+            .get("instanceId")
+            .or_else(|| value.get("id"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Widget reference is missing 'instanceId'"))?
+            .to_string();
+
+        let widget_id = value
+            .get("widgetId")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        let surface_id = value
+            .get("surfaceId")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| instance_id.clone());
+
+        let component = value.get("component").cloned().ok_or_else(|| {
+            anyhow!(
+                "Widget reference is missing 'component'. Re-add the Instantiate Widget node (requires version 4 or newer)."
+            )
+        })?;
+
+        Ok(ChatWidget {
+            instance_id,
+            widget_id,
+            surface_id,
+            component,
+            updates: vec![],
+        })
+    }
+
+    fn inline_child_ids(&self) -> Vec<String> {
+        self.component
+            .get("inlineWidgetDef")
+            .and_then(|def| def.get("components"))
+            .and_then(|c| c.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|c| c.get("id").and_then(|id| id.as_str()))
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Collects the run's a2ui updates that target this widget (its instance,
+    /// a `{instance}/{child}` qualified element, one of its inline children by
+    /// bare id, or its surface's data model) so the frontend can replay them
+    /// over the pushed snapshot. All matching entries are kept — including full
+    /// re-registrations of the instance — because the replay must end at
+    /// exactly the state the emission order produces.
+    pub fn attach_update_log(&mut self, log: &[flow_like::a2ui::A2UIServerMessage]) {
+        use flow_like::a2ui::A2UIServerMessage as Msg;
+
+        let child_ids = self.inline_child_ids();
+        let qualified_prefix = format!("{}/", self.instance_id);
+
+        for message in log {
+            let relevant = match message {
+                Msg::UpsertElement { element_id, .. } => {
+                    element_id == &self.instance_id
+                        || element_id.starts_with(&qualified_prefix)
+                        || (!element_id.contains('/') && {
+                            let suffix = format!("-{element_id}");
+                            child_ids
+                                .iter()
+                                .any(|c| c == element_id || c.ends_with(&suffix))
+                        })
+                }
+                Msg::DataModelUpdate { surface_id, .. }
+                | Msg::CreateElement { surface_id, .. }
+                | Msg::RemoveElement { surface_id, .. } => surface_id == &self.surface_id,
+                _ => false,
+            };
+
+            if relevant && let Ok(value) = flow_like_types::json::to_value(message) {
+                self.updates.push(value);
+            }
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct ChatResponse {
     pub response: Response,
@@ -574,6 +684,8 @@ pub struct ChatResponse {
     pub actions: Vec<ChatAction>,
     pub attachments: Vec<Attachment>,
     pub model_id: Option<String>,
+    #[serde(default)]
+    pub widgets: Vec<ChatWidget>,
 }
 
 #[derive(Clone)]
@@ -596,6 +708,7 @@ impl CachedChatResponse {
             response: Response::new(),
             actions: vec![],
             attachments: vec![],
+            widgets: vec![],
             global_session: flow_like_types::json::from_str("{}")?,
             local_session: flow_like_types::json::from_str("{}")?,
             model_id: None,
@@ -641,6 +754,8 @@ pub struct ChatStreamingResponse {
     pub actions: Vec<ChatAction>,
     pub attachments: Vec<Attachment>,
     pub plan: Option<Reasoning>,
+    #[serde(default)]
+    pub widgets: Vec<ChatWidget>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]

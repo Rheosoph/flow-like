@@ -14,7 +14,7 @@ import { CalloutKit } from "./plugins/callout-kit";
 import { CodeBlockKit } from "./plugins/code-block-kit";
 import { ColumnKit } from "./plugins/column-kit";
 import { CommentKit } from "./plugins/comment-kit";
-import { CopilotKit } from "./plugins/copilot-kit";
+import { createCopilotKit } from "./plugins/copilot-kit";
 import { CursorOverlayKit } from "./plugins/cursor-overlay-kit";
 import { DateKit } from "./plugins/date-kit";
 import { DiscussionKit } from "./plugins/discussion-kit";
@@ -38,9 +38,9 @@ import { TableKit } from "./plugins/table-kit";
 import { TocKit } from "./plugins/toc-kit";
 import { ToggleKit } from "./plugins/toggle-kit";
 
-export const EditorKit = [
+export const createEditorKit = (appId?: string) => [
 	...AIKit,
-	...CopilotKit,
+	...createCopilotKit(appId),
 	...BlockMenuKit,
 
 	// Elements
@@ -90,6 +90,11 @@ export const EditorKit = [
 	...FloatingToolbarKit,
 ];
 
-export type MyEditor = TPlateEditor<Value, (typeof EditorKit)[number]>;
+export const EditorKit = createEditorKit();
+
+export type MyEditor = TPlateEditor<
+	Value,
+	ReturnType<typeof createEditorKit>[number]
+>;
 
 export const useEditor = () => useEditorRef<MyEditor>();

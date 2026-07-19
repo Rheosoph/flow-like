@@ -1,6 +1,7 @@
 use crate::{
     ensure_permission, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    permission::role_permission::RolePermissions, routes::app::prerun_shared::parse_version,
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -16,6 +17,8 @@ pub struct GetExecutionElementsQuery {
     pub page_id: String,
     #[serde(default)]
     pub wildcard: bool,
+    /// Board version in MAJOR_MINOR_PATCH format. Omitted means latest.
+    pub version: Option<String>,
 }
 
 #[derive(Serialize, ToSchema)]
@@ -55,8 +58,9 @@ pub async fn get_execution_elements(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteBoards);
     let sub = permission.sub()?;
 
+    let version = query.version.as_deref().and_then(parse_version);
     let board = state
-        .master_board(&sub, &app_id, &board_id, &state, None)
+        .master_board(&sub, &app_id, &board_id, &state, version)
         .await?;
 
     let elements = board

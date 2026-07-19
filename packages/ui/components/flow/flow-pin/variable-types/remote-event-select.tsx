@@ -13,6 +13,7 @@ import {
 } from "../../../../components/ui/select";
 import { useInvalidateInvoke } from "../../../../hooks";
 import { updateNodeCommand } from "../../../../lib";
+import { formatEventTypeLabel } from "../../../../lib/event-type-label";
 import type { IBoard } from "../../../../lib/schema/flow/board";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
@@ -254,7 +255,7 @@ export function RemoteEventSelect({
 								{event.name}
 								<span className="text-muted-foreground">
 									{" "}
-									· {event.event_type}
+									· {formatEventTypeLabel(event.event_type)}
 								</span>
 							</SelectItem>
 						))}

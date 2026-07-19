@@ -152,6 +152,7 @@ export function A2UIBoundingBoxOverlay({
 
 	return (
 		<div
+			data-card-action-stop
 			ref={containerRef}
 			className={cn("relative", resolveStyle(style))}
 			style={resolveInlineStyle(style)}
@@ -180,12 +181,19 @@ export function A2UIBoundingBoxOverlay({
 					const height = box.height * scale.y;
 
 					return (
-						<div
+						<button
+							type="button"
 							key={boxId}
 							className={cn(
-								"absolute border transition-opacity",
+								"absolute appearance-none bg-transparent p-0 text-left border transition-opacity",
 								interactive && "cursor-pointer hover:opacity-80",
 							)}
+							disabled={!interactive}
+							aria-label={
+								box.label
+									? `Bounding box: ${box.label}`
+									: `Bounding box ${index + 1}`
+							}
 							style={{
 								left: `${left}px`,
 								top: `${top}px`,
@@ -217,7 +225,7 @@ export function A2UIBoundingBoxOverlay({
 									)}
 								</div>
 							)}
-						</div>
+						</button>
 					);
 				})}
 		</div>

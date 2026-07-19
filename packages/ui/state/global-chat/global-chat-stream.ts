@@ -1,7 +1,14 @@
 import { createId } from "@paralleldrive/cuid2";
-import { createCopilotStreamParser } from "../../components/flowpilot/copilot-stream-parser";
+import {
+	FLOWPILOT_DEBUG_ENABLED,
+	stripFlowPilotDebugReport,
+} from "../../lib/flowpilot-debug";
 import { isTauri } from "../../lib/platform";
 import { IRole } from "../../lib/schema/llm/history";
+import {
+	createAgentDebugStreamRecorder,
+	summarizeAgentDebugRootOutcomes,
+} from "./agent-debug-report";
 import {
 	applyStreamEvent,
 	createStreamAccumulator,
@@ -87,7 +94,13 @@ export function makeGlobalChatMessage(
 
 export async function persistGlobalChatMessage(message: IMessage) {
 	try {
-		await globalChatDb.messages.put(message);
+		if (FLOWPILOT_DEBUG_ENABLED) {
+			await globalChatDb.messages.put(message);
+			return;
+		}
+		// Defense in depth: callers can pass restored or backend-provided messages that still carry
+		// an old report. Production must never write that diagnostic payload back to history.
+		await globalChatDb.messages.put(stripFlowPilotDebugReport(message));
 	} catch {
 		// history persistence is best-effort in v1
 	}
@@ -118,6 +131,8 @@ interface DriveOptions {
 	responseMessage: IMessage;
 	/** True for a resume re-attach (guards against overwriting a restored checkpoint on a miss). */
 	isResume?: boolean;
+	/** Bounded/redacted user input metadata included in the persisted debug report. */
+	inputPreview?: unknown;
 	/**
 	 * Transport hook. Drives the underlying run and forwards every raw FlowPilot stream chunk to
 	 * `onChunk`; resolves with the transport's result (the desktop Tauri command's return value or,
@@ -152,12 +167,37 @@ export function tauriStart(command: string, args: Record<string, unknown>) {
 export async function driveGlobalChatStream({
 	responseMessage,
 	isResume,
+	inputPreview,
 	start,
 }: DriveOptions) {
 	const store = useGlobalChatStore;
-	const parser = createCopilotStreamParser();
 	const acc = createStreamAccumulator();
 	let lastCheckpoint = 0;
+	let streamFailure: string | undefined;
+	const initialState = store.getState();
+	initialState.beginDebugReport(responseMessage.id, {
+		provider: initialState.provider,
+		model: initialState.selectedModelId,
+		reasoningEffort: initialState.reasoningEffort,
+		inputPreview,
+	});
+	initialState.recordDebugEvent(responseMessage.id, {
+		id: `main:${responseMessage.id}:lifecycle:start`,
+		kind: "lifecycle",
+		stage: isResume ? "resume_started" : "run_started",
+		status: "progress",
+		timestamp_ms: Date.now(),
+		started_at_ms: Date.now(),
+		summary: isResume
+			? "Re-attaching to a previously started agent run. Earlier frontend-only milestones may be unavailable."
+			: "Agent turn started.",
+	});
+	const debugStream = createAgentDebugStreamRecorder({
+		scope: "main",
+		requestId: responseMessage.id,
+		record: (event) =>
+			store.getState().recordDebugEvent(responseMessage.id, event),
+	});
 
 	const syncMessage = () => {
 		const state = store.getState();
@@ -170,9 +210,15 @@ export async function driveGlobalChatStream({
 		responseMessage.app_refs =
 			state.pendingAppRefs.length > 0 ? [...state.pendingAppRefs] : undefined;
 		responseMessage.files = state.subAttachments;
+		responseMessage.widgets =
+			state.subWidgets.length > 0 ? state.subWidgets : undefined;
 		const combinedUsage = mergeUsageStats(acc.usageStats, state.subUsageStats);
 		responseMessage.usage_stats =
 			combinedUsage.length > 0 ? combinedUsage : undefined;
+		responseMessage.debug_report =
+			state.debugReport?.message_id === responseMessage.id
+				? state.debugReport
+				: undefined;
 		state.setStreamingMessage({ ...responseMessage });
 		const now = Date.now();
 		if (now - lastCheckpoint > 1_000) {
@@ -182,7 +228,9 @@ export async function driveGlobalChatStream({
 	};
 
 	const onChunk = (chunk: string) => {
-		for (const event of parser.push(chunk)) applyStreamEvent(acc, event);
+		for (const event of debugStream.push(chunk)) {
+			applyStreamEvent(acc, event);
+		}
 		syncMessage();
 	};
 
@@ -191,6 +239,16 @@ export async function driveGlobalChatStream({
 		invokeResult = await start(onChunk);
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
+		streamFailure = message;
+		store.getState().recordDebugEvent(responseMessage.id, {
+			id: `main:${responseMessage.id}:lifecycle:stream-error`,
+			kind: "lifecycle",
+			stage: "stream_error",
+			status: "error",
+			timestamp_ms: Date.now(),
+			ended_at_ms: Date.now(),
+			error: message,
+		});
 		// Surface mid-stream failures even when partial content already arrived — a silent stop
 		// reads as a crash. The failed step keeps the panel open.
 		acc.stepOrder.push("stream-error");
@@ -206,11 +264,16 @@ export async function driveGlobalChatStream({
 		}
 	} finally {
 		// Emit any held-back partial-tag fragment so replies ending in '<...' are not lost.
-		for (const event of parser.flush()) applyStreamEvent(acc, event);
+		for (const event of debugStream.flush()) {
+			applyStreamEvent(acc, event);
+		}
 		for (const id of acc.stepOrder) {
 			const step = acc.steps.get(id);
 			if (step?.status === "progress") {
-				acc.steps.set(id, { ...step, status: "done" });
+				acc.steps.set(id, {
+					...step,
+					status: streamFailure ? "failed" : "done",
+				});
 			}
 		}
 		const finalState = store.getState();
@@ -223,13 +286,94 @@ export async function driveGlobalChatStream({
 			invokeResult !== null &&
 			(invokeResult as { attached?: boolean }).attached === false;
 
+		if (resumeMissed) {
+			store.getState().recordDebugEvent(responseMessage.id, {
+				id: `main:${responseMessage.id}:lifecycle:resume-gap`,
+				kind: "lifecycle",
+				stage: "resume_gap",
+				status: "error",
+				timestamp_ms: Date.now(),
+				error:
+					"The live run was no longer available. The restored checkpoint was preserved, but frontend-only milestones after the last checkpoint may be missing.",
+			});
+		}
+		store.getState().recordDebugEvent(responseMessage.id, {
+			id: `main:${responseMessage.id}:lifecycle:finish`,
+			kind: "lifecycle",
+			stage: "run_finished",
+			status: streamFailure || resumeMissed ? "error" : "done",
+			timestamp_ms: Date.now(),
+			ended_at_ms: Date.now(),
+			error: streamFailure,
+			summary: resumeMissed
+				? "Resume did not find a live run."
+				: streamFailure
+					? "The agent stream ended with an error."
+					: "The agent turn completed.",
+		});
+		const reportBeforeFinalize = store.getState().debugReport;
+		const reportEvents =
+			reportBeforeFinalize?.message_id === responseMessage.id
+				? reportBeforeFinalize.events
+				: [];
+		const { recordedTimeout, recordedPartial, recordedError } =
+			summarizeAgentDebugRootOutcomes(reportEvents);
+		const debugOutcome = recordedTimeout
+			? "timeout"
+			: streamFailure || resumeMissed || recordedError
+				? "error"
+				: recordedPartial
+					? "partial"
+					: "ok";
+		store.getState().finalizeDebugReport(responseMessage.id, {
+			outcome: debugOutcome,
+			terminalStage: resumeMissed
+				? "resume_gap"
+				: streamFailure
+					? "stream_error"
+					: recordedTimeout
+						? "frontend_tool_timeout"
+						: recordedError
+							? "completed_with_errors"
+							: recordedPartial
+								? "completed_partial"
+								: "completed",
+			terminalCode: resumeMissed
+				? "RUN_NOT_FOUND"
+				: streamFailure
+					? "STREAM_FAILED"
+					: recordedTimeout
+						? "FRONTEND_TOOL_TIMEOUT"
+						: recordedError
+							? "COMPLETED_WITH_ERRORS"
+							: recordedPartial
+								? "PARTIAL"
+								: "OK",
+			summary: resumeMissed
+				? "The live run could not be resumed."
+				: streamFailure
+					? streamFailure
+					: recordedTimeout
+						? "The agent turn ended after a frontend tool timeout; late mutations were blocked."
+						: recordedError
+							? "The agent turn completed with one or more recorded errors."
+							: recordedPartial
+								? "The agent turn completed partially because an action was partial, denied, or cancelled."
+								: "Agent turn completed.",
+			outputPreview: acc.content,
+		});
+
 		if (!resumeMissed) {
+			const reportState = store.getState();
 			responseMessage.inner.content = acc.content;
 			responseMessage.plan_steps = [
 				...orderedSteps(acc),
 				...finalState.subPlanSteps.map((step) =>
 					step.status === "progress"
-						? { ...step, status: "done" as const }
+						? {
+								...step,
+								status: streamFailure ? ("failed" as const) : ("done" as const),
+							}
 						: step,
 				),
 			];
@@ -240,12 +384,20 @@ export async function driveGlobalChatStream({
 					? [...finalState.pendingAppRefs]
 					: undefined;
 			responseMessage.files = finalState.subAttachments;
+			responseMessage.widgets =
+				finalState.subWidgets.length > 0
+					? [...finalState.subWidgets]
+					: undefined;
 			const finalUsage = mergeUsageStats(
 				acc.usageStats,
 				finalState.subUsageStats,
 			);
 			responseMessage.usage_stats =
 				finalUsage.length > 0 ? finalUsage : undefined;
+			responseMessage.debug_report =
+				reportState.debugReport?.message_id === responseMessage.id
+					? reportState.debugReport
+					: undefined;
 			const finalized = { ...responseMessage };
 			finalState.commitMessage(finalized);
 			void persistGlobalChatMessage(finalized);
@@ -253,11 +405,13 @@ export async function driveGlobalChatStream({
 			finalState.clearSubPlanSteps();
 			finalState.clearSubAttachments();
 			finalState.clearSubUsageStats();
+			finalState.clearSubWidgets();
 		}
 
 		// Always release the stream regardless of commit vs. kept-checkpoint.
 		finalState.setStreamingMessage(null);
 		finalState.setStreaming(false);
+		finalState.clearDebugReport(responseMessage.id);
 		clearActiveRun();
 	}
 }

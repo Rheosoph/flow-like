@@ -25,6 +25,14 @@ import { VariableDescription } from "./variable-types/default-text";
 import { ElementSelect } from "./variable-types/element-select";
 import { EnumVariable } from "./variable-types/enum-variable";
 import { FnVariable } from "./variable-types/fn-select";
+import {
+	OntologyActionSelect,
+	OntologyObjectSelect,
+	OntologySelect,
+	RemoteOntologyActionSelect,
+	RemoteOntologyObjectSelect,
+	RemoteOntologySelect,
+} from "./variable-types/ontology-pin-selects";
 import { ProjectUserSelect } from "./variable-types/project-user-select";
 import { RemoteDatabaseSelect } from "./variable-types/remote-database-select";
 import { RemoteEventSelect } from "./variable-types/remote-event-select";
@@ -158,6 +166,61 @@ export const PinEdit: FC<PinEditProps> = memo(function PinEdit({
 
 	if (pin.name === "_flow_remote_event_meta") {
 		return <VariableDescription pin={pin} />;
+	}
+
+	if (
+		pin.data_type === IVariableType.String &&
+		pin.value_type === IValueType.Normal
+	) {
+		const ontologyProps = {
+			pin,
+			value: cachedDefaultValue,
+			appId,
+			boardId,
+			nodeId,
+			currentLayerId,
+			boardRef,
+			setValue: updateDefaultValue,
+		} as const;
+		if (
+			(nodeName === "ontology_query_objects" ||
+				nodeName === "ontology_action_request" ||
+				nodeName === "ontology_action_input") &&
+			pin.name === "ontology_id"
+		) {
+			return <OntologySelect {...ontologyProps} />;
+		}
+		if (nodeName === "ontology_query_objects" && pin.name === "object_type") {
+			return <OntologyObjectSelect {...ontologyProps} />;
+		}
+		if (
+			(nodeName === "ontology_action_request" ||
+				nodeName === "ontology_action_input") &&
+			pin.name === "action_id"
+		) {
+			return <OntologyActionSelect {...ontologyProps} />;
+		}
+		if (
+			(nodeName === "ontology_query_remote_objects" ||
+				nodeName === "ontology_query_remote_children" ||
+				nodeName === "ontology_action_request_remote") &&
+			pin.name === "binding_id"
+		) {
+			return <RemoteOntologySelect {...ontologyProps} />;
+		}
+		if (
+			(nodeName === "ontology_query_remote_objects" ||
+				nodeName === "ontology_query_remote_children") &&
+			pin.name === "object_type"
+		) {
+			return <RemoteOntologyObjectSelect {...ontologyProps} />;
+		}
+		if (
+			nodeName === "ontology_action_request_remote" &&
+			pin.name === "action_id"
+		) {
+			return <RemoteOntologyActionSelect {...ontologyProps} />;
+		}
 	}
 
 	if (

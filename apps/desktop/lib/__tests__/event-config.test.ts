@@ -1,5 +1,8 @@
+import {
+	EVENT_CONFIG,
+	isChatEventType,
+} from "@flow-like/flow-like-ui/lib/event-config";
 import { describe, expect, test } from "vitest";
-import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 
 describe("daemon event config", () => {
 	test("is available as a local-only simple event sink", () => {
@@ -26,6 +29,55 @@ describe("daemon event config", () => {
 			log_flush_interval_ms: 5000,
 			log_batch_size: 500,
 			healthy_reset_ms: 60000,
+		});
+	});
+});
+
+describe("chat event config", () => {
+	test("offers only the built-in Chat UI as a chat interface", () => {
+		expect(EVENT_CONFIG.events_chat.eventTypes).toContain("simple_chat");
+		expect(EVENT_CONFIG.events_chat.eventTypes).not.toContain("advanced_chat");
+		expect(isChatEventType("simple_chat")).toBe(true);
+		expect(isChatEventType("advanced_chat")).toBe(false);
+		expect(isChatEventType("chat_stream")).toBe(false);
+	});
+});
+
+describe("workflow Event entry compatibility", () => {
+	test("keeps Simple, Generic, and Chat entry setup separate", () => {
+		expect(EVENT_CONFIG.events_simple.defaultEventType).toBe("quick_action");
+		expect(EVENT_CONFIG.events_simple.eventTypes).toEqual(
+			expect.arrayContaining(["quick_action", "cron", "daemon", "rest", "mcp"]),
+		);
+		expect(EVENT_CONFIG.events_generic.defaultEventType).toBe("generic_form");
+		expect(EVENT_CONFIG.events_generic.eventTypes).toEqual(
+			expect.arrayContaining(["generic_form", "api", "deeplink"]),
+		);
+		expect(EVENT_CONFIG.events_chat.defaultEventType).toBe("simple_chat");
+		expect(EVENT_CONFIG.events_chat.eventTypes).toEqual(
+			expect.arrayContaining(["simple_chat", "discord", "telegram"]),
+		);
+		expect(EVENT_CONFIG.events_generic.eventTypes).not.toContain("cron");
+		expect(EVENT_CONFIG.events_chat.eventTypes).not.toContain("cron");
+	});
+
+	test("cron is serialized as Simple Event sink config", () => {
+		const cronConfig = {
+			...EVENT_CONFIG.events_simple.configs.cron,
+			expression: "0 8 * * *",
+			timezone: "Europe/Berlin",
+			last_fired: null,
+			sink_execution: "LOCAL",
+		};
+		const encoded = new TextEncoder().encode(JSON.stringify(cronConfig));
+		const decoded = JSON.parse(new TextDecoder().decode(encoded));
+
+		expect(decoded).toEqual({
+			sink_type: "cron",
+			expression: "0 8 * * *",
+			timezone: "Europe/Berlin",
+			last_fired: null,
+			sink_execution: "LOCAL",
 		});
 	});
 });

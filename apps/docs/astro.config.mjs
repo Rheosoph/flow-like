@@ -134,6 +134,21 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 							],
 						},
 						{
+							label: "Data Studio",
+							collapsed: false,
+							items: [
+								{ label: "Overview", slug: "apps/data-studio" },
+								{
+									label: "Ontology & Knowledge Graph",
+									slug: "topics/ontology/overview",
+								},
+								{
+									label: "Shared & Remote Ontologies",
+									slug: "topics/ontology/remote",
+								},
+							],
+						},
+						{
 							label: "Apps",
 							collapsed: true,
 							items: [
@@ -214,6 +229,20 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 										{
 											label: "AI-Powered Analysis",
 											slug: "topics/datascience/ai-analysis",
+										},
+									],
+								},
+								{
+									label: "Ontology & Knowledge Graph",
+									collapsed: true,
+									items: [
+										{
+											label: "Overview",
+											slug: "topics/ontology/overview",
+										},
+										{
+											label: "Shared & Remote Ontologies",
+											slug: "topics/ontology/remote",
 										},
 									],
 								},

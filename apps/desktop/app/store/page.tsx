@@ -42,6 +42,7 @@ export default function Page() {
 		onBuy,
 		onJoinOrRequest,
 		refetchAppData,
+		registerAppInProfile,
 	} = useStoreData(id, router, EVENT_CONFIG);
 	const handledPurchaseRef = useRef<string | null>(null);
 
@@ -63,7 +64,9 @@ export default function Page() {
 			toast.success("Purchase successful! You now have access to this app.", {
 				duration: 5000,
 			});
-			refetchAppData();
+			void registerAppInProfile().finally(() => {
+				void refetchAppData();
+			});
 		} else if (purchaseStatus === "canceled") {
 			toast.info("Purchase was canceled. You can try again anytime.");
 		}
@@ -71,7 +74,7 @@ export default function Page() {
 		const url = new URL(window.location.href);
 		url.searchParams.delete("purchase");
 		router.replace(url.pathname + url.search, { scroll: false });
-	}, [purchaseStatus, refetchAppData, router]);
+	}, [purchaseStatus, refetchAppData, registerAppInProfile, router]);
 
 	if (!id) return null;
 

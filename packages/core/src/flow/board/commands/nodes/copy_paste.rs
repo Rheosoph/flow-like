@@ -91,7 +91,7 @@ impl Command for CopyPasteCommand {
                     if pin.name == "var_ref"
                         && let Some(var_ref) = pin.default_value.as_ref()
                         && let Ok(var_ref) = from_slice::<String>(var_ref)
-                        && board.variables.get(&var_ref).is_none()
+                        && !board.variables.contains_key(&var_ref)
                         && let Some(orig) = self.original_variables.iter().find(|v| v.id == var_ref)
                     {
                         board.variables.insert(var_ref.clone(), orig.clone());

@@ -14,8 +14,20 @@ import { toast } from "sonner";
 import { appGlobalState, pageLocalState } from "../../lib/idb-storage";
 import { getCurrentPageContext } from "../../lib/page-context";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
-import type { IBoard } from "../../lib/schema/flow/board";
-import { useBackend } from "../../state/backend-state";
+import { IExecutionMode, type IBoard } from "../../lib/schema/flow/board";
+import {
+	type BoardVersion,
+	resolveEventBoardVersion,
+	withBoardVersion,
+} from "../../lib/schema/flow/board-version";
+import {
+	type ITemporaryUploadExecutionTarget,
+	useBackend,
+} from "../../state/backend-state";
+import {
+	prerunBoardKey,
+	prerunSwr,
+} from "../../state/backend-state/prerun-cache";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { useRouteDialogSafe } from "./RouteDialogProvider";
 import { useWidgetInstance } from "./layout/A2UIWidgetInstance";
@@ -25,37 +37,12 @@ import type {
 	Action,
 	SurfaceComponent,
 } from "./types";
+import { compactWorkflowPayload } from "./workflow-payload";
+
+export { compactWorkflowPayload } from "./workflow-payload";
 
 type ActionHandler = (message: A2UIClientMessage) => void;
 type A2UIMessageHandler = (message: A2UIServerMessage) => void;
-
-const COMPACT_PAYLOAD_OMIT_KEYS = new Set(["dataUrl"]);
-
-export function compactWorkflowPayload(value: unknown): unknown {
-	if (value === null || value === undefined) return undefined;
-
-	if (Array.isArray(value)) {
-		return value
-			.map((item) => compactWorkflowPayload(item))
-			.filter((item) => item !== undefined);
-	}
-
-	if (typeof value === "object") {
-		const compacted: Record<string, unknown> = {};
-		for (const [key, childValue] of Object.entries(
-			value as Record<string, unknown>,
-		)) {
-			if (COMPACT_PAYLOAD_OMIT_KEYS.has(key)) continue;
-			const nextValue = compactWorkflowPayload(childValue);
-			if (nextValue !== undefined) {
-				compacted[key] = nextValue;
-			}
-		}
-		return compacted;
-	}
-
-	return value;
-}
 
 function toBoundValue(value: unknown): Record<string, unknown> {
 	if (typeof value === "boolean") return { literalBool: value };
@@ -224,6 +211,7 @@ interface ActionContextValue {
 	surfaceId: string;
 	appId?: string;
 	boardId?: string;
+	boardVersion?: BoardVersion;
 	eventId?: string;
 	components?: Record<string, SurfaceComponent>;
 	globalState: Record<string, unknown>;
@@ -240,6 +228,9 @@ interface ActionContextValue {
 	) => void;
 	closeDialog?: (dialogId?: string) => void;
 	getElementValues: () => Record<string, unknown>;
+	resolveTemporaryUploadTarget: (
+		action?: Action,
+	) => Promise<ITemporaryUploadExecutionTarget>;
 	triggeringComponents: ReadonlySet<string>;
 	markComponentTriggering: (componentId: string, on: boolean) => void;
 }
@@ -252,6 +243,7 @@ interface ActionProviderProps {
 	surfaceId: string;
 	appId?: string;
 	boardId?: string;
+	boardVersion?: BoardVersion;
 	eventId?: string;
 	components?: Record<string, SurfaceComponent>;
 	children: ReactNode;
@@ -271,6 +263,7 @@ export function ActionProvider({
 	surfaceId,
 	appId,
 	boardId,
+	boardVersion,
 	eventId,
 	components,
 	children,
@@ -279,6 +272,7 @@ export function ActionProvider({
 	closeDialog: closeDialogProp,
 }: ActionProviderProps) {
 	const pathname = usePathname();
+	const backend = useBackend();
 	const routeDialog = useRouteDialogSafe();
 	const [globalState, setGlobalStateMap] = useState<Record<string, unknown>>(
 		{},
@@ -324,6 +318,75 @@ export function ActionProvider({
 			setTriggeringComponents(new Set(counts.keys()));
 		},
 		[],
+	);
+
+	const resolveTemporaryUploadTarget = useCallback(
+		async (action?: Action): Promise<ITemporaryUploadExecutionTarget> => {
+			// Browser backends always dispatch remotely. Keeping this explicit also
+			// prevents a permissive prerun response from being mistaken for a local
+			// execution capability in the web app.
+			if (backend.eventState.alwaysRemote === true) return "remote";
+
+			const actionContext = action?.context ?? {};
+			const actionAppId =
+				action?.name === "workflow_event" &&
+				typeof actionContext.appId === "string"
+					? actionContext.appId
+					: undefined;
+			const actionBoardId =
+				action?.name === "workflow_event" &&
+				typeof actionContext.boardId === "string"
+					? actionContext.boardId
+					: undefined;
+			const effectiveAppId = actionAppId || appId;
+			const effectiveBoardId = actionBoardId || boardId;
+
+			if (!effectiveAppId || !effectiveBoardId) return "remote";
+
+			const effectiveVersion = resolveEventBoardVersion(
+				boardId,
+				// Version pins are meaningful only for a live page event. Builder and
+				// preview surfaces always prerun the latest board.
+				eventId ? boardVersion : undefined,
+				effectiveBoardId,
+			);
+			if (!backend.boardState.prerunBoard) return "remote";
+
+			try {
+				const prerun = await prerunSwr(
+					prerunBoardKey(
+						effectiveAppId,
+						effectiveBoardId,
+						effectiveVersion,
+					),
+					() =>
+						backend.boardState.prerunBoard!(
+							effectiveAppId,
+							effectiveBoardId,
+							effectiveVersion,
+						),
+				);
+
+				return prerun.can_execute_locally &&
+					prerun.execution_mode !== IExecutionMode.Remote
+					? "local"
+					: "remote";
+			} catch (error) {
+				console.warn(
+					"[A2UI] Failed to resolve temporary upload execution target; using remote storage:",
+					error,
+				);
+				return "remote";
+			}
+		},
+		[
+			appId,
+			backend.boardState,
+			backend.eventState.alwaysRemote,
+			boardId,
+			boardVersion,
+			eventId,
+		],
 	);
 
 	// Wrap onAction to intercept change events and store element values in memory
@@ -546,6 +609,7 @@ export function ActionProvider({
 				surfaceId,
 				appId,
 				boardId,
+				boardVersion,
 				eventId,
 				components,
 				globalState,
@@ -557,6 +621,7 @@ export function ActionProvider({
 				openDialog,
 				closeDialog,
 				getElementValues,
+				resolveTemporaryUploadTarget,
 				triggeringComponents,
 				markComponentTriggering,
 			}}
@@ -572,17 +637,21 @@ export function useActionContext() {
 		return {
 			appId: undefined,
 			boardId: undefined,
+			boardVersion: undefined,
 			eventId: undefined,
 			surfaceId: "",
 			isPreviewMode: false,
+			resolveTemporaryUploadTarget: undefined,
 		};
 	}
 	return {
 		appId: context.appId,
 		boardId: context.boardId,
+		boardVersion: context.boardVersion,
 		eventId: context.eventId,
 		surfaceId: context.surfaceId,
 		isPreviewMode: context.isPreviewMode,
+		resolveTemporaryUploadTarget: context.resolveTemporaryUploadTarget,
 	};
 }
 
@@ -653,6 +722,7 @@ export function useCollectEventElements() {
 	const backend = useBackend();
 	const appId = context?.appId;
 	const boardId = context?.boardId;
+	const boardVersion = context?.boardVersion;
 	const surfaceId = context?.surfaceId;
 	const components = context?.components;
 	const getElementValues = context?.getElementValues;
@@ -669,6 +739,7 @@ export function useCollectEventElements() {
 					boardId,
 					surfaceId || "",
 					false,
+					boardVersion,
 				);
 				if (!elementsMap || Object.keys(elementsMap).length === 0) {
 					elementsMap = fallbackElements();
@@ -694,6 +765,7 @@ export function useCollectEventElements() {
 	}, [
 		appId,
 		boardId,
+		boardVersion,
 		surfaceId,
 		components,
 		getElementValues,
@@ -762,6 +834,7 @@ export function useExecuteAction() {
 		surfaceId,
 		appId,
 		boardId,
+		boardVersion,
 		eventId,
 		components,
 		globalState,
@@ -783,6 +856,16 @@ export function useExecuteAction() {
 					event.event_type,
 					event.payload,
 				);
+
+				if (event.event_type === "error") {
+					const payload = event.payload as { message?: unknown } | undefined;
+					const message =
+						typeof payload?.message === "string"
+							? payload.message
+							: "The workflow could not be completed.";
+					toast.error("Workflow execution failed", { description: message });
+					continue;
+				}
 
 				if (event.event_type === "a2ui") {
 					const message = event.payload as A2UIServerMessage;
@@ -939,7 +1022,7 @@ export function useExecuteAction() {
 				}
 			}
 		},
-		[router, onA2UIMessage, appId, openDialog, closeDialog],
+		[router, pathname, onA2UIMessage, appId, openDialog, closeDialog],
 	);
 
 	const executeAction = useCallback(
@@ -1156,13 +1239,15 @@ export function useExecuteAction() {
 					case "workflow_event": {
 						const nodeId = context.nodeId as string | undefined;
 						const actionBoardId = context.boardId as string | undefined;
-						const boardVersion = context.boardVersion as
-							| [number, number, number]
-							| undefined;
 						const contextAppId = context.appId as string | undefined;
 
 						const effectiveAppId = contextAppId || appId;
 						const effectiveBoardId = actionBoardId || boardId;
+						const inheritedBoardVersion = resolveEventBoardVersion(
+							boardId,
+							boardVersion,
+							effectiveBoardId,
+						);
 
 						if (nodeId && effectiveBoardId && effectiveAppId) {
 							try {
@@ -1173,7 +1258,6 @@ export function useExecuteAction() {
 									nodeId,
 									effectiveAppId,
 									effectiveBoardId,
-									boardVersion,
 									surfaceId,
 									cacheKey,
 									hadCachedElements: false,
@@ -1184,7 +1268,7 @@ export function useExecuteAction() {
 									const currentBoard = await backend.boardState.getBoard(
 										effectiveAppId,
 										effectiveBoardId,
-										undefined,
+										inheritedBoardVersion,
 									);
 									console.log(
 										"[A2UI] workflow_event local board element refs:",
@@ -1210,6 +1294,7 @@ export function useExecuteAction() {
 										effectiveBoardId,
 										surfaceId || "",
 										false,
+										inheritedBoardVersion,
 									);
 
 									if (!elementsMap || Object.keys(elementsMap).length === 0) {
@@ -1280,7 +1365,7 @@ export function useExecuteAction() {
 									});
 								}
 
-								const payload = compactWorkflowPayload({
+								const basePayload = compactWorkflowPayload({
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
@@ -1296,12 +1381,14 @@ export function useExecuteAction() {
 										_global_state: globalState || {},
 										_page_state: pageState || {},
 									},
-									version: boardVersion,
 								}) as {
 									id: string;
 									payload: Record<string, unknown>;
-									version?: [number, number, number];
 								};
+								const payload = withBoardVersion(
+									basePayload,
+									inheritedBoardVersion,
+								);
 
 								// Use execution service if available (checks runtime variables)
 								const execFn =
@@ -1317,6 +1404,12 @@ export function useExecuteAction() {
 								);
 							} catch (error) {
 								console.error("Failed to execute workflow event:", error);
+								toast.error("Workflow execution failed", {
+									description:
+										error instanceof Error
+											? error.message
+											: "The workflow could not be started.",
+								});
 							}
 						} else {
 							console.warn("Missing required context for workflow_event:", {
@@ -1337,17 +1430,28 @@ export function useExecuteAction() {
 						const actionId = context.actionId as string | undefined;
 						if (!actionId) {
 							console.warn("[A2UI] widget_event missing actionId");
+							toast.warning("Widget action has no action id configured.");
 							break;
 						}
 
 						// Look up the binding from the widget instance's action bindings
 						const binding = widgetInstance?.actionBindings[actionId];
 						if (!binding) {
+							const available = Object.keys(
+								widgetInstance?.actionBindings ?? {},
+							);
 							console.warn(
 								"[A2UI] widget_event: no binding found for actionId:",
 								actionId,
 								"available bindings:",
 								widgetInstance?.actionBindings,
+							);
+							toast.warning(
+								`Widget action '${actionId}' is not bound to a workflow${
+									available.length
+										? ` (bound: ${available.join(", ")})`
+										: ". Reference a Widget Action Event from the Instantiate Widget node, then re-run the flow so a fresh widget is pushed."
+								}`,
 							);
 							break;
 						}
@@ -1357,6 +1461,9 @@ export function useExecuteAction() {
 								"[A2UI] widget_event: only workflow bindings are supported for execution, got:",
 								binding,
 							);
+							toast.warning(
+								`Widget action '${actionId}' has a non-workflow binding and cannot run here.`,
+							);
 							break;
 						}
 
@@ -1364,6 +1471,11 @@ export function useExecuteAction() {
 
 						const effectiveAppId = appId;
 						const effectiveBoardId = boardId;
+						const inheritedBoardVersion = resolveEventBoardVersion(
+							boardId,
+							boardVersion,
+							effectiveBoardId,
+						);
 
 						if (effectiveBoardId && effectiveAppId) {
 							try {
@@ -1385,6 +1497,7 @@ export function useExecuteAction() {
 										effectiveBoardId,
 										surfaceId || "",
 										false,
+										inheritedBoardVersion,
 									);
 
 									if (!elementsMap || Object.keys(elementsMap).length === 0) {
@@ -1424,7 +1537,7 @@ export function useExecuteAction() {
 									}
 								}
 
-								const payload = compactWorkflowPayload({
+								const basePayload = compactWorkflowPayload({
 									id: nodeId,
 									payload: {
 										_elements: mergedElements,
@@ -1434,6 +1547,10 @@ export function useExecuteAction() {
 										_action_context: context,
 									},
 								}) as { id: string; payload: Record<string, unknown> };
+								const payload = withBoardVersion(
+									basePayload,
+									inheritedBoardVersion,
+								);
 
 								const execFn =
 									executionService?.executeBoard ??
@@ -1448,6 +1565,12 @@ export function useExecuteAction() {
 								);
 							} catch (error) {
 								console.error("[A2UI] Failed to execute widget event:", error);
+								toast.error(`Widget action '${actionId}' failed`, {
+									description:
+										error instanceof Error
+											? error.message
+											: "The widget workflow could not be started.",
+								});
 							}
 						} else {
 							console.warn(
@@ -1456,6 +1579,9 @@ export function useExecuteAction() {
 									appId: effectiveAppId,
 									boardId: effectiveBoardId,
 								},
+							);
+							toast.warning(
+								"Widget action cannot run: missing app or board context.",
 							);
 						}
 						break;
@@ -1466,7 +1592,7 @@ export function useExecuteAction() {
 								type: "userAction",
 								name,
 								surfaceId: surfaceId ?? "",
-								sourceComponentId: "",
+								sourceComponentId: triggeringComponentId ?? "",
 								timestamp: Date.now(),
 								context,
 							});
@@ -1487,6 +1613,7 @@ export function useExecuteAction() {
 			surfaceId,
 			appId,
 			boardId,
+			boardVersion,
 			eventId,
 			components,
 			globalState,
@@ -1494,6 +1621,7 @@ export function useExecuteAction() {
 			handleA2UIEvents,
 			isPreviewMode,
 			widgetInstance,
+			getElementValues,
 			markComponentTriggering,
 		],
 	);

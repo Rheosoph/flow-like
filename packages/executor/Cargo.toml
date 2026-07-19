@@ -11,6 +11,8 @@ all-execute = ["flow-like-catalog/all-execute"]
 server-execute = ["flow-like-catalog/server-execute"]
 all-server-execute = ["flow-like-catalog/all-server-execute"]
 local-ml = ["flow-like-catalog/local-ml"]
+local-ml-cuda = ["local-ml", "flow-like/local-ml-cuda", "flow-like-catalog/local-ml-cuda"]
+local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt"]
 tauri = ["flow-like-catalog/tauri"]
 
 [dependencies]
@@ -18,7 +20,7 @@ flow-like.workspace = true
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog.workspace = true
-flow-like-wasm.workspace = true
+flow-like-wasm = { workspace = true, features = ["model"] }
 
 blake3.workspace = true
 moka.workspace = true

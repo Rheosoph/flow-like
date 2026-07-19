@@ -11,6 +11,7 @@ use crate::{
 pub mod add_column;
 pub mod alter_column;
 pub mod build_index;
+pub mod create_table;
 pub mod db_add;
 pub mod db_count;
 pub mod db_delete;
@@ -25,6 +26,7 @@ pub mod list_tables;
 pub mod list_tables_user;
 pub mod optimize;
 pub mod presign_db_access;
+pub mod saved_queries;
 pub mod table_view;
 
 #[derive(Debug, Clone, serde::Deserialize, Default)]
@@ -43,6 +45,21 @@ pub struct ScopedPaginationParams {
     pub limit: Option<u64>,
     pub offset: Option<u64>,
     pub scope: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionAccess {
+    Read,
+    Write,
+}
+
+impl ConnectionAccess {
+    fn credentials_access(self) -> CredentialsAccess {
+        match self {
+            Self::Read => CredentialsAccess::InvokeRead,
+            Self::Write => CredentialsAccess::InvokeWrite,
+        }
+    }
 }
 
 impl ScopedPaginationParams {
@@ -88,10 +105,33 @@ pub async fn resolve_connection(
     app_id: &str,
     scope: &ScopeParams,
 ) -> Result<Connection, ApiError> {
+    resolve_connection_with_access(state, user, app_id, scope, ConnectionAccess::Read).await
+}
+
+/// Resolve an app database connection for a mutating operation. Project-scoped
+/// connections use the same master database, while user-scoped connections
+/// receive write-capable temporary credentials rather than the read-only
+/// credentials used by [`resolve_connection`].
+pub async fn resolve_write_connection(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    scope: &ScopeParams,
+) -> Result<Connection, ApiError> {
+    resolve_connection_with_access(state, user, app_id, scope, ConnectionAccess::Write).await
+}
+
+async fn resolve_connection_with_access(
+    state: &AppState,
+    user: &AppUser,
+    app_id: &str,
+    scope: &ScopeParams,
+    access: ConnectionAccess,
+) -> Result<Connection, ApiError> {
     if scope.is_user_scoped() {
         let sub = user.sub()?;
         let credentials = state
-            .scoped_credentials(&sub, app_id, CredentialsAccess::InvokeRead)
+            .scoped_credentials(&sub, app_id, access.credentials_access())
             .await?;
         let builder = credentials.to_db_scoped(&sub, app_id).await?;
         Ok(builder.execute().await?)
@@ -106,6 +146,17 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/", get(list_tables::list_tables))
         .route("/user", get(list_tables_user::list_tables_user))
+        .route(
+            "/queries",
+            get(saved_queries::list_saved_queries).post(saved_queries::create_saved_query),
+        )
+        .route("/queries/execute", post(saved_queries::execute_query))
+        .route(
+            "/queries/{query_id}",
+            get(saved_queries::get_saved_query)
+                .put(saved_queries::update_saved_query)
+                .delete(saved_queries::delete_saved_query),
+        )
         .route("/presign", post(presign_db_access::presign_db_access))
         .route(
             "/presign/project",
@@ -113,7 +164,8 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/{table}",
-            put(db_add::add_to_table)
+            post(create_table::create_table)
+                .put(db_add::add_to_table)
                 .delete(db_delete::delete_from_table)
                 .get(db_list::list_items),
         )

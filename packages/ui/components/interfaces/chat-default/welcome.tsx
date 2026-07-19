@@ -1,9 +1,9 @@
 "use client";
 
-import { useTheme } from "next-themes";
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { IEvent, IEventPayloadChat } from "../../../lib";
 import { VoiceMode } from "./VoiceMode";
+import { ChatAiDisclosure } from "./ai-disclosure";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
@@ -34,8 +34,7 @@ export function ChatWelcome({
 	const [currentMessage, setCurrentMessage] = useState("");
 	const [voiceModeOpen, setVoiceModeOpen] = useState(false);
 	const chatBox = useRef<ChatBoxRef>(null);
-	const { resolvedTheme } = useTheme();
-
+	const description = event.description?.trim();
 	const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 	const voiceEnabled = isVoiceEnabled(voiceConfig);
 
@@ -48,7 +47,7 @@ export function ChatWelcome({
 	);
 
 	// Fuzzy search function
-	const fuzzyScore = (text: string, searchTerm: string): number => {
+	const fuzzyScore = useCallback((text: string, searchTerm: string): number => {
 		const textLower = text.toLowerCase();
 		const searchLower = searchTerm.toLowerCase();
 
@@ -91,7 +90,7 @@ export function ChatWelcome({
 		}
 
 		return 0;
-	};
+	}, []);
 
 	// Filter examples based on current message and show max 5
 	const filteredExamples = useMemo(() => {
@@ -126,22 +125,34 @@ export function ChatWelcome({
 		const searchLower = searchTerm.toLowerCase();
 
 		// For exact substring matches, use the original highlighting
-		if (textLower.includes(searchLower)) {
-			const regex = new RegExp(`(${searchTerm})`, "gi");
-			const parts = text.split(regex);
+		if (searchLower && textLower.includes(searchLower)) {
+			const result: React.ReactNode[] = [];
+			let cursor = 0;
+			let matchStart = textLower.indexOf(searchLower, cursor);
 
-			return parts.map((part, index) =>
-				regex.test(part) ? (
+			while (matchStart !== -1) {
+				if (matchStart > cursor) {
+					result.push(text.slice(cursor, matchStart));
+				}
+				const matchEnd = matchStart + searchLower.length;
+				const match = text.slice(matchStart, matchEnd);
+				result.push(
 					<span
-						key={part + index}
+						key={`${matchStart}-${match}`}
 						className="bg-primary/20 text-primary rounded-sm"
 					>
-						{part}
-					</span>
-				) : (
-					part
-				),
-			);
+						{match}
+					</span>,
+				);
+				cursor = matchEnd;
+				matchStart = textLower.indexOf(searchLower, cursor);
+			}
+
+			if (cursor < text.length) {
+				result.push(text.slice(cursor));
+			}
+
+			return result;
 		}
 
 		// For fuzzy matches, highlight individual matching characters
@@ -176,7 +187,14 @@ export function ChatWelcome({
 	};
 
 	return (
-		<div className="flex flex-col h-full grow bg-background relative">
+		<div
+			className="fl-chat-surface relative flex h-full grow flex-col bg-transparent"
+			data-fl-chat-surface
+			data-fl-chat-welcome
+			style={{
+				backgroundColor: "var(--fl-chat-surface-background, var(--background))",
+			}}
+		>
 			{voiceModeOpen && (
 				<VoiceMode
 					open={voiceModeOpen}
@@ -237,17 +255,27 @@ export function ChatWelcome({
 				</div>
 			)}
 			{/* Welcome Content */}
-			<div className="flex-1 flex items-center justify-center p-8">
-				<div className="max-w-2xl w-full space-y-8">
+			<div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto p-3 sm:items-center sm:p-6 lg:p-8">
+				<div
+					className="w-full space-y-6"
+					data-fl-chat-welcome-panel
+					style={{
+						maxWidth: "min(var(--fl-chat-content-width, 64rem), 40rem)",
+					}}
+				>
 					{/* Header */}
-					<div className="text-center space-y-4">
-						<h1 className="text-3xl font-bold">{event.name}</h1>
-						<p className="text-muted-foreground text-lg line-clamp-1">
-							{event.description ?? "How can I assist you today?"}
-						</p>
+					<div className="space-y-2 text-center" data-fl-chat-welcome-header>
+						<h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
+							{event.name}
+						</h1>
+						{description && (
+							<p className="line-clamp-2 text-base text-muted-foreground">
+								{description}
+							</p>
+						)}
 					</div>
 
-					<div className="max-w-2xl mx-auto space-y-4">
+					<div className="mx-auto max-w-2xl space-y-3">
 						<ChatBox
 							ref={chatBox}
 							availableTools={config?.tools ?? []}
@@ -269,18 +297,23 @@ export function ChatWelcome({
 
 						{/* Example Prompts List */}
 						{(filteredExamples.length > 0 || currentMessage.trim()) && (
-							<div className="space-y-2 pt-2 px-2">
+							<div className="space-y-2" data-fl-chat-suggestions>
 								{filteredExamples.length > 0 && (
 									<p className="text-xs text-muted-foreground uppercase tracking-wide">
 										Suggestions
 									</p>
 								)}
-								<div className="space-y-1 min-h-50">
-									{filteredExamples.map((example, index) => (
+								<div className="grid max-h-[min(15rem,30dvh)] grid-cols-1 gap-1.5 overflow-y-auto sm:grid-cols-2">
+									{filteredExamples.map((example) => (
 										<button
-											key={example + index}
-											className="w-full text-left text-sm text-muted-foreground bg-muted/10 hover:text-foreground hover:bg-muted/50 rounded-md px-3 py-2 transition-colors cursor-pointer"
-											onClick={() => chatBox.current?.setInput(example)}
+											key={example}
+											className="min-h-11 w-full cursor-pointer rounded-lg border border-transparent bg-muted/10 px-3 py-2 text-left text-sm text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+											data-fl-chat-suggestion
+											onClick={() => {
+												chatBox.current?.setInput(example);
+												chatBox.current?.focusInput?.();
+											}}
+											type="button"
 										>
 											{highlightMatch(example, currentMessage.trim())}
 										</button>
@@ -290,6 +323,16 @@ export function ChatWelcome({
 						)}
 					</div>
 				</div>
+			</div>
+			<div
+				className="mx-auto w-full shrink-0 px-3"
+				style={{
+					maxWidth: "var(--fl-chat-content-width, 64rem)",
+					paddingBottom:
+						"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
+				}}
+			>
+				<ChatAiDisclosure text={config.ai_disclosure} />
 			</div>
 		</div>
 	);

@@ -359,6 +359,7 @@ mod node_metadata {
         batch::BatchImageInferenceNode,
         depth::{DepthColorizeNode, DepthEstimationNode, DepthToPointCloudNode},
         face::{CompareFacesNode, CropFacesNode, FaceDetectionNode, FaceEmbeddingNode},
+        face_id::{AnalyzeFacesNode, LoadFaceAnalyzerNode, UnloadFaceAnalyzerNode},
         ocr::{CropTextRegionsNode, TextDetectionNode, TextRecognitionNode},
     };
 
@@ -373,6 +374,13 @@ mod node_metadata {
 
     fn assert_node_has_description(node: &flow_like::flow::node::Node) {
         assert!(!node.description.is_empty(), "Node should have description");
+    }
+
+    fn pin<'a>(node: &'a flow_like::flow::node::Node, name: &str) -> &'a flow_like::flow::pin::Pin {
+        node.pins
+            .values()
+            .find(|pin| pin.name == name)
+            .unwrap_or_else(|| panic!("Node {} is missing pin {name}", node.name))
     }
 
     #[test]
@@ -440,6 +448,78 @@ mod node_metadata {
 
         assert_eq!(node.friendly_name, "Crop Faces");
         assert_node_has_exec_pins(&node);
+    }
+
+    #[test]
+    fn load_face_analyzer_node_metadata() {
+        let node = LoadFaceAnalyzerNode::new().get_node();
+
+        assert_eq!(node.name, "face_id_load_analyzer");
+        assert_eq!(node.version, Some(2));
+        assert_eq!(node.category, "AI/ML/ONNX/Face");
+        assert_node_has_exec_pins(&node);
+        assert!(pin(&node, "cache_dir").schema.is_some());
+        assert!(pin(&node, "analyzer").schema.is_some());
+        for name in [
+            "detector_url",
+            "detector_sha256",
+            "embedder_url",
+            "embedder_sha256",
+            "gender_age_url",
+            "gender_age_sha256",
+        ] {
+            assert!(pin(&node, name).default_value.is_some());
+        }
+        assert_eq!(
+            pin(&node, "input_size").options.as_ref().unwrap().range,
+            Some((32.0, 640.0))
+        );
+        assert_eq!(
+            pin(&node, "score_threshold")
+                .options
+                .as_ref()
+                .unwrap()
+                .range,
+            Some((0.25, 1.0))
+        );
+        assert_eq!(
+            pin(&node, "iou_threshold").options.as_ref().unwrap().range,
+            Some((0.0, 0.75))
+        );
+    }
+
+    #[test]
+    fn analyze_faces_node_metadata() {
+        let node = AnalyzeFacesNode::new().get_node();
+
+        assert_eq!(node.name, "face_id_analyze");
+        assert_eq!(node.version, Some(2));
+        assert_node_has_exec_pins(&node);
+        assert_eq!(
+            pin(&node, "max_faces").options.as_ref().unwrap().range,
+            Some((1.0, 100.0))
+        );
+        let faces = pin(&node, "faces");
+        assert_eq!(
+            faces.data_type,
+            flow_like::flow::variable::VariableType::Struct
+        );
+        assert_eq!(faces.value_type, flow_like::flow::pin::ValueType::Array);
+        assert!(faces.schema.is_some());
+    }
+
+    #[test]
+    fn unload_face_analyzer_node_metadata() {
+        let node = UnloadFaceAnalyzerNode::new().get_node();
+
+        assert_eq!(node.name, "face_id_unload_analyzer");
+        assert_eq!(node.version, Some(1));
+        assert_node_has_exec_pins(&node);
+        assert!(pin(&node, "analyzer").schema.is_some());
+        assert_eq!(
+            pin(&node, "success").data_type,
+            flow_like::flow::variable::VariableType::Boolean
+        );
     }
 
     #[test]

@@ -48,7 +48,14 @@ pub async fn list_overlays(
     );
 
     let connection = resolve_connection(&state, &user, &app_id, &scope).await?;
-    let defs = lancegraph::list_overlays(&connection).await?;
+    let mut defs = lancegraph::list_overlays(&connection).await?;
+    if user.is_connected_app() {
+        defs = defs
+            .into_iter()
+            .filter(|definition| definition.exposed)
+            .map(crate::routes::app::connection::remote_ontologies::sanitize_remote_contract)
+            .collect();
+    }
 
     let overlays: Vec<flow_like_catalog_core::GraphOverlay> =
         defs.into_iter().map(def_to_overlay).collect();
@@ -65,6 +72,8 @@ pub fn def_to_overlay(d: lancegraph::GraphOverlayDef) -> flow_like_catalog_core:
             .nodes
             .into_iter()
             .map(|n| flow_like_catalog_core::NodeLabelMapping {
+                id: n.id,
+                api_name: n.api_name,
                 label: n.label,
                 table: n.table,
                 id_column: n.id_column,
@@ -85,6 +94,8 @@ pub fn def_to_overlay(d: lancegraph::GraphOverlayDef) -> flow_like_catalog_core:
             .edges
             .into_iter()
             .map(|e| flow_like_catalog_core::EdgeLabelMapping {
+                id: e.id,
+                api_name: e.api_name,
                 label: e.label,
                 table: e.table,
                 src_column: e.src_column,
@@ -93,6 +104,9 @@ pub fn def_to_overlay(d: lancegraph::GraphOverlayDef) -> flow_like_catalog_core:
                 dst_label: e.dst_label,
                 src_node_column: e.src_node_column,
                 dst_node_column: e.dst_node_column,
+                containment: e.containment,
+                dst_ontology: e.dst_ontology,
+                dst_binding_id: e.dst_binding_id,
                 property_columns: e
                     .property_columns
                     .into_iter()
@@ -105,6 +119,35 @@ pub fn def_to_overlay(d: lancegraph::GraphOverlayDef) -> flow_like_catalog_core:
                 style: serde_json::from_value(e.style).unwrap_or_default(),
             })
             .collect(),
+        object_views: d
+            .object_views
+            .into_iter()
+            .map(|view| flow_like_catalog_core::ObjectViewDefinition {
+                object_type: view.object_type,
+                title_property: view.title_property,
+                prominent_properties: view.prominent_properties,
+            })
+            .collect(),
+        actions: d
+            .actions
+            .into_iter()
+            .map(|action| flow_like_catalog_core::OntologyActionDefinition {
+                id: action.id,
+                name: action.name,
+                description: action.description,
+                object_type: action.object_type,
+                board_id: action.board_id,
+                board_version: action.board_version,
+                start_node_id: action.start_node_id,
+                event_id: action.event_id,
+                enabled: action.enabled,
+                allow_bulk: action.allow_bulk,
+                parameter_schema: action.parameter_schema,
+                exposed: action.exposed,
+            })
+            .collect(),
+        exposed: d.exposed,
+        bindings_enabled: d.bindings_enabled,
         default_limit: d.default_limit,
         created_at: d.created_at,
         updated_at: d.updated_at,

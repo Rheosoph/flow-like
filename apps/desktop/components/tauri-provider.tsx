@@ -22,6 +22,7 @@ import {
 	type IHelperState,
 	type IPageState,
 	type IProfile,
+	type IQueryState,
 	type IRegistryState,
 	type IRoleState,
 	type ISalesState,
@@ -43,6 +44,7 @@ import {
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
 import type { ICommandSync } from "@flow-like/flow-like-ui/lib";
+import Dexie, { type EntityTable } from "dexie";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
 import { useCallback, useEffect, useRef, useTransition } from "react";
@@ -59,6 +61,7 @@ import { AppState } from "./tauri-provider/app-state";
 import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
 import { DatabaseState } from "./tauri-provider/db-state";
+import { QueryState } from "./tauri-provider/query-state";
 import { EventState } from "./tauri-provider/event-state";
 import { GraphState } from "./tauri-provider/graph-state";
 import { HelperState } from "./tauri-provider/helper-state";
@@ -74,6 +77,30 @@ import { TemplateState } from "./tauri-provider/template-state";
 import { UsageState } from "./tauri-provider/usage-state";
 import { UserState } from "./tauri-provider/user-state";
 import { WidgetState } from "./tauri-provider/widget-state";
+
+interface IBoardLineage {
+	key: string;
+	appId: string;
+	boardId: string;
+	/** Nanoseconds since epoch of the last remote updated_at applied or pushed past. */
+	updatedAtNs: number;
+	recordedAt: Date;
+}
+
+// Client-side sync lineage alongside the offline command queue: remembers the
+// last remote board revision this client applied or successfully pushed past,
+// so a stale remote snapshot (clock skew, equal timestamps, lagging replica)
+// is refused instead of clobbering local state.
+const boardLineageDB = new Dexie("BoardSyncLineage") as Dexie & {
+	lineage: EntityTable<IBoardLineage, "key">;
+};
+
+boardLineageDB.version(1).stores({
+	lineage: "key, [appId+boardId]",
+});
+
+const boardLineageKey = (appId: string, boardId: string): string =>
+	`${appId}:${boardId}`;
 
 // One-time resume guards for the whole app session
 declare global {
@@ -100,6 +127,7 @@ export class TauriBackend implements IBackendState {
 	aiState: IAIState;
 	dbState: IDatabaseState;
 	graphState: IGraphState;
+	queryState: IQueryState;
 	widgetState: IWidgetState;
 	pageState: IPageState;
 	registryState: IRegistryState;
@@ -133,6 +161,7 @@ export class TauriBackend implements IBackendState {
 		this.aiState = new AiState(this);
 		this.dbState = new DatabaseState(this);
 		this.graphState = new GraphState(this);
+		this.queryState = new QueryState(this);
 		this.widgetState = new WidgetState(this);
 		this.pageState = new PageState(this);
 		this.registryState = new RegistryState(this);
@@ -226,6 +255,38 @@ export class TauriBackend implements IBackendState {
 		boardId: string,
 	): Promise<void> {
 		await offlineSyncDB.commands.delete(commandId);
+	}
+
+	async getBoardLineage(
+		appId: string,
+		boardId: string,
+	): Promise<number | undefined> {
+		const entry = await boardLineageDB.lineage.get(
+			boardLineageKey(appId, boardId),
+		);
+		return entry?.updatedAtNs;
+	}
+
+	/** Max-merge: the lineage timestamp only ever moves forward. */
+	async recordBoardLineage(
+		appId: string,
+		boardId: string,
+		updatedAtNs: number,
+	): Promise<void> {
+		if (!Number.isFinite(updatedAtNs) || updatedAtNs <= 0) return;
+
+		const key = boardLineageKey(appId, boardId);
+		await boardLineageDB.transaction("rw", boardLineageDB.lineage, async () => {
+			const existing = await boardLineageDB.lineage.get(key);
+			if (existing && existing.updatedAtNs >= updatedAtNs) return;
+			await boardLineageDB.lineage.put({
+				key,
+				appId,
+				boardId,
+				updatedAtNs,
+				recordedAt: new Date(),
+			});
+		});
 	}
 
 	async uploadSignedUrl(

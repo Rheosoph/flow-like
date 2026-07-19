@@ -405,6 +405,7 @@ function pinPropsAreEqual(
 		prevProps.boardRef?.current !== nextProps.boardRef?.current ||
 		prevProps.boardDataVersion !== nextProps.boardDataVersion ||
 		versionKey(prevProps.version) !== versionKey(nextProps.version) ||
+		prevProps.currentLayerId !== nextProps.currentLayerId ||
 		prevProps.node?.id !== nextProps.node?.id ||
 		prevProps.pin.id !== nextProps.pin.id ||
 		prevProps.pin.index !== nextProps.pin.index ||

@@ -18,7 +18,11 @@ export {
 	type GraphQueryPanelProps,
 } from "./graph-query-panel";
 export { GraphSearch, type GraphSearchProps } from "./graph-search";
-export { GraphViewer, type GraphViewerProps } from "./graph-viewer";
+export {
+	GraphViewer,
+	type GraphViewerProps,
+	getNodeRawId,
+} from "./graph-viewer";
 export { GRAPH_ICONS, getGraphIcon, type IconKey } from "./icons";
 export { getPresets, applyPreset, type DomainPreset } from "./presets";
 export * from "./overlay-builder";

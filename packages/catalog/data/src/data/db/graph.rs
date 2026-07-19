@@ -8,11 +8,21 @@ use flow_like_catalog_core::NodeGraphConnection;
 use flow_like_types::{Cacheable, async_trait, json::json};
 use std::sync::Arc;
 
+pub mod analytics;
 pub mod cypher;
 pub mod drop_overlay;
 pub mod list_overlays;
 pub mod neighbors;
+pub mod ontology_action;
+pub mod ontology_action_input;
+pub mod ontology_action_remote;
+pub mod ontology_query;
+pub mod ontology_remote_children;
+pub mod ontology_remote_query;
+pub mod paths;
+pub mod sample;
 pub mod schema;
+pub mod search;
 pub mod sql;
 pub mod subgraph;
 pub mod upsert_edge;
@@ -20,6 +30,48 @@ pub mod upsert_node;
 
 #[cfg(feature = "execute")]
 use flow_like_storage::databases::graph::lancegraph::LanceGraphStore;
+
+/// Merges any per-property `param_*` input pins over a base parameters object.
+///
+/// Generated action bindings expand a flat scalar parameter schema into one
+/// typed pin per property (see `flow_like_catalog_core::ontology_binding_nodes`).
+/// When no such pins are present the node stays in single-struct mode and the
+/// base object is returned unchanged.
+#[cfg(feature = "execute")]
+pub(crate) async fn merge_parameter_pins(
+    context: &ExecutionContext,
+    base: flow_like_types::Value,
+) -> flow_like_types::Value {
+    use flow_like::flow::pin::PinType;
+
+    let param_pins: Vec<String> = {
+        let node = context.node.node.lock().await;
+        node.pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Input && pin.name.starts_with("param_"))
+            .map(|pin| pin.name.clone())
+            .collect()
+    };
+    if param_pins.is_empty() {
+        return base;
+    }
+    let mut object = match base {
+        flow_like_types::Value::Object(map) => map,
+        _ => flow_like_types::json::Map::new(),
+    };
+    for pin_name in param_pins {
+        let Some(key) = pin_name.strip_prefix("param_") else {
+            continue;
+        };
+        if let Ok(value) = context
+            .evaluate_pin::<flow_like_types::Value>(&pin_name)
+            .await
+        {
+            object.insert(key.to_string(), value);
+        }
+    }
+    flow_like_types::Value::Object(object)
+}
 
 /// Cached graph store instance, stored in the execution context cache.
 #[cfg(feature = "execute")]
@@ -382,6 +434,8 @@ impl NodeLogic for CreateGraphOverlayNode {
                 .nodes
                 .into_iter()
                 .map(|n| lancegraph::NodeMappingDef {
+                    id: n.id,
+                    api_name: n.api_name,
                     label: n.label,
                     table: n.table,
                     id_column: n.id_column,
@@ -402,6 +456,8 @@ impl NodeLogic for CreateGraphOverlayNode {
                 .edges
                 .into_iter()
                 .map(|e| lancegraph::EdgeMappingDef {
+                    id: e.id,
+                    api_name: e.api_name,
                     label: e.label,
                     table: e.table,
                     src_column: e.src_column,
@@ -410,6 +466,9 @@ impl NodeLogic for CreateGraphOverlayNode {
                     dst_label: e.dst_label,
                     src_node_column: e.src_node_column,
                     dst_node_column: e.dst_node_column,
+                    containment: e.containment,
+                    dst_ontology: e.dst_ontology,
+                    dst_binding_id: e.dst_binding_id,
                     property_columns: e
                         .property_columns
                         .into_iter()
@@ -422,10 +481,42 @@ impl NodeLogic for CreateGraphOverlayNode {
                     style: flow_like_types::json::to_value(&e.style).unwrap_or_default(),
                 })
                 .collect(),
+            object_views: overlay
+                .object_views
+                .into_iter()
+                .map(|view| lancegraph::ObjectViewDef {
+                    object_type: view.object_type,
+                    title_property: view.title_property,
+                    prominent_properties: view.prominent_properties,
+                })
+                .collect(),
+            // Governed capabilities (executable actions, cross-project
+            // exposure) can only be granted through Data Studio, where event
+            // materialization, contract hashing, and permissions are enforced.
+            // A board write path must never mint them.
+            actions: Vec::new(),
+            exposed: false,
+            bindings_enabled: overlay.bindings_enabled,
+            property_projection_mode: lancegraph::PropertyProjectionMode::Dynamic,
             default_limit: overlay.default_limit,
             created_at: now.clone(),
             updated_at: now,
         };
+
+        let validation = lancegraph::validate_overlay_definition(&connection, &def).await?;
+        if !validation.ok {
+            let mut issues = validation.issues;
+            for mapping in &validation.mappings {
+                for issue in &mapping.issues {
+                    issues.push(format!("{} '{}': {}", mapping.kind, mapping.label, issue));
+                }
+            }
+            context
+                .set_pin_value("error_message", json!(issues.join("; ")))
+                .await?;
+            context.activate_exec_pin("error").await?;
+            return Ok(());
+        }
 
         match lancegraph::save_overlay(&connection, &def).await {
             Ok(()) => {

@@ -213,11 +213,20 @@ pub fn search_declarations(query: &str) -> Vec<DeclarationMatch> {
 
     let analyses = declaration_query_plan(query);
     let normalized_query = query.trim().to_lowercase();
+    // A query that names an exact FlowScript function is a symbol lookup first and a semantic
+    // search second. Domain expansions (for example `mail` -> the whole IMAP/SMTP workflow) are
+    // still useful companions, but must never displace the declaration the caller explicitly
+    // requested.
+    let exact_function_names = query
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|token| !token.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<HashSet<_>>();
 
     let mut scored = DECLARATION_INDEX
         .iter()
         .filter_map(|entry| {
-            let score = analyses
+            let semantic_score = analyses
                 .iter()
                 .enumerate()
                 .map(|(index, analysis)| {
@@ -229,6 +238,11 @@ pub fn search_declarations(query: &str) -> Vec<DeclarationMatch> {
                 })
                 .sum::<i32>()
                 + workflow_priority_score(entry, &normalized_query, false);
+            let exact_symbol_score = exact_function_names
+                .contains(&entry.function_name.to_ascii_lowercase())
+                .then_some(100_000)
+                .unwrap_or_default();
+            let score = semantic_score.saturating_add(exact_symbol_score);
 
             (score > 0).then(|| DeclarationMatch {
                 path: entry.path,
@@ -865,6 +879,25 @@ mod tests {
     fn fuzzy_missing_batch_embedding_still_finds_document_embedding() {
         let names = names("batchEmbedDocument");
         assert!(names.iter().any(|name| name == "embedDocument"));
+    }
+
+    #[test]
+    fn exact_function_symbol_outranks_workflow_expansion() {
+        let matches = search_declarations("mailAddressFields address struct input schema");
+        assert_eq!(
+            matches
+                .first()
+                .map(|matched| matched.function_name.as_str()),
+            Some("mailAddressFields")
+        );
+
+        let matches = search_declarations("cuid generate id");
+        assert_eq!(
+            matches
+                .first()
+                .map(|matched| matched.function_name.as_str()),
+            Some("cuid")
+        );
     }
 
     #[test]

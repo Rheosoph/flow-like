@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "Flow-Like Local Development Execution Runtime"
 
+[features]
+default = []
+local-ml-cuda = ["flow-like/local-ml-cuda", "flow-like-catalog/local-ml-cuda", "flow-like-executor/local-ml-cuda"]
+local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt", "flow-like-executor/local-ml-tensorrt"]
+
 [dependencies]
 flow-like.workspace = true
 flow-like-api = { workspace = true, features = ["kubernetes", "redis", "azure"] }

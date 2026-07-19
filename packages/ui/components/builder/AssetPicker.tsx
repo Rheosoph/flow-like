@@ -2,7 +2,9 @@
 
 import { FolderOpen, ImageIcon, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { type IStorageItem, useBackend, useInvoke } from "../..";
+import { useInvoke } from "../../hooks/use-invoke";
+import type { IStorageItem } from "../../lib/schema/storage/storage-item";
+import { useBackend } from "../../state/backend-state";
 import {
 	Button,
 	Dialog,
@@ -27,6 +29,7 @@ export interface AssetPickerProps {
 		| "environment"
 		| "all";
 	placeholder?: string;
+	disabled?: boolean;
 }
 
 const ASSET_EXTENSIONS: Record<string, string[]> = {
@@ -137,6 +140,7 @@ export function AssetPicker({
 	onChange,
 	accept = "all",
 	placeholder = "Select asset...",
+	disabled = false,
 }: AssetPickerProps) {
 	const backend = useBackend();
 	const [open, setOpen] = useState(false);
@@ -148,11 +152,15 @@ export function AssetPicker({
 		setInputValue(value ?? "");
 	}, [value]);
 
+	useEffect(() => {
+		if (disabled) setOpen(false);
+	}, [disabled]);
+
 	const items = useInvoke(
 		backend.storageState.listStorageItems,
 		backend.storageState,
 		[appId, prefix],
-		open && typeof appId === "string",
+		open && !disabled && typeof appId === "string" && appId.length > 0,
 	);
 
 	const handleSelect = useCallback(
@@ -202,12 +210,13 @@ export function AssetPicker({
 		<div className="flex gap-1.5">
 			<div className="relative flex-1">
 				<Input
+					disabled={disabled}
 					value={inputValue}
 					onChange={(e) => handleInputChange(e.target.value)}
 					placeholder={placeholder}
 					className="h-8 text-sm pr-8"
 				/>
-				{inputValue && (
+				{inputValue && !disabled && (
 					<button
 						type="button"
 						onClick={handleClear}
@@ -222,12 +231,18 @@ export function AssetPicker({
 				variant="outline"
 				size="sm"
 				onClick={() => setOpen(true)}
+				disabled={disabled}
 				className="h-8 px-2"
 			>
 				<FolderOpen className="h-4 w-4" />
 			</Button>
 
-			<Dialog open={open} onOpenChange={setOpen}>
+			<Dialog
+				open={open && !disabled}
+				onOpenChange={(nextOpen) => {
+					if (!disabled) setOpen(nextOpen);
+				}}
+			>
 				<DialogContent className="max-w-md">
 					<DialogHeader>
 						<DialogTitle>Select Asset</DialogTitle>
