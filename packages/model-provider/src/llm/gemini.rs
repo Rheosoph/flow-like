@@ -1,4 +1,4 @@
-use std::{any::Any, sync::Arc};
+use std::any::Any;
 
 use super::{LLMCallback, ModelLogic, extract_headers};
 use crate::provider::random_provider;
@@ -10,7 +10,6 @@ use crate::{
 };
 use flow_like_types::json::to_value;
 use flow_like_types::{Cacheable, Result, anyhow, async_trait};
-use rig::completion::CompletionModel;
 use rig::message::DocumentSourceKind;
 use rig::providers::gemini::completion::gemini_api_types::{
     AdditionalParameters, GenerationConfig, ThinkingConfig, ThinkingLevel,
@@ -194,7 +193,6 @@ impl Cacheable for GeminiModel {
 
 #[async_trait]
 impl ModelLogic for GeminiModel {
-    #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
         Ok(ModelConstructor {
             inner: Box::new(self.client.clone()),
@@ -209,9 +207,8 @@ impl ModelLogic for GeminiModel {
         // Not used - we override invoke() to transform RigMessages instead
     }
 
-    #[allow(deprecated)]
     async fn invoke(&self, history: &History, lambda: Option<LLMCallback>) -> Result<Response> {
-        use crate::llm::{CompletionModelHandle, invoke_with_stream, invoke_without_stream};
+        use super::{invoke_with_stream, invoke_without_stream};
 
         let model_name = self
             .default_model()
@@ -219,8 +216,7 @@ impl ModelLogic for GeminiModel {
             .unwrap_or_else(|| history.model.clone());
 
         let constructor = self.provider().await?;
-        let completion_model = constructor.inner.completion_model(&model_name);
-        let completion_handle = CompletionModelHandle::new(Arc::from(completion_model));
+        let dynamic_model = constructor.dynamic_model(&model_name);
 
         let (mut prompt, mut chat_history) = history
             .extract_prompt_and_history()
@@ -229,8 +225,7 @@ impl ModelLogic for GeminiModel {
         // GEMINI-SPECIFIC: Transform data URLs to Base64
         self.transform_rig_messages(&mut prompt, &mut chat_history);
 
-        let mut builder = completion_handle
-            .completion_request(prompt)
+        let mut builder = rig::completion::CompletionModel::completion_request(&dynamic_model, prompt)
             .messages(chat_history);
 
         if let Some(temp) = history.temperature {

@@ -436,8 +436,7 @@ impl NodeLogic for ExtractDocumentAiNode {
             .build(&model_bit, context.app_state.clone(), context.token.clone())
             .await?;
 
-        #[allow(deprecated)]
-        let completion_handle = model.completion_model_handle(None).await?;
+        let completion_handle = model.dynamic_completion_model(None).await?;
 
         let llm_config = LlmConfig::default()
             .with_images_per_message(images_per_message.max(1) as usize)
@@ -745,8 +744,7 @@ impl NodeLogic for ExtractDocumentsAiNode {
             .build(&model_bit, context.app_state.clone(), context.token.clone())
             .await?;
 
-        #[allow(deprecated)]
-        let completion_handle = model.completion_model_handle(None).await?;
+        let completion_handle = model.dynamic_completion_model(None).await?;
 
         let llm_config = LlmConfig::default()
             .with_images_per_message(images_per_message.max(1) as usize)

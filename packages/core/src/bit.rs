@@ -12,8 +12,8 @@ use flow_like_storage::files::store::local_store::LocalObjectStore;
 use flow_like_types::Value;
 use flow_like_types::intercom::InterComCallback;
 
+use flow_like_model_provider::llm::{CompletionClientDyn, DynamicCompletionModel};
 use rig::agent::AgentBuilder;
-use rig::client::completion::{CompletionClientDyn, CompletionModelHandle};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -843,11 +843,11 @@ impl Bit {
         Some(path)
     }
 
-    pub async fn agent<'a>(
+    pub async fn agent(
         &self,
         context: &mut ExecutionContext,
         history: &Option<History>,
-    ) -> flow_like_types::Result<AgentBuilder<CompletionModelHandle<'a>>> {
+    ) -> flow_like_types::Result<AgentBuilder<DynamicCompletionModel>> {
         let (model_name, additional_params, completion_client) =
             self.completion_model(context, history).await?;
         let mut agent_builder = completion_client.agent(&model_name);
@@ -859,14 +859,14 @@ impl Bit {
         Ok(agent_builder)
     }
 
-    pub async fn completion_model<'a>(
+    pub async fn completion_model(
         &self,
         context: &mut ExecutionContext,
         history: &Option<History>,
     ) -> flow_like_types::Result<(
         String,
         Option<flow_like_types::Value>,
-        Box<dyn CompletionClientDyn + Send + Sync + 'a>,
+        Box<dyn CompletionClientDyn>,
     )> {
         let (model_name, additional_params, completion_client) = {
             let model_factory = context.app_state.model_factory.clone();

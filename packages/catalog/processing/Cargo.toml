@@ -13,7 +13,7 @@ execute = [
     "dep:rake",
     "dep:yake-rust",
     "dep:whatlang",
-    "dep:rig-core",
+    "dep:rig",
 ]
 
 [dependencies]
@@ -38,7 +38,7 @@ markitdown = { workspace = true, optional = true }
 rake = { version = "0.3.6", optional = true }
 yake-rust = { version = "1.0.3", optional = true }
 whatlang = { version = "0.18.0", optional = true }
-rig-core = { workspace = true, optional = true }
+rig = { workspace = true, optional = true }
 regex = { workspace = true }
 
 [build-dependencies]

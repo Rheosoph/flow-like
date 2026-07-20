@@ -15,7 +15,7 @@ crate-type = ["cdylib", "rlib"]
 flow-like-wasm-sdk = { version="0.3.6", features = ["rig"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-rig-core = { version = "0.34.0", default-features = false, features = ["wasm"] }
+rig-core = { version = "0.37.0", default-features = false, features = ["wasm"] }
 
 [profile.release]
 opt-level = "z"

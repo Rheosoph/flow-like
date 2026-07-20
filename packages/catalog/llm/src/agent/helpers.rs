@@ -69,6 +69,34 @@ fn flatten_reasoning(reasoning: &rig::message::Reasoning) -> String {
         .join("\n")
 }
 
+/// Merge an incoming full reasoning block into the per-turn accumulator.
+/// Mirrors rig 0.37's `merge_reasoning_blocks`: blocks that share a provider
+/// id (e.g. Anthropic's signed thinking blocks) extend the existing entry so
+/// signatures stay attached to the right block; blocks with different or
+/// missing ids stay as separate items.
+#[cfg(feature = "execute")]
+fn merge_reasoning_blocks(
+    accumulated_reasoning: &mut Vec<rig::message::Reasoning>,
+    incoming: &rig::message::Reasoning,
+) {
+    let ids_match = |existing: &rig::message::Reasoning| {
+        matches!(
+            (&existing.id, &incoming.id),
+            (Some(existing_id), Some(incoming_id)) if existing_id == incoming_id
+        )
+    };
+
+    if let Some(existing) = accumulated_reasoning
+        .iter_mut()
+        .rev()
+        .find(|existing| ids_match(existing))
+    {
+        existing.content.extend(incoming.content.clone());
+    } else {
+        accumulated_reasoning.push(incoming.clone());
+    }
+}
+
 /// Estimate token count for a message using character-based heuristic.
 /// Most LLMs average ~4 characters per token for English text.
 #[cfg(feature = "execute")]
@@ -1121,19 +1149,11 @@ pub async fn execute_agent_streaming(
     let mut mcp_tool_clients: HashMap<String, rmcp::service::ServerSink> = HashMap::new();
     let mut _mcp_clients = Vec::new();
 
-    let client_info = ClientInfo {
-        meta: None,
-        protocol_version: Default::default(),
-        capabilities: ClientCapabilities::default(),
-        client_info: Implementation {
-            name: "Flow-Like".to_string(),
-            version: "alpha".to_string(),
-            title: None,
-            description: None,
-            icons: None,
-            website_url: Some("https://flow-like.com".to_string()),
-        },
-    };
+    let client_info = ClientInfo::new(
+        ClientCapabilities::default(),
+        Implementation::new("Flow-Like", "alpha")
+            .with_website_url("https://flow-like.com"),
+    );
 
     for mcp_config in &agent.mcp_servers {
         let transport =
@@ -1170,10 +1190,7 @@ pub async fn execute_agent_streaming(
 
             // Check if there are more pages
             if let Some(next_cursor) = response.next_cursor {
-                cursor = Some(PaginatedRequestParams {
-                    meta: None,
-                    cursor: Some(next_cursor),
-                });
+                cursor = Some(PaginatedRequestParams::default().with_cursor(Some(next_cursor)));
             } else {
                 break;
             }
@@ -1660,7 +1677,17 @@ pub async fn execute_agent_streaming(
             .await
             .map_err(|e| anyhow!("Failed to start completion stream: {}", e))?;
 
-        let mut response_contents: Vec<AssistantContent> = Vec::new();
+        let mut text_contents: Vec<AssistantContent> = Vec::new();
+        let mut tool_call_contents: Vec<AssistantContent> = Vec::new();
+        // Full reasoning blocks accumulate here (they carry signatures /
+        // encrypted payloads that Anthropic and OpenAI Responses require to
+        // round-trip in chat history).
+        let mut accumulated_reasoning: Vec<rig::message::Reasoning> = Vec::new();
+        // Reasoning deltas are kept separate because they lack signatures;
+        // we assemble them into a single block at turn-end only if no full
+        // reasoning block arrived.
+        let mut pending_reasoning_delta_text = String::new();
+        let mut pending_reasoning_delta_id: Option<String> = None;
         let mut final_usage: Option<RigUsage> = None;
         let mut response_obj = Response::new();
         response_obj.model = Some(model_display_name.clone());
@@ -1680,7 +1707,7 @@ pub async fn execute_agent_streaming(
                     let chunk = ResponseChunk::from_text(&text.text, &model_display_name);
                     response_obj.push_chunk(chunk.clone());
                     stream_state.emit_chunk(context, &chunk).await?;
-                    response_contents.push(AssistantContent::Text(text));
+                    text_contents.push(AssistantContent::Text(text));
                 }
                 StreamedAssistantContent::ToolCall { tool_call, .. } => {
                     let chunk = ResponseChunk::from_tool_call(&tool_call, &model_display_name);
@@ -1688,7 +1715,7 @@ pub async fn execute_agent_streaming(
                     stream_state.emit_chunk(context, &chunk).await?;
                     // Track this ID so we don't duplicate from deltas
                     complete_tool_call_ids.insert(tool_call.id.clone());
-                    response_contents.push(AssistantContent::ToolCall(tool_call));
+                    tool_call_contents.push(AssistantContent::ToolCall(tool_call));
                 }
                 StreamedAssistantContent::ToolCallDelta { id, content, .. } => {
                     let entry = tool_call_deltas
@@ -1714,16 +1741,31 @@ pub async fn execute_agent_streaming(
                     let chunk = ResponseChunk::from_reasoning(&reasoning_text, &model_display_name);
                     response_obj.push_chunk(chunk.clone());
                     stream_state.emit_chunk(context, &chunk).await?;
+                    merge_reasoning_blocks(&mut accumulated_reasoning, &reasoning);
                 }
-                StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
+                StreamedAssistantContent::ReasoningDelta { reasoning, id } => {
                     let chunk = ResponseChunk::from_reasoning(&reasoning, &model_display_name);
                     response_obj.push_chunk(chunk.clone());
                     stream_state.emit_chunk(context, &chunk).await?;
+                    pending_reasoning_delta_text.push_str(&reasoning);
+                    if pending_reasoning_delta_id.is_none() {
+                        pending_reasoning_delta_id = id;
+                    }
                 }
                 StreamedAssistantContent::Final(final_resp) => {
                     final_usage = final_resp.usage;
                 }
             }
+        }
+
+        // Mirror rig 0.37: if we only saw deltas, assemble them into a single
+        // reasoning block so the next turn still carries reasoning context.
+        if accumulated_reasoning.is_empty() && !pending_reasoning_delta_text.is_empty() {
+            let mut assembled = rig::message::Reasoning::new(&pending_reasoning_delta_text);
+            if let Some(id) = pending_reasoning_delta_id.take() {
+                assembled = assembled.with_id(id);
+            }
+            accumulated_reasoning.push(assembled);
         }
 
         let finish_chunk = ResponseChunk::finish(&model_display_name, final_usage.as_ref());
@@ -1750,7 +1792,7 @@ pub async fn execute_agent_streaming(
                     signature: None,
                     additional_params: None,
                 };
-                response_contents.push(AssistantContent::ToolCall(tool_call));
+                tool_call_contents.push(AssistantContent::ToolCall(tool_call));
             }
         }
 
@@ -1759,7 +1801,7 @@ pub async fn execute_agent_streaming(
         // for multiple calls, which breaks tool_call ↔ tool_result pairing.
         let mut used_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut id_counter = 0u32;
-        for content in response_contents.iter_mut() {
+        for content in tool_call_contents.iter_mut() {
             if let AssistantContent::ToolCall(tc) = content {
                 if !used_ids.insert(tc.id.clone()) || tc.id == tc.function.name {
                     let new_id = format!("call_{}_{}", iteration, id_counter);
@@ -1777,6 +1819,17 @@ pub async fn execute_agent_streaming(
                 id_counter += 1;
             }
         }
+
+        // Assemble assistant message in the strict order required by providers:
+        // text → reasoning → tool_calls. OpenAI Responses API requires reasoning
+        // items to precede function_call items; Anthropic requires reasoning
+        // blocks (with signatures) to round-trip through tool-call turns.
+        let mut response_contents: Vec<AssistantContent> = Vec::new();
+        response_contents.extend(text_contents);
+        for reasoning in accumulated_reasoning.drain(..) {
+            response_contents.push(AssistantContent::Reasoning(reasoning));
+        }
+        response_contents.extend(tool_call_contents);
 
         let assistant_msg = rig::message::Message::Assistant {
             id: None,
@@ -1816,13 +1869,12 @@ pub async fn execute_agent_streaming(
                     );
 
                     let args_map = arguments.as_object().cloned();
+                    let mut call_params = CallToolRequestParams::new(name.clone());
+                    if let Some(args) = args_map {
+                        call_params = call_params.with_arguments(args);
+                    }
                     match mcp_peer
-                        .call_tool(CallToolRequestParams {
-                            meta: None,
-                            name: name.clone().into(),
-                            arguments: args_map,
-                            task: None,
-                        })
+                        .call_tool(call_params)
                         .await
                     {
                         Ok(result) => {

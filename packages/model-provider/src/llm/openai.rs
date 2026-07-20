@@ -1,15 +1,12 @@
-use std::any::Any;
-
 use super::{ModelLogic, extract_headers, merge_additional_params};
 use crate::provider::random_provider;
 use crate::{
     history::History,
-    llm::ModelConstructor,
+    llm::{CompletionClientDyn, ModelConstructor},
     provider::{ModelProvider, ModelProviderConfiguration},
 };
 use flow_like_types::{Cacheable, Result, async_trait, json::json};
-#[allow(deprecated)]
-use rig::client::completion::CompletionClientDyn;
+use std::any::Any;
 
 #[derive(Clone)]
 enum OpenAIClientType {
@@ -18,8 +15,7 @@ enum OpenAIClientType {
 }
 
 impl OpenAIClientType {
-    #[allow(deprecated)]
-    fn into_boxed(self) -> Box<dyn CompletionClientDyn + Send + Sync> {
+    fn into_boxed(self) -> Box<dyn CompletionClientDyn> {
         match self {
             OpenAIClientType::OpenAI(client) => Box::new(client),
             OpenAIClientType::Azure(client) => Box::new(client),
@@ -223,8 +219,8 @@ mod tests {
             .agent(&model.default_model.unwrap_or(history.model.clone()))
             .build();
 
-        let (prompt, history_msgs) = history.extract_prompt_and_history().unwrap();
-        let response: String = agent.chat(prompt, history_msgs).await.unwrap();
+        let (prompt, mut history_msgs) = history.extract_prompt_and_history().unwrap();
+        let response: String = agent.chat(prompt, &mut history_msgs).await.unwrap();
 
         assert!(!response.is_empty());
     }
@@ -279,9 +275,9 @@ mod tests {
             .temperature(1.0)
             .build();
 
-        let (prompt, history) = history.extract_prompt_and_history().unwrap();
+        let (prompt, mut history) = history.extract_prompt_and_history().unwrap();
 
-        let response: String = agent.chat(prompt, history).await.unwrap();
+        let response: String = agent.chat(prompt, &mut history).await.unwrap();
         println!("Final response: {:?}", response);
         assert!(!response.is_empty());
     }
@@ -566,7 +562,7 @@ mod tests {
         let response: String = agent
             .chat(
                 "Call the tool to get the weather for San Francisco, CA in celsius.",
-                Vec::<Message>::new(),
+                &mut Vec::<Message>::new(),
             )
             .await
             .expect("Failed to get response");
@@ -648,7 +644,7 @@ mod tests {
         let response: String = agent
             .chat(
                 "What is the weather in Paris in celsius? Use the tool.",
-                Vec::<Message>::new(),
+                &mut Vec::<Message>::new(),
             )
             .await
             .expect("Failed to get response");
@@ -707,9 +703,9 @@ mod tests {
             .agent(&model.default_model.unwrap_or(history.model.clone()))
             .build();
 
-        let (prompt, history_msgs) = history.extract_prompt_and_history().unwrap();
+        let (prompt, mut history_msgs) = history.extract_prompt_and_history().unwrap();
 
-        let response: String = match agent.chat(prompt, history_msgs).await {
+        let response: String = match agent.chat(prompt, &mut history_msgs).await {
             Ok(r) => r,
             Err(e) => {
                 let msg = format!("{e}");
@@ -859,7 +855,7 @@ mod tests {
         let response: String = agent
             .chat(
                 "Call the tool to get the weather for San Francisco, CA in celsius.",
-                Vec::<Message>::new(),
+                &mut Vec::<Message>::new(),
             )
             .await
             .expect("Failed to get response");
@@ -931,7 +927,7 @@ mod tests {
         let response: String = agent
             .chat(
                 "What is the weather in Paris in celsius? Use the tool.",
-                Vec::<Message>::new(),
+                &mut Vec::<Message>::new(),
             )
             .await
             .expect("Failed to get response");
@@ -995,9 +991,9 @@ mod tests {
             .agent(&model.default_model.unwrap_or(history.model.clone()))
             .build();
 
-        let (prompt, history_msgs) = history.extract_prompt_and_history().unwrap();
+        let (prompt, mut history_msgs) = history.extract_prompt_and_history().unwrap();
 
-        let response: String = match agent.chat(prompt, history_msgs).await {
+        let response: String = match agent.chat(prompt, &mut history_msgs).await {
             Ok(r) => r,
             Err(e) => {
                 let msg = format!("{e}");
@@ -1120,7 +1116,7 @@ mod tests {
 
         let prompt =
             "Call both weather and forecast tools for Berlin (3 days), return tool calls only.";
-        let response: String = agent.chat(prompt, Vec::<Message>::new()).await.unwrap();
+        let response: String = agent.chat(prompt, &mut Vec::<Message>::new()).await.unwrap();
 
         assert!(!response.is_empty());
         assert!(response.contains("Berlin") || response.contains("berlin"));
@@ -1186,7 +1182,7 @@ mod tests {
 
         let prompt =
             "Call both weather and forecast tools for Berlin (3 days), return tool calls only.";
-        let response: String = agent.chat(prompt, Vec::<Message>::new()).await.unwrap();
+        let response: String = agent.chat(prompt, &mut Vec::<Message>::new()).await.unwrap();
 
         assert!(!response.is_empty());
         assert!(response.contains("Berlin") || response.contains("berlin"));

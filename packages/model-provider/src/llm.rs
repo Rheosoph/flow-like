@@ -2,14 +2,16 @@ use flow_like_types::async_trait;
 use flow_like_types::{Result, Value, anyhow};
 use futures::StreamExt;
 use http::{HeaderMap, HeaderName, HeaderValue};
-use rig::client::FinalCompletionResponse;
-#[allow(deprecated)]
-pub use rig::client::completion::{CompletionClientDyn, CompletionModelHandle};
+use rig::agent::AgentBuilder;
 use rig::completion::{
     CompletionError, CompletionModel, CompletionRequest, CompletionRequestBuilder,
-    CompletionResponse, Message, Usage as RigUsage,
+    CompletionResponse, GetTokenUsage, Message, Usage as RigUsage,
 };
-use rig::streaming::{StreamedAssistantContent, StreamingCompletionResponse, ToolCallDeltaContent};
+use rig::message::ReasoningContent;
+use rig::streaming::{
+    RawStreamingChoice, RawStreamingToolCall, StreamedAssistantContent,
+    StreamingCompletionResponse, ToolCallDeltaContent,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::{future::Future, pin::Pin, sync::Arc};
@@ -98,9 +100,6 @@ pub trait ModelLogic: Send + Sync {
 
     fn transform_history(&self, _history: &mut History) {}
 
-    /// Get a DynamicCompletionModel for use with external libraries that need `CompletionModel`.
-    /// This is the preferred method over `completion_model_handle` as it properly implements the trait.
-    #[allow(deprecated)]
     async fn dynamic_completion_model(
         &self,
         model_name: Option<&str>,
@@ -115,25 +114,6 @@ pub trait ModelLogic: Send + Sync {
         Ok(constructor.dynamic_model(&model_name))
     }
 
-    /// Get the underlying rig CompletionModelHandle for use with external libraries
-    #[deprecated(note = "Use `dynamic_completion_model` instead")]
-    #[allow(deprecated)]
-    async fn completion_model_handle(
-        &self,
-        model_name: Option<&str>,
-    ) -> Result<CompletionModelHandle<'static>> {
-        let default = self.default_model().await;
-        let model_name = model_name
-            .map(|s| s.to_string())
-            .or(default)
-            .ok_or_else(|| anyhow!("No model name provided and no default model available"))?;
-
-        let constructor = self.provider().await?;
-        let completion_model = constructor.inner.completion_model(&model_name);
-        Ok(CompletionModelHandle::new(Arc::from(completion_model)))
-    }
-
-    #[allow(deprecated)]
     async fn invoke(&self, history: &History, lambda: Option<LLMCallback>) -> Result<Response> {
         let mut history = history.clone();
         self.transform_history(&mut history);
@@ -144,9 +124,7 @@ pub trait ModelLogic: Send + Sync {
             .await
             .unwrap_or_else(|| history.model.clone());
 
-        let constructor = self.provider().await?;
-        let completion_model = constructor.inner.completion_model(&model_name);
-        let completion_handle = CompletionModelHandle::new(Arc::from(completion_model));
+        let dynamic_model = self.provider().await?.dynamic_model(&model_name);
 
         // Extract and remove system prompt so it becomes preamble instead of
         // being converted to a User message (which would break role alternation
@@ -158,7 +136,7 @@ pub trait ModelLogic: Send + Sync {
             .map_err(|e| anyhow!("Failed to convert history into rig messages: {e}"))?;
 
         let mut builder =
-            CompletionModel::completion_request(&completion_handle, prompt).messages(chat_history);
+            CompletionModel::completion_request(&dynamic_model, prompt).messages(chat_history);
 
         if let Some(preamble) = system_prompt {
             builder = builder.preamble(preamble);
@@ -204,61 +182,198 @@ pub trait ModelLogic: Send + Sync {
     }
 }
 
-#[allow(deprecated)]
 pub struct ModelConstructor {
-    pub inner: Box<dyn CompletionClientDyn + Send + Sync>,
+    pub inner: Box<dyn CompletionClientDyn>,
 }
 
-#[allow(deprecated)]
 impl ModelConstructor {
-    pub fn client(&self) -> &(dyn CompletionClientDyn + Send + Sync) {
+    pub fn client(&self) -> &dyn CompletionClientDyn {
         self.inner.as_ref()
     }
 
-    /// Consumes the constructor and returns the inner completion client
-    pub fn into_client(self) -> Box<dyn CompletionClientDyn + Send + Sync> {
+    pub fn into_client(self) -> Box<dyn CompletionClientDyn> {
         self.inner
     }
 
-    /// Create a DynamicCompletionModel for the given model name.
-    /// This properly returns a type that implements `CompletionModel + Send + Sync + 'static`.
     pub fn dynamic_model(self, model_name: &str) -> DynamicCompletionModel {
-        DynamicCompletionModel::new(self.inner, model_name.to_string())
+        let model_dyn = self.inner.completion_model_dyn(model_name);
+        DynamicCompletionModel::new(model_dyn)
     }
 }
 
-/// A wrapper around a `CompletionClientDyn` + model name that properly implements `CompletionModel`.
-/// This allows using dynamic completion models with libraries that require the concrete trait.
-/// The model is created lazily on each request to avoid lifetime issues.
-#[derive(Clone)]
-#[allow(deprecated)]
-pub struct DynamicCompletionModel {
-    client: Arc<dyn CompletionClientDyn + Send + Sync>,
-    model_name: String,
+// ---------------------------------------------------------------------------
+// Our own dynamic-dispatch layer (replaces rig's removed CompletionClientDyn,
+// CompletionModelHandle, FinalCompletionResponse and CompletionModelDyn types)
+// ---------------------------------------------------------------------------
+
+/// Replacement for rig's removed `FinalCompletionResponse` (dropped in 0.37.0).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FinalCompletionResponse {
+    pub usage: Option<RigUsage>,
 }
 
-#[allow(deprecated)]
+impl GetTokenUsage for FinalCompletionResponse {
+    fn token_usage(&self) -> Option<RigUsage> {
+        self.usage
+    }
+}
+
+/// Object-safe version of `CompletionModel` (replaces rig's removed `CompletionModelDyn`).
+pub trait CompletionModelDyn: Send + Sync {
+    fn completion_dyn<'a>(
+        &'a self,
+        request: CompletionRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<CompletionResponse<()>, CompletionError>> + Send + 'a>>;
+
+    fn stream_dyn<'a>(
+        &'a self,
+        request: CompletionRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        StreamingCompletionResponse<FinalCompletionResponse>,
+                        CompletionError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
+}
+
+impl<T> CompletionModelDyn for T
+where
+    T: CompletionModel + Send + Sync + Clone + 'static,
+    T::StreamingResponse: GetTokenUsage + 'static,
+{
+    fn completion_dyn<'a>(
+        &'a self,
+        request: CompletionRequest,
+    ) -> Pin<Box<dyn Future<Output = Result<CompletionResponse<()>, CompletionError>> + Send + 'a>>
+    {
+        let model = self.clone();
+        Box::pin(async move {
+            let response = model.completion(request).await?;
+            Ok(CompletionResponse {
+                choice: response.choice,
+                message_id: response.message_id,
+                usage: response.usage,
+                raw_response: (),
+            })
+        })
+    }
+
+    fn stream_dyn<'a>(
+        &'a self,
+        request: CompletionRequest,
+    ) -> Pin<
+        Box<
+            dyn Future<
+                    Output = Result<
+                        StreamingCompletionResponse<FinalCompletionResponse>,
+                        CompletionError,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        let model = self.clone();
+        Box::pin(async move {
+            let provider_stream = model.stream(request).await?;
+            let raw = provider_stream.map(
+                |item| -> Result<RawStreamingChoice<FinalCompletionResponse>, CompletionError> {
+                    let content = item?;
+                    Ok(match content {
+                        StreamedAssistantContent::Text(t) => RawStreamingChoice::Message(t.text),
+                        StreamedAssistantContent::ToolCall {
+                            tool_call,
+                            internal_call_id,
+                        } => RawStreamingChoice::ToolCall(
+                            RawStreamingToolCall::new(
+                                tool_call.id,
+                                tool_call.function.name,
+                                tool_call.function.arguments,
+                            )
+                            .with_internal_call_id(internal_call_id),
+                        ),
+                        StreamedAssistantContent::ToolCallDelta {
+                            id,
+                            internal_call_id,
+                            content,
+                        } => RawStreamingChoice::ToolCallDelta {
+                            id,
+                            internal_call_id,
+                            content,
+                        },
+                        StreamedAssistantContent::Reasoning(r) => {
+                            let content =
+                                r.content.into_iter().next().unwrap_or(ReasoningContent::Text {
+                                    text: String::new(),
+                                    signature: None,
+                                });
+                            RawStreamingChoice::Reasoning { id: r.id, content }
+                        }
+                        StreamedAssistantContent::ReasoningDelta { id, reasoning } => {
+                            RawStreamingChoice::ReasoningDelta { id, reasoning }
+                        }
+                        StreamedAssistantContent::Final(r) => {
+                            RawStreamingChoice::FinalResponse(FinalCompletionResponse {
+                                usage: r.token_usage(),
+                            })
+                        }
+                    })
+                },
+            );
+            Ok(StreamingCompletionResponse::stream(Box::pin(raw)))
+        })
+    }
+}
+
+/// Object-safe completion client (replaces rig's removed `CompletionClientDyn`).
+pub trait CompletionClientDyn: Send + Sync {
+    fn completion_model_dyn(&self, model: &str) -> Box<dyn CompletionModelDyn>;
+    fn agent(&self, model: &str) -> AgentBuilder<DynamicCompletionModel>;
+}
+
+impl<T> CompletionClientDyn for T
+where
+    T: rig::client::CompletionClient + Send + Sync + 'static,
+    T::CompletionModel: Send + Sync + Clone + 'static,
+    <T::CompletionModel as CompletionModel>::StreamingResponse: GetTokenUsage + 'static,
+{
+    fn completion_model_dyn(&self, model: &str) -> Box<dyn CompletionModelDyn> {
+        Box::new(self.completion_model(model))
+    }
+
+    fn agent(&self, model: &str) -> AgentBuilder<DynamicCompletionModel> {
+        let model_dyn = self.completion_model_dyn(model);
+        AgentBuilder::new(DynamicCompletionModel::new(model_dyn))
+    }
+}
+
+/// A `CompletionModel` implementation backed by a type-erased `CompletionModelDyn`.
+/// Replaces rig's removed `CompletionModelHandle` / old `DynamicCompletionModel`.
+#[derive(Clone)]
+pub struct DynamicCompletionModel {
+    model: Arc<dyn CompletionModelDyn>,
+}
+
 impl DynamicCompletionModel {
-    pub fn new(client: Box<dyn CompletionClientDyn + Send + Sync>, model_name: String) -> Self {
+    pub fn new(model: Box<dyn CompletionModelDyn>) -> Self {
         Self {
-            client: Arc::from(client),
-            model_name,
+            model: Arc::from(model),
         }
     }
 
-    pub fn from_arc(
-        client: Arc<dyn CompletionClientDyn + Send + Sync>,
-        model_name: String,
-    ) -> Self {
-        Self { client, model_name }
+    pub fn from_arc(model: Arc<dyn CompletionModelDyn>) -> Self {
+        Self { model }
     }
 }
 
-/// Response type for dynamic completion models - always returns unit type
+/// Opaque response type used by `DynamicCompletionModel`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct DynamicResponse;
 
-#[allow(deprecated)]
 impl CompletionModel for DynamicCompletionModel {
     type Response = DynamicResponse;
     type StreamingResponse = FinalCompletionResponse;
@@ -273,12 +388,11 @@ impl CompletionModel for DynamicCompletionModel {
     fn completion(
         &self,
         request: CompletionRequest,
-    ) -> impl std::future::Future<
-        Output = Result<CompletionResponse<Self::Response>, CompletionError>,
-    > + Send {
-        let model = self.client.completion_model(&self.model_name);
+    ) -> impl Future<Output = Result<CompletionResponse<Self::Response>, CompletionError>> + Send
+    {
+        let model = self.model.clone();
         async move {
-            let response = model.completion(request).await?;
+            let response = model.completion_dyn(request).await?;
             Ok(CompletionResponse {
                 choice: response.choice,
                 message_id: response.message_id,
@@ -291,17 +405,16 @@ impl CompletionModel for DynamicCompletionModel {
     fn stream(
         &self,
         request: CompletionRequest,
-    ) -> impl std::future::Future<
+    ) -> impl Future<
         Output = Result<StreamingCompletionResponse<Self::StreamingResponse>, CompletionError>,
     > + Send {
-        let model = self.client.completion_model(&self.model_name);
-        async move { model.stream(request).await }
+        let model = self.model.clone();
+        async move { model.stream_dyn(request).await }
     }
 }
 
-#[allow(deprecated)]
-async fn invoke_without_stream<'a>(
-    builder: CompletionRequestBuilder<CompletionModelHandle<'a>>,
+pub(crate) async fn invoke_without_stream(
+    builder: CompletionRequestBuilder<DynamicCompletionModel>,
     model_name: &str,
     additional_params: Option<flow_like_types::Value>,
 ) -> Result<Response> {
@@ -327,9 +440,8 @@ async fn invoke_without_stream<'a>(
     Ok(response)
 }
 
-#[allow(deprecated)]
-async fn invoke_with_stream<'a>(
-    builder: CompletionRequestBuilder<CompletionModelHandle<'a>>,
+pub(crate) async fn invoke_with_stream(
+    builder: CompletionRequestBuilder<DynamicCompletionModel>,
     callback: LLMCallback,
     model_name: &str,
     additional_params: Option<flow_like_types::Value>,
@@ -341,7 +453,6 @@ async fn invoke_with_stream<'a>(
     };
 
     let mut stream = builder.stream().await.map_err(|e| {
-        // Extract more detailed error information
         let error_msg = format!("{:?}", e);
         anyhow!("Rig streaming error: {} | Details: {}", e, error_msg)
     })?;
@@ -388,8 +499,8 @@ async fn invoke_with_stream<'a>(
                     .content
                     .iter()
                     .filter_map(|c| match c {
-                        rig::message::ReasoningContent::Text { text, .. } => Some(text.as_str()),
-                        rig::message::ReasoningContent::Summary(s) => Some(s.as_str()),
+                        ReasoningContent::Text { text, .. } => Some(text.as_str()),
+                        ReasoningContent::Summary(s) => Some(s.as_str()),
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -419,3 +530,4 @@ async fn invoke_with_stream<'a>(
 
     Ok(response)
 }
+

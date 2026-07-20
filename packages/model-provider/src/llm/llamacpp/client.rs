@@ -128,6 +128,7 @@ impl TryFrom<CompletionResponse> for completion::CompletionResponse<CompletionRe
                 total_tokens: resp.usage.total_tokens,
                 cache_creation_input_tokens: 0,
                 cached_input_tokens: 0,
+                reasoning_tokens: 0,
             },
             raw_response: resp,
         })
@@ -1459,6 +1460,7 @@ impl GetTokenUsage for StreamingCompletionResponse {
             total_tokens: self.total_tokens,
             cache_creation_input_tokens: 0,
             cached_input_tokens: 0,
+            reasoning_tokens: 0,
         })
     }
 }
@@ -2233,7 +2235,7 @@ mod tests {
         let agent = client.agent(&test_model()).build();
 
         let response: String = agent
-            .chat("Say hello in exactly 3 words.", Vec::<Message>::new())
+            .chat("Say hello in exactly 3 words.", &mut Vec::<Message>::new())
             .await
             .unwrap();
         assert!(!response.is_empty(), "Expected non-empty response");
@@ -2253,7 +2255,7 @@ mod tests {
             .build();
 
         let response: String = agent
-            .chat("What is your name?", Vec::<Message>::new())
+            .chat("What is your name?", &mut Vec::<Message>::new())
             .await
             .unwrap();
         assert!(!response.is_empty());
@@ -2269,12 +2271,12 @@ mod tests {
         let client = LlamaCppClient::new(&test_base_url());
         let agent = client.agent(&test_model()).build();
 
-        let history = vec![
+        let mut history = vec![
             Message::user("My name is Alice."),
             Message::assistant("Nice to meet you, Alice!"),
         ];
 
-        let response: String = agent.chat("What is my name?", history).await.unwrap();
+        let response: String = agent.chat("What is my name?", &mut history).await.unwrap();
         assert!(!response.is_empty());
     }
 
@@ -2634,7 +2636,7 @@ mod tests {
                     ])
                     .unwrap(),
                 },
-                Vec::<Message>::new(),
+                &mut Vec::<Message>::new(),
             )
             .await
             .unwrap();

@@ -35,10 +35,10 @@ pub use types::{
 use std::sync::Arc;
 
 use flow_like_types::Result;
+use flow_like_model_provider::llm::CompletionClientDyn;
 use futures::StreamExt;
 use rig::{
     OneOrMany,
-    client::completion::CompletionClientDyn,
     completion::Completion,
     message::{
         AssistantContent, DocumentSourceKind, Image, ImageDetail, ImageMediaType,
@@ -1167,11 +1167,11 @@ impl Copilot {
     }
 
     /// Get the model for the agent
-    async fn get_model<'a>(
+    async fn get_model(
         &self,
         model_id: Option<String>,
         token: Option<String>,
-    ) -> Result<(String, Box<dyn CompletionClientDyn + Send + Sync + 'a>)> {
+    ) -> Result<(String, Box<dyn CompletionClientDyn>)> {
         let bit = if let Some(profile) = &self.profile {
             if let Some(id) = model_id {
                 profile

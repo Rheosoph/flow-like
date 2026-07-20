@@ -15,7 +15,6 @@ use google_cloud_auth::credentials::{
 };
 use google_cloud_auth::errors::CredentialsError;
 use http::{Extensions, HeaderMap, HeaderValue, header::AUTHORIZATION};
-use rig::completion::CompletionModel;
 
 #[derive(Clone, Debug)]
 struct StaticAccessTokenCredentials {
@@ -122,7 +121,6 @@ impl Cacheable for VertexModel {
 
 #[async_trait]
 impl ModelLogic for VertexModel {
-    #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
         Ok(ModelConstructor {
             inner: Box::new(self.client.clone()),
@@ -133,10 +131,8 @@ impl ModelLogic for VertexModel {
         self.default_model.clone()
     }
 
-    #[allow(deprecated)]
     async fn invoke(&self, history: &History, lambda: Option<LLMCallback>) -> Result<Response> {
-        use crate::llm::{CompletionModelHandle, invoke_without_stream};
-        use std::sync::Arc;
+        use super::invoke_without_stream;
 
         let mut history = history.clone();
         history.normalize_for_alternation();
@@ -147,8 +143,7 @@ impl ModelLogic for VertexModel {
             .unwrap_or_else(|| history.model.clone());
 
         let constructor = self.provider().await?;
-        let completion_model = constructor.inner.completion_model(&model_name);
-        let completion_handle = CompletionModelHandle::new(Arc::from(completion_model));
+        let dynamic_model = constructor.dynamic_model(&model_name);
 
         let system_prompt = history.take_system_prompt();
         let (prompt, chat_history) = history
@@ -156,7 +151,7 @@ impl ModelLogic for VertexModel {
             .map_err(|e| anyhow!("Failed to convert history into rig messages: {e}"))?;
 
         let mut builder =
-            CompletionModel::completion_request(&completion_handle, prompt).messages(chat_history);
+            rig::completion::CompletionModel::completion_request(&dynamic_model, prompt).messages(chat_history);
 
         if let Some(preamble) = system_prompt {
             builder = builder.preamble(preamble);
