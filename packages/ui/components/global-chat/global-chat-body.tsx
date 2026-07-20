@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import {
 	IBitTypes,
 	IRole,
+	filterHostableLlmModels,
 	useAssistantSurface,
 	useBackend,
 	useCopilotSDK,
@@ -308,12 +309,16 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		!!settingsProfile.data,
 		[settingsProfile.data?.hub_profile.id],
 	);
+	const canHostLlamaCPP = backend.capabilities().canHostLlamaCPP;
 	const bitsModels = useMemo(() => {
 		const profileBits = settingsProfile.data?.hub_profile.bits;
 		if (!llmBits.data || !profileBits) return [];
 		const ids = new Set(profileBits);
-		return llmBits.data.filter((bit) => ids.has(`${bit.hub}:${bit.id}`));
-	}, [llmBits.data, settingsProfile.data?.hub_profile.bits]);
+		const profileModels = llmBits.data.filter((bit) =>
+			ids.has(`${bit.hub}:${bit.id}`),
+		);
+		return filterHostableLlmModels(profileModels, canHostLlamaCPP);
+	}, [llmBits.data, settingsProfile.data?.hub_profile.bits, canHostLlamaCPP]);
 
 	const normalizedProvider = normalizeAIProvider(provider);
 	const isAgent = isAgentBackendProvider(normalizedProvider);

@@ -26,7 +26,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCopilotSDK, useInvoke } from "../../hooks";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
-import { IBitTypes } from "../../lib";
+import { IBitTypes, filterHostableLlmModels } from "../../lib";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import {
 	type IFlowPilotConversation,
@@ -855,32 +855,17 @@ function FlowPilotImpl({
 		[profile.data?.hub_profile.id],
 	);
 
-	// Filter bits models to only include those in the user's profile
+	// Filter bits models to those in the user's profile, dropping local-only
+	// models on hosts that cannot run llama.cpp (e.g. iOS).
+	const canHostLlamaCPP = backendContext.capabilities().canHostLlamaCPP;
 	const bitsModels = useMemo(() => {
 		if (!foundBits.data || !profile.data?.hub_profile.bits) return [];
 		const profileBitIds = new Set(profile.data.hub_profile.bits);
-		const canHostLocal = backendContext.capabilities().canHostLlamaCPP;
-
-		return foundBits.data.filter((model) => {
-			const fullId = `${model.hub}:${model.id}`;
-			if (!profileBitIds.has(fullId)) return false;
-
-			if (!canHostLocal) {
-				const providerName =
-					model.parameters?.provider?.provider_name?.toLowerCase();
-				if (
-					providerName === "local" ||
-					providerName === "llama.cpp" ||
-					providerName === "llamacpp" ||
-					providerName === "ollama"
-				) {
-					return false;
-				}
-			}
-
-			return true;
-		});
-	}, [foundBits.data, profile.data?.hub_profile.bits]);
+		const profileModels = foundBits.data.filter((model) =>
+			profileBitIds.has(`${model.hub}:${model.id}`),
+		);
+		return filterHostableLlmModels(profileModels, canHostLlamaCPP);
+	}, [foundBits.data, profile.data?.hub_profile.bits, canHostLlamaCPP]);
 
 	const openFrontendToolDialog = useCallback(
 		(dialog: FrontendToolDialogState, resolve: (value: any) => void) => {
