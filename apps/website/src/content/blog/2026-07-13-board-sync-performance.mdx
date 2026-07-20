@@ -1,0 +1,90 @@
+---
+title: "The Board Should Never Fight the UI Thread"
+description: "How Flow-Like moved desktop board merging into a Web Worker, added sync lineage, and stopped background activity from waking the whole canvas."
+date: 2026-07-13
+tags: ["performance", "desktop", "offline", "sync", "web-worker", "indexeddb", "flowpilot", "flow-like"]
+cover: "/images/board-sync-performance.jpg"
+draft: false
+---
+
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
+A workflow editor has one unforgivable failure mode: you make a change, and the canvas feels unsure whether it belongs to you.
+
+Maybe a remote cursor moved. Maybe FlowPilot streamed another token. Maybe the desktop client fetched the board it already had and compared every node anyway. None of those background jobs should make dragging a node feel heavier — and a late server snapshot should never get the chance to replace newer local work.
+
+Two pieces of the 0.1.6 work attack that problem from opposite sides. [PR #665](https://github.com/Rheosoph/flow-like/pull/665) makes the canvas dramatically harder to rerender by accident. [PR #711](https://github.com/Rheosoph/flow-like/pull/711) rebuilds the desktop board-sync path around an off-thread merge, an ordered offline queue, and a persistent record of which remote revision this device has already seen.
+
+The result is not one heroic optimization. It is a better rule: **background work stays in the background.**
+
+## The expensive part was hiding in a normal refresh
+
+Flow-Like keeps a local board on desktop even when an app also exists remotely. When a server copy arrives, Studio cannot simply replace the local object. It has to preserve local-only secret values and runtime fields, compare nested nodes and layers, and decide whether anything meaningful changed beyond `updated_at`.
+
+That merge uses `structuredClone` and deep equality. On a large board, doing it on the main thread means the same thread responsible for pointer input, layout, and paint is busy walking a graph.
+
+In 0.1.6, that work moves into a module Web Worker:
+
+```typescript
+self.onmessage = (event: MessageEvent<MergeRequest>) => {
+  const { id, remote, local } = event.data
+  try {
+    const result = mergeBoardWithLocal(remote, local)
+    self.postMessage({ id, ok: true, result })
+  } catch (error) {
+    self.postMessage({ id, ok: false, error: String(error) })
+  }
+}
+```
+
+The caller assigns each merge an ID, resolves the matching promise when the worker responds, and falls back to the same inline function if Workers are unavailable or the worker crashes. The safety behavior does not depend on the optimization; only the expensive walk changes threads.
+
+The merge itself also learned to do less. Matching runtime hashes skip a clone-and-compare path for unchanged nodes. If the merged content is identical, Studio returns the existing local object instead of a fresh equivalent one, allowing query caches and downstream equality checks to short-circuit. The full recursive difference logger is now opt-in behind `flow-debug-board-sync=1` rather than quietly spending hundreds of milliseconds during ordinary sync.
+
+<BlogInteractiveDemo client:only="react" preset="board-sync" />
+
+## Newer means strictly newer
+
+Timestamps alone are not enough to make sync trustworthy. A lagging replica can return an old board. Equal timestamps can arrive after this device has already pushed forward. A snapshot can be technically valid but still predate commands waiting in the offline queue.
+
+Studio now layers several refusals before a remote board can touch local state:
+
+- A remote `updated_at` older than the local board is rejected.
+- A board missing page IDs that still exist locally is treated as incomplete.
+- Any pending offline command batch blocks a remote overwrite.
+- A persistent lineage guard requires the remote revision to be strictly newer than the last revision this client applied or pushed past.
+
+The lineage lives in a tiny Dexie/IndexedDB database keyed by app and board. Writes use a max-merge, so the remembered revision can only move forward. Stripped to its decision, the guard stays deliberately small:
+
+```typescript
+export function evaluateBoardLineage(
+  remoteUpdatedAtNs: number,
+  cachedLineageNs: number | null | undefined,
+) {
+  if (!cachedLineageNs || cachedLineageNs <= 0) return { apply: true }
+  if (remoteUpdatedAtNs <= 0 || remoteUpdatedAtNs <= cachedLineageNs) {
+    return { apply: false }
+  }
+  return { apply: true }
+}
+```
+
+A missing lineage record leaves the existing checks in charge; it never grants permission to a snapshot they rejected. Once a lineage exists, a missing, equal, or older remote revision is refused. Studio records progress only after the corresponding revision is safely in the local cache, so the guard cannot lock out its own recovery path.
+
+The offline queue follows the same monotonic idea. Large command batches are split into order-preserving chunks below 800 KiB. The drain stops at the first failure, keeps the undelivered tail queued, and prevents a later edit from overtaking it. Commands older than seven days expire rather than replaying across a week of newer history. A failed sync now produces one debounced warning with a **Retry now** action instead of silently setting up the next overwrite.
+
+## A quieter canvas
+
+Moving merge work off-thread only helps if unrelated state cannot wake the entire graph. The rendering pass in #665 creates a memoized `FlowCanvas` with stable callbacks, node arrays, and edge arrays. On boards above 65 nodes, React Flow renders only visible elements.
+
+<BlogInteractiveDemo client:only="react" preset="render-performance" />
+
+High-frequency collaboration data gets a narrower path too. Remote cursors live in an external store consumed by the cursor overlay, so a pointer moving at roughly 20 Hz no longer rerenders the board beneath it. Awareness bursts are coalesced to one animation frame, idle cursor positions are not rebroadcast, and peer maps keep their object identity until their actual contents change.
+
+FlowPilot follows the same principle. Completed message bubbles receive stable props and do not re-parse Markdown while the live answer streams. The one-second elapsed timer owns its state inside a tiny status pill instead of rerendering the whole assistant. Node, pin, edge, and layer components gained tighter memo boundaries and narrower execution-log subscriptions. WebKit also skips a handful of disproportionately expensive blur, shadow, and overlapping-edge effects.
+
+There is no benchmark theater here: hardware, board shape, and collaboration load vary too much for one synthetic number to be honest. The architectural win is easier to defend. Deep board comparison is no longer on the UI thread; stale data has more gates to pass; unchanged data keeps its identity; and fast-changing state reaches only the pixels that need it.
+
+This work is desktop-specific where it touches the Tauri local cache, offline command queue, Worker merge, and IndexedDB lineage. The shared canvas optimizations benefit the common UI, while browser-side board transport remains a separate implementation.
+
+The original performance work tracks [issue #659](https://github.com/Rheosoph/flow-like/issues/659), and the sync/FlowPilot follow-through tracks [issue #699](https://github.com/Rheosoph/flow-like/issues/699). Both ship as part of [Flow-Like Beta 0.1.6](/blog/beta-0-1-6/) — the release where the app around the workflow finally becomes as deliberate as the workflow itself.

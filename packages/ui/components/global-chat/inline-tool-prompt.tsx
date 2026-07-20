@@ -1,7 +1,12 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { LayersIcon, ShieldQuestionIcon, SparklesIcon } from "lucide-react";
+import {
+	ChevronDownIcon,
+	LayersIcon,
+	ShieldQuestionIcon,
+	SparklesIcon,
+} from "lucide-react";
 import { useState } from "react";
 import {
 	Button,
@@ -16,14 +21,18 @@ import type {
 	GlobalToolAskChoice,
 	GlobalToolPrompt,
 } from "../../state/global-chat/global-chat-store";
+import {
+	Collapsible,
+	CollapsibleContent,
+	CollapsibleTrigger,
+} from "../ui/collapsible";
 
 const choiceValue = (choice: GlobalToolAskChoice): unknown =>
 	choice.value ?? choice.label;
 
 /**
  * Resolves an approval's target app id to its name + icon so the card shows the app's identity
- * instead of the opaque id. The tool's approval sentence (from the backend) embeds the raw id — we
- * swap it for the resolved name so the copy reads naturally too.
+ * instead of the opaque id.
  */
 function ApprovalAppIdentity({
 	appId,
@@ -62,9 +71,40 @@ function ApprovalAppIdentity({
 				</span>
 			</div>
 			{resolvedDescription && (
-				<p className="text-xs text-muted-foreground">{resolvedDescription}</p>
+				<ApprovalDetails description={resolvedDescription} />
 			)}
 		</div>
+	);
+}
+
+/** Keep verbose delegated prompts out of the way until the user explicitly asks to inspect them. */
+function ApprovalDetails({ description }: { description: string }) {
+	const [open, setOpen] = useState(false);
+
+	return (
+		<Collapsible open={open} onOpenChange={setOpen}>
+			<CollapsibleTrigger asChild>
+				<button
+					type="button"
+					className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+				>
+					<span>Review request details</span>
+					<ChevronDownIcon
+						className={cn(
+							"ml-auto size-3.5 shrink-0 transition-transform",
+							open && "rotate-180",
+						)}
+					/>
+				</button>
+			</CollapsibleTrigger>
+			<CollapsibleContent>
+				<div className="mt-1 max-h-56 overflow-y-auto overscroll-contain rounded-lg border border-border/50 bg-muted/20 p-2.5">
+					<p className="whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+						{description}
+					</p>
+				</div>
+			</CollapsibleContent>
+		</Collapsible>
 	);
 }
 
@@ -128,9 +168,9 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 			initial={{ opacity: 0, y: 8, scale: 0.98 }}
 			animate={{ opacity: 1, y: 0, scale: 1 }}
 			transition={{ type: "spring", stiffness: 380, damping: 32 }}
-			className="w-full rounded-xl border border-amber-500/40 bg-background/80 backdrop-blur-xl shadow-lg overflow-hidden"
+			className="flex max-h-[70vh] w-full flex-col overflow-hidden rounded-xl border border-amber-500/40 bg-background/80 shadow-lg backdrop-blur-xl"
 		>
-			<div className="flex items-center gap-2 px-3 py-2 bg-amber-500/5 border-b border-amber-500/15">
+			<div className="flex shrink-0 items-center gap-2 border-b border-amber-500/15 bg-amber-500/5 px-3 py-2">
 				<span
 					className={`flex items-center justify-center size-6 rounded-md shrink-0 ${isApproval ? "bg-amber-500/15 text-amber-600 dark:text-amber-400" : "bg-primary/15 text-primary"}`}
 				>
@@ -149,126 +189,119 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 					{isApproval ? "Approval" : "Question"}
 				</span>
 			</div>
-			<div className="px-3 py-2.5 space-y-2.5">
+			<div className="min-h-0 space-y-2.5 overflow-y-auto px-3 py-2.5">
 				{prompt.appId ? (
 					<ApprovalAppIdentity
 						appId={prompt.appId}
-						description={prompt.description}
+						description={isApproval ? prompt.description : undefined}
 					/>
 				) : (
+					prompt.kind === "ask" &&
 					prompt.description && (
 						<p className="text-xs text-muted-foreground">
 							{prompt.description}
 						</p>
 					)
 				)}
-				{prompt.kind === "ask" ? (
-					<>
-						{isChoice ? (
-							<div className="space-y-1.5">
-								{choices.map((choice, index) => {
-									const active = selected.has(index);
-									return (
-										<button
-											key={`${choice.label}-${index}`}
-											type="button"
-											className={cn(
-												"flex w-full items-start gap-2.5 rounded-lg border p-2.5 text-left transition-colors",
-												active
-													? "border-primary/50 bg-primary/10"
-													: "border-border/50 bg-background/70 hover:bg-muted/40",
-											)}
-											onClick={() => toggle(index)}
-										>
-											<Checkbox
-												checked={active}
-												className={cn(
-													"mt-0.5 pointer-events-none shrink-0",
-													mode === "single_choice" && "rounded-full",
-												)}
-											/>
-											<div className="min-w-0">
-												<div className="text-xs font-medium">
-													{choice.label}
-												</div>
-												{choice.description && (
-													<div className="mt-0.5 text-[11px] text-muted-foreground">
-														{choice.description}
-													</div>
-												)}
-											</div>
-										</button>
-									);
-								})}
-							</div>
-						) : (
-							<Textarea
-								autoFocus
-								value={answer}
-								onChange={(e) => setAnswer(e.target.value)}
-								placeholder={prompt.ask?.placeholder ?? "Your answer…"}
-								className="min-h-20 resize-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-								onKeyDown={(e) => {
-									if (e.key === "Enter" && !e.shiftKey && answer.trim()) {
-										e.preventDefault();
-										submit();
-									}
-								}}
-							/>
-						)}
-						<div className="flex items-center justify-end gap-2">
-							<Button
-								variant="ghost"
-								size="sm"
-								className="outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-								onClick={() => prompt.respond(null)}
-							>
-								Cancel
-							</Button>
-							<Button
-								size="sm"
-								disabled={!canSend}
-								className="outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-								onClick={submit}
-							>
-								Send
-							</Button>
-						</div>
-					</>
-				) : (
-					<div className="flex flex-wrap items-center justify-between gap-2">
-						<label
-							htmlFor="inline-tool-prompt-remember"
-							className="flex items-center gap-2 text-xs text-muted-foreground"
-						>
-							<Checkbox
-								id="inline-tool-prompt-remember"
-								checked={remember}
-								onCheckedChange={(checked) => setRemember(checked === true)}
-							/>
-							Don&apos;t ask again this session
-						</label>
-						<div className="flex items-center gap-2">
-							<Button
-								variant="ghost"
-								size="sm"
-								className="outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-								onClick={() =>
-									prompt.respond({ approved: false, remember: false })
-								}
-							>
-								Deny
-							</Button>
-							<Button
-								size="sm"
-								className="outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-								onClick={() => prompt.respond({ approved: true, remember })}
-							>
-								Approve
-							</Button>
-						</div>
-					</div>
+				{isApproval && prompt.description && !prompt.appId && (
+					<ApprovalDetails description={prompt.description} />
 				)}
+				{prompt.kind === "ask" &&
+					(isChoice ? (
+						<div className="space-y-1.5">
+							{choices.map((choice, index) => {
+								const active = selected.has(index);
+								return (
+									<button
+										key={`${choice.label}-${index}`}
+										type="button"
+										className={cn(
+											"flex w-full items-start gap-2.5 rounded-lg border p-2.5 text-left transition-colors",
+											active
+												? "border-primary/50 bg-primary/10"
+												: "border-border/50 bg-background/70 hover:bg-muted/40",
+										)}
+										onClick={() => toggle(index)}
+									>
+										<Checkbox
+											checked={active}
+											className={cn(
+												"mt-0.5 pointer-events-none shrink-0",
+												mode === "single_choice" && "rounded-full",
+											)}
+										/>
+										<div className="min-w-0">
+											<div className="text-xs font-medium">{choice.label}</div>
+											{choice.description && (
+												<div className="mt-0.5 text-[11px] text-muted-foreground">
+													{choice.description}
+												</div>
+											)}
+										</div>
+									</button>
+								);
+							})}
+						</div>
+					) : (
+						<Textarea
+							autoFocus
+							value={answer}
+							onChange={(e) => setAnswer(e.target.value)}
+							placeholder={prompt.ask?.placeholder ?? "Your answer…"}
+							className="min-h-20 resize-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+							onKeyDown={(e) => {
+								if (e.key === "Enter" && !e.shiftKey && answer.trim()) {
+									e.preventDefault();
+									submit();
+								}
+							}}
+						/>
+					))}
+			</div>
+			<div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border/40 bg-background/90 px-3 py-2">
+				{isApproval ? (
+					<label
+						htmlFor="inline-tool-prompt-remember"
+						className="flex items-center gap-2 text-xs text-muted-foreground"
+					>
+						<Checkbox
+							id="inline-tool-prompt-remember"
+							checked={remember}
+							onCheckedChange={(checked) => setRemember(checked === true)}
+						/>
+						Don&apos;t ask again this session
+					</label>
+				) : (
+					<span />
+				)}
+				<div className="ml-auto flex items-center gap-2">
+					<Button
+						variant="ghost"
+						size="sm"
+						className="outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						onClick={() =>
+							isApproval
+								? prompt.respond({ approved: false, remember: false })
+								: prompt.respond(null)
+						}
+					>
+						{isApproval ? "Deny" : "Cancel"}
+					</Button>
+					<Button
+						size="sm"
+						disabled={!isApproval && !canSend}
+						className="outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						onClick={() => {
+							if (isApproval) {
+								prompt.respond({ approved: true, remember });
+							} else {
+								submit();
+							}
+						}}
+					>
+						{isApproval ? "Approve" : "Send"}
+					</Button>
+				</div>
 			</div>
 		</motion.div>
 	);

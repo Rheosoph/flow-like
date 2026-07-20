@@ -24,7 +24,7 @@ export function InlineAppSurfaceCard({
 	onClose,
 	compact = false,
 }: InlineAppSurfaceCardProps) {
-	const [expanded, setExpanded] = useState(true);
+	const [expanded, setExpanded] = useState(false);
 
 	return (
 		<motion.div

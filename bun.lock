@@ -343,6 +343,7 @@
         "@tailwindcss/vite": "^4.1.11",
         "@types/react": "^19.2.6",
         "@types/react-dom": "^19.2.3",
+        "@xyflow/react": "^12.10.0",
         "astro": "^6.3.3",
         "astro-robots-txt": "^1.0.0",
         "react": "^19.2.1",

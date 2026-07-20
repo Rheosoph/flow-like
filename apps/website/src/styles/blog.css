@@ -115,10 +115,8 @@
 	text-align: center;
 	margin-top: 0.5em;
 }
-:where(.prose) img,
-:where(.prose) video,
-:where(.prose) canvas,
-:where(.prose) svg {
+:where(.prose)
+	:where(img, video, canvas, svg):not(:where(.not-prose, .not-prose *)) {
 	display: block;
 	max-width: 100%;
 	height: auto;
@@ -206,4 +204,36 @@
 	color: var(--muted-foreground);
 	border: 1px solid var(--border);
 	border-radius: 0.25rem;
+}
+
+/* Client-only interactive demos reserve their final footprint while React loads. */
+astro-island[component-export="BlogInteractiveDemo"] {
+	display: block;
+	inline-size: 100%;
+	min-inline-size: 0;
+	max-inline-size: 100%;
+	contain: inline-size;
+}
+
+astro-island[component-export="BlogInteractiveDemo"][client="only"]:empty {
+	display: grid;
+	min-height: 22rem;
+	place-items: center;
+	margin-block: 2.5rem;
+	border: 1px solid var(--border);
+	border-radius: 1.75rem;
+	background: radial-gradient(
+			circle at 20% 0%,
+			color-mix(in srgb, var(--primary) 10%, transparent),
+			transparent 42%
+		), var(--card);
+}
+
+astro-island[component-export="BlogInteractiveDemo"][client="only"]:empty::before {
+	content: "Loading interactive demo…";
+	font-size: 0.75rem;
+	font-weight: 600;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--muted-foreground);
 }
