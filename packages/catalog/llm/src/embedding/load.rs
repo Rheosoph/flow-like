@@ -89,16 +89,13 @@ impl NodeLogic for LoadModelNode {
         // Check if we should use proxy mode (remote execution via API)
         // context.token already exists and is used by LLM hosted execution
         #[cfg(feature = "remote-ml")]
-        if let Some(access_token) = &context.token {
+        if let Some(access_token) = &context.token
+            && !flow_like::models::embedding_factory::prefers_local_execution(&bit)
+        {
             let embedding_provider = bit.try_to_embedding();
             if let Some(provider) = &embedding_provider
                 && provider.supports_remote()
             {
-                println!(
-                    "[LoadModelNode] using proxy mode for bit={}, token_len={}",
-                    bit.id,
-                    access_token.len()
-                );
                 // Use proxy mode - call internal API
                 let model = match bit.bit_type {
                     BitTypes::Embedding => {

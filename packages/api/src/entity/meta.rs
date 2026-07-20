@@ -72,6 +72,14 @@ pub enum Relation {
     )]
     App,
     #[sea_orm(
+        belongs_to = "super::app_group::Entity",
+        from = "Column::GroupId",
+        to = "super::app_group::Column::Id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    AppGroup,
+    #[sea_orm(
         belongs_to = "super::bit::Entity",
         from = "Column::BitId",
         to = "super::bit::Column::Id",
@@ -111,19 +119,17 @@ pub enum Relation {
         on_delete = "Cascade"
     )]
     Widget,
-    #[sea_orm(
-        belongs_to = "super::app_group::Entity",
-        from = "Column::GroupId",
-        to = "super::app_group::Column::Id",
-        on_update = "Cascade",
-        on_delete = "Cascade"
-    )]
-    AppGroup,
 }
 
 impl Related<super::app::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::App.def()
+    }
+}
+
+impl Related<super::app_group::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppGroup.def()
     }
 }
 
@@ -154,12 +160,6 @@ impl Related<super::wasm_package::Entity> for Entity {
 impl Related<super::widget::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::Widget.def()
-    }
-}
-
-impl Related<super::app_group::Entity> for Entity {
-    fn to() -> RelationDef {
-        Relation::AppGroup.def()
     }
 }
 

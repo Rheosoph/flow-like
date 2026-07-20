@@ -16,8 +16,6 @@ pub struct Model {
     pub approver_id: Option<String>,
     #[sea_orm(column_name = "appId", column_type = "Text", nullable)]
     pub app_id: Option<String>,
-    #[sea_orm(column_name = "groupId", column_type = "Text", nullable)]
-    pub group_id: Option<String>,
     pub status: PublicationRequestStatus,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,
@@ -25,6 +23,8 @@ pub struct Model {
     pub updated_at: DateTime,
     #[sea_orm(column_name = "aiActAssessmentId", column_type = "Text", nullable)]
     pub ai_act_assessment_id: Option<String>,
+    #[sea_orm(column_name = "groupId", column_type = "Text", nullable)]
+    pub group_id: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

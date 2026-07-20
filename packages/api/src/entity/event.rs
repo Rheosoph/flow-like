@@ -42,21 +42,12 @@ pub struct Model {
     pub notes: Option<Json>,
     #[sea_orm(column_type = "JsonBinary", nullable)]
     pub canary: Option<Json>,
-    /// Process-mining case-key mappings: key name → dot-path into the payload.
-    #[sea_orm(
-        column_name = "correlationMappings",
-        column_type = "JsonBinary",
-        nullable
-    )]
-    pub correlation_mappings: Option<Json>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
     #[sea_orm(column_name = "executionMode", column_type = "Text")]
     pub execution_mode: String,
-    #[sea_orm(column_type = "Text")]
-    pub exposure: String,
     #[sea_orm(column_name = "lastSetupAt")]
     pub last_setup_at: Option<DateTime>,
     #[sea_orm(column_name = "lastSetupError", column_type = "Text", nullable)]
@@ -65,6 +56,14 @@ pub struct Model {
     pub last_setup_version: Option<String>,
     #[sea_orm(column_name = "setupStatus", column_type = "Text", nullable)]
     pub setup_status: Option<String>,
+    #[sea_orm(
+        column_name = "correlationMappings",
+        column_type = "JsonBinary",
+        nullable
+    )]
+    pub correlation_mappings: Option<Json>,
+    #[sea_orm(column_type = "Text")]
+    pub exposure: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

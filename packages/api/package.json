@@ -6,7 +6,7 @@
 	"scripts": {
 		"db:push:sync": "bun run db:push && bun run db:sync",
 		"db:sync": "docker compose up postgres tools && cd ../.. && cargo fmt --all",
-		"db:push": "bunx prisma db push --schema prisma/schema",
+		"db:push": "tsx prisma/db-push.ts",
 		"db:migration:create": "bunx prisma migrate dev --name",
 		"db:migration:deploy": "bunx prisma migrate deploy",
 		"db:view": "bunx drizzle-kit studio"

@@ -8,6 +8,7 @@ use text_splitter::{MarkdownSplitter, TextSplitter};
 use tiktoken_rs::CoreBPE;
 
 pub mod openai;
+pub mod proxy_config;
 
 #[cfg(feature = "remote-ml")]
 pub mod proxy;

@@ -311,6 +311,9 @@ pub fn run() {
     initialize_catalog();
 
     let mut settings_state = Settings::new();
+    // Resolves the active profile's hub as the base URL for proxied model calls
+    // before any run can start.
+    let _ = settings_state.get_current_profile();
     let project_dir = settings_state.project_dir.clone();
     let logs_dir = settings_state.logs_dir.clone();
     let temporary_dir = settings_state.temporary_dir.clone();

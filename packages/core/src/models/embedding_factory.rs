@@ -23,6 +23,26 @@ pub struct EmbeddingFactory {
     pub ttl_list: HashMap<String, SystemTime>,
 }
 
+pub fn is_local_provider(provider_name: &str) -> bool {
+    provider_name.trim().eq_ignore_ascii_case("local")
+}
+
+/// Whether this host should execute the embedding model itself instead of
+/// proxying it through the API.
+///
+/// Bits carrying a remote gateway config can still be locally runnable ONNX
+/// models. Proxying those would make an otherwise offline-capable run depend on
+/// the backend, so hosts with `local-ml` always keep them local; the proxy stays
+/// reserved for models that have no local implementation.
+pub fn prefers_local_execution(bit: &Bit) -> bool {
+    if !cfg!(feature = "local-ml") {
+        return false;
+    }
+
+    bit.try_to_embedding_provider()
+        .is_some_and(|provider| is_local_provider(&provider.provider_name))
+}
+
 #[cfg(any(feature = "remote-ml", test))]
 fn embedding_usage_headers(usage_context: Option<&ModelUsageContext>) -> Vec<(String, String)> {
     let Some(context) = usage_context else {
@@ -79,7 +99,7 @@ impl EmbeddingFactory {
             .ok_or(flow_like_types::anyhow!("Model type not supported"))?;
         let provider_name = provider.provider_name;
 
-        if provider_name == "Local" {
+        if is_local_provider(&provider_name) {
             #[cfg(feature = "local-ml")]
             {
                 if let Some(model) = self.cached_text_models.get(&bit.id) {
@@ -125,7 +145,7 @@ impl EmbeddingFactory {
         let provider = provider.ok_or(flow_like_types::anyhow!("Model type not supported"))?;
         let provider = provider.provider.provider_name;
 
-        if provider == "Local" {
+        if is_local_provider(&provider) {
             #[cfg(feature = "local-ml")]
             {
                 if let Some(model) = self.cached_image_models.get(&bit.id) {

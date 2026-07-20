@@ -1,5 +1,5 @@
 use std::any::Any;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use flow_like_types::json::{Deserialize, Serialize};
 use flow_like_types::{Cacheable, Result, async_trait};
@@ -7,12 +7,8 @@ use text_splitter::{Characters, ChunkConfig, MarkdownSplitter, TextSplitter};
 
 use crate::provider::EmbeddingModelProvider;
 
+use super::proxy_config::api_base_url;
 use super::{EmbeddingModelLogic, GeneralTextSplitter};
-
-/// API base URL - loaded once using LazyLock
-static API_BASE_URL: LazyLock<String> = LazyLock::new(|| {
-    std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:3000".to_string())
-});
 
 /// Proxy embedding model that calls the internal API
 /// Used in executor (AWS Lambda, Kubernetes) where secrets are not available
@@ -72,7 +68,7 @@ impl ProxyEmbeddingModel {
     }
 
     async fn call_api(&self, texts: &[String], embed_type: &str) -> Result<Vec<Vec<f32>>> {
-        let url = format!("{}/api/v1/embeddings/embed", API_BASE_URL.as_str());
+        let url = format!("{}/api/v1/embeddings/embed", api_base_url());
 
         let request = EmbedRequest {
             model: self.bit_id.clone(),
