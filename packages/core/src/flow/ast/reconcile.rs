@@ -3478,6 +3478,11 @@ struct StructuralPlanner<'a> {
     /// `var_{function}_{pin}` id, so repeated literal returns (branch arms, re-planned bodies)
     /// share one variable + `variable_get` instead of minting suffixed duplicates.
     planned_literal_return_sources: HashMap<String, ValueSource>,
+    /// Boundary pass-throughs materialized during THIS plan, keyed by `(function layer ref,
+    /// parameter pin)`. `already_planned` in `queue_validated_data_connection` dedupes the EDGE,
+    /// not the reroute NODE, so without this `return a, a` (or two branch arms returning the same
+    /// parameter) would mint a sibling reroute per return statement.
+    planned_boundary_passthroughs: HashMap<(String, String), ValueSource>,
     /// Optional hook to materialize a node's dynamic (`on_update`-generated) pins for a call, so a
     /// literal/connection targeting one resolves against a real pin instead of the predicted
     /// `synthesize_dynamic_input_pin` fallback. `None` for the pure static-catalog paths.
@@ -3514,6 +3519,7 @@ impl<'a> StructuralPlanner<'a> {
             fn_ref_commands: Vec::new(),
             planned_functions: HashMap::new(),
             planned_literal_return_sources: HashMap::new(),
+            planned_boundary_passthroughs: HashMap::new(),
             enricher,
         }
     }
@@ -3551,6 +3557,7 @@ impl<'a> StructuralPlanner<'a> {
         self.pop_scope();
 
         self.check_new_function_structure();
+        self.check_function_ref_targets();
         self.check_dangling_impure_execution();
 
         // The entry node is the registration target for the outer app Event. Materialize every
@@ -4136,6 +4143,55 @@ impl<'a> StructuralPlanner<'a> {
             if !exit_connected {
                 self.result.diagnostics.push(format!(
                     "new impure function `{name}` has no materialized body tail connected to Function exec_out; callers could not continue after it. End the body on a node with one execution output, use explicit labelled arms for terminal multi-output nodes, or add an exact continuation policy for that node type"
+                ));
+            }
+        }
+    }
+
+    /// A `tools:`/`fnRefs:` target must resolve to a concrete entry NODE at run time: the executor
+    /// looks it up in the flat node map (`ExecutionContext::get_referenced_functions`), derives the
+    /// tool name from that node's friendly name and the tool's WHOLE parameter schema from its data
+    /// OUTPUT pins, triggers it, and reads the tool result from the `set_result` an
+    /// `events_generic_return_result` writes.
+    ///
+    /// A FlowScript `function` materializes as a Function LAYER with boundary pins and no entry
+    /// node, so such a reference can never be registered: `apply` rejects it with "Function layer
+    /// `X` has no referenceable event/handler entry" and rolls the WHOLE batch back, and
+    /// `validate_and_deduplicate_fn_refs` would silently strip it even if apply accepted it.
+    /// Reject it here instead, where `check_flowscript` reports it with a fix — an apply-phase
+    /// `Err` is invisible to the model.
+    ///
+    /// Only NEW function layers are checked: an anchored layer may already hold an entry node that
+    /// the text does not re-declare, and apply resolves that case correctly today.
+    fn check_function_ref_targets(&mut self) {
+        let new_layer_targets: Vec<(String, String)> = self
+            .fn_ref_commands
+            .iter()
+            .filter_map(|command| match command {
+                BoardCommand::SetNodeFunctionRefs { fn_refs, .. } => Some(fn_refs.clone()),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|name| match self.planned_functions.get(&name).map(|p| &p.entity) {
+                Some(NodeEntity::Layer { ref_id, .. }) => Some((name, ref_id.clone())),
+                _ => None,
+            })
+            .collect();
+
+        for (name, layer_ref) in new_layer_targets {
+            let has_entry = self.add_commands.iter().any(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode {
+                        ref_id: Some(ref_id),
+                        target_layer: Some(target_layer),
+                        ..
+                    } if target_layer == &layer_ref && self.event_entry_refs.contains(ref_id)
+                )
+            });
+            if !has_entry {
+                self.result.diagnostics.push(format!(
+                    "new function `{name}` is referenced as an agent tool but its Function layer contains no event/handler entry node, so the reference cannot be registered at run time. Declare `{name}` as a handler block — `{name}(<params>) {{ … return <value> }}` — instead of `function {name}(…)`; the handler's data outputs become the tool's arguments and its `return` becomes the tool result"
                 ));
             }
         }
@@ -4892,6 +4948,27 @@ impl<'a> StructuralPlanner<'a> {
                     ));
                     continue;
                 };
+                // `return <bare parameter>`: `seed_function_params` binds parameters to this
+                // layer's own boundary Input pins, so this edge would be layer -> itself, which
+                // `connect_pins` rejects and which rolls the whole apply batch back. Splice the
+                // board's pass-through primitive between the two boundary pins instead. This is
+                // the data-side twin of `wire_function_exit`'s existing self-reference guard.
+                let (source, output_pin) = if source.node.node_ref() == layer.node_ref() {
+                    match self.boundary_return_passthrough(
+                        &layer,
+                        &output_pin,
+                        &return_param,
+                        &function_name,
+                    ) {
+                        Some(spliced) => {
+                            let pin = spliced.output_pin.clone().unwrap_or_default();
+                            (spliced, pin)
+                        }
+                        None => continue,
+                    }
+                } else {
+                    (source, output_pin)
+                };
                 self.queue_validated_data_connection(
                     &source,
                     output_pin,
@@ -4951,6 +5028,106 @@ impl<'a> StructuralPlanner<'a> {
     /// Reverse the `events_generic_return_result` sugar: reuse the anchored result node (or add a
     /// fresh one), wire the returned value into its `response` input, and chain it into the exec
     /// flow as a terminal statement.
+    /// Bridge a Function layer's parameter pin to one of its own return pins (`return <param>`).
+    ///
+    /// That value both enters and leaves the SAME layer, and the direct edge is not representable:
+    /// `connect_pins` rejects `from_node == to_node` outright ("Cannot connect a node to itself",
+    /// aborting the whole apply); it could not be persisted anyway, because the command mutates two
+    /// independent clones of one entity and the second upsert erases the first; and
+    /// `control_call_function::read_outputs` resolves a return pin's dependency by searching the
+    /// execution graph's NODES, so a boundary-owned dependency leaves the output silently unset.
+    ///
+    /// The board's primitive for a wire that must become two edges is `reroute`: a pure
+    /// pass-through that `lower::resolve_source` already collapses back to the bare parameter
+    /// reference and that `BoardIndex::data_source_for_pin_id` already traces through, so the text
+    /// round-trips unchanged and the deletion planner never treats it as authored.
+    ///
+    /// Returns the source to wire the return pin from, or `None` when the bridge already exists on
+    /// the live board (no-op) or could not be built (diagnosed).
+    fn boundary_return_passthrough(
+        &mut self,
+        layer: &NodeEntity,
+        param_pin: &str,
+        return_param: &PinMetadata,
+        function_name: &str,
+    ) -> Option<ValueSource> {
+        // An applied bridge collapses back to `{layer, param}` in `BoardIndex`
+        // (`data_source_for_pin_id` traces through reroutes and falls back to `boundary_sources`),
+        // so the reconciler's ordinary already-wired test recognises it and the round-trip is a
+        // no-op. Without this the reroute chain would grow by one node on every apply.
+        let already_wired = self
+            .existing_sources_for_input_ref(layer, &return_param.name)
+            .into_iter()
+            .any(|existing| {
+                existing.node.node_ref() == layer.node_ref()
+                    && existing.output_pin.as_deref() == Some(param_pin)
+            });
+        if already_wired {
+            return None;
+        }
+
+        // Both reroute pins are Generic, so `planned_output_is_compatible` short-circuits and the
+        // two spliced edges validate against ANY contract. Type-check the parameter against the
+        // declared return pin here, which is what the (unrepresentable) direct edge did.
+        let boundary_source = ValueSource {
+            node: layer.clone(),
+            output_pin: Some(param_pin.to_string()),
+        };
+        let Some(output) = self.planned_source_output_type(&boundary_source) else {
+            self.result.diagnostics.push(format!(
+                "return of parameter `{param_pin}` as `{}` in function `{function_name}` has no exact source output contract; skipped connection",
+                return_param.name
+            ));
+            return None;
+        };
+        if !planned_output_is_compatible(return_param, &output, &self.existing.refs) {
+            self.result.diagnostics.push(format!(
+                "return of parameter `{param_pin}` for `{}` in function `{function_name}` has incompatible pin types or schemas: the parameter is `{}/{}`, but the return pin requires `{}/{}`; use a catalog-declared conversion before returning it",
+                return_param.name,
+                output.data_type,
+                output.value_type,
+                return_param.data_type,
+                return_param.value_type
+            ));
+            return None;
+        }
+
+        let key = (layer.node_ref(), param_pin.to_string());
+        if let Some(source) = self.planned_boundary_passthroughs.get(&key) {
+            return Some(source.clone());
+        }
+
+        let meta = self.resolve_variable_node("reroute", "Reroute")?;
+        let route_in = metadata_input_pin(&meta, "route_in")?.clone();
+        let route_out_name = metadata_output_pin(&meta, "route_out")?.name.clone();
+
+        let entity = self.queue_add_node(meta, Some(layer.node_ref()));
+        if !self.queue_validated_data_connection(
+            &boundary_source,
+            param_pin.to_string(),
+            &entity,
+            &route_in,
+            &route_in.name,
+            "Connect FlowScript function parameter pass-through".to_string(),
+            &format!(
+                "parameter `{param_pin}` returned as `{}` in function `{function_name}`",
+                return_param.name
+            ),
+            false,
+        ) {
+            // The incoming half was rejected (and diagnosed); queueing only the outgoing half
+            // would leave a reroute wired to nothing and the return pin reading Null.
+            return None;
+        }
+
+        let source = ValueSource {
+            node: entity,
+            output_pin: Some(route_out_name),
+        };
+        self.planned_boundary_passthroughs.insert(key, source.clone());
+        Some(source)
+    }
+
     fn plan_event_return(
         &mut self,
         values: &[Expr],
@@ -11855,6 +12032,71 @@ simpleEvent() {   //@n:event
         );
     }
 
+    /// A top-level `function` used as an agent tool materializes as `CreateLayer` + boundary pins
+    /// and nothing else, while apply requires each `SetNodeFunctionRefs` target to resolve to a
+    /// node carrying `fn_refs.can_be_referenced_by_fns`. Without a reconcile-side check, `check`
+    /// says `valid`, `commit` says `queued` with zero diagnostics, and the apply dies with
+    /// "Function layer `X` has no referenceable event/handler entry", rolling the whole document
+    /// back — a failure the model can neither see nor attribute.
+    ///
+    /// Minting an `events_generic` entry to make it apply is NOT the remedy: that entry exposes
+    /// only `payload`, so the tool advertises a `{payload}` schema the model's named arguments
+    /// never bind to, and `execute_tool_call` reads the `set_result` that only
+    /// `events_generic_return_result` writes — a function's `return` wires to layer boundary pins,
+    /// which the tool path never reads. It would apply clean and return the literal
+    /// "Tool executed successfully".
+    #[test]
+    fn function_used_as_agent_tool_is_diagnosed_by_name() {
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "agent_register_function_tools",
+                "Register Function Tools",
+                vec![pin_meta("agent_in", "Struct", PinType::Input)],
+                vec![pin_meta("agent_out", "Struct", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function summarizeTicket(subject: string): (headline: string) {
+    logInfo({ message: subject })
+    return "summarized"
+}
+
+eventsSimple() {
+    const agent = agentRegisterFunctionTools({ agentIn: "{}", tools: [summarizeTicket] })
+    logInfo({ message: agent.agentOut })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("summarizeTicket") && d.contains("no event/handler entry")),
+            "a `function` used as an agent tool must be diagnosed BY NAME at check time: {:#?}",
+            result.diagnostics
+        );
+    }
+
     #[test]
     fn catalog_aware_reconcile_uses_metadata_enricher_for_dynamic_pins() {
         let board = empty_board();
@@ -17516,6 +17758,118 @@ eventsSimple() {
                 _ => None,
             })
             .collect()
+    }
+
+    fn reroute_catalog() -> Vec<NodeMetadata> {
+        let mut catalog = string_format_dynamic_catalog();
+        catalog.push(catalog_meta(
+            "reroute",
+            "Reroute",
+            vec![pin_meta("route_in", "Generic", PinType::Input)],
+            vec![pin_meta("route_out", "Generic", PinType::Output)],
+        ));
+        catalog
+    }
+
+    /// `seed_function_params` binds every parameter to `ValueSource { node: <the function layer> }`,
+    /// so `return <bare param>` used to queue `ConnectPins { from_node: "$0", to_node: "$0" }` with
+    /// ZERO diagnostics: `check` reported `valid`, `commit` reported `queued`, and the apply then
+    /// hard-errored in `connect_pins` ("Cannot connect a node to itself") and rolled the entire
+    /// batch back. The value must instead route through a `reroute` INSIDE the layer, which
+    /// `lower::resolve_source` collapses back to the bare parameter reference.
+    #[test]
+    fn function_return_of_bare_parameter_never_queues_a_layer_self_edge() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function greet(name: string): (message: string, echoed: string) {
+    const formatted = stringFormat({ formatString: "Hello {name}", name: name })
+    return formatted.value, name
+}
+"#,
+            &reroute_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            self_connections(&result.commands).is_empty(),
+            "returning a bare function parameter must not queue a layer -> layer self-edge; \
+             `connect_pins` rejects it and rolls the whole apply batch back: {:?}",
+            self_connections(&result.commands)
+        );
+
+        // The `echoed` return pin must still be fed, from a real node inside the layer.
+        let feed = result
+            .commands
+            .iter()
+            .find_map(|command| match command {
+                BoardCommand::ConnectPins {
+                    from_node,
+                    to_node,
+                    to_pin,
+                    ..
+                } if to_node == "$0" && to_pin == "echoed" => Some(from_node.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "the `echoed` return pin must be wired: {:#?}",
+                    result.commands
+                )
+            });
+        assert_ne!(
+            feed, "$0",
+            "the pass-through must be a real node, not the layer"
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::AddNode { node_type, ref_id: Some(ref_id), target_layer, .. }
+                    if node_type == "reroute"
+                        && ref_id == &feed
+                        && target_layer.as_deref() == Some("$0")
+            )),
+            "the pass-through must be a `reroute` INSIDE the function layer — \
+             `control_call_function::find_node_id_by_pin` only searches the layer's own nodes: {:#?}",
+            result.commands
+        );
+        assert!(
+            result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, .. }
+                    if from_node == "$0" && from_pin == "name" && to_node == &feed
+            )),
+            "the pass-through must read the `name` boundary parameter: {:#?}",
+            result.commands
+        );
+    }
+
+    /// The spliced `reroute`'s pins are Generic, so both spliced edges validate against any
+    /// contract. The return-type check must therefore happen on the parameter -> return-pin pair
+    /// explicitly, or `function f(a: string): (b: int) { return a }` would apply clean and fail at
+    /// run time inside `from_value::<T>` at an arbitrary downstream consumer.
+    #[test]
+    fn function_return_of_mismatched_parameter_is_still_diagnosed() {
+        let board = empty_board();
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function greet(name: string): (message: string, count: int) {
+    const formatted = stringFormat({ formatString: "Hello {name}", name: name })
+    return formatted.value, name
+}
+"#,
+            &reroute_catalog(),
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("incompatible pin types") && d.contains("`name`")),
+            "a parameter returned into an incompatible return pin must be diagnosed: {:?}",
+            result.diagnostics
+        );
+        assert!(self_connections(&result.commands).is_empty());
     }
 
     #[test]

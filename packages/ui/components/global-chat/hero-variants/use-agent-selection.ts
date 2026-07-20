@@ -8,9 +8,11 @@ import {
 	useInvoke,
 } from "../../../index";
 import { isTauri } from "../../../lib/platform";
-import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
+import {
+	AGENT_MODEL_KEY,
+	useGlobalChatStore,
+} from "../../../state/global-chat/global-chat-store";
 import type {
-	AIProvider,
 	AgentBackendProvider,
 	NormalizedAIProvider,
 } from "../../flowpilot/types";
@@ -18,13 +20,7 @@ import {
 	isAgentBackendProvider,
 	normalizeAIProvider,
 } from "../../flowpilot/types";
-
-const PROVIDER_STORAGE_KEY = "flowpilot.hero.provider";
-const MODEL_STORAGE_KEY = "flowpilot.hero.model";
-const REASONING_EFFORT_STORAGE_KEY = "flowpilot.hero.reasoning-effort";
-// Persisted provider/model/effort live in an in-memory store shared with /chat;
-// hydrate them from localStorage once per session so the user's picks stick.
-let hydrated = false;
+import { useHydrateAgentSelection } from "../use-agent-persistence";
 
 export interface AgentReasoningEffortOption {
 	id: string;
@@ -55,9 +51,17 @@ export function useAgentSelection() {
 	const provider = useGlobalChatStore((s) => s.provider);
 	const selectedModelId = useGlobalChatStore((s) => s.selectedModelId);
 	const reasoningEffort = useGlobalChatStore((s) => s.reasoningEffort);
-	const setProvider = useGlobalChatStore((s) => s.setProvider);
 	const setSelectedModelId = useGlobalChatStore((s) => s.setSelectedModelId);
 	const setReasoningEffort = useGlobalChatStore((s) => s.setReasoningEffort);
+	// Explicit picks persist; the "keep a valid model" fallback below deliberately
+	// uses the plain setters so a still-loading catalog can never clobber them.
+	const selectProvider = useGlobalChatStore((s) => s.selectProvider);
+	const selectModel = useGlobalChatStore((s) => s.selectModel);
+	const selectReasoningEffort = useGlobalChatStore(
+		(s) => s.selectReasoningEffort,
+	);
+
+	useHydrateAgentSelection();
 
 	const backend = useBackend();
 	const settingsProfile = useInvoke(
@@ -94,41 +98,6 @@ export function useAgentSelection() {
 		[isDesktop],
 	);
 
-	// Hydrate the shared store from the last remembered pick, once.
-	useEffect(() => {
-		if (hydrated) return;
-		hydrated = true;
-		try {
-			const savedProvider = localStorage.getItem(PROVIDER_STORAGE_KEY);
-			const savedModel = localStorage.getItem(MODEL_STORAGE_KEY);
-			const savedReasoningEffort = localStorage.getItem(
-				REASONING_EFFORT_STORAGE_KEY,
-			);
-			if (savedProvider) setProvider(savedProvider as AIProvider);
-			if (savedModel) setSelectedModelId(savedModel);
-			if (savedReasoningEffort) setReasoningEffort(savedReasoningEffort);
-		} catch {
-			// storage unavailable — remembering is best-effort
-		}
-	}, [setProvider, setReasoningEffort, setSelectedModelId]);
-
-	useEffect(() => {
-		try {
-			localStorage.setItem(PROVIDER_STORAGE_KEY, provider);
-		} catch {}
-	}, [provider]);
-	useEffect(() => {
-		if (!selectedModelId) return;
-		try {
-			localStorage.setItem(MODEL_STORAGE_KEY, selectedModelId);
-		} catch {}
-	}, [selectedModelId]);
-	useEffect(() => {
-		try {
-			localStorage.setItem(REASONING_EFFORT_STORAGE_KEY, reasoningEffort);
-		} catch {}
-	}, [reasoningEffort]);
-
 	// Start the chosen agent backend so its models/auth load (mirrors the chat).
 	useEffect(() => {
 		if (
@@ -162,9 +131,24 @@ export function useAgentSelection() {
 		}));
 	}, [isAgent, copilotSDK.models, bitsModels]);
 
-	// Keep a valid model selected whenever the active model list changes.
+	// Keep a usable model selected as the catalog loads/changes — but prefer the
+	// user's remembered pick the moment the catalog that offers it appears, so a
+	// transient/fallback list can't strand them on the wrong model (and, because
+	// this uses the raw setter, it never rewrites the remembered value).
 	useEffect(() => {
 		if (models.length === 0) return;
+		let remembered: string | null = null;
+		try {
+			remembered = localStorage.getItem(AGENT_MODEL_KEY);
+		} catch {}
+		if (
+			remembered &&
+			remembered !== selectedModelId &&
+			models.some((model) => model.id === remembered)
+		) {
+			setSelectedModelId(remembered);
+			return;
+		}
 		if (!models.some((model) => model.id === selectedModelId)) {
 			setSelectedModelId(models[0].id);
 		}
@@ -216,15 +200,15 @@ export function useAgentSelection() {
 
 	return {
 		provider: normalizedProvider,
-		setProvider,
+		setProvider: selectProvider,
 		selectedModelId,
-		setSelectedModelId,
+		setSelectedModelId: selectModel,
 		availableProviders,
 		providerLabel,
 		models,
 		selectedModelName,
 		reasoningEffort,
-		setReasoningEffort,
+		setReasoningEffort: selectReasoningEffort,
 		reasoningEffortOptions,
 		reasoningEffortName,
 		autoReasoningEffortName,

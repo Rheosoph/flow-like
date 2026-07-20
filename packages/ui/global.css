@@ -1119,6 +1119,29 @@
 	}
 }
 
+/* Safe-area helpers. Prefer the app's resolved --fl-safe-* vars (which fold in
+   native-injected insets) and fall back to raw env() so they also work outside
+   the Tauri shell. */
+@utility pt-safe {
+	padding-top: var(--fl-safe-top, env(safe-area-inset-top, 0px));
+}
+
+@utility pb-safe {
+	padding-bottom: var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px));
+}
+
+@utility px-safe {
+	padding-left: var(--fl-safe-left, env(safe-area-inset-left, 0px));
+	padding-right: var(--fl-safe-right, env(safe-area-inset-right, 0px));
+}
+
+/* Keyboard-aware viewport height. --fl-mobile-vvh tracks visualViewport.height
+   (written by IOSWebviewHardening) so the shell shrinks when the soft keyboard
+   opens; falls back to the dynamic viewport everywhere else. */
+@utility h-vvh {
+	height: var(--fl-mobile-vvh, 100dvh);
+}
+
 @layer utilities {
 	.backdrop-blur-fallback {
 		@supports (backdrop-filter: blur(1px)) {
@@ -1164,6 +1187,15 @@
 .dark .shiki-wrapper .shiki span {
 	color: var(--shiki-dark);
 	background-color: var(--shiki-dark-bg);
+}
+
+/*
+ * While a text field is focused (soft keyboard up, see IOSWebviewHardening) the
+ * mobile bottom nav gives its space back, so a pinned composer is never squeezed
+ * out of the shrunken viewport and left behind the keyboard.
+ */
+html[data-fl-keyboard="open"] .fl-mobile-bottom-nav {
+	display: none;
 }
 
 /*

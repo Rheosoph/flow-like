@@ -704,20 +704,24 @@ eventsSimple() {
 
 #### Function references
 `tools: [echoTool]` is explicit FlowScript function-reference syntax emitted by the decompiler. It
-is metadata for `agentRegisterFunctionTools`, not a catalog input pin, and each array item must be a
-bare function/handler name declared in the same complete document.
-```flowscript-verified
-function echoTool(payload: Struct): (answer: string) {
-    const answer = valToString({ value: payload })
-    return answer
-}
+is metadata for `agentRegisterFunctionTools`, not a catalog input pin.
 
+**Each array item must name a handler block — `name(params) { … }` — never a `function`.** A
+`function` compiles to a Function layer whose signature becomes boundary pins, and a layer cannot be
+referenced as a tool: it has no entry node for the runtime to trigger, so the reference is rejected
+and the whole edit is refused. A handler block compiles to an event entry, which is what the agent
+actually invokes: its **data outputs become the tool's arguments** and its **`return` becomes the
+tool result**. Declare the handler inside the same scope that registers it.
+```flowscript-verified
 eventsSimple() {
     const agent = agentRegisterFunctionTools({
         agentIn: agentFromModel({ model: structMake() }),
         tools: [echoTool]
     })
     logInfo({ message: agent })
+    echoTool(payload: Struct) {
+        return valToString({ value: payload }).string
+    }
 }
 ```
 
@@ -896,17 +900,10 @@ eventsSimple() {
 
 ### 6. Factor reusable logic into helper functions (each becomes a Function layer)
 Declaring `function name(...) { ... }` creates a Function layer with boundary pins from its
-signature. Prefer several small helpers over one giant event block. The `tools` array below is the
-same synthetic FlowScript function-reference syntax described in the verified example above; it is
-supported even though it is intentionally absent from the node's ordinary data-input declaration.
+signature. Prefer several small helpers over one giant event block. Note the split below: ordinary
+reusable logic is a `function`, but anything an agent invokes is a **handler block** declared in the
+scope that registers it, because only a handler compiles to an entry node the runtime can trigger.
 ```ts
-function fetchPage(url: string, payload: Struct): (markdown: string) {
-    const response = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })
-    const text = httpResponseToText({ response: response.response })
-    const markdown = utilsMdHtmlToMd({ html: text.text, skippedTags: ["script","style","iframe"] })
-    return markdown.markdown
-}
-
 function runResearch(task: string): (answer: string) {
     const model = aiGenerativeFindModel({})
     const history = aiGenerativeHistoryFromString({ modelName: "", message: task })
@@ -915,6 +912,11 @@ function runResearch(task: string): (answer: string) {
         tools: [fetchPage]
     })
     const result = agentInvoke({ agent: agent, history: history })
+    fetchPage(url: string) {
+        const response = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })
+        const text = httpResponseToText({ response: response.response })
+        return utilsMdHtmlToMd({ html: text.text, skippedTags: ["script","style","iframe"] }).markdown
+    }
     return aiGenerativeLlmResponseLastContent({ response: result.response }).content
 }
 ```
@@ -942,10 +944,13 @@ function fillArticles(rows: Struct[]) {
     }
 }
 
-function openBriefing(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+eventsWidgetAction openBriefing(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
     a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: widgetInstanceId }) })
 }
 ```
+A widget action target is neither a `function` nor a generic handler: `a2uiInstantiateWidget`
+validates that every `fnRefs` entry is a **Widget Action Event** and errors otherwise, so declare it
+as `eventsWidgetAction name(...)`. Its parameters are the action payload the runtime delivers.
 
 ### 8. Drive a dashboard chart/table directly from a DataFusion query
 `dfSqlQuery(...).table` is a `CSVTable` you can hand straight to `a2uiPushCsvToChart` (format `CSV`).
@@ -1945,11 +1950,9 @@ mod tests {
             "loadConfig",
             "processAllSources",
             "loadOverview",
-            "fetchPage",
             "runResearch",
             "briefingPageLoad",
             "fillArticles",
-            "openBriefing",
             "renderTrend",
         ] {
             assert!(
@@ -1961,6 +1964,33 @@ mod tests {
                 "few-shot helper {helper} must not look like an Event/interface declaration"
             );
         }
+        // The inverse contract: a `tools:`/`fnRefs:` target must be a HANDLER block, never a
+        // `function`. A `function` compiles to a Function layer with no entry node, so apply
+        // rejects the reference outright ("has no referenceable event/handler entry") and rolls
+        // the whole edit back — see `check_function_ref_targets`. These examples previously taught
+        // the broken shape.
+        for tool_target in ["echoTool", "fetchPage"] {
+            assert!(
+                !FLOWSCRIPT_FEW_SHOT_EXAMPLES.contains(&format!("function {tool_target}(")),
+                "agent/widget tool target {tool_target} must NOT be declared as a `function` — \
+                 a Function layer cannot be referenced as a tool"
+            );
+            assert!(
+                FLOWSCRIPT_FEW_SHOT_EXAMPLES.contains(&format!("{tool_target}(")),
+                "agent/widget tool target {tool_target} must still be declared as a handler block"
+            );
+        }
+        // A widget action target is stricter still: `a2ui_instantiate_widget` validates that every
+        // `fnRefs` entry is an `events_widget_action` node and errors otherwise, so a plain handler
+        // block (which lowers to `events_generic`) is NOT sufficient here.
+        assert!(
+            FLOWSCRIPT_FEW_SHOT_EXAMPLES.contains("eventsWidgetAction openBriefing("),
+            "a widget `fnRefs` target must be declared as an `eventsWidgetAction` event"
+        );
+        assert!(
+            !FLOWSCRIPT_FEW_SHOT_EXAMPLES.contains("function openBriefing("),
+            "a widget `fnRefs` target must not be declared as a `function`"
+        );
         assert!(
             !FLOWSCRIPT_FEW_SHOT_EXAMPLES
                 .contains("aiGenerativeMakeHistoryMessage({ role: \"User\", type: \"Text\", text:")

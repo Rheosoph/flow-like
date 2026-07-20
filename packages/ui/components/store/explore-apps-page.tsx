@@ -304,14 +304,14 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 					subtitle="Community apps, ready to use or fork."
 				/>
 
-				<div className="flex items-center gap-2">
-					<div className="relative flex-1 max-w-lg">
+				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+					<div className="relative w-full sm:flex-1 sm:max-w-lg">
 						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
 						<Input
 							placeholder="Search community apps…"
 							value={searchQuery}
 							onChange={(e) => setSearchQuery(e.target.value)}
-							className="pl-11 h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
+							className="pl-11 h-11 sm:h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
 						/>
 						{searchQuery && (
 							<button
@@ -325,36 +325,38 @@ function ExploreAppsContent({ eventConfig }: Readonly<ExploreAppsPageProps>) {
 						)}
 					</div>
 
-					<Select
-						value={sortKey}
-						onValueChange={(value) => setSortKey(value as SortOption)}
-					>
-						<SelectTrigger
-							aria-label="Sort results"
-							className="w-auto gap-1.5 rounded-full border-border/40 bg-muted/30 text-sm h-10"
+					<div className="flex items-center gap-2">
+						<Select
+							value={sortKey}
+							onValueChange={(value) => setSortKey(value as SortOption)}
 						>
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent>
-							{SORT_OPTIONS.map((option) => (
-								<SelectItem key={option} value={option}>
-									{SORT_LABEL[option]}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+							<SelectTrigger
+								aria-label="Sort results"
+								className="w-auto gap-1.5 rounded-full border-border/40 bg-muted/30 text-sm h-11 sm:h-10"
+							>
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								{SORT_OPTIONS.map((option) => (
+									<SelectItem key={option} value={option}>
+										{SORT_LABEL[option]}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
 
-					{isFiltered && (
-						<Button
-							variant="ghost"
-							size="sm"
-							className="rounded-full text-muted-foreground/70 hover:text-foreground"
-							onClick={clearFilters}
-						>
-							<X className="h-3.5 w-3.5 mr-1" />
-							Clear
-						</Button>
-					)}
+						{isFiltered && (
+							<Button
+								variant="ghost"
+								size="sm"
+								className="rounded-full h-11 sm:h-9 text-muted-foreground/70 hover:text-foreground"
+								onClick={clearFilters}
+							>
+								<X className="h-3.5 w-3.5 mr-1" />
+								Clear
+							</Button>
+						)}
+					</div>
 				</div>
 
 				<CategoryChips
@@ -459,7 +461,7 @@ function CategoryChips({
 		<div
 			className={
 				isMobile
-					? "flex gap-1.5 overflow-x-auto scrollbar-hide -mx-4 px-4 pb-1"
+					? "flex gap-2 overflow-x-auto scrollbar-hide -mx-4 px-4 pb-1"
 					: "flex flex-wrap gap-1.5"
 			}
 		>
@@ -474,7 +476,9 @@ function CategoryChips({
 						key={category}
 						type="button"
 						aria-pressed={isSelected}
-						className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs transition-all ${
+						className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 text-xs transition-all ${
+							isMobile ? "py-2.5" : "py-1.5"
+						} ${
 							isSelected
 								? "bg-foreground/10 text-foreground ring-1 ring-foreground/20"
 								: "bg-muted/20 text-muted-foreground/70 hover:bg-muted/40 hover:text-foreground/80"

@@ -5,6 +5,7 @@ import {
 	AlertDescription,
 	Button,
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogHeader,
@@ -138,7 +139,7 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 					</DialogDescription>
 				</DialogHeader>
 
-				<div className="space-y-4">
+				<DialogBody className="space-y-4">
 					{error && (
 						<Alert variant="destructive">
 							<AlertDescription>{error}</AlertDescription>
@@ -210,7 +211,7 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 								</p>
 							</div>
 
-							<div className="flex gap-2 pt-4">
+							<div className="flex flex-col gap-2 pt-4 sm:flex-row">
 								<Button
 									variant="outline"
 									onClick={async () => {
@@ -218,28 +219,23 @@ const ChangeEmailDialog: React.FC<ChangeEmailDialogProps> = ({
 											userAttributeKey: "email",
 										});
 									}}
-									className="flex-1"
 								>
 									Resend
 								</Button>
-								<Button
-									variant="outline"
-									onClick={handleBack}
-									className="flex-1"
-								>
+								<Button variant="outline" onClick={handleBack}>
 									Back
 								</Button>
 								<Button
 									onClick={handleVerificationSubmit}
 									disabled={isLoading}
-									className="flex-1"
+									className="sm:flex-1"
 								>
 									{isLoading ? "Verifying..." : "Verify & Change"}
 								</Button>
 							</div>
 						</>
 					)}
-				</div>
+				</DialogBody>
 			</DialogContent>
 		</Dialog>
 	);

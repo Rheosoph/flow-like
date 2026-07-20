@@ -13,17 +13,17 @@ export function HeroFileChips({
 			{files.map((file, index) => (
 				<span
 					key={`${file.name}-${index}`}
-					className="flex items-center gap-1 rounded-full bg-primary/10 text-primary px-2 py-0.5 text-xs"
+					className="flex items-center gap-1 rounded-full bg-primary/10 text-primary py-0.5 pl-2 pr-0.5 text-xs"
 				>
-					<ImageIcon className="size-3" />
+					<ImageIcon className="size-3 shrink-0" />
 					<span className="max-w-32 truncate">{file.name}</span>
 					<button
 						type="button"
 						aria-label={`Remove ${file.name}`}
-						className="rounded-full hover:text-destructive outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						className="grid size-6 shrink-0 place-items-center rounded-full hover:text-destructive outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0 extend-touch-target"
 						onClick={() => onRemove(index)}
 					>
-						<XIcon className="size-3" />
+						<XIcon className="size-3.5" />
 					</button>
 				</span>
 			))}

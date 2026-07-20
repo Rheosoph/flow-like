@@ -404,17 +404,17 @@ function Swimlane({
 					<button
 						type="button"
 						onClick={() => scroll("left")}
-						className="absolute left-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-linear-to-r from-background/80 to-transparent opacity-0 group-hover/swimlane:opacity-100 transition-opacity"
+						className="absolute left-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-linear-to-r from-background/80 to-transparent opacity-100 md:opacity-0 md:group-hover/swimlane:opacity-100 transition-opacity"
 					>
 						<ChevronRight className="h-4 w-4 rotate-180" />
 					</button>
 				)}
 				<div
 					ref={scrollRef}
-					className="flex gap-3 overflow-x-auto scrollbar-none pb-1"
+					className="flex snap-x snap-mandatory gap-3 overflow-x-auto scrollbar-none pb-1"
 				>
 					{packages.map((pkg) => (
-						<div key={pkg.id} className="w-70 shrink-0">
+						<div key={pkg.id} className="w-[85vw] max-w-72 shrink-0 snap-start">
 							<PackageCard pkg={pkg} />
 						</div>
 					))}
@@ -423,7 +423,7 @@ function Swimlane({
 					<button
 						type="button"
 						onClick={() => scroll("right")}
-						className="absolute right-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-linear-to-l from-background/80 to-transparent opacity-0 group-hover/swimlane:opacity-100 transition-opacity"
+						className="absolute right-0 top-0 bottom-0 z-10 w-8 flex items-center justify-center bg-linear-to-l from-background/80 to-transparent opacity-100 md:opacity-0 md:group-hover/swimlane:opacity-100 transition-opacity"
 					>
 						<ChevronRight className="h-4 w-4" />
 					</button>

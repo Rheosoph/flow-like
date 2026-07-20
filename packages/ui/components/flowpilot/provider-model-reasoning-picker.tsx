@@ -154,7 +154,7 @@ export function ProviderModelReasoningPicker({
 						{modelLabel}
 					</span>
 					{reasoning.efforts.length > 0 && (
-						<>
+						<span data-slot="picker-reasoning" className="contents">
 							<span className="text-border" aria-hidden="true">
 								·
 							</span>
@@ -162,7 +162,7 @@ export function ProviderModelReasoningPicker({
 							<span className="min-w-0 max-w-36 truncate text-muted-foreground">
 								{reasoning.selected}
 							</span>
-						</>
+						</span>
 					)}
 					<ChevronDownIcon className="size-3 shrink-0 opacity-50" />
 				</button>

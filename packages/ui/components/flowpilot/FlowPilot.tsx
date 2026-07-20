@@ -21,6 +21,7 @@ import {
 	WorkflowIcon,
 	WrenchIcon,
 	XIcon,
+	ZapIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -581,6 +582,12 @@ function FlowPilotImpl({
 	} | null>(null);
 	const [destructiveApplyPending, setDestructiveApplyPending] = useState(false);
 	const [showWorkspace, setShowWorkspace] = useState(false);
+	// Session-only: auto mode resets whenever the panel remounts. It waives frontend
+	// tool-approval prompts and the pending-change review gate. It never waives `ask_user`
+	// or the destructive-deletion dialog.
+	const [autoMode, setAutoMode] = useState(false);
+	const autoModeRef = useRef(false);
+	autoModeRef.current = autoMode;
 	const [processEvents, setProcessEvents] = useState<FlowPilotProcessEvent[]>(
 		[],
 	);
@@ -605,6 +612,8 @@ function FlowPilotImpl({
 		FlowPilotGenerationMetricsRun | undefined
 	>(undefined);
 	const flowIrApplyInFlightRef = useRef(false);
+	const autoApplyAttemptRef = useRef<string | null>(null);
+	const autoApplyComponentsAttemptRef = useRef<string | null>(null);
 	const currentBoardIdRef = useRef<string | undefined>(board?.id);
 	const currentBoardNodeCountRef = useRef<number | undefined>(
 		flowPilotBoardNodeCount(board),
@@ -903,7 +912,12 @@ function FlowPilotImpl({
 			const sessionKey =
 				approval?.sessionKey ||
 				`${request.toolName}:${approval?.kind ?? "none"}`;
+			// Auto mode is read through a ref so toggling it never changes this callback's
+			// identity: the Tauri bridge listener would otherwise tear down and cancel every
+			// in-flight request. `remember: false` keeps auto-approvals out of the session
+			// allowlist, so turning auto mode off restores prompting.
 			if (
+				autoModeRef.current ||
 				approval?.kind === "none" ||
 				shouldSkipUnavailableCreateTableApproval(
 					request.toolName,
@@ -1257,6 +1271,45 @@ function FlowPilotImpl({
 		[],
 	);
 
+	// Turning auto mode on mid-run must settle approval dialogs that are already on screen or
+	// queued; their promises were captured before the flip and would otherwise block until the
+	// backend deadline. `ask_user` dialogs stay up — auto mode never answers questions.
+	const flushPendingToolApprovals = useCallback(() => {
+		if (frontendToolDialogRef.current?.type === "approval") {
+			const resolver = frontendToolDialogResolverRef.current;
+			frontendToolDialogResolverRef.current = null;
+			frontendToolDialogRef.current = null;
+			resolver?.({ approved: true, remember: false });
+			setFrontendToolDialog(null);
+		}
+
+		const retained: FrontendToolQueuedDialog[] = [];
+		for (const queued of frontendToolDialogQueueRef.current) {
+			if (queued.dialog.type !== "approval") {
+				retained.push(queued);
+				continue;
+			}
+			queued.resolve({ approved: true, remember: false });
+		}
+		frontendToolDialogQueueRef.current = retained;
+
+		if (!frontendToolDialogResolverRef.current) {
+			const next = frontendToolDialogQueueRef.current.shift();
+			if (next) {
+				frontendToolDialogResolverRef.current = next.resolve;
+				frontendToolDialogRef.current = next.dialog;
+				setFrontendToolDialog(next.dialog);
+			}
+		}
+	}, []);
+
+	const handleToggleAutoMode = useCallback(() => {
+		const next = !autoModeRef.current;
+		autoModeRef.current = next;
+		setAutoMode(next);
+		if (next) flushPendingToolApprovals();
+	}, [flushPendingToolApprovals]);
+
 	useEffect(
 		() => () => {
 			// Navigation can unmount the board while the native agent is awaiting approval/input.
@@ -1426,6 +1479,10 @@ function FlowPilotImpl({
 		setProcessEvents([]);
 		setCurrentConversationId(undefined);
 		currentMessageIdRef.current = undefined;
+		// A regenerated review can be byte-identical to the last one; clearing the stamps keeps
+		// auto mode from mistaking it for an apply it already attempted.
+		autoApplyAttemptRef.current = null;
+		autoApplyComponentsAttemptRef.current = null;
 		setShowHistory(false);
 	}, [dismissPendingFlowIrCommit, pendingFlowIrCommit, settleGenerationReview]);
 
@@ -1469,6 +1526,8 @@ function FlowPilotImpl({
 				setValidationWarnings([]);
 				setProcessEvents([]);
 				currentMessageIdRef.current = undefined;
+				autoApplyAttemptRef.current = null;
+				autoApplyComponentsAttemptRef.current = null;
 				setShowHistory(false);
 			} catch (err) {
 				console.error("Failed to load conversation:", err);
@@ -3240,6 +3299,56 @@ function FlowPilotImpl({
 		visiblePendingCommands.length === 0 &&
 		flowscriptWorkspaceStatus === "stale";
 
+	// Auto mode applies a settled review as soon as generation finishes, mirroring the exact
+	// condition that renders the review card. The attempt stamp makes this fire once per
+	// distinct review: every early return inside executePendingCommands either leaves the
+	// review untouched (key unchanged, so no retry) or clears it outright. Bailing on
+	// `destructiveApplyRequest` is load-bearing — cancelling that dialog restores the
+	// applicable workspace, and without the bail the effect would immediately re-raise it.
+	const autoApplyKey =
+		!autoMode ||
+		loading ||
+		destructiveApplyRequest !== null ||
+		hasDismissOnlyStaleReview ||
+		!(agentMode === "board" || agentMode === "both") ||
+		!(visiblePendingCommands.length > 0 || hasUnappliedFlowScriptWorkspace)
+			? null
+			: [
+					pendingFlowIrCommit?.claim_id ?? "",
+					hasUnappliedFlowScriptWorkspace ? flowscriptWorkspace : "",
+					visiblePendingCommands
+						.map((command) => JSON.stringify(command))
+						.join("|"),
+				].join("::");
+
+	useEffect(() => {
+		if (!autoApplyKey || autoApplyAttemptRef.current === autoApplyKey) return;
+		autoApplyAttemptRef.current = autoApplyKey;
+		void executePendingCommands();
+	}, [autoApplyKey, executePendingCommands]);
+
+	// Components stream in batches during generation, so this waits for `!loading` rather
+	// than applying partial batches.
+	const autoApplyComponentsKey =
+		!autoMode ||
+		loading ||
+		!(agentMode === "ui" || agentMode === "both") ||
+		pendingComponents.length === 0
+			? null
+			: pendingComponents
+					.map((component) => JSON.stringify(component))
+					.join("|");
+
+	useEffect(() => {
+		if (
+			!autoApplyComponentsKey ||
+			autoApplyComponentsAttemptRef.current === autoApplyComponentsKey
+		)
+			return;
+		autoApplyComponentsAttemptRef.current = autoApplyComponentsKey;
+		handleApplyComponents();
+	}, [autoApplyComponentsKey, handleApplyComponents]);
+
 	useEffect(() => {
 		onWorkspaceVisibleChange?.(showFlowScriptWorkspace);
 	}, [onWorkspaceVisibleChange, showFlowScriptWorkspace]);
@@ -3283,6 +3392,8 @@ function FlowPilotImpl({
 				hasWorkspace={hasFlowScriptWorkspace}
 				showWorkspace={showWorkspace}
 				onToggleWorkspace={() => setShowWorkspace((value) => !value)}
+				autoMode={autoMode}
+				onToggleAutoMode={handleToggleAutoMode}
 			/>
 
 			<div
@@ -3596,8 +3707,8 @@ function FlowPilotImpl({
 					<DialogHeader>
 						<DialogTitle>Approve deletion</DialogTitle>
 						<DialogDescription>
-							FlowScript apply needs to delete existing board items before it
-							can continue.
+							Applying this FlowScript needs to delete existing board items
+							before it can continue. Deletions are never automatic.
 						</DialogDescription>
 					</DialogHeader>
 					<DialogBody>
@@ -3888,6 +3999,8 @@ interface HeaderProps {
 	hasWorkspace: boolean;
 	showWorkspace: boolean;
 	onToggleWorkspace: () => void;
+	autoMode: boolean;
+	onToggleAutoMode: () => void;
 }
 
 const Header = memo(function Header({
@@ -3914,6 +4027,8 @@ const Header = memo(function Header({
 	hasWorkspace,
 	showWorkspace,
 	onToggleWorkspace,
+	autoMode,
+	onToggleAutoMode,
 }: HeaderProps) {
 	const normalizedProvider = normalizeAIProvider(provider);
 	const pickerProviders: ProviderModelPickerProvider[] = [
@@ -4050,6 +4165,24 @@ const Header = memo(function Header({
 							</TooltipContent>
 						</Tooltip>
 					)}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant={autoMode ? "secondary" : "ghost"}
+								size="icon"
+								aria-pressed={autoMode}
+								className="h-7 w-7 rounded-md hover:bg-accent/50"
+								onClick={onToggleAutoMode}
+							>
+								<ZapIcon className="w-4 h-4" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom" className="text-xs">
+							{autoMode
+								? "Auto mode on — tools run and changes apply without asking, including destructive ones. Only board-item deletion still asks."
+								: "Auto mode off — FlowPilot asks before acting"}
+						</TooltipContent>
+					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Button

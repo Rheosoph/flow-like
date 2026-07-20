@@ -115,6 +115,7 @@ import { fetcher } from "../lib/api";
 import { appsDB } from "../lib/apps-db";
 import { isIosTauriRuntime } from "../lib/platform";
 import { CreateProfileDialog } from "./add-profile";
+import { MobileBottomNav } from "./mobile-bottom-nav";
 import { Shortcuts } from "./shortcuts";
 import { useTauriInvoke } from "./useInvoke";
 
@@ -214,12 +215,7 @@ export function AppSidebar({
 	return (
 		<SidebarProvider defaultOpen={defaultOpen}>
 			<InnerSidebar />
-			<main
-				className="w-full h-dvh flex flex-col overflow-hidden"
-				style={{
-					paddingTop: "var(--fl-safe-top, env(safe-area-inset-top, 0px))",
-				}}
-			>
+			<main className="w-full h-vvh flex flex-col overflow-hidden pt-safe">
 				<MobileHeaderProvider>
 					<MobileHeader />
 					<SidebarInset className="relative flex flex-col flex-1 min-h-0 h-full overflow-hidden">
@@ -231,6 +227,7 @@ export function AppSidebar({
 							{children}
 						</FlowBackground>
 					</SidebarInset>
+					<MobileBottomNav />
 				</MobileHeaderProvider>
 			</main>
 		</SidebarProvider>
@@ -347,8 +344,8 @@ function InnerSidebar() {
 								</DialogDescription>
 							</DialogHeader>
 							<div className="grid gap-4 py-4">
-								<div className="grid grid-cols-4 items-center gap-4">
-									<Label htmlFor="name" className="text-right">
+								<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-4 sm:items-center sm:gap-4">
+									<Label htmlFor="name" className="text-left sm:text-right">
 										{"Name (optional)"}
 									</Label>
 									<Input
@@ -357,11 +354,11 @@ function InnerSidebar() {
 										onChange={(e) =>
 											setFeedback({ ...feedback, name: e.target.value })
 										}
-										className="col-span-3"
+										className="sm:col-span-3"
 									/>
 								</div>
-								<div className="grid grid-cols-4 items-center gap-4">
-									<Label htmlFor="username" className="text-right">
+								<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-4 sm:items-center sm:gap-4">
+									<Label htmlFor="username" className="text-left sm:text-right">
 										{"Email (optional)"}
 									</Label>
 									<Input
@@ -370,11 +367,11 @@ function InnerSidebar() {
 										onChange={(e) =>
 											setFeedback({ ...feedback, email: e.target.value })
 										}
-										className="col-span-3"
+										className="sm:col-span-3"
 									/>
 								</div>
-								<div className="grid grid-cols-4 items-center gap-4">
-									<Label htmlFor="message" className="text-right">
+								<div className="grid grid-cols-1 gap-1.5 sm:grid-cols-4 sm:items-center sm:gap-4">
+									<Label htmlFor="message" className="text-left sm:text-right">
 										{"Message"}
 									</Label>
 									<Textarea
@@ -383,7 +380,7 @@ function InnerSidebar() {
 										onChange={(e) =>
 											setFeedback({ ...feedback, message: e.target.value })
 										}
-										className="col-span-3"
+										className="sm:col-span-3"
 									/>
 								</div>
 							</div>
@@ -699,7 +696,8 @@ function Profiles() {
 											Object.keys(profiles.data ?? {}).length > 1 && (
 												<button
 													type="button"
-													className="text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors p-1 rounded shrink-0"
+													aria-label={`Delete ${profile.hub_profile.name ?? "profile"}`}
+													className="text-muted-foreground/40 hover:text-destructive hover:bg-destructive/10 transition-colors p-2 rounded shrink-0 extend-touch-target"
 													onClick={(e) =>
 														handleDeleteProfile(
 															profile.hub_profile.id ?? "",

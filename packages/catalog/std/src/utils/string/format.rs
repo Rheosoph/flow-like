@@ -2,7 +2,7 @@ use flow_like::flow::{
     board::Board,
     execution::context::ExecutionContext,
     node::{Node, NodeLogic},
-    pin::PinType,
+    pin::{Pin, PinType},
     variable::VariableType,
 };
 use flow_like_types::{Value, async_trait, json::json};
@@ -96,28 +96,45 @@ impl NodeLogic for FormatStringNode {
             .and_then(|json| json.as_str().map(ToOwned::to_owned))
             .unwrap_or_default();
 
-        let mut current_placeholders = pins
-            .iter()
-            .map(|p| (p.name.clone(), *p))
-            .collect::<HashMap<_, _>>();
+        // Group by name: earlier updates could have leaked several pins for one placeholder.
+        let mut current_placeholders: HashMap<String, Vec<&Pin>> = HashMap::new();
+        for pin in &pins {
+            current_placeholders
+                .entry(pin.name.clone())
+                .or_default()
+                .push(pin);
+        }
 
         let mut all_placeholders = HashSet::new();
         let mut missing_placeholders = HashSet::new();
+        let mut stale_ids = Vec::new();
 
         for cap in self.regex.captures_iter(&format_string) {
-            if let Some(placeholder) = cap.get(1).map(|m| m.as_str().to_string()) {
-                all_placeholders.insert(placeholder.clone());
-                if current_placeholders.remove(&placeholder).is_none() {
+            let Some(placeholder) = cap.get(1).map(|m| m.as_str().to_string()) else {
+                continue;
+            };
+            // A placeholder repeated in the format string still maps to a single pin.
+            if !all_placeholders.insert(placeholder.clone()) {
+                continue;
+            }
+            match current_placeholders.remove(&placeholder) {
+                Some(mut matched) => {
+                    matched.sort_by_key(|pin| (pin.index, pin.id.clone()));
+                    stale_ids.extend(matched.iter().skip(1).map(|pin| pin.id.clone()));
+                }
+                None => {
                     missing_placeholders.insert(placeholder);
                 }
             }
         }
 
-        let ids_to_remove = current_placeholders
-            .values()
-            .map(|p| p.id.clone())
-            .collect::<Vec<_>>();
-        ids_to_remove.iter().for_each(|id| {
+        stale_ids.extend(
+            current_placeholders
+                .values()
+                .flatten()
+                .map(|pin| pin.id.clone()),
+        );
+        stale_ids.iter().for_each(|id| {
             node.pins.remove(id);
         });
 

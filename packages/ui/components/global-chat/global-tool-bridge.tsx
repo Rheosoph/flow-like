@@ -201,6 +201,8 @@ export interface FrontendToolResponse {
 interface DialogOverride {
 	title: string;
 	description?: string;
+	/** Marks a gate that must never be answered without the user (auto mode, batch approvers). */
+	destructive?: boolean;
 }
 
 type DialogState =
@@ -744,6 +746,7 @@ function promptForDialog(
 	return {
 		id: promptId,
 		kind: "approval" as const,
+		destructive: dialog.override?.destructive ?? false,
 		toolName: request.toolName,
 		title:
 			dialog.override?.title || request.approval?.title || "Approve action",
@@ -2762,6 +2765,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										type: "approval",
 										request,
 										override: {
+											destructive: true,
 											title: "Approve deletion",
 											description: `${
 												diagnostic.length > 200
@@ -3594,7 +3598,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 						});
 					}
 
-					// Edit mode: stage for the user's inline review — NEVER auto-applied.
+					// Edit mode: stage for the user's inline review. The tool never applies this
+					// itself; only the review card does, either on a click or via auto mode.
 					let staged = false;
 					if (runIsLive() && widgetSurface) {
 						useGlobalChatStore.getState().setPendingComponents({
@@ -3968,7 +3973,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 				const sessionKey =
 					approval?.sessionKey ||
 					`${request.toolName}:${approval?.kind ?? "none"}`;
+				// Read through getState() rather than a selector so `execute` keeps a stable
+				// identity. Auto mode is a frontend waiver only: the approval kind sent by the
+				// backend is untouched, so ordered execution of mutating tools still holds.
 				const needsApproval =
+					!useGlobalChatStore.getState().autoMode &&
 					(approval?.kind === "mutating" || approval?.kind === "execute") &&
 					!shouldSkipUnavailableCreateTableApproval(
 						request.toolName,
