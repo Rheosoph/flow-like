@@ -208,73 +208,34 @@ jobs:
         if: steps.build_release.outcome == 'failure'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_APP_VERSION: ${{ steps.build_release.outputs.appVersion }}
+          TAURI_ARTIFACT_PATHS: ${{ steps.build_release.outputs.artifactPaths }}
+          TAURI_RELEASE_ID: ${{ steps.build_release.outputs.releaseId }}
+          TAURI_RUNNER_ARCH: ${{ runner.arch }}
         shell: bash
-        run: |
-          VERSION=$(jq -r '.version' apps/desktop/src-tauri/tauri.conf.json)
-          TAG="beta-v${VERSION}"
+        run: bash .github/scripts/retry-release-upload.sh
 
-          # Stagger retries to reduce concurrent upload collisions
-          sleep $((RANDOM % 30 + 10))
-
-          # Find all release artifacts and upload with retry
-          if [ ! -d target/release/bundle ]; then
-            echo "::error::No release bundle directory found at target/release/bundle. The build likely failed before Tauri produced artifacts."
-            exit 1
-          fi
-
-          artifacts="$(mktemp)"
-          find target/release/bundle -type f \( \
-            -name "*.deb" -o -name "*.deb.sig" \
-            -o -name "*.rpm" -o -name "*.rpm.sig" \
-            -o -name "*.AppImage" -o -name "*.AppImage.sig" \
-            -o -name "*.AppImage.tar.gz" -o -name "*.AppImage.tar.gz.sig" \
-            -o -name "*.dmg" -o -name "*.dmg.sig" \
-            -o -name "*.app.tar.gz" -o -name "*.app.tar.gz.sig" \
-            -o -name "*.exe" -o -name "*.exe.sig" \
-            -o -name "*.msi" -o -name "*.msi.sig" \
-            -o -name "*.msi.zip" -o -name "*.msi.zip.sig" \
-            -o -name "*.nsis.zip" -o -name "*.nsis.zip.sig" \
-          \) > "$artifacts"
-
-          if [ ! -s "$artifacts" ]; then
-            echo "::error::No release artifacts found under target/release/bundle."
-            find target/release/bundle -type f | sed 's/^/  /'
-            exit 1
-          fi
-
-          # Ensure the draft release exists after confirming there is something to upload
-          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --prerelease --title "Flow Like - Beta v${VERSION}" || \
-              gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
-          fi
-
-          upload_failed=0
-          while read -r file; do
-            filename=$(basename "$file")
-            echo "Uploading $filename..."
-            uploaded=0
-            for attempt in 1 2 3; do
-              if gh release upload "$TAG" "$file" --repo "$GITHUB_REPOSITORY" --clobber; then
-                echo "  Uploaded $filename"
-                uploaded=1
-                break
-              fi
-              if [ "$attempt" -lt 3 ]; then
-                echo "  Attempt $attempt failed, retrying in $((attempt * 15))s..."
-                sleep $((attempt * 15))
-              fi
-            done
-            if [ "$uploaded" -ne 1 ]; then
-              echo "::error::Failed to upload $filename after 3 attempts."
-              upload_failed=1
-            fi
-          done < "$artifacts"
-
-          exit "$upload_failed"
-
-      - name: Fail if build failed
+      - name: Report recovered installer uploads
         if: steps.build_release.outcome == 'failure'
         shell: bash
         run: |
-          echo "::warning::Build and Release step failed initially, retry upload was attempted."
-          echo "Check the release draft to verify all artifacts were uploaded."
+          echo "::warning::Tauri's initial release upload failed, but all built installer assets were recovered and verified by digest."
+
+  finalize-updater-json:
+    name: Finalize updater metadata
+    needs: alpha-release
+    if: ${{ always() && needs['alpha-release'].result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 1
+
+      - name: Generate and publish complete latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: bash .github/scripts/finalize-updater-json.sh
