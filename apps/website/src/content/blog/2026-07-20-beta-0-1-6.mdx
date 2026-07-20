@@ -1,0 +1,313 @@
+---
+title: "Flow-Like Beta v0.1.6 — The Whole App Is the Workflow"
+description: "FlowPilot goes global, flows become editable code, and rich apps gain voice, video, planning, local AI, permissions, Suites, Data Studio, and a faster foundation."
+date: 2026-07-20
+tags: ["release", "beta", "beta-0-1-6", "flowpilot", "flowscript", "a2ui", "local-ai", "performance"]
+cover: "/images/0-1-6.jpg"
+draft: false
+---
+
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
+0.1.5 could build serious workflows. **0.1.6 can build the product around them.**
+
+This is the release where a lot of separate bets finally click together. Your graph has a readable, editable language. FlowPilot can work across the whole platform instead of one open board. Workflow output can become a live calendar, a voice interface, an inline app, a Gantt plan, a diff, or a multimodal answer. Apps can call other apps with explicit permissions, travel in Suites, and expose their data through a much stronger Data Studio.
+
+And the canvas underneath all of that got faster, safer, and harder to knock over.
+
+The audited change set runs from `beta-v0.1.5` through release-candidate commit [`7a7b74fe`](https://github.com/Rheosoph/flow-like/commit/7a7b74fef62058967470e815aa8342132982f4b5) — the code boundary immediately before this post: **221 commits, 48 merged product PRs, four direct-to-`dev` commits, and 49 issues closed after the 0.1.5 tag**. The `alpha` branch adds six promotion merges on top; promotion commit [`75d5dc54`](https://github.com/Rheosoph/flow-like/commit/75d5dc54c125f2cf317ea0369c69e8f70b000ace) has a tree byte-for-byte identical to that candidate.
+
+The raw diff touches 3,184 files. That number is real, but it needs context: generated node documentation, FlowScript declarations, platform artifacts, lockfiles, and third-party notices account for a large share. The story of 0.1.6 is not “half a million lines.” It is that the product now behaves like one system.
+
+## The release at a glance
+
+- **FlowPilot becomes a platform assistant.** It can create apps, build pages, edit workflows, work with data, call other apps, remember context, and embed results in the conversation.
+- **FlowScript gives every board a second face.** Read a flow as TypeScript-flavored code, edit it in Monaco, lint it, and reconcile it back to the visual graph as one undoable change.
+- **A2UI gets dramatically more expressive.** Calendar, Gantt, diff, voice, user profiles, richer forms, runtime configuration, and inline app pages all become first-class building blocks.
+- **Local AI gets ears, eyes, and a media pipeline.** Speech-to-text, voice playback, Face ID, broader ONNX acceleration, RTSP capture, and 30 pure-Rust video/media nodes land together.
+- **Apps learn to cooperate.** Explicit cross-app permissions, connected-app calls, process lineage, and publishable Suites turn isolated projects into governed systems.
+- **The foundation gets quieter and faster.** On desktop, offline board merging moves off the main thread and stale syncs are blocked by lineage; across the app, expensive renders are cut, storage becomes manageable, and release uploads can recover instead of starting over.
+
+That is the short version. Here is why these pieces matter together.
+
+## FlowPilot gets the keys to the whole app
+
+FlowPilot used to be an editor feature. Open a board, ask about that board, get help with that board. Useful — but boxed in.
+
+In 0.1.6, FlowPilot moves up a level. The new global chat is available across the app and speaks a shared set of platform tools. It can list and create apps, navigate, open pages or chats inline, call headless events, manage app routes, hand workflow logic to the board specialist, hand interface work to the widget specialist, and hand data work to Data Studio.
+
+That last part is important. FlowPilot does not pretend one model prompt is equally good at everything. It orchestrates specialists with clear boundaries: workflow logic goes to `flowpilot_board`, UI goes to `flowpilot_widget`, and databases, ontologies, graph queries, and analytics go to `data_studio_agent`.
+
+A whole-app build now has a deliberate shape:
+
+```text
+create_app
+  → flowpilot_widget
+  → flowpilot_board
+  → set_page_load_event
+  → upsert_event
+```
+
+The page is created before the flow so the workflow can reference real component and action IDs. The workflow is created before the event so the route points at a real entry node. Each mutating step is reviewable, and a FlowPilot edit lands as a single command batch in the board history instead of a blur of half-applied node changes.
+
+The conversation itself is now part of the workspace. An app page or chat can render **inside a message**. FlowPilot can call several independent apps in parallel, carry files to the one that needs them, and attach the called apps back to its answer. Memories are profile-scoped and optional, appearing only when you configure an embedding model.
+
+On desktop, the same tool surface can be driven by your profile models, GitHub Copilot, Codex, or the newly added Claude Code backend. The coding-agent backends connect through a local MCP server and receive Flow-Like tools — they do not get a free pass to rewrite your project from the shell.
+
+Read the deeper dives: [FlowPilot now drives the whole app](/blog/flowpilot-whole-app/) and [Claude Code & Codex in FlowPilot](/blog/claude-code-codex-providers/).
+
+## Your flow, as code — safely
+
+The other half of this release is [FlowScript](/blog/flowscript/): a typed, TypeScript-flavored projection of a board that round-trips back into the graph.
+
+This is not an export format and it is not a code screenshot bolted onto the editor. Open the FlowScript panel, edit the source, press save, and the reconciler works out which nodes, pins, connections, layers, variables, and entry points must change. Stable anchor comments preserve identity across edits. A deletion guard stops an incomplete model response from casually erasing the rest of your board. Monaco adds syntax highlighting, completion, hover information, go-to-definition, and live diagnostics.
+
+Real workflows read like code because they *are* the same workflow:
+
+```typescript
+queryItems(tables: string[], query: string, payload: Struct) {
+    const session = dfCreateSession({ sessionName: "default", batchSize: 8192 })
+
+    for (const table of controlForEach({ array: tables })) {
+        const database = openLocalDb({
+            name: table.value,
+            userScoped: true,
+            batchSize: 1000
+        })
+        dfRegisterLance({
+            session: session.session,
+            database: database.database,
+            tableName: table.value
+        })
+    }
+
+    return dfSqlQuery({ session: session.session, query: query }).rows
+}
+```
+
+Struct fields can be assigned directly (`order.status = "approved"`), Unicode identifiers work, and the parser now handles more real-world type shapes without losing the anchors that make reconciliation stable.
+
+This changes more than developer ergonomics. FlowScript is the common contract between the visual canvas, the human editor, and FlowPilot. You can inspect exactly what the assistant intends to apply. The assistant can edit a hundred-node graph without dragging a hundred boxes. And the result is still a normal visual flow that your team can open, run, and undo.
+
+## Apps become live surfaces
+
+A workflow is only half an app. People need somewhere to see, change, approve, schedule, record, and explore what it does. 0.1.6 gives the UI layer a serious expansion.
+
+The new [Calendar and Gantt elements](/blog/calendar-gantt/) are not static renderers. Calendar supports month, week, day, and agenda views; Gantt supports dependencies, milestones, progress, grouping, and multiple time scales. Dragging an event, resizing a task, linking dependencies, or creating a new item fires a typed action back into a workflow.
+
+<BlogInteractiveDemo client:only="react" preset="planning" />
+
+The contract stays pleasingly small:
+
+```typescript
+export interface CalendarEvent {
+  id: string;
+  title: string;
+  start: string; // ISO 8601
+  end?: string;
+  allDay?: boolean;
+  calendarId?: string;
+  color?: string;
+  description?: string;
+  editable?: boolean;
+  location?: string;
+  link?: string;
+  metadata?: Record<string, unknown>;
+}
+```
+
+Give the element an array; let the flow own what happens next.
+
+The new [Diff View](/blog/diff-view/) brings split, unified, and inline comparisons to text, code, Markdown, JSON, and documents. The [voice toolkit](/blog/voice-recorder/) adds recording, animated playback, a full-screen conversational mode, and seven visualizer styles behind one shared API. A User Profile element resolves a project user into a consistent avatar/name surface, while new read-only user nodes let workflows safely inspect membership and roles.
+
+[Schema-driven inputs](/blog/schema-driven-app-inputs/) also stop complex variables from feeling like raw JSON homework. Struct defaults resolve modern JSON Schema references and composition, with a form-first editor and a generic JSON fallback. Runtime-configured paths get a proper picker. Pages are correctly scoped to their boards. And generated widgets can be staged, previewed, applied, or dismissed directly from chat.
+
+The result is a much shorter distance between “this workflow returns data” and “this is an app somebody can actually use.”
+
+## Local AI learns to listen, speak, see, and edit video
+
+0.1.6 is also a large local-media release.
+
+[Speech-to-text joins text-to-speech](/blog/speech-models/) with hosted and fully local paths. Whisper, OLMoASR, Qwen3-ASR, Moonshine, Kokoro, Qwen3-TTS, and the surrounding model stack can run inside Flow-Like without handing every recording to an external service. The UI side of that loop arrives in the same release: record in an app, transcribe in a flow, act on the text, synthesize a response, and play it back through an animated voice surface.
+
+[Face analysis becomes a native catalog capability](/blog/face-id-local-vision/) backed by SCRFD detection and ArcFace embeddings, with landmarks, a normalized identity vector, age, gender, and a normal Flow-Like bounding box in the result. ONNX Runtime packaging and execution-provider support expand across Windows, macOS, iOS, and Android, including better architecture detection and DirectML support on Windows.
+
+<BlogInteractiveDemo client:only="react" preset="face-vision" />
+
+Then there is video. [Thirty new media nodes](/blog/video-nodes/) cover probing, remuxing, transcoding, AV1, transforms, thumbnails, contact sheets, audio analysis, silence detection, subtitles, and HLS packaging. They run on the team's pure-Rust `video-utils-rs` stack — no FFmpeg process to install or babysit. RTSP frame capture lands alongside native HEVC work, including a dedicated Windows decoder thread and the Apple media frameworks needed to build it cleanly.
+
+Atlas Cloud and MiniMax M3 join the provider catalog as community contributions. Thank you to **Lucas Zhu** and **octo-patch** for landing them.
+
+Multimodal handling underneath the UI got a less visible but essential fix: URLs, base64 payloads, provider file IDs, raw bytes, and literal strings now survive Flow-Like's history boundary as distinct source kinds instead of collapsing into one ambiguous string. The encoding is intentionally boring and reversible:
+
+```rust
+match source {
+    DocumentSourceKind::Url(url) => url,
+    DocumentSourceKind::Base64(data) => format!("data:{mime_type};base64,{data}"),
+    DocumentSourceKind::FileId(file_id) => format!("file_id:{file_id}"),
+    DocumentSourceKind::Raw(bytes) => format!(
+        "data:{mime_type};flow-like-source=raw;base64,{}",
+        BASE64_STANDARD.encode(bytes)
+    ),
+    DocumentSourceKind::String(value) => format!(
+        "data:{mime_type};flow-like-source=string;base64,{}",
+        BASE64_STANDARD.encode(value.as_bytes())
+    ),
+    DocumentSourceKind::Unknown => String::new(),
+    _ => String::new(),
+}
+```
+
+Flow-Like's history and UI can preserve ordered text, image, audio, video, and document parts; the media a particular model can generate — and what its SDK can replay — still depends on that provider.
+
+## Apps stop being islands
+
+[Apps can now expose selected capabilities to other apps](/blog/app-connections-process-lineage/) through explicit connections and roles. A connected app can call approved events, work with permitted data, and follow links across an end-to-end process without inheriting blanket access to everything else.
+
+Those calls also gain process context: `traceId`, `parentRunId`, and configurable correlation keys let the platform reconstruct a case across app and event boundaries. The admin connection view turns that lineage into a process graph with call chains, cases, and notes instead of leaving it buried in execution logs.
+
+<BlogInteractiveDemo client:only="react" preset="process-lineage" />
+
+When several apps belong together, you can [package them as a **Suite**](/blog/app-suites/). Suites have their own identity, artwork, membership, library shelf, store page, visibility, and governance flow. They start private, member apps go through consent, and public Suites use the same reviewed publication path as apps. That makes it possible to ship a platform made of several focused apps without asking users to discover and assemble the pieces themselves.
+
+[Data Studio grows into the data counterpart](/blog/data-studio-ontologies/) to FlowPilot's board and UI specialists. Remote ontologies can be listed, installed, sampled, queried, and removed. Graph overlays gain better validation, pathfinding, centrality and community analytics, table/schema tools, saved query state, and executable ontology actions. FlowPilot can delegate data work there instead of improvising a query in the chat layer.
+
+Smaller building blocks matter here too: HashMap finally gets a complete typed node surface, directory manifests can efficiently report added, changed, and deleted paths, and runtime variables are easier to configure without exposing secret defaults.
+
+## Faster where you actually feel it
+
+The most consequential performance work in 0.1.6 is not a micro-optimization. [On desktop, offline board synchronization and merging](/blog/board-sync-performance/) move into a Web Worker, taking deep comparisons and structured cloning off the UI thread. An IndexedDB lineage record remembers the last remote revision applied to each board, so an old snapshot cannot quietly overwrite newer local work.
+
+<BlogInteractiveDemo client:only="react" preset="board-sync" />
+
+On the canvas, selectors get narrower, state updates get batched, components get memoized, and FlowPilot stops forcing unrelated graph work to rerender. Hidden WebKit surfaces are handled more carefully. Developer-node registry rebuilds become more stable. Large boards and an open assistant can finally coexist without fighting over every frame.
+
+The rest of the app gets simpler too. The new [Home and Explore experience](/blog/home-explore-redesign/) starts with FlowPilot, adds category rails and top charts, and brings apps and packages into one Explore hub. “Library” is now the much clearer “My Apps.” Onboarding has been rebuilt around the product that exists today, not the one from several releases ago.
+
+And documentation closes the loop. The catalog now generates more than 1,600 node pages directly from source, including its sidebar and FlowScript signatures. A node's info panel can [deep-link to the exact matching page](/blog/node-docs-deep-linking/) with the same deterministic slug rules as the generator. Search moves to Pagefind, so “we documented it” is much closer to “you can find it.”
+
+## The quiet fixes are doing loud work
+
+Big releases are remembered for the new surfaces. They are trusted because the old surfaces stop surprising you.
+
+Among the 49 issues closed after 0.1.5:
+
+- Pinned apps and profile shortcuts now synchronize correctly, and templates can be opened or deleted from the grid ([#619](https://github.com/Rheosoph/flow-like/issues/619)).
+- Windows builds are back on a stable toolchain, and the HEVC decoder no longer blocks the caller thread ([#627](https://github.com/Rheosoph/flow-like/issues/627)).
+- Onboarding cards report real model download sizes ([#637](https://github.com/Rheosoph/flow-like/issues/637)).
+- The governance board uses the space it is given ([#643](https://github.com/Rheosoph/flow-like/issues/643)).
+- Offline user-scoped databases appear in Data Studio again ([#649](https://github.com/Rheosoph/flow-like/issues/649)).
+- Mobile push stays enabled, and opening a notification no longer trips over marking it read ([#652](https://github.com/Rheosoph/flow-like/issues/652), [#657](https://github.com/Rheosoph/flow-like/issues/657)).
+- Pages no longer leak from one board into another ([#664](https://github.com/Rheosoph/flow-like/issues/664)).
+- Package auto-update works again ([#599](https://github.com/Rheosoph/flow-like/issues/599)).
+- Runtime-configured paths show the path selector they were missing ([#694](https://github.com/Rheosoph/flow-like/issues/694)).
+- Getting or buying an app actually adds it to the active profile ([#707](https://github.com/Rheosoph/flow-like/issues/707)).
+- [Local run storage is visible, categorized, and governed by retention rules](/blog/local-storage-retention/) instead of growing forever ([#702](https://github.com/Rheosoph/flow-like/issues/702)).
+
+The release pipeline got the same treatment. Installer uploads retry and verify digests, updater metadata is finalized only after all primary platform artifacts exist, and a failed upload can recover without throwing away a successful multi-hour build.
+
+## The complete engineering ledger
+
+The narrative above is intentionally about outcomes. For the people who want every receipt, this is the complete product PR and issue ledger we audited between the 0.1.5 content boundary and release-candidate commit `7a7b74fe`.
+
+<details>
+<summary><strong>Show all 48 product PRs, four direct commits, six alpha promotions, and 49 closed issues</strong></summary>
+
+**FlowPilot, FlowScript, and chat**
+
+- [#662 — Batch board updates and state management](https://github.com/Rheosoph/flow-like/pull/662) ([issue #614](https://github.com/Rheosoph/flow-like/issues/614))
+- [#676 — Better FlowPilot support for pages and databases](https://github.com/Rheosoph/flow-like/pull/676) ([issue #668](https://github.com/Rheosoph/flow-like/issues/668))
+- [#680 — Platform-level FlowPilot and global chat](https://github.com/Rheosoph/flow-like/pull/680) ([issue #534](https://github.com/Rheosoph/flow-like/issues/534))
+- [#683 — FlowScript inside the workflow view](https://github.com/Rheosoph/flow-like/pull/683) ([issue #674](https://github.com/Rheosoph/flow-like/issues/674))
+- [#685 — Claude Code as a FlowPilot backend](https://github.com/Rheosoph/flow-like/pull/685) ([issue #684](https://github.com/Rheosoph/flow-like/issues/684))
+- [#701 — Inline pages and widgets in chat](https://github.com/Rheosoph/flow-like/pull/701) ([issue #691](https://github.com/Rheosoph/flow-like/issues/691))
+- [#711 — Board sync and FlowPilot optimization](https://github.com/Rheosoph/flow-like/pull/711) ([issue #699](https://github.com/Rheosoph/flow-like/issues/699))
+- [#713 — Richer simple chat and correct usage attribution](https://github.com/Rheosoph/flow-like/pull/713) ([issue #692](https://github.com/Rheosoph/flow-like/issues/692))
+- [#717 — Multimodal response round-tripping](https://github.com/Rheosoph/flow-like/pull/717) ([issue #602](https://github.com/Rheosoph/flow-like/issues/602))
+
+**A2UI and end-user experience**
+
+- [#635 — Schema-driven struct and generic variable editors](https://github.com/Rheosoph/flow-like/pull/635) ([issue #631](https://github.com/Rheosoph/flow-like/issues/631))
+- [#636 — User Profile A2UI element](https://github.com/Rheosoph/flow-like/pull/636) ([issue #622](https://github.com/Rheosoph/flow-like/issues/622))
+- [#644 — Correct onboarding model sizes](https://github.com/Rheosoph/flow-like/pull/644) ([issue #637](https://github.com/Rheosoph/flow-like/issues/637))
+- [#645 — Board references, variable handling, and governance layout](https://github.com/Rheosoph/flow-like/pull/645) ([issue #643](https://github.com/Rheosoph/flow-like/issues/643))
+- [#663 — A2UI Diff View](https://github.com/Rheosoph/flow-like/pull/663) ([issue #653](https://github.com/Rheosoph/flow-like/issues/653))
+- [#669 — Correct page scoping between boards](https://github.com/Rheosoph/flow-like/pull/669) ([issue #664](https://github.com/Rheosoph/flow-like/issues/664))
+- [#667 — Voice recorder, playback, and visualizers](https://github.com/Rheosoph/flow-like/pull/667) ([issue #660](https://github.com/Rheosoph/flow-like/issues/660))
+- [#675 — Interactive Calendar and Gantt elements](https://github.com/Rheosoph/flow-like/pull/675) ([issue #654](https://github.com/Rheosoph/flow-like/issues/654))
+- [#695 — Home, Explore, and navigation redesign](https://github.com/Rheosoph/flow-like/pull/695) ([issue #686](https://github.com/Rheosoph/flow-like/issues/686))
+- [#714 — New onboarding](https://github.com/Rheosoph/flow-like/pull/714) ([issue #708](https://github.com/Rheosoph/flow-like/issues/708))
+
+**Local AI, media, and providers**
+
+- [#646 — Atlas Cloud OpenAI-compatible provider (merge commit; PR metadata no longer resolves)](https://github.com/Rheosoph/flow-like/commit/16ca7c1efb24e57cc9fd1ce498c6bd505d0c11ed)
+- [#661 — Pure-Rust video and media nodes](https://github.com/Rheosoph/flow-like/pull/661) ([issue #612](https://github.com/Rheosoph/flow-like/issues/612))
+- [#671 — Local speech-to-text and model-stack updates](https://github.com/Rheosoph/flow-like/pull/671) ([issue #670](https://github.com/Rheosoph/flow-like/issues/670))
+- [#677 — MiniMax M3 provider](https://github.com/Rheosoph/flow-like/pull/677)
+- [#703 — Face ID and ONNX Runtime upgrades](https://github.com/Rheosoph/flow-like/pull/703) ([#682](https://github.com/Rheosoph/flow-like/issues/682), [#687](https://github.com/Rheosoph/flow-like/issues/687))
+
+**Data, app composition, and collaboration**
+
+- [#639 — Read-only project user nodes](https://github.com/Rheosoph/flow-like/pull/639) ([issue #623](https://github.com/Rheosoph/flow-like/issues/623))
+- [#688 — App permissions, connections, and process lineage](https://github.com/Rheosoph/flow-like/pull/688) ([#336](https://github.com/Rheosoph/flow-like/issues/336), [#600](https://github.com/Rheosoph/flow-like/issues/600))
+- [#697 — Complete typed HashMap nodes](https://github.com/Rheosoph/flow-like/pull/697) ([issue #690](https://github.com/Rheosoph/flow-like/issues/690))
+- [#696 — Directory diff and manifest nodes](https://github.com/Rheosoph/flow-like/pull/696) ([issue #693](https://github.com/Rheosoph/flow-like/issues/693))
+- [#698 — Runtime path configuration](https://github.com/Rheosoph/flow-like/pull/698) ([issue #694](https://github.com/Rheosoph/flow-like/issues/694))
+- [#715 — Graph overlays, ontology, and Data Studio](https://github.com/Rheosoph/flow-like/pull/715) ([issue #704](https://github.com/Rheosoph/flow-like/issues/704))
+- [#716 — App groups and publishable Suites](https://github.com/Rheosoph/flow-like/pull/716) ([issue #679](https://github.com/Rheosoph/flow-like/issues/679))
+
+**Documentation and developer experience**
+
+- [#621 — Automatic node documentation](https://github.com/Rheosoph/flow-like/pull/621) ([issue #311](https://github.com/Rheosoph/flow-like/issues/311))
+- [#640 — MarkItDown dependency update](https://github.com/Rheosoph/flow-like/pull/640) ([issue #604](https://github.com/Rheosoph/flow-like/issues/604))
+- [#648 — Node-to-doc deep links and docs search](https://github.com/Rheosoph/flow-like/pull/648) ([issue #647](https://github.com/Rheosoph/flow-like/issues/647))
+- [#673 — README overhaul](https://github.com/Rheosoph/flow-like/pull/673) ([issue #672](https://github.com/Rheosoph/flow-like/issues/672))
+
+**Reliability, performance, and lifecycle**
+
+- [#624 — Pinning, shortcuts, templates, and RTSP groundwork](https://github.com/Rheosoph/flow-like/pull/624) ([issue #619](https://github.com/Rheosoph/flow-like/issues/619))
+- [#626 — Apple media framework dependencies](https://github.com/Rheosoph/flow-like/pull/626)
+- [#628 — Stable Windows release build environment](https://github.com/Rheosoph/flow-like/pull/628) ([issue #627](https://github.com/Rheosoph/flow-like/issues/627))
+- [#633 — Threaded Windows HEVC decoder](https://github.com/Rheosoph/flow-like/pull/633) (follow-up to the [#627 Windows build work](https://github.com/Rheosoph/flow-like/issues/627))
+- [#642 — General dependency refresh](https://github.com/Rheosoph/flow-like/pull/642) ([issue #638](https://github.com/Rheosoph/flow-like/issues/638))
+- [#650 — Offline user databases and local usage reporting](https://github.com/Rheosoph/flow-like/pull/650) ([issue #649](https://github.com/Rheosoph/flow-like/issues/649))
+- [#651 — Execution usage timestamps and reporting](https://github.com/Rheosoph/flow-like/pull/651)
+- [#655 — Reliable mobile push settings](https://github.com/Rheosoph/flow-like/pull/655) ([issue #652](https://github.com/Rheosoph/flow-like/issues/652))
+- [#658 — Notification read and route handling](https://github.com/Rheosoph/flow-like/pull/658) ([issue #657](https://github.com/Rheosoph/flow-like/issues/657))
+- [#665 — Flow and FlowPilot render performance](https://github.com/Rheosoph/flow-like/pull/665) ([issue #659](https://github.com/Rheosoph/flow-like/issues/659))
+- [#666 — Package auto-update and developer registry stability](https://github.com/Rheosoph/flow-like/pull/666) ([issue #599](https://github.com/Rheosoph/flow-like/issues/599))
+- [#706 — Local storage overview, retention, and cleanup](https://github.com/Rheosoph/flow-like/pull/706) ([issue #702](https://github.com/Rheosoph/flow-like/issues/702))
+- [#709 — Add acquired apps to the active profile](https://github.com/Rheosoph/flow-like/pull/709) ([issue #707](https://github.com/Rheosoph/flow-like/issues/707))
+
+**Direct-to-`dev` commits**
+
+- [`c9939284` — README stars badge](https://github.com/Rheosoph/flow-like/commit/c99392840b1ae6945989e1eb67ad37c7a7caa104)
+- [`22f7fdc3` — lock-aware database schema push](https://github.com/Rheosoph/flow-like/commit/22f7fdc307d24cfb64a70824fcff87279d5ff449)
+- [`a7958634` — embedding-model and proxy configuration](https://github.com/Rheosoph/flow-like/commit/a795863419639a48a8f765ae8f94239454a4c363)
+- [`7a7b74fe` — recoverable release uploads and finalized updater metadata](https://github.com/Rheosoph/flow-like/commit/7a7b74fef62058967470e815aa8342132982f4b5)
+
+**`alpha` promotions (no additional candidate-tree delta)**
+
+- [#625](https://github.com/Rheosoph/flow-like/pull/625), [#629](https://github.com/Rheosoph/flow-like/pull/629), [#630](https://github.com/Rheosoph/flow-like/pull/630), [#632](https://github.com/Rheosoph/flow-like/pull/632), [#718](https://github.com/Rheosoph/flow-like/pull/718), and final promotion [#721](https://github.com/Rheosoph/flow-like/pull/721)
+
+**Release-window backlog closures without a unique 0.1.6 code delta**
+
+- [#480 — Bump LlamaCPP](https://github.com/Rheosoph/flow-like/issues/480), [#481 — Add MiniCPM-o-4.5](https://github.com/Rheosoph/flow-like/issues/481), [#482 — Add Qwen3-TTS](https://github.com/Rheosoph/flow-like/issues/482), and [#483 — Implement KugelAudio](https://github.com/Rheosoph/flow-like/issues/483) were manually closed together during the cycle. GitHub records no closing PR or commit for them, so they are counted as issue closures here — not claimed as new 0.1.6 implementations.
+
+Every one of the **49 post-tag issue closures** is linked above: #311, #336, #480–#483, #534, #599, #600, #602, #604, #612, #614, #619, #622, #623, #627, #631, #637, #638, #643, #647, #649, #652–#654, #657, #659, #660, #664, #668, #670, #672, #674, #679, #682, #684, #686, #687, #690–#694, #699, #702, #704, #707, and #708.
+
+Eight issues that GitHub's day-level search also returns for June 18 are deliberately excluded: [#69](https://github.com/Rheosoph/flow-like/issues/69), [#85](https://github.com/Rheosoph/flow-like/issues/85), [#152](https://github.com/Rheosoph/flow-like/issues/152), [#277](https://github.com/Rheosoph/flow-like/issues/277), [#279](https://github.com/Rheosoph/flow-like/issues/279), [#280](https://github.com/Rheosoph/flow-like/issues/280), [#476](https://github.com/Rheosoph/flow-like/issues/476), and [#605](https://github.com/Rheosoph/flow-like/issues/605) were closed before the 0.1.5 tag was cut and belong to the prior content boundary.
+
+</details>
+
+You can inspect the [frozen `beta-v0.1.5...7a7b74fe` diff on GitHub](https://github.com/Rheosoph/flow-like/compare/beta-v0.1.5...7a7b74fef62058967470e815aa8342132982f4b5).
+
+## Get ready for 0.1.6
+
+The 0.1.6 release candidate audited here is commit `7a7b74fe`, promoted to the `alpha` branch as `75d5dc54`; the public `beta-v0.1.6` tag and installers are not live yet. Once the rollout starts, the web app will update automatically and desktop builds for macOS, Windows, and Linux will appear on the [download page](/download/). The same core still runs locally and offline.
+
+If you want to understand a feature before using it, start in the [documentation](https://docs.flow-like.com). If you want to inspect the implementation, improve it, or tell us exactly where it hurts, come to [GitHub](https://github.com/Rheosoph/flow-like). For demos, questions, and gloriously weird app ideas, join us on [Discord](https://discord.com/invite/mdBA9kMjFJ).
+
+0.1.6 is a large release. The important part is not how many things landed. It is that they now reinforce each other: **flows become code, code becomes safe agent edits, agent edits become live apps, and live apps can finally work together.**
+
+That is the platform we have been trying to build.

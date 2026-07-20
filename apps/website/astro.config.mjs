@@ -44,6 +44,13 @@ export default defineConfig({
 		compressor(),
 	],
 	vite: {
+		// React's jsx-dev-runtime is conditional on NODE_ENV. Keep Vite's client,
+		// SSR, and Astro dependency caches physically separate so a production
+		// pre-bundle can never be reused by development transforms that call jsxDEV.
+		cacheDir:
+			process.env.NODE_ENV === "production"
+				? "node_modules/.vite-production"
+				: "node_modules/.vite-development",
 		define: {
 			"process.env": {},
 		},

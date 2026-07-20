@@ -420,6 +420,22 @@ interface DatabaseOverviewProps {
 	searchParams: ReadonlyURLSearchParams;
 }
 
+const DATA_STUDIO_VIEWS = [
+	"overview",
+	"objects",
+	"model",
+	"actions",
+	"sharing",
+	"sources",
+	"queries",
+] as const;
+
+type DataStudioView = (typeof DATA_STUDIO_VIEWS)[number];
+
+function isDataStudioView(view: string | null): view is DataStudioView {
+	return DATA_STUDIO_VIEWS.includes(view as DataStudioView);
+}
+
 interface Table {
 	name: string;
 	rowCount?: number;
@@ -434,21 +450,18 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	const invalidate = useInvalidateInvoke();
 	const router = useRouter();
 	const pathname = usePathname();
-	const validViews = [
-		"overview",
-		"objects",
-		"model",
-		"actions",
-		"sharing",
-		"sources",
-		"queries",
-	] as const;
 	const requestedView = searchParams.get("view");
-	const activeView = validViews.includes(
-		requestedView as (typeof validViews)[number],
-	)
-		? (requestedView as (typeof validViews)[number])
+	const urlView: DataStudioView = isDataStudioView(requestedView)
+		? requestedView
 		: "overview";
+	const [activeView, setActiveViewState] = useState<DataStudioView>(urlView);
+
+	// Keep back/forward navigation and copied deep links authoritative. Tab clicks
+	// update this same state synchronously below so the controlled Radix tabs do
+	// not snap back while Next is still publishing the new search parameters.
+	useEffect(() => {
+		setActiveViewState(urlView);
+	}, [urlView]);
 	const [actionBoardsRequested, setActionBoardsRequested] = useState(false);
 	const tables = useInvoke(backend.dbState.listTables, backend.dbState, [
 		appId,
@@ -575,6 +588,8 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 
 	const setActiveView = useCallback(
 		(view: string) => {
+			if (!isDataStudioView(view)) return;
+			setActiveViewState(view);
 			const params = new URLSearchParams(searchParams?.toString() ?? "");
 			if (view === "overview") params.delete("view");
 			else params.set("view", view);

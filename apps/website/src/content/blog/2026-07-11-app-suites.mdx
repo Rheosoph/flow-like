@@ -1,0 +1,75 @@
+---
+title: "Meet Suites: Ship a Platform, Not a Pile of Apps"
+description: "Suites package related Flow-Like apps into one governed, discoverable product while preserving each app's ownership, permissions, visibility, and lifecycle."
+date: 2026-07-11
+tags: ["suites", "app-groups", "governance", "publishing", "marketplace", "flow-like"]
+cover: "/images/app-suites.jpg"
+draft: false
+---
+
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
+Focused apps are easier to build, secure, and evolve. They are also easy to scatter across a library until the product they form together becomes invisible.
+
+**Suites** solve the presentation layer of that problem. A Suite is a curated, branded collection of Flow-Like apps that appears as one platform in the library and store. It has its own identity, membership, visibility, and review flow — while every member app keeps its own team, permissions, data boundary, and lifecycle.
+
+That distinction is the feature: a Suite groups apps without turning them into one giant app.
+
+<BlogInteractiveDemo client:only="react" preset="suite-console" />
+
+## One product identity, several focused apps
+
+A Suite gets the same kind of storefront identity as an app: name, icon, banner, description, use-case label, and tags, with localized metadata underneath. Its anchor app supplies the governing team and acts as the branding fallback until the Suite has artwork of its own.
+
+Members have an explicit order, so the Suite is curated rather than an arbitrary tag query. One app is marked as the primary member; the rest can stay as narrow as they need to be — admin console, ingestion service, reporting workspace, customer portal — while the Suite explains the product they form together.
+
+In the library, Suite shelves gather installed member apps into a recognizable row, with a mosaic drawn from their icons. In Explore, public Suites appear under **Suites & Platforms** and open a dedicated detail page with their branding and published member apps. Users discover the system first, then choose the part they need.
+
+<BlogInteractiveDemo client:only="react" preset="suite-library" />
+
+## Membership requires consent
+
+The anchor app's owners can propose apps for a Suite, but ownership of the Suite is not ownership of every app inside it.
+
+An app joins immediately when the person adding it already owns or administers that app, or when an active App Connection establishes an existing relationship. Otherwise, Flow-Like creates a pending invitation for the member app's owner to accept. A member can leave later. Removing or leaving a Suite never deletes the app.
+
+The model stays intentionally small:
+
+```text
+Suite
+├── anchor app · PRIMARY · ACTIVE
+├── reporting app · MEMBER · ACTIVE
+└── partner portal · MEMBER · PENDING
+```
+
+Most importantly, this membership is a **presentation grant only**. It does not let one member read another member's files, call its events, or query its database. For runtime cooperation, use [App Connections](/blog/app-connections-process-lineage/) and grant a role explicitly. A polished platform card should never become a side door around authorization.
+
+## Publishing is a Suite-level decision
+
+Every Suite starts private. Changing it to a public visibility goes through the same publication-review system as an app, but the request targets the Suite itself. Only the anchor app's owners and admins can edit the Suite identity or request publication.
+
+The review pipeline understands both targets without conflating them: a publication request must point to exactly one app or exactly one Suite. That sounds like a backend detail, but it prevents ambiguous reviews and keeps the audit chain attached to the governing anchor app.
+
+Where the EU AI Act gate is enabled, the Suite's risk posture is the union of its active members. Every active app needs a submitted, non-blocked assessment before the Suite can be published; a member that declares a prohibited practice blocks the bundle. Reviewers get a member-readiness view instead of having to audit an opaque package.
+
+Publication does not silently rewrite member visibility. If a public Suite contains an app that is still private, the membership remains, but that app stays out of the public store until it is published in its own right. The Suite can describe the platform without overruling the decisions of its members.
+
+<BlogInteractiveDemo client:only="react" preset="suite-publication" />
+
+## Governance continues after launch
+
+Suites have a lifecycle separate from the apps inside them:
+
+- **Active** Suites appear wherever their visibility permits.
+- **Inactive** Suites are hidden but keep their curation and members.
+- **Archived** Suites retire from the store while remaining recoverable and read-only.
+
+Deleting a Suite removes its branding and curation, not its apps. Archiving a member app does not collapse the rest of the platform. Each boundary can move at its own pace.
+
+Platform administrators get a dedicated Suite publication queue with member status and readiness in context. App owners get the Suite console inside team settings. Users get a cleaner library and a store that can finally represent multi-app products. Those are three views of the same governed object, not three disconnected conventions.
+
+## Composition without coupling
+
+Suites give Flow-Like a missing level of product architecture. Boards compose nodes. Apps compose boards, pages, events, and data. Suites compose apps — but only at the identity and discovery layer. [Connections](/blog/app-connections-process-lineage/) handle trusted runtime calls; [Data Studio](/blog/data-studio-ontologies/) handles shared semantic contracts. Each mechanism has one job and a visible consent boundary.
+
+The work landed in [PR #716](https://github.com/Rheosoph/flow-like/pull/716) for [issue #679](https://github.com/Rheosoph/flow-like/issues/679). Suites ship as part of [Flow-Like Beta v0.1.6](/blog/beta-0-1-6/).
