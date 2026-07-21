@@ -628,10 +628,15 @@ Actionable empty-board edits:
   with both arms wired from its true/false pins, and the statement after the `if` continues
   correctly (fan-in from the arm ends and any untaken pin). Loops use the exact loop-node call
   form: `for (const item of controlForEach({ array: items })) { ... }`.
-- Do not add trailing labels/comments to new `if` branches unless the condition is itself a
-  catalog/control-node call. `if (someBoolean) { // exec_out ... }` triggers
-  `labelled branch requires a call condition`; write plain `if (someBoolean) { ... } else { ... }`
-  or use exact control-node calls from `get_declarations`.
+- A trailing comment on an `if` brace is an execution-pin LABEL only when the condition is itself
+  a catalog/control-node call. On a boolean condition it is ordinary text and is kept as the first
+  comment inside the branch body — it does NOT name an exec pin, so do not use it to steer
+  execution. To wire specific arms, use an exact control-node call from `get_declarations` and
+  label its arms.
+- `!` negates a boolean: `if (!ready) { ... }`. It is a real operator now, so it also works with an
+  `else`. A loop head is not a boolean — `while (!done)` is rejected; loops take a loop-node call
+  such as `controlForEach({ array: items })`.
+- There is no unary minus: write `0 - x`. A negative literal like `-1` is fine.
 
 ### Compiler-verified microexamples
 These small examples are kept parseable and reconcilable in CI against the generated catalog

@@ -370,7 +370,7 @@ export function registerFlowScriptLanguage(monaco: Monaco): void {
 			"|",
 		],
 		symbols: /[=><!~?:&|+\-*/^%]+/,
-		escapes: /\\(?:["\\/nrt]|u[0-9A-Fa-f]{4})/,
+		escapes: /\\(?:['"\\/bfnrt]|u[0-9A-Fa-f]{4})/,
 		tokenizer: {
 			root: [
 				// Anchor comments carry round-trip identity — highlight distinctly.

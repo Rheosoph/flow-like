@@ -731,3 +731,160 @@ fn fixture_dashboard_idempotent() {
 fn fixture_dashboard_anchored_idempotent() {
     assert_idempotent(FIXTURE_DASHBOARD_ANCHORED, &anchored_opts());
 }
+
+// ---- anchors must be trailing (C1) -------------------------------------------------------
+
+/// Anchors (`//@n:` / `//@v:` / `//@l:`) are the ONLY stable identity across a round-trip.
+/// `take_anchor` used to grab the next anchor comment regardless of position, so a statement
+/// swallowed the anchor authored on the FOLLOWING line: reconcile then rewrote that node with the
+/// wrong statement's content, created a duplicate for the statement whose anchor was taken, and
+/// reported the original as deleted.
+#[test]
+fn own_line_anchor_is_not_stolen_by_the_previous_statement() {
+    let ast = parse(
+        "eventsSimple() {\n    const a = foo({ x: 1 })\n    //@n:NODE_B\n    const b = bar({ y: 2 })\n}\n",
+    )
+    .expect("parses");
+    let rendered = render(&ast, &anchored_opts());
+    assert!(
+        !rendered.contains("foo({ x: 1 })   //@n:NODE_B"),
+        "the anchor on the next line must not attach to the previous statement:\n{rendered}"
+    );
+}
+
+/// The renderer emits a board comment whose text happens to look like an anchor as
+/// `// @n:X` (space after `//`). Parsing that must not consume it as an anchor, or the line is
+/// silently converted into identity metadata and the comment disappears.
+#[test]
+fn renderer_emitted_comment_containing_anchor_text_round_trips() {
+    assert_idempotent(
+        "eventsSimple() {\n    // @n:X\n    logInfo({ message: \"hi\" })\n}\n",
+        &anchored_opts(),
+    );
+}
+
+/// A fan-out body contains nothing but labelled arms, and `BranchArm` has no anchor field, so an
+/// anchor before the first arm is unambiguously the branch's. It stays accepted on its own line
+/// and is re-rendered trailing — without this exemption, currently-parsing documents would fail
+/// with `expected identifier, found Comment(...)`.
+#[test]
+fn branch_fanout_keeps_an_anchor_on_the_line_after_the_brace() {
+    for source in [
+        "eventsSimple() {\n    httpFetch({ request: r }) {\n//@n:F\n        execSuccess: {\n            logInfo({ message: \"ok\" })\n        }\n    }\n}\n",
+        "eventsSimple() {\n    const h = httpFetch({ request: r })\n    h {\n//@n:B\n        execSuccess: {\n            logInfo({ message: \"ok\" })\n        }\n    }\n}\n",
+    ] {
+        let ast = parse(source).expect("fan-out parses");
+        let rendered = render(&ast, &anchored_opts());
+        assert!(
+            rendered.contains("//@n:F") || rendered.contains("//@n:B"),
+            "the branch anchor must survive:\n{rendered}"
+        );
+    }
+}
+
+/// The positional check is byte-based, not `Token::line`-based: a multi-line string literal
+/// records its START line, so a line comparison would wrongly reject a genuinely trailing anchor
+/// after one. Guards against a "simplification" back to `Token::line`.
+#[test]
+fn trailing_anchor_after_a_multiline_string_is_still_taken() {
+    let ast = parse("eventsSimple() {\n    const a = foo({ x: \"one\ntwo\" })   //@n:KEEP\n}\n")
+        .expect("parses");
+    let rendered = render(&ast, &anchored_opts());
+    assert!(
+        rendered.contains("//@n:KEEP"),
+        "a trailing anchor after a multi-line string must still be taken:\n{rendered}"
+    );
+}
+
+// ---- escapes, unary `!`, `else if` (D-series) --------------------------------------------
+
+/// `\b`/`\f` must lex: a `Literal::Json` span is re-emitted verbatim after serde_json validates
+/// it, and the lexer runs over the whole file first — so without them a JSON default that would
+/// round-trip byte-exactly failed at lex time.
+#[test]
+fn accepts_json_escape_set_and_single_quote() {
+    for text in ["\"a\\bb\"", "\"a\\fb\"", "\"it\\'s\"", "\"a\\/b\""] {
+        let source = format!("eventsSimple() {{\n    logInfo({{ message: {text} }})\n}}\n");
+        parse(&source).unwrap_or_else(|e| panic!("{text} must lex: {e:?}"));
+    }
+}
+
+/// `\'` denotes a character that needs no escape, so it normalizes away — same as `\/` and
+/// `\uXXXX` already do. Pinned so the normalization is contractual, not accidental.
+#[test]
+fn escaped_single_quote_normalizes_to_a_bare_apostrophe() {
+    let ast = parse("eventsSimple() {\n    logInfo({ message: \"it\\'s\" })\n}\n").expect("parses");
+    let rendered = render(&ast, &RenderOptions::default());
+    assert!(rendered.contains("\"it's\""), "{rendered}");
+}
+
+/// Unknown escapes stay a HARD error. Passing them through would silently turn a regex `"\d+"`
+/// into `"d+"`, which applies cleanly and fails at run time.
+#[test]
+fn rejects_unknown_escape_so_regex_backslashes_stay_loud() {
+    for text in ["\"\\d+\"", "\"a\\zb\""] {
+        let source = format!("eventsSimple() {{\n    logInfo({{ message: {text} }})\n}}\n");
+        assert!(parse(&source).is_err(), "{text} must stay a hard error");
+    }
+}
+
+/// `if (!(cond)) { … }` is the renderer's own single-arm form and must be byte-stable.
+#[test]
+fn renderer_negated_single_arm_form_is_a_fixpoint() {
+    assert_idempotent(
+        "eventsSimple() {\n    if (!(flag)) {\n        logInfo({ message: \"no\" })\n    }\n}\n",
+        &RenderOptions::default(),
+    );
+}
+
+/// `if (!c) { } else { }` was a HARD ERROR (`expected Colon, found LParen`). It now parses, with
+/// the negation carried by a real `boolNot` node because both arms exist.
+#[test]
+fn negated_condition_with_else_parses_and_is_a_fixpoint() {
+    let source = "eventsSimple() {\n    if (boolNot({ boolean: flag })) {\n        logInfo({ message: \"a\" })\n    } else {\n        logInfo({ message: \"b\" })\n    }\n}\n";
+    assert_idempotent(source, &RenderOptions::default());
+    let ast = parse("eventsSimple() {\n    if (!flag) {\n        logInfo({ message: \"a\" })\n    } else {\n        logInfo({ message: \"b\" })\n    }\n}\n")
+        .expect("`if (!c) {} else {}` must parse");
+    assert_eq!(render(&ast, &RenderOptions::default()), source);
+}
+
+/// `else if` desugars to the nested ladder the renderer emits.
+#[test]
+fn else_if_desugars_to_the_nested_ladder() {
+    let ast = parse("eventsSimple() {\n    if (a) {\n        logInfo({ message: \"a\" })\n    } else if (b) {\n        logInfo({ message: \"b\" })\n    }\n}\n")
+        .expect("`else if` must parse");
+    let rendered = render(&ast, &RenderOptions::default());
+    assert!(rendered.contains("} else {"), "{rendered}");
+    assert!(!rendered.contains("else if"), "{rendered}");
+    assert_eq!(
+        render(
+            &parse(&rendered).expect("reparse"),
+            &RenderOptions::default()
+        ),
+        rendered
+    );
+}
+
+/// A loop head must be a loop-node call. `boolNot` IS an `Expr::Call` but has zero exec outputs,
+/// so accepting it built a node whose body was never wired, with no diagnostics at all.
+#[test]
+fn boolean_loop_head_is_rejected_with_an_actionable_message() {
+    for source in [
+        "eventsSimple() {\n    while (!done) {\n        logInfo({ message: \"x\" })\n    }\n}\n",
+        "eventsSimple() {\n    for (const v of !items) {\n        logInfo({ message: \"x\" })\n    }\n}\n",
+    ] {
+        let err = parse(source).expect_err("a boolean loop head must be rejected");
+        assert!(err.message.contains("loop-node call"), "{:?}", err.message);
+    }
+}
+
+/// `-x` has no catalog lowering, so it stays an error — but an actionable one instead of a
+/// `Debug`-formatted token dump. A negative literal is unaffected.
+#[test]
+fn unary_minus_is_rejected_with_a_workaround_and_negative_literals_still_parse() {
+    let err = parse("eventsSimple() {\n    const a = intAdd({ integer1: -x, integer2: 1 })\n}\n")
+        .expect_err("unary minus must be rejected");
+    assert!(err.message.contains("0 - x"), "{:?}", err.message);
+    parse("eventsSimple() {\n    const a = intAdd({ integer1: -1, integer2: 1 })\n}\n")
+        .expect("a negative literal must still parse");
+}
