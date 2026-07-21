@@ -22,6 +22,7 @@ import {
 } from "../../../../lib/uint8";
 import type { IRemoteEvent } from "../../../../state/backend-state/types";
 import { useUndoRedo } from "../../flow-history";
+import { filterRemoteEventsForNode } from "./remote-event-filter";
 
 const REMOTE_APP_PIN_NAME = "_flow_remote_app_id";
 const REMOTE_EVENT_META_PIN_NAME = "_flow_remote_event_meta";
@@ -37,6 +38,7 @@ export function RemoteEventSelect({
 	appId,
 	boardId,
 	nodeId,
+	nodeName,
 	boardRef,
 	setValue,
 	onPreviewValue,
@@ -46,6 +48,7 @@ export function RemoteEventSelect({
 	appId: string;
 	boardId?: string;
 	nodeId: string;
+	nodeName?: string;
 	boardRef?: RefObject<IBoard | undefined>;
 	setValue: (value: number[] | undefined) => void;
 	onPreviewValue?: (value: number[] | undefined) => void;
@@ -69,12 +72,22 @@ export function RemoteEventSelect({
 	);
 	const targetAppId = normalizeStringValue(remoteAppPin?.default_value);
 
-	const events =
+	const remoteEvents =
 		loadedEvents.targetAppId === targetAppId ? loadedEvents.events : [];
+	const events = filterRemoteEventsForNode(remoteEvents, nodeName);
 	const eventsLoaded = loadedEvents.targetAppId === targetAppId && !loading;
 	const selectedEvent = events.find((event) => event.id === selectedEventId);
+	const selectedRemoteEvent = remoteEvents.find(
+		(event) => event.id === selectedEventId,
+	);
 	const selectedEventMissing =
-		Boolean(selectedEventId) && eventsLoaded && !error && !selectedEvent;
+		Boolean(selectedEventId) && eventsLoaded && !error && !selectedRemoteEvent;
+	const selectedEventUnsupported =
+		Boolean(selectedEventId) &&
+		eventsLoaded &&
+		!error &&
+		Boolean(selectedRemoteEvent) &&
+		!selectedEvent;
 
 	// The meta pin caches the full event detail (including its name), so the
 	// selected event's name stays visible even before the events list is loaded.
@@ -93,7 +106,8 @@ export function RemoteEventSelect({
 			return "";
 		}
 	})();
-	const selectedEventLabel = selectedEvent?.name || cachedEventName;
+	const selectedEventLabel =
+		selectedEvent?.name || selectedRemoteEvent?.name || cachedEventName;
 
 	useEffect(() => {
 		if (!appId || !targetAppId || !open) return;
@@ -266,6 +280,12 @@ export function RemoteEventSelect({
 									<span className="text-muted-foreground">
 										{" "}
 										(not found in project)
+									</span>
+								)}
+								{selectedEventUnsupported && (
+									<span className="text-muted-foreground">
+										{" "}
+										(not available for this node)
 									</span>
 								)}
 							</SelectItem>

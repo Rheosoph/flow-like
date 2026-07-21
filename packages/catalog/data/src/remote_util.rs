@@ -3,7 +3,7 @@
 //! behalf of the current app.
 
 use flow_like::flow::execution::context::ExecutionContext;
-use flow_like_types::{PROXY_EVENT_AUTHORIZATION_HEADER, Value, json::json, reqwest};
+use flow_like_types::{PROXY_EVENT_AUTHORIZATION_HEADER, Value, async_trait, json::json, reqwest};
 use std::sync::{Arc, OnceLock};
 
 use flow_like::credentials::SharedCredentials;
@@ -728,6 +728,31 @@ pub(crate) struct SseOutcome {
     pub(crate) chat_stream: Option<Value>,
 }
 
+/// One decoded event from a remote invocation's SSE response. Keeping this
+/// transport-level shape separate from [`SseOutcome`] lets streaming callers
+/// react to every chat update while final-only callers continue to use the
+/// collected outcome.
+#[derive(Debug, Clone)]
+pub(crate) struct RemoteSseEvent {
+    pub(crate) event_type: String,
+    pub(crate) payload: Value,
+    pub(crate) run_id: Option<String>,
+}
+
+#[async_trait]
+pub(crate) trait RemoteSseEventHandler: Send {
+    async fn on_event(&mut self, event: &RemoteSseEvent) -> flow_like_types::Result<()>;
+}
+
+struct IgnoreRemoteSseEvents;
+
+#[async_trait]
+impl RemoteSseEventHandler for IgnoreRemoteSseEvents {
+    async fn on_event(&mut self, _event: &RemoteSseEvent) -> flow_like_types::Result<()> {
+        Ok(())
+    }
+}
+
 impl SseOutcome {
     pub(crate) fn status_str(&self) -> String {
         self.status.clone().unwrap_or_else(|| "Unknown".to_string())
@@ -759,7 +784,7 @@ impl SseOutcome {
     }
 }
 
-fn apply_sse_frame(frame: &str, outcome: &mut SseOutcome) -> bool {
+fn parse_sse_frame(frame: &str) -> Option<RemoteSseEvent> {
     // SSE concatenates all `data:` fields in one event with a newline. Normalize
     // lone CR line endings too; `str::lines` only handles LF/CRLF.
     let normalized = frame.replace("\r\n", "\n").replace('\r', "\n");
@@ -770,50 +795,60 @@ fn apply_sse_frame(frame: &str, outcome: &mut SseOutcome) -> bool {
         .collect::<Vec<_>>()
         .join("\n");
     if data.is_empty() {
-        return false;
+        return None;
     }
-    let Ok(parsed) = flow_like_types::json::from_str::<Value>(&data) else {
-        return false;
-    };
-    let payload = parsed.get("payload");
-
-    if outcome.run_id.is_none()
-        && let Some(run_id) = parsed
-            .get("run_id")
-            .or_else(|| payload.and_then(|value| value.get("run_id")))
-            .and_then(|value| value.as_str())
-    {
-        outcome.run_id = Some(run_id.to_string());
-    }
-
+    let parsed = flow_like_types::json::from_str::<Value>(&data).ok()?;
+    let payload = parsed.get("payload").cloned().unwrap_or(Value::Null);
+    let run_id = parsed
+        .get("run_id")
+        .or_else(|| payload.get("run_id"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
     let event_type = parsed
         .get("event_type")
         .and_then(|value| value.as_str())
-        .unwrap_or("");
+        .filter(|event_type| !event_type.is_empty())?
+        .to_string();
 
-    match event_type {
+    Some(RemoteSseEvent {
+        event_type,
+        payload,
+        run_id,
+    })
+}
+
+fn apply_sse_event(event: &RemoteSseEvent, outcome: &mut SseOutcome) -> bool {
+    let payload = &event.payload;
+
+    if outcome.run_id.is_none()
+        && let Some(run_id) = &event.run_id
+    {
+        outcome.run_id = Some(run_id.clone());
+    }
+
+    match event.event_type.as_str() {
         "generic_result" if outcome.generic_result.is_none() => {
-            outcome.generic_result = payload.cloned();
+            outcome.generic_result = Some(payload.clone());
         }
         "chat_out" => {
-            outcome.chat_out = payload.cloned();
+            outcome.chat_out = Some(payload.clone());
         }
         "chat_stream" => {
-            outcome.chat_stream = payload.cloned();
+            outcome.chat_stream = Some(payload.clone());
         }
         "error" => {
             outcome.error_message = payload
-                .and_then(|value| value.get("message"))
+                .get("message")
                 .and_then(|value| value.as_str())
                 .map(str::to_string);
         }
         "completed" => {
             outcome.status = payload
-                .and_then(|value| value.get("status"))
+                .get("status")
                 .and_then(|value| value.as_str())
                 .map(str::to_string);
             if let Some(error_message) = payload
-                .and_then(|value| value.get("error_message"))
+                .get("error_message")
                 .and_then(|value| value.as_str())
             {
                 outcome.error_message = Some(error_message.to_string());
@@ -823,6 +858,13 @@ fn apply_sse_frame(frame: &str, outcome: &mut SseOutcome) -> bool {
         _ => {}
     }
     false
+}
+
+#[cfg(test)]
+fn apply_sse_frame(frame: &str, outcome: &mut SseOutcome) -> bool {
+    parse_sse_frame(frame)
+        .map(|event| apply_sse_event(&event, outcome))
+        .unwrap_or(false)
 }
 
 fn finish_sse_outcome(
@@ -869,11 +911,29 @@ pub(crate) async fn invoke_and_collect(
     body: &Value,
     timeout: u64,
 ) -> flow_like_types::Result<SseOutcome> {
+    let mut handler = IgnoreRemoteSseEvents;
+    invoke_and_collect_with_handler(session, url, body, timeout, &mut handler).await
+}
+
+/// Invoke a remote event and visit every decoded SSE event as it arrives while
+/// still collecting the terminal outcome. The handler runs inline to preserve
+/// event order, which is required for chat chunks, embedded widgets and state
+/// updates.
+pub(crate) async fn invoke_and_collect_with_handler<H>(
+    session: &RemoteAppSession,
+    url: &str,
+    body: &Value,
+    timeout: u64,
+    handler: &mut H,
+) -> flow_like_types::Result<SseOutcome>
+where
+    H: RemoteSseEventHandler + ?Sized,
+{
     flow_like_types::tokio::time::timeout(std::time::Duration::from_secs(timeout), async {
         // Include connection establishment and response headers in the
         // advertised invocation deadline, not just the SSE body.
         let response = post_json(session, url, body).await?;
-        collect_sse_outcome(response).await
+        collect_sse_outcome(response, handler).await
     })
     .await
     .map_err(|_| {
@@ -881,7 +941,13 @@ pub(crate) async fn invoke_and_collect(
     })?
 }
 
-async fn collect_sse_outcome(response: reqwest::Response) -> flow_like_types::Result<SseOutcome> {
+async fn collect_sse_outcome<H>(
+    response: reqwest::Response,
+    handler: &mut H,
+) -> flow_like_types::Result<SseOutcome>
+where
+    H: RemoteSseEventHandler + ?Sized,
+{
     use futures::StreamExt;
 
     let mut outcome = SseOutcome {
@@ -924,9 +990,13 @@ async fn collect_sse_outcome(response: reqwest::Response) -> flow_like_types::Re
                     frame_start = pos + delimiter_len;
                     scan_from = frame_start;
 
-                    if apply_sse_frame(&frame, &mut outcome) {
-                        terminal_received = true;
-                        break 'outer;
+                    if let Some(event) = parse_sse_frame(&frame) {
+                        let terminal = apply_sse_event(&event, &mut outcome);
+                        handler.on_event(&event).await?;
+                        if terminal {
+                            terminal_received = true;
+                            break 'outer;
+                        }
                     }
                 }
                 None => {
@@ -954,13 +1024,25 @@ async fn collect_sse_outcome(response: reqwest::Response) -> flow_like_types::Re
     // instead of writing the optional trailing blank line. At EOF the
     // remaining bytes form one last frame and must still be considered.
     if !terminal_received && !buffer.is_empty() {
-        terminal_received = apply_sse_eof_buffer(&buffer, &mut outcome)?;
+        let frame = sse_eof_frame(&buffer)?;
+        if let Some(event) = frame.as_deref().and_then(parse_sse_frame) {
+            terminal_received = apply_sse_event(&event, &mut outcome);
+            handler.on_event(&event).await?;
+        }
     }
 
     finish_sse_outcome(outcome, terminal_received)
 }
 
+#[cfg(test)]
 fn apply_sse_eof_buffer(buffer: &[u8], outcome: &mut SseOutcome) -> flow_like_types::Result<bool> {
+    let Some(frame) = sse_eof_frame(buffer)? else {
+        return Ok(false);
+    };
+    Ok(apply_sse_frame(&frame, outcome))
+}
+
+fn sse_eof_frame(buffer: &[u8]) -> flow_like_types::Result<Option<String>> {
     if buffer.len() > MAX_SSE_FRAME_BYTES {
         return Err(flow_like_types::anyhow!(
             "Remote event stream frame exceeded the {} byte limit",
@@ -971,9 +1053,9 @@ fn apply_sse_eof_buffer(buffer: &[u8], outcome: &mut SseOutcome) -> flow_like_ty
         flow_like_types::anyhow!("Remote event stream contained invalid UTF-8: {}", error)
     })?;
     if frame.trim().is_empty() {
-        return Ok(false);
+        return Ok(None);
     }
-    Ok(apply_sse_frame(frame, outcome))
+    Ok(Some(frame.to_string()))
 }
 
 #[cfg(test)]
@@ -1005,10 +1087,11 @@ fn find_sse_frame_boundary_from(buffer: &[u8], start: usize) -> Option<(usize, u
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_SSE_FRAME_BYTES, RemoteAppSession, SseOutcome, apply_sse_eof_buffer, apply_sse_frame,
-        ensure_remote_connection_fresh, extend_bounded_body, find_sse_frame_boundary,
-        finish_sse_outcome, follow_get_redirect_without_credentials, http_client,
-        http_client_no_redirect, parse_mcp_response_body, remote_connection_refresh_at,
+        MAX_SSE_FRAME_BYTES, RemoteAppSession, RemoteSseEvent, RemoteSseEventHandler, SseOutcome,
+        apply_sse_eof_buffer, apply_sse_frame, collect_sse_outcome, ensure_remote_connection_fresh,
+        extend_bounded_body, find_sse_frame_boundary, finish_sse_outcome,
+        follow_get_redirect_without_credentials, http_client, http_client_no_redirect,
+        parse_mcp_response_body, remote_connection_refresh_at,
         remote_ontology_authorization_cache_key, remote_session_deadlines,
         with_event_registration_headers,
     };
@@ -1024,6 +1107,19 @@ mod tests {
             generic_result: None,
             chat_out: None,
             chat_stream: None,
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingSseHandler {
+        events: Vec<RemoteSseEvent>,
+    }
+
+    #[flow_like_types::async_trait]
+    impl RemoteSseEventHandler for RecordingSseHandler {
+        async fn on_event(&mut self, event: &RemoteSseEvent) -> flow_like_types::Result<()> {
+            self.events.push(event.clone());
+            Ok(())
         }
     }
 
@@ -1187,6 +1283,77 @@ mod tests {
         let oversized = vec![b'x'; MAX_SSE_FRAME_BYTES + 1];
         let error = apply_sse_eof_buffer(&oversized, &mut outcome).unwrap_err();
         assert!(error.to_string().contains("frame exceeded"));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn sse_handler_receives_every_event_in_wire_order() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let body = concat!(
+            "data: {\"event_type\":\"run_initiated\",\"run_id\":\"run-order\",\"payload\":{}}\n\n",
+            "data: {\"event_type\":\"chat_stream_partial\",\"payload\":{\"chunk\":{\"content\":\"first\"}}}\n\n",
+            "data: {\"event_type\":\"chat_local_session\",\"payload\":{\"turn\":1}}\n\n",
+            "data: {\"event_type\":\"chat_stream_partial\",\"payload\":{\"chunk\":{\"content\":\"second\"}}}\n\n",
+            "data: {\"event_type\":\"chat_out\",\"payload\":{\"response\":{\"choices\":[]}}}\n\n",
+            "data: {\"event_type\":\"completed\",\"payload\":{\"status\":\"completed\"}}"
+        );
+        let server = flow_like_types::tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = socket.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+
+            let headers = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            socket.write_all(headers.as_bytes()).await.unwrap();
+            for chunk in body.as_bytes().chunks(17) {
+                socket.write_all(chunk).await.unwrap();
+                flow_like_types::tokio::task::yield_now().await;
+            }
+        });
+
+        let response = http_client()
+            .get(format!("http://{address}/events"))
+            .send()
+            .await
+            .unwrap();
+        let mut handler = RecordingSseHandler::default();
+        let outcome = collect_sse_outcome(response, &mut handler).await.unwrap();
+        server.await.unwrap();
+
+        let event_types = handler
+            .events
+            .iter()
+            .map(|event| event.event_type.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            event_types,
+            [
+                "run_initiated",
+                "chat_stream_partial",
+                "chat_local_session",
+                "chat_stream_partial",
+                "chat_out",
+                "completed",
+            ]
+        );
+        assert_eq!(handler.events[0].run_id.as_deref(), Some("run-order"));
+        assert_eq!(handler.events[1].payload["chunk"]["content"], "first");
+        assert_eq!(handler.events[3].payload["chunk"]["content"], "second");
+        assert_eq!(outcome.run_id.as_deref(), Some("run-order"));
+        assert_eq!(outcome.status.as_deref(), Some("completed"));
+        assert_eq!(outcome.chat_out.unwrap()["response"]["choices"], json!([]));
     }
 
     #[test]

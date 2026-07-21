@@ -1,19 +1,23 @@
-use super::chat_event::Attachment;
+use super::chat_event::{Attachment, ChatAction, ChatUsageStat, ChatWidget, Reasoning, User};
 use crate::data::path::FlowPath;
 use crate::remote_util::{
-    RemoteAppSession, error_for_status, follow_get_redirect_without_credentials,
-    http_client_no_redirect, invoke_and_collect, post_json, remote_app_session, validate_path_id,
+    RemoteAppSession, RemoteSseEvent, RemoteSseEventHandler, error_for_status,
+    follow_get_redirect_without_credentials, http_client_no_redirect, invoke_and_collect,
+    invoke_and_collect_with_handler, post_json, remote_app_session, validate_path_id,
     with_event_registration_headers,
 };
+use ahash::AHashSet;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use flow_like::flow::{
     board::Board,
-    execution::context::ExecutionContext,
+    execution::{LogLevel, context::ExecutionContext, internal_node::InternalNode},
     node::{Node, NodeLogic},
     pin::{PinOptions, PinType, ValueType},
     variable::VariableType,
 };
-use flow_like_model_provider::history::History;
+use flow_like_model_provider::{
+    history::History, response::Response, response_chunk::ResponseChunk,
+};
 use flow_like_types::{Value, async_trait, json::json};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -178,11 +182,20 @@ fn apply_spec(pin: &mut flow_like::flow::pin::Pin, spec: &PinSpec) {
 /// that are no longer desired.
 fn reconcile_inputs(node: &mut Node, desired: &[PinSpec]) {
     for spec in desired {
-        if let Some(pin) = node.pins.values_mut().find(|pin| pin.name == spec.name) {
+        if let Some(pin) = node
+            .pins
+            .values_mut()
+            .find(|pin| pin.pin_type == PinType::Input && pin.name == spec.name)
+        {
             pin.data_type = spec.data_type.clone();
             pin.value_type = spec.value_type.clone();
             pin.schema = spec.schema.clone();
             pin.options = build_options(spec);
+            if pin.default_value.is_none()
+                && let Some(default) = &spec.default
+            {
+                pin.set_default_value(Some(default.clone()));
+            }
         } else {
             let pin = node.add_input_pin(
                 &spec.name,
@@ -209,17 +222,22 @@ fn reconcile_inputs(node: &mut Node, desired: &[PinSpec]) {
 
 fn reconcile_outputs(node: &mut Node, desired: &[PinSpec]) {
     for spec in desired {
-        if node.pins.values().any(|pin| pin.name == spec.name) {
-            continue;
+        if let Some(pin) = node
+            .pins
+            .values_mut()
+            .find(|pin| pin.pin_type == PinType::Output && pin.name == spec.name)
+        {
+            pin.data_type = spec.data_type.clone();
+            apply_spec(pin, spec);
+        } else {
+            let pin = node.add_output_pin(
+                &spec.name,
+                &spec.friendly,
+                &spec.description,
+                spec.data_type.clone(),
+            );
+            apply_spec(pin, spec);
         }
-        let pin = node.add_output_pin(
-            &spec.name,
-            &spec.friendly,
-            &spec.description,
-            spec.data_type.clone(),
-        );
-        pin.value_type = spec.value_type.clone();
-        pin.schema = spec.schema.clone();
     }
 
     let keep: Vec<String> = desired.iter().map(|spec| spec.name.clone()).collect();
@@ -286,7 +304,8 @@ fn chat_desired(node: &Node) -> (Vec<PinSpec>, Vec<PinSpec>) {
             "Message",
             "User message appended to the conversation",
             VariableType::String,
-        ),
+        )
+        .default(json!("")),
         PinSpec::new(
             "history",
             "History",
@@ -294,26 +313,30 @@ fn chat_desired(node: &Node) -> (Vec<PinSpec>, Vec<PinSpec>) {
             VariableType::Struct,
         )
         .schema(schema_string::<History>())
-        .enforce(),
+        .enforce()
+        .default(json!(History::new(String::new(), Vec::new()))),
         PinSpec::new(
             "local_session",
             "Local Session",
             "Local session state",
             VariableType::Struct,
-        ),
+        )
+        .default(json!({})),
         PinSpec::new(
             "global_session",
             "Global Session",
             "Global session state",
             VariableType::Struct,
-        ),
+        )
+        .default(json!({})),
         PinSpec::new(
             "tools",
             "Tools",
             "Tool ids the assistant may use",
             VariableType::String,
         )
-        .array(),
+        .array()
+        .default(json!([])),
         PinSpec::new(
             "attachments",
             "Attachments",
@@ -322,7 +345,8 @@ fn chat_desired(node: &Node) -> (Vec<PinSpec>, Vec<PinSpec>) {
         )
         .array()
         .schema(schema_string::<Attachment>())
-        .enforce(),
+        .enforce()
+        .default(json!([])),
         timeout_spec(),
     ];
     let outputs = vec![
@@ -341,6 +365,184 @@ fn chat_desired(node: &Node) -> (Vec<PinSpec>, Vec<PinSpec>) {
         PinSpec::new("run_id", "Run ID", "Remote run id", VariableType::String),
         PinSpec::new("status", "Status", "Final run status", VariableType::String),
     ];
+    (inputs, outputs)
+}
+
+/// Stable contract for the dedicated remote-chat node. Unlike the legacy
+/// adaptive node, every chat output is present before an event is selected so
+/// the node is useful from both the visual editor and FlowScript.
+fn remote_chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
+    let inputs = vec![
+        PinSpec::new(
+            "message",
+            "Message",
+            "User message appended to the conversation",
+            VariableType::String,
+        )
+        .default(json!("")),
+        PinSpec::new(
+            "history",
+            "History",
+            "Prior conversation history",
+            VariableType::Struct,
+        )
+        .schema(schema_string::<History>())
+        .enforce()
+        .default(json!(History::new(String::new(), Vec::new()))),
+        PinSpec::new(
+            "local_session",
+            "Local State",
+            "State local to this chat session",
+            VariableType::Struct,
+        )
+        .default(json!({})),
+        PinSpec::new(
+            "global_session",
+            "Global State",
+            "State shared for the remote chat user",
+            VariableType::Struct,
+        )
+        .default(json!({})),
+        PinSpec::new(
+            "tools",
+            "Tools",
+            "Tool ids the remote assistant may use",
+            VariableType::String,
+        )
+        .array()
+        .default(json!([])),
+        PinSpec::new(
+            "actions",
+            "Actions",
+            "User actions included with the chat request",
+            VariableType::Struct,
+        )
+        .array()
+        .schema(schema_string::<ChatAction>())
+        .enforce()
+        .default(json!([])),
+        PinSpec::new(
+            "attachments",
+            "Attachments",
+            "Attachments included with the chat request",
+            VariableType::Struct,
+        )
+        .array()
+        .schema(schema_string::<Attachment>())
+        .enforce()
+        .default(json!([])),
+        PinSpec::new(
+            "user",
+            "User",
+            "User information forwarded to the remote chat",
+            VariableType::Struct,
+        )
+        .schema(schema_string::<User>())
+        .enforce()
+        .default(Value::Null),
+        timeout_spec(),
+    ];
+
+    let outputs = vec![
+        PinSpec::new(
+            "chunk",
+            "Chunk",
+            "Latest streamed response chunk",
+            VariableType::Struct,
+        )
+        .schema(schema_string::<ResponseChunk>())
+        .enforce(),
+        PinSpec::new(
+            "response",
+            "Response",
+            "Latest complete model response",
+            VariableType::Struct,
+        )
+        .schema(schema_string::<Response>())
+        .enforce(),
+        PinSpec::new(
+            "response_text",
+            "Response Text",
+            "Text of the latest complete response",
+            VariableType::String,
+        ),
+        PinSpec::new(
+            "widgets",
+            "Widgets",
+            "Widgets emitted by the remote chat update",
+            VariableType::Struct,
+        )
+        .array()
+        .schema(schema_string::<ChatWidget>())
+        .enforce(),
+        PinSpec::new(
+            "attachments_out",
+            "Attachments",
+            "Attachments emitted by the remote chat update",
+            VariableType::Struct,
+        )
+        .array()
+        .schema(schema_string::<Attachment>())
+        .enforce(),
+        PinSpec::new(
+            "actions_out",
+            "Actions",
+            "Actions emitted by the remote chat update",
+            VariableType::Struct,
+        )
+        .array()
+        .schema(schema_string::<ChatAction>())
+        .enforce(),
+        PinSpec::new(
+            "plan",
+            "Plan",
+            "Latest streamed reasoning plan",
+            VariableType::Struct,
+        )
+        .schema(schema_string::<Reasoning>())
+        .enforce(),
+        PinSpec::new(
+            "local_session_out",
+            "Local State",
+            "Latest remote local session state",
+            VariableType::Struct,
+        ),
+        PinSpec::new(
+            "global_session_out",
+            "Global State",
+            "Latest remote global session state",
+            VariableType::Struct,
+        ),
+        PinSpec::new(
+            "usage_stat",
+            "Usage Stat",
+            "Latest model usage update",
+            VariableType::Struct,
+        )
+        .schema(schema_string::<ChatUsageStat>())
+        .enforce(),
+        PinSpec::new(
+            "model_id",
+            "Model ID",
+            "Model reported by the remote chat",
+            VariableType::String,
+        ),
+        PinSpec::new(
+            "event_type",
+            "Event Type",
+            "Type of the latest streamed remote event",
+            VariableType::String,
+        ),
+        PinSpec::new(
+            "event_payload",
+            "Event Payload",
+            "Raw payload of the latest streamed remote event",
+            VariableType::Generic,
+        ),
+        PinSpec::new("run_id", "Run ID", "Remote run id", VariableType::String),
+        PinSpec::new("status", "Status", "Final run status", VariableType::String),
+    ];
+
     (inputs, outputs)
 }
 
@@ -369,21 +571,22 @@ fn rest_desired(node: &Node, meta: &EventMeta) -> (Vec<PinSpec>, Vec<PinSpec>) {
             "Query",
             "Query parameters as an object",
             VariableType::Generic,
-        ),
-        PinSpec::new("body", "Body", "Request body (JSON)", VariableType::Generic),
+        )
+        .default(json!({})),
+        PinSpec::new("body", "Body", "Request body (JSON)", VariableType::Generic)
+            .default(Value::Null),
         PinSpec::new(
             "headers",
             "Headers",
             "Additional request headers as an object",
             VariableType::Generic,
-        ),
+        )
+        .default(json!({})),
         timeout_spec(),
     ];
 
     let selection = pin_string(node, "route");
-    let mut is_file = false;
-    if let Some((method, path)) = selected_route(meta, &selection) {
-        is_file = is_file_route(meta, &method, &path);
+    if let Some((_method, path)) = selected_route(meta, &selection) {
         for param in &template_params(&path) {
             inputs.push(PinSpec::new(
                 &format!("param_{}", param),
@@ -394,7 +597,7 @@ fn rest_desired(node: &Node, meta: &EventMeta) -> (Vec<PinSpec>, Vec<PinSpec>) {
         }
     }
 
-    let mut outputs = vec![
+    let outputs = vec![
         PinSpec::new(
             "status",
             "Status Code",
@@ -413,13 +616,14 @@ fn rest_desired(node: &Node, meta: &EventMeta) -> (Vec<PinSpec>, Vec<PinSpec>) {
             "Response body (JSON when parseable, else text)",
             VariableType::Generic,
         ),
+        PinSpec::new(
+            "file",
+            "File",
+            "Response body as a downloaded file when it is binary",
+            VariableType::Struct,
+        )
+        .schema(flow_path_schema()),
     ];
-    if is_file {
-        outputs.push(
-            PinSpec::new("file", "File", "Downloaded file", VariableType::Struct)
-                .schema(flow_path_schema()),
-        );
-    }
     (inputs, outputs)
 }
 
@@ -442,7 +646,8 @@ fn mcp_desired(node: &Node, meta: &EventMeta) -> (Vec<PinSpec>, Vec<PinSpec>) {
             "Static registration authentication headers (for example Authorization or x-api-key). HMAC auth is not supported for MCP because every request needs a fresh signature.",
             VariableType::Struct,
         )
-        .schema(schema_string::<HashMap<String, String>>()),
+        .schema(schema_string::<HashMap<String, String>>())
+        .default(json!({})),
         timeout_spec(),
     ];
 
@@ -580,6 +785,30 @@ fn flow_path_schema() -> String {
     schema_string::<FlowPath>()
 }
 
+fn add_remote_event_selector_pins(node: &mut Node, event_description: &str) {
+    node.add_input_pin(
+        PIN_REMOTE_APP_ID,
+        "Project",
+        "Connected project to invoke the event in",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+    node.add_input_pin(
+        PIN_REMOTE_EVENT,
+        "Event",
+        event_description,
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+    node.add_input_pin(
+        PIN_REMOTE_EVENT_META,
+        "Event Details",
+        "Auto-filled by the editor when an event is selected. Drives the typed pins.",
+        VariableType::String,
+    )
+    .set_default_value(Some(json!("")));
+}
+
 // ---------------------------------------------------------------------------
 // Node
 // ---------------------------------------------------------------------------
@@ -607,27 +836,7 @@ impl NodeLogic for CallRemoteEventNode {
         node.set_version(4);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
-        node.add_input_pin(
-            PIN_REMOTE_APP_ID,
-            "Project",
-            "Connected project to invoke the event in",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            PIN_REMOTE_EVENT,
-            "Event",
-            "Event of the selected project to invoke",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
-        node.add_input_pin(
-            PIN_REMOTE_EVENT_META,
-            "Event Details",
-            "Auto-filled by the editor when an event is selected. Drives the input and output pins.",
-            VariableType::String,
-        )
-        .set_default_value(Some(json!("")));
+        add_remote_event_selector_pins(&mut node, "Event of the selected project to invoke");
 
         node.add_output_pin(
             "exec_out",
@@ -817,7 +1026,10 @@ impl CallRemoteEventNode {
         outcome.ensure_ok()?;
 
         let response = outcome.chat_result().unwrap_or(Value::Null);
-        let response_text = extract_text(&response);
+        let response_text = response
+            .get("response")
+            .map(extract_response_text)
+            .unwrap_or_else(|| extract_response_text(&response));
 
         context.set_pin_value("response", response.clone()).await?;
         context
@@ -950,6 +1162,7 @@ impl CallRemoteEventNode {
             let value = flow_like_types::json::from_slice::<Value>(&bytes)
                 .unwrap_or_else(|_| json!(String::from_utf8_lossy(&bytes)));
             context.set_pin_value("response", value).await?;
+            context.set_pin_value("file", Value::Null).await?;
         }
 
         context.activate_exec_pin("exec_out").await?;
@@ -1085,6 +1298,452 @@ impl CallRemoteEventNode {
         context.activate_exec_pin("exec_out").await?;
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Dedicated remote API node
+// ---------------------------------------------------------------------------
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct CallRemoteApiNode {}
+
+impl CallRemoteApiNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for CallRemoteApiNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "call_remote_api",
+            "Call Remote API",
+            "Call an internal REST API exposed by a connected project and return its status, headers and response body.",
+            "Events/Remote",
+        );
+        node.add_icon("/flow/icons/event.svg");
+        node.set_version(1);
+
+        node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
+        add_remote_event_selector_pins(&mut node, "REST API event of the selected project");
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "The remote API request completed",
+            VariableType::Execution,
+        );
+
+        let (inputs, outputs) = rest_desired(&node, &EventMeta::default());
+        reconcile_inputs(&mut node, &inputs);
+        reconcile_outputs(&mut node, &outputs);
+        node.set_long_running(true);
+        node
+    }
+
+    async fn on_update(&self, node: &mut Node, _board: &Board) {
+        let meta = parse_meta(node).unwrap_or_default();
+        let (inputs, outputs) = rest_desired(node, &meta);
+        reconcile_inputs(node, &inputs);
+        reconcile_outputs(node, &outputs);
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+
+        let remote_app_id: String = context.evaluate_pin(PIN_REMOTE_APP_ID).await?;
+        let event_id: String = context.evaluate_pin(PIN_REMOTE_EVENT).await?;
+        let remote_app_id = validate_path_id(&remote_app_id, "remote project")?;
+        let event_id = validate_path_id(&event_id, "remote API event")?;
+        let meta_raw: String = context
+            .evaluate_pin(PIN_REMOTE_EVENT_META)
+            .await
+            .unwrap_or_default();
+        let meta: EventMeta = flow_like_types::json::from_str(&meta_raw).map_err(|_| {
+            flow_like_types::anyhow!(
+                "Remote API details are missing; select the remote API event again"
+            )
+        })?;
+        if meta.event_type != "rest" {
+            return Err(flow_like_types::anyhow!(
+                "The selected remote event is type '{}', but Call Remote API requires a REST event",
+                meta.event_type
+            ));
+        }
+
+        let session = remote_app_session(context, &remote_app_id).await?;
+        CallRemoteEventNode::new()
+            .run_rest(context, &session, &event_id, &meta)
+            .await
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Dedicated remote chat node
+// ---------------------------------------------------------------------------
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct CallRemoteChatNode {}
+
+impl CallRemoteChatNode {
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+#[async_trait]
+impl NodeLogic for CallRemoteChatNode {
+    fn get_node(&self) -> Node {
+        let mut node = Node::new(
+            "call_remote_chat",
+            "Call Remote Chat",
+            "Call a chat event in a connected project. Chunks, complete responses, widgets, attachments and session state are exposed while the remote chat streams.",
+            "Events/Remote",
+        );
+        node.add_icon("/flow/icons/event.svg");
+        node.set_version(1);
+
+        node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
+        add_remote_event_selector_pins(&mut node, "Chat event of the selected project");
+        node.add_output_pin(
+            "on_stream",
+            "On Stream",
+            "Fires for every output event produced by the remote chat",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "The remote chat completed",
+            VariableType::Execution,
+        );
+
+        let (inputs, outputs) = remote_chat_desired();
+        reconcile_inputs(&mut node, &inputs);
+        reconcile_outputs(&mut node, &outputs);
+        node.set_long_running(true);
+        node
+    }
+
+    async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("exec_out").await?;
+        context.deactivate_exec_pin("on_stream").await?;
+
+        let remote_app_id: String = context.evaluate_pin(PIN_REMOTE_APP_ID).await?;
+        let event_id: String = context.evaluate_pin(PIN_REMOTE_EVENT).await?;
+        let remote_app_id = validate_path_id(&remote_app_id, "remote project")?;
+        let event_id = validate_path_id(&event_id, "remote chat event")?;
+        let meta_raw: String = context
+            .evaluate_pin(PIN_REMOTE_EVENT_META)
+            .await
+            .unwrap_or_default();
+        let meta: EventMeta = flow_like_types::json::from_str(&meta_raw).map_err(|_| {
+            flow_like_types::anyhow!(
+                "Remote chat details are missing; select the remote chat event again"
+            )
+        })?;
+        if meta.event_type != "simple_chat" {
+            return Err(flow_like_types::anyhow!(
+                "The selected remote event is type '{}', but Call Remote Chat requires a chat event",
+                meta.event_type
+            ));
+        }
+
+        reset_remote_chat_outputs(context).await?;
+
+        let message: String = context.evaluate_pin("message").await.unwrap_or_default();
+        let history: Value = context.evaluate_pin("history").await.unwrap_or(Value::Null);
+        let local_session: Value = context
+            .evaluate_pin("local_session")
+            .await
+            .unwrap_or(Value::Null);
+        let global_session: Value = context
+            .evaluate_pin("global_session")
+            .await
+            .unwrap_or(Value::Null);
+        let tools: Vec<String> = context.evaluate_pin("tools").await.unwrap_or_default();
+        let actions: Value = context.evaluate_pin("actions").await.unwrap_or(Value::Null);
+        let attachments: Value = context
+            .evaluate_pin("attachments")
+            .await
+            .unwrap_or(Value::Null);
+        let user: Value = context.evaluate_pin("user").await.unwrap_or(Value::Null);
+        let timeout = CallRemoteEventNode::new().timeout_secs(context).await;
+
+        let mut messages: Vec<Value> = match &history {
+            Value::Array(items) => items.clone(),
+            Value::Object(obj) => obj
+                .get("messages")
+                .and_then(|messages| messages.as_array())
+                .cloned()
+                .or_else(|| obj.contains_key("role").then(|| vec![history.clone()]))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        if !message.trim().is_empty() {
+            messages.push(json!({ "role": "user", "content": message }));
+        }
+
+        let mut chat = json!({ "messages": messages });
+        insert_non_null(&mut chat, "local_session", local_session);
+        insert_non_null(&mut chat, "global_session", global_session);
+        if !tools.is_empty() {
+            chat["tools"] = json!(tools);
+        }
+        insert_non_empty_array(&mut chat, "actions", actions);
+        insert_non_empty_array(&mut chat, "attachments", attachments);
+        insert_non_null(&mut chat, "user", user);
+
+        let session = remote_app_session(context, &remote_app_id).await?;
+        let url = session.url(&format!("events/{}/invoke", event_id));
+        let body = json!({ "payload": chat });
+        let stream_state = RemoteChatStreamState::new(context).await?;
+        let mut handler = RemoteChatEventOutput::new(context, stream_state);
+        let outcome_result =
+            invoke_and_collect_with_handler(&session, &url, &body, timeout, &mut handler).await;
+        let finalize_result = handler.finalize().await;
+        drop(handler);
+
+        if let Err(error) = finalize_result {
+            if outcome_result.is_ok() {
+                return Err(error);
+            }
+            context.log_message(
+                &format!("Failed to finalize remote chat stream outputs: {error}"),
+                LogLevel::Warn,
+            );
+        }
+
+        let outcome = outcome_result?;
+        outcome.ensure_ok()?;
+        context
+            .set_pin_value("run_id", json!(outcome.run_id.clone().unwrap_or_default()))
+            .await?;
+        context
+            .set_pin_value("status", json!(outcome.status_str()))
+            .await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+}
+
+struct RemoteChatStreamConsumer {
+    node_id: String,
+    context: ExecutionContext,
+}
+
+struct RemoteChatStreamState {
+    parent_node_id: String,
+    consumers: Vec<RemoteChatStreamConsumer>,
+}
+
+impl RemoteChatStreamState {
+    async fn new(context: &mut ExecutionContext) -> flow_like_types::Result<Self> {
+        let on_stream = context.get_pin_by_name("on_stream").await?;
+        context.activate_exec_pin_ref(&on_stream).await?;
+        let parent_node_id = context.node.node.lock().await.id.clone();
+        let mut consumers = Vec::new();
+        for node in on_stream.get_connected_nodes() {
+            let node_id = node.node.lock().await.id.clone();
+            consumers.push(RemoteChatStreamConsumer {
+                node_id,
+                context: context.create_sub_context(&node).await,
+            });
+        }
+        Ok(Self {
+            parent_node_id,
+            consumers,
+        })
+    }
+
+    async fn emit(&mut self, context: &mut ExecutionContext) {
+        let mut recursion_guard = AHashSet::new();
+        recursion_guard.insert(self.parent_node_id.clone());
+        for consumer in &mut self.consumers {
+            let mut guard = Some(recursion_guard.clone());
+            let result = InternalNode::trigger(&mut consumer.context, &mut guard, true).await;
+            consumer.context.end_trace();
+            if let Err(error) = result {
+                context.log_message(
+                    &format!(
+                        "Remote chat stream-connected node {} failed: {error:?}",
+                        consumer.node_id
+                    ),
+                    LogLevel::Error,
+                );
+            }
+        }
+    }
+
+    async fn finalize(&mut self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        context.deactivate_exec_pin("on_stream").await?;
+        for consumer in &mut self.consumers {
+            consumer.context.end_trace();
+            context.push_sub_context(&mut consumer.context);
+        }
+        Ok(())
+    }
+}
+
+struct RemoteChatEventOutput<'a> {
+    context: &'a mut ExecutionContext,
+    stream: RemoteChatStreamState,
+}
+
+impl<'a> RemoteChatEventOutput<'a> {
+    fn new(context: &'a mut ExecutionContext, stream: RemoteChatStreamState) -> Self {
+        Self { context, stream }
+    }
+
+    async fn finalize(&mut self) -> flow_like_types::Result<()> {
+        self.stream.finalize(self.context).await
+    }
+}
+
+#[async_trait]
+impl RemoteSseEventHandler for RemoteChatEventOutput<'_> {
+    async fn on_event(&mut self, event: &RemoteSseEvent) -> flow_like_types::Result<()> {
+        if let Some(run_id) = &event.run_id {
+            self.context.set_pin_value("run_id", json!(run_id)).await?;
+        }
+        if !is_stream_output_event(&event.event_type) {
+            return Ok(());
+        }
+
+        for (pin, value) in remote_chat_pin_updates(event) {
+            self.context.set_pin_value(pin, value).await?;
+        }
+        self.stream.emit(self.context).await;
+        Ok(())
+    }
+}
+
+fn is_stream_output_event(event_type: &str) -> bool {
+    matches!(
+        event_type,
+        "chat_stream_partial"
+            | "chat_stream"
+            | "chat_out"
+            | "chat_local_session"
+            | "chat_global_session"
+            | "chat_usage_stat"
+            | "a2ui"
+            | "interaction_request"
+    )
+}
+
+fn remote_chat_pin_updates(event: &RemoteSseEvent) -> Vec<(&'static str, Value)> {
+    let mut updates = vec![
+        ("event_type", json!(event.event_type)),
+        ("event_payload", event.payload.clone()),
+    ];
+    if let Some(run_id) = &event.run_id {
+        updates.push(("run_id", json!(run_id)));
+    }
+
+    match event.event_type.as_str() {
+        "chat_stream_partial" => {
+            push_payload_field(&mut updates, &event.payload, "chunk", "chunk");
+            push_payload_field(&mut updates, &event.payload, "widgets", "widgets");
+            push_payload_field(
+                &mut updates,
+                &event.payload,
+                "attachments",
+                "attachments_out",
+            );
+            push_payload_field(&mut updates, &event.payload, "actions", "actions_out");
+            push_payload_field(&mut updates, &event.payload, "plan", "plan");
+        }
+        "chat_stream" | "chat_out" => {
+            if let Some(response) = event.payload.get("response") {
+                updates.push(("response", response.clone()));
+                updates.push(("response_text", json!(extract_response_text(response))));
+            }
+            push_payload_field(&mut updates, &event.payload, "widgets", "widgets");
+            push_payload_field(
+                &mut updates,
+                &event.payload,
+                "attachments",
+                "attachments_out",
+            );
+            push_payload_field(&mut updates, &event.payload, "actions", "actions_out");
+            push_payload_field(&mut updates, &event.payload, "model_id", "model_id");
+        }
+        "chat_local_session" => updates.push(("local_session_out", event.payload.clone())),
+        "chat_global_session" => updates.push(("global_session_out", event.payload.clone())),
+        "chat_usage_stat" => updates.push(("usage_stat", event.payload.clone())),
+        _ => {}
+    }
+
+    updates
+}
+
+fn push_payload_field(
+    updates: &mut Vec<(&'static str, Value)>,
+    payload: &Value,
+    field: &str,
+    pin: &'static str,
+) {
+    if let Some(value) = payload.get(field) {
+        updates.push((pin, value.clone()));
+    }
+}
+
+fn insert_non_null(target: &mut Value, field: &str, value: Value) {
+    if !value.is_null() {
+        target[field] = value;
+    }
+}
+
+fn insert_non_empty_array(target: &mut Value, field: &str, value: Value) {
+    if value.as_array().is_some_and(|values| !values.is_empty()) {
+        target[field] = value;
+    }
+}
+
+async fn reset_remote_chat_outputs(context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+    for pin in ["widgets", "attachments_out", "actions_out"] {
+        context.set_pin_value(pin, json!([])).await?;
+    }
+    for pin in [
+        "chunk",
+        "response",
+        "plan",
+        "local_session_out",
+        "global_session_out",
+        "usage_stat",
+        "event_payload",
+    ] {
+        context.set_pin_value(pin, Value::Null).await?;
+    }
+    for pin in [
+        "response_text",
+        "model_id",
+        "event_type",
+        "run_id",
+        "status",
+    ] {
+        context.set_pin_value(pin, json!("")).await?;
+    }
+    Ok(())
+}
+
+fn extract_response_text(response: &Value) -> String {
+    response
+        .get("choices")
+        .and_then(Value::as_array)
+        .and_then(|choices| {
+            choices.iter().rev().find_map(|choice| {
+                choice
+                    .get("message")
+                    .and_then(|message| message.get("content"))
+                    .and_then(Value::as_str)
+            })
+        })
+        .map(str::to_string)
+        .unwrap_or_else(|| extract_text(response))
 }
 
 // ---------------------------------------------------------------------------
@@ -1241,7 +1900,15 @@ fn extract_mcp_text(result: &Value) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::encode_path_parameter;
+    use std::collections::{HashMap, HashSet};
+
+    use flow_like::flow::{node::NodeLogic, pin::PinType};
+    use flow_like_types::json::json;
+
+    use super::{
+        CallRemoteApiNode, CallRemoteChatNode, RemoteSseEvent, encode_path_parameter,
+        is_stream_output_event, remote_chat_pin_updates,
+    };
 
     #[test]
     fn remote_rest_path_parameters_stay_in_one_segment() {
@@ -1261,5 +1928,115 @@ mod tests {
         assert_eq!(encode_path_parameter(" .. ").unwrap(), "%20..%20");
         assert_eq!(encode_path_parameter("...").unwrap(), "...");
         assert_eq!(encode_path_parameter("%2e%2e").unwrap(), "%252e%252e");
+    }
+
+    #[test]
+    fn dedicated_remote_nodes_expose_stable_output_contracts() {
+        let api = CallRemoteApiNode::new().get_node();
+        assert_eq!(api.name, "call_remote_api");
+        assert!(api.pins.values().any(|pin| {
+            pin.pin_type == PinType::Output && pin.name == "file" && pin.schema.is_some()
+        }));
+
+        let chat = CallRemoteChatNode::new().get_node();
+        assert_eq!(chat.name, "call_remote_chat");
+        for name in [
+            "on_stream",
+            "exec_out",
+            "chunk",
+            "response",
+            "widgets",
+            "attachments_out",
+            "local_session_out",
+            "global_session_out",
+            "event_payload",
+        ] {
+            assert!(
+                chat.pins
+                    .values()
+                    .any(|pin| pin.pin_type == PinType::Output && pin.name == name),
+                "missing remote chat output {name}"
+            );
+        }
+
+        let names = chat
+            .pins
+            .values()
+            .map(|pin| pin.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names.len(),
+            names.iter().copied().collect::<HashSet<_>>().len(),
+            "pin names must be unambiguous across inputs and outputs"
+        );
+        for pin in chat.pins.values().filter(|pin| {
+            pin.pin_type == PinType::Input
+                && pin.data_type != flow_like::flow::variable::VariableType::Execution
+        }) {
+            assert!(
+                pin.default_value.is_some(),
+                "optional chat input {} needs a default so the node can execute unwired",
+                pin.name
+            );
+        }
+    }
+
+    #[test]
+    fn remote_chat_updates_surface_typed_partial_and_response_fields() {
+        let partial = RemoteSseEvent {
+            event_type: "chat_stream_partial".to_string(),
+            payload: json!({
+                "chunk": { "id": "chunk-1", "choices": [] },
+                "widgets": [{ "instance_id": "one" }],
+                "attachments": ["https://example.com/file"],
+                "actions": [],
+                "plan": { "current_step": 0 }
+            }),
+            run_id: Some("run-1".to_string()),
+        };
+        let updates = remote_chat_pin_updates(&partial)
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        assert_eq!(updates["chunk"]["id"], "chunk-1");
+        assert_eq!(updates["widgets"][0]["instance_id"], "one");
+        assert_eq!(updates["attachments_out"][0], "https://example.com/file");
+        assert_eq!(updates["run_id"], "run-1");
+
+        let response = RemoteSseEvent {
+            event_type: "chat_out".to_string(),
+            payload: json!({
+                "response": {
+                    "choices": [{ "message": { "content": "final answer" } }]
+                },
+                "local_session": {},
+                "global_session": {}
+            }),
+            run_id: None,
+        };
+        let updates = remote_chat_pin_updates(&response)
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        assert_eq!(updates["response_text"], "final answer");
+        assert!(!updates.contains_key("local_session_out"));
+        assert!(!updates.contains_key("global_session_out"));
+    }
+
+    #[test]
+    fn dedicated_session_events_are_not_lost_or_overwritten() {
+        let local = RemoteSseEvent {
+            event_type: "chat_local_session".to_string(),
+            payload: json!({ "turn": 3 }),
+            run_id: None,
+        };
+        let updates = remote_chat_pin_updates(&local)
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        assert_eq!(updates["local_session_out"]["turn"], 3);
+
+        assert!(is_stream_output_event("chat_stream_partial"));
+        assert!(is_stream_output_event("a2ui"));
+        assert!(is_stream_output_event("interaction_request"));
+        assert!(!is_stream_output_event("progress"));
+        assert!(!is_stream_output_event("completed"));
     }
 }
