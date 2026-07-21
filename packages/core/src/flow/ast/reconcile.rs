@@ -4172,10 +4172,12 @@ impl<'a> StructuralPlanner<'a> {
                 _ => None,
             })
             .flatten()
-            .filter_map(|name| match self.planned_functions.get(&name).map(|p| &p.entity) {
-                Some(NodeEntity::Layer { ref_id, .. }) => Some((name, ref_id.clone())),
-                _ => None,
-            })
+            .filter_map(
+                |name| match self.planned_functions.get(&name).map(|p| &p.entity) {
+                    Some(NodeEntity::Layer { ref_id, .. }) => Some((name, ref_id.clone())),
+                    _ => None,
+                },
+            )
             .collect();
 
         for (name, layer_ref) in new_layer_targets {
@@ -5124,7 +5126,8 @@ impl<'a> StructuralPlanner<'a> {
             node: entity,
             output_pin: Some(route_out_name),
         };
-        self.planned_boundary_passthroughs.insert(key, source.clone());
+        self.planned_boundary_passthroughs
+            .insert(key, source.clone());
         Some(source)
     }
 

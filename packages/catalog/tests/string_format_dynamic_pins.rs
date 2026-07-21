@@ -99,8 +99,14 @@ async fn repeated_placeholder_maps_to_a_single_stable_pin() {
 
 #[flow_like_types::tokio::test]
 async fn distinct_placeholders_are_stable_across_updates() {
-    assert_eq!(pin_counts_per_pass("/{parent}/{page}", "page", 5).await, vec![1; 5]);
-    assert_eq!(pin_counts_per_pass("/{parent}/{page}", "parent", 5).await, vec![1; 5]);
+    assert_eq!(
+        pin_counts_per_pass("/{parent}/{page}", "page", 5).await,
+        vec![1; 5]
+    );
+    assert_eq!(
+        pin_counts_per_pass("/{parent}/{page}", "parent", 5).await,
+        vec![1; 5]
+    );
 }
 
 #[flow_like_types::tokio::test]
@@ -117,9 +123,18 @@ async fn already_leaked_duplicate_pins_are_healed() {
 
     // Simulate a board persisted by the buggy version: several pins sharing one placeholder name.
     for _ in 0..4 {
-        node.add_input_pin("page", "page", "", flow_like::flow::variable::VariableType::Generic);
+        node.add_input_pin(
+            "page",
+            "page",
+            "",
+            flow_like::flow::variable::VariableType::Generic,
+        );
     }
-    assert_eq!(input_pins_named(&node, "page"), 4, "precondition: leaked pins present");
+    assert_eq!(
+        input_pins_named(&node, "page"),
+        4,
+        "precondition: leaked pins present"
+    );
 
     logic.on_update(&mut node, &board).await;
     assert_eq!(
@@ -151,6 +166,10 @@ async fn placeholders_removed_from_the_format_string_drop_their_pins() {
 
     set_format(&mut node, "{page}");
     logic.on_update(&mut node, &board).await;
-    assert_eq!(input_pins_named(&node, "parent"), 0, "stale placeholder pin must be removed");
+    assert_eq!(
+        input_pins_named(&node, "parent"),
+        0,
+        "stale placeholder pin must be removed"
+    );
     assert_eq!(input_pins_named(&node, "page"), 1);
 }
