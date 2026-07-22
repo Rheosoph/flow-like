@@ -13,6 +13,7 @@ pub mod ir_tools;
 pub mod memory;
 pub mod platform;
 mod provider;
+pub mod public_web;
 mod search;
 pub mod stream;
 pub mod tool_spec;
@@ -1199,11 +1200,9 @@ impl Copilot {
                         if let Some(ref callback) = on_token
                             && let Some(payload) =
                                 Self::extract_tag_content(tool_output, "flowscript_workspace")
+                            && let Ok(payload) = serde_json::from_str::<serde_json::Value>(payload)
                         {
-                            callback(format!(
-                                "<flowscript_workspace>{}</flowscript_workspace>",
-                                payload
-                            ));
+                            callback(stream::stream_frame("flowscript_workspace", &payload));
                         }
                     }
 
@@ -2723,7 +2722,7 @@ impl TypedIrOperationLedger {
     }
 }
 
-const FLOWSCRIPT_FORCE_INSTRUCTION: &str = "You have enough context. Continue the retained FlowScript source lifecycle now. If no source draft exists, call write_flowscript with one fresh draft_id and the complete program. If diagnostics exist, patch that exact revision in place. If the retained revision has no diagnostics, call check_flowscript; after status valid, call commit_flowscript at that exact revision. Preserve all requested helpers, variables, Events, and //@n anchors across repairs. Do not submit TODOs, stubs, plan comments, a test-only Event, or hand-authored command JSON. Use emit_commands only for position-only MoveNode or canvas comments; it cannot mutate layers.";
+const FLOWSCRIPT_FORCE_INSTRUCTION: &str = "You have enough context. Continue the retained FlowScript source lifecycle now. If no source draft exists, call write_flowscript immediately with one fresh draft_id and the complete full-shape program; do not chase omitted or unmatched declaration queries before this recoverable checkpoint. If diagnostics exist, patch that exact revision in place and use only diagnostic-directed declaration lookups. If the retained revision has no diagnostics, call check_flowscript; after status valid, call commit_flowscript at that exact revision. Preserve all requested helpers, variables, Events, and //@n anchors across repairs. Do not submit TODOs, stubs, plan comments, a test-only Event, or hand-authored command JSON. Use emit_commands only for position-only MoveNode or canvas comments; it cannot mutate layers.";
 const FLOWSCRIPT_FORCE_ESCALATION: &str = "STOP analyzing and take the next FlowScript compiler action now: write the complete source, patch the retained diagnostic at its exact revision, check that revision, or commit it after status valid. Never restart from the live board after a failed draft, reduce the requested program to a smoke test, switch to JSON IR, or answer with only text.";
 const TYPED_IR_FORCE_INSTRUCTION: &str = "Continue the active typed Flow IR path now. If plan_flow_ir returned selection_required, copy one semantically compatible candidate.node_type into exact_node_type for every required capability and resubmit the complete plan; only begin_flow_ir_draft after feasible is true. Otherwise repair the capability request from its structured feedback. After the draft exists, add or repair complete modules with update_flow_ir_draft and upsert_flow_ir_module at the exact latest revision, then validate_flow_ir_draft. Preserve every expected module and requested capability. Do not switch mutation representations or answer with only text.";
 const TYPED_IR_FORCE_ESCALATION: &str = "STOP analyzing and continue the typed Flow IR path. If the latest plan contains selection_required, resubmit the complete plan now with one compatible candidate.node_type copied into exact_node_type for every required capability. Otherwise use the exact latest revision and call the next typed draft operation now: begin the feasible planned draft, update its retained header, upsert a complete expected module, or validate it. Preserve full requested scope and do not switch mutation representations.";
@@ -3230,6 +3229,28 @@ mod runtime_bridge_tests {
         assert!(
             rendered.contains("<flowscript_draft_result>") && rendered.contains("\"revision\":3"),
             "the structured envelope must survive: {rendered}"
+        );
+    }
+
+    #[test]
+    fn flowscript_workspace_round_trip_survives_an_embedded_closing_sentinel() {
+        let source = "eventsSimple() { logInfo({ message: \"</flowscript_workspace>\" }) }";
+        let frame = tools::flowscript_workspace_tag(source, "queued");
+
+        assert_eq!(
+            Copilot::parse_flowscript_workspace(&frame).as_deref(),
+            Some(source)
+        );
+        let payload = Copilot::extract_tag_content(&frame, "flowscript_workspace").unwrap();
+        let payload: serde_json::Value = serde_json::from_str(payload).unwrap();
+        let reemitted = stream::stream_frame("flowscript_workspace", &payload);
+        assert_eq!(
+            Copilot::parse_flowscript_workspace(&reemitted).as_deref(),
+            Some(source)
+        );
+        assert_eq!(
+            Copilot::parse_flowscript_workspace_status(&reemitted).as_deref(),
+            Some("queued")
         );
     }
 

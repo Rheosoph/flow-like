@@ -380,6 +380,10 @@ function redactValue(
 	stringLimit = MAX_PREVIEW_CHARS,
 	allowWorkspaceEnvelopes = true,
 ): unknown {
+	if (key === "_flowpilot_image_urls") {
+		const count = Array.isArray(value) ? value.length : 0;
+		return `[OMITTED ${count} IMAGE ATTACHMENT${count === 1 ? "" : "S"}]`;
+	}
 	if (SENSITIVE_KEY.test(key)) return "[REDACTED]";
 	// MCP content -> text -> JSON adds two legitimate wrapper levels before the diagnostic list.
 	// Keep enough depth for stable diagnostic codes while arrays/objects remain independently

@@ -226,6 +226,9 @@ pub fn search_declarations(query: &str) -> Vec<DeclarationMatch> {
     let mut scored = DECLARATION_INDEX
         .iter()
         .filter_map(|entry| {
+            // Query-plan entries are alternate interpretations, not independent evidence.
+            // Summing them rewards domains that happen to have more canned expansions and can
+            // let a generic term such as `table` or `message` outrank the caller's actual query.
             let semantic_score = analyses
                 .iter()
                 .enumerate()
@@ -236,7 +239,8 @@ pub fn search_declarations(query: &str) -> Vec<DeclarationMatch> {
                     let normalized_joined = analysis.tokens.join("");
                     score_entry(entry, &analysis.expanded_tokens, &normalized_joined) * weight / 100
                 })
-                .sum::<i32>()
+                .max()
+                .unwrap_or_default()
                 + workflow_priority_score(entry, &normalized_query, false);
             let exact_symbol_score = exact_function_names
                 .contains(&entry.function_name.to_ascii_lowercase())
@@ -455,9 +459,55 @@ fn declaration_query_plan(query: &str) -> Vec<SearchQueryAnalysis> {
     queries
         .into_iter()
         .filter(|query| seen.insert(query.to_lowercase()))
-        .map(|query| analyze_search_query(&query))
+        .map(|query| analyze_declaration_search_query(&query))
         .filter(|analysis| !analysis.tokens.is_empty())
         .collect()
+}
+
+fn analyze_declaration_search_query(query: &str) -> SearchQueryAnalysis {
+    let mut analysis = analyze_search_query(query);
+    let has_storage_intent = analysis.tokens.iter().any(|token| {
+        matches!(
+            token.as_str(),
+            "put"
+                | "store"
+                | "write"
+                | "persist"
+                | "db"
+                | "database"
+                | "lance"
+                | "lancedb"
+                | "vector"
+                | "table"
+                | "row"
+                | "record"
+                | "batch"
+                | "insert"
+                | "upsert"
+        )
+    });
+
+    if !has_storage_intent {
+        let query_tokens = analysis.tokens.iter().cloned().collect::<HashSet<_>>();
+        analysis.expanded_tokens.retain(|token| {
+            query_tokens.contains(token)
+                || !matches!(
+                    token.as_str(),
+                    "open"
+                        | "local"
+                        | "db"
+                        | "database"
+                        | "table"
+                        | "row"
+                        | "record"
+                        | "batch"
+                        | "insert"
+                        | "upsert"
+                )
+        });
+    }
+
+    analysis
 }
 
 fn score_entry(entry: &DeclarationEntry, query_tokens: &[String], normalized_joined: &str) -> i32 {
@@ -568,7 +618,7 @@ fn workflow_priority_score(
     let group_matches_query = match group {
         "email" => contains_any(
             normalized_query,
-            &["gmail", "email", "mail", "imap", "smtp", "inbox", "message"],
+            &["gmail", "email", "mail", "imap", "smtp", "inbox"],
         ),
         "embedding" => contains_any(
             normalized_query,
@@ -898,6 +948,27 @@ mod tests {
                 .map(|matched| matched.function_name.as_str()),
             Some("cuid")
         );
+    }
+
+    #[test]
+    fn generic_terms_do_not_promote_unrelated_workflow_declarations() {
+        for (query, unrelated) in [
+            (
+                "chat send response message citation source attachment file",
+                "emailSmtpSend",
+            ),
+            ("a2ui write CSV to table", "openLocalDb"),
+            ("agent tool structured output schema", "batchInsertLocalDb"),
+        ] {
+            let matches = search_declarations(query);
+            assert_ne!(
+                matches
+                    .first()
+                    .map(|matched| matched.function_name.as_str()),
+                Some(unrelated),
+                "{query:?} incorrectly preferred {unrelated}; matches: {matches:?}"
+            );
+        }
     }
 
     #[test]

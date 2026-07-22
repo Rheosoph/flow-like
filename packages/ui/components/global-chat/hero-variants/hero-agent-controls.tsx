@@ -30,6 +30,7 @@ export function HeroAgentControls() {
 			models={models.map((model) => ({
 				id: model.id,
 				label: model.name,
+				isFree: model.isFree,
 				supportedReasoningEfforts: model.supportedReasoningEfforts,
 				defaultReasoningEffort: model.defaultReasoningEffort,
 			}))}

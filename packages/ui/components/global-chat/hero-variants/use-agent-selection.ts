@@ -3,6 +3,8 @@
 import { useEffect, useMemo } from "react";
 import {
 	IBitTypes,
+	filterHostableLlmModels,
+	isFreeLlmModel,
 	useBackend,
 	useCopilotSDK,
 	useInvoke,
@@ -31,6 +33,7 @@ export interface AgentReasoningEffortOption {
 export interface AgentModelOption {
 	id: string;
 	name: string;
+	isFree?: boolean;
 	supportedReasoningEfforts?: AgentReasoningEffortOption[];
 	defaultReasoningEffort?: string;
 }
@@ -77,12 +80,16 @@ export function useAgentSelection() {
 		!!settingsProfile.data,
 		[settingsProfile.data?.hub_profile.id],
 	);
+	const canHostLlamaCPP = backend.capabilities().canHostLlamaCPP;
 	const bitsModels = useMemo(() => {
 		const profileBits = settingsProfile.data?.hub_profile.bits;
 		if (!llmBits.data || !profileBits) return [];
 		const ids = new Set(profileBits);
-		return llmBits.data.filter((bit) => ids.has(`${bit.hub}:${bit.id}`));
-	}, [llmBits.data, settingsProfile.data?.hub_profile.bits]);
+		const profileModels = llmBits.data.filter((bit) =>
+			ids.has(`${bit.hub}:${bit.id}`),
+		);
+		return filterHostableLlmModels(profileModels, canHostLlamaCPP);
+	}, [llmBits.data, settingsProfile.data?.hub_profile.bits, canHostLlamaCPP]);
 
 	const normalizedProvider = normalizeAIProvider(provider);
 	const isAgent = isAgentBackendProvider(normalizedProvider);
@@ -128,6 +135,7 @@ export function useAgentSelection() {
 		return bitsModels.map((bit) => ({
 			id: bit.id,
 			name: bit.meta?.en?.name ?? bit.id,
+			isFree: isFreeLlmModel(bit),
 		}));
 	}, [isAgent, copilotSDK.models, bitsModels]);
 

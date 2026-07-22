@@ -488,16 +488,22 @@ button.hero-bubble-icon {
 		max-width: 100%;
 	}
 }
-/* phones: a big, near-square idle bubble that fills most of the screen */
+/* phones: keep the idle bubble prominent without letting it dominate the screen */
 @media (max-width: 560px) {
 	.hero-bubble-wrap {
-		height: min(92vw, 26rem);
-		transition: height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+		width: min(69vw, 19.5rem);
+		height: min(69vw, 19.5rem);
+		transition:
+			width 0.4s cubic-bezier(0.4, 0, 0.2, 1),
+			height 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 	}
 	/* the composer only needs a comfortable input height — collapse the big idle
 	   bubble when open so the field + controls sit together instead of spreading
 	   across the whole sphere */
-	.hero-bubble-wrap.hero-bubble-open { height: 15rem; }
+	.hero-bubble-wrap.hero-bubble-open {
+		width: 100%;
+		height: 15rem;
+	}
 	/* the rim now hugs the wrap edge (draw(): edgeX/edgeY), so inset the content
 	   well inside it — flush-to-rim content was the source of the text/orb-on-the
 	   -border bug */

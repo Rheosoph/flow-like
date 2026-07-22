@@ -201,12 +201,12 @@ function perpareNews(source: Struct) {
         const invokeAgent = agentInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentFromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }), tools: [fetchPage, addNews] }), history: pushMessage.historyOut })
         eventsChatPushStat({ stepName: source.label, stat: invokeAgent.stats })
     }
-    addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {
+    eventsGeneric addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {
         const push2 = arrayPush({ arrayIn: reportEntry, value: { title: title, uri: uri, summary: summary, interest: label, date: date, report_id: reportID } })
         reportEntry = push2.arrayOut
         return stringFormat({ formatString: "Successfully Added" })
     }
-    fetchPage(url: string, payload: Struct) {
+    eventsGeneric fetchPage(url: string, payload: Struct) {
         eventsChatPushStep({ title: "Reading Website", description: url })
         const aPICall = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })
         aPICall {
@@ -220,7 +220,7 @@ function perpareNews(source: Struct) {
             }
         }
     }
-    search(query: string, language: string, page: int, payload: Struct) {
+    eventsGeneric search(query: string, language: string, page: int, payload: Struct) {
         eventsChatPushStep({ title: "Searching Internet", description: query })
         const aPICall3 = httpFetch({ request: httpMakeRequest({ method: "GET", url: stringFormat({ formatString: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}", page: utilsTypesFallback({ value: page, default: 1 }).result, lang: utilsTypesFallback({ value: language, default: "en-US" }).result, q: a2uiUrlEncode({ input: query }) }) }) })
         aPICall3 {
@@ -239,7 +239,7 @@ function saveConfig(config: Struct) {
     writeString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }), content: valToString({ value: config, pretty: true }) })
 }
 
-clickLatestOverview() {
+eventsSimple clickLatestOverview() {
     const openDatabase2 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
     const createDataFusionSession2 = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
     dfRegisterLance({ session: createDataFusionSession2.session, database: openDatabase2.database, tableName: "reports" })
@@ -247,10 +247,10 @@ clickLatestOverview() {
     a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: sQLQuery2.rows[0].report_id }) })
 }
 
-setReportCreated(valueRef: bool) {
+variableSet setReportCreated(valueRef: bool) {
 }
 
-loadOverview() {
+eventsSimple loadOverview() {
     const openDatabase = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
     const createDataFusionSession = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })
     dfRegisterLance({ session: createDataFusionSession.session, database: openDatabase.database, tableName: "reports" })
@@ -271,11 +271,11 @@ loadOverview() {
     a2uiShowScreen()
 }
 
-widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
     a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: widgetInstanceId }) })
 }
 
-loadConfig() {
+eventsSimple loadConfig() {
     if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })) { // exec_out_exists
         const readToString = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })
         userConfiguration = valFromString({ string: readToString.content })
@@ -285,7 +285,7 @@ loadConfig() {
     }
 }
 
-generateFeed() {
+eventsSimple generateFeed() {
     const findModel = aiGenerativeFindModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })
     model = findModel.model
     const cUIDV22 = cuid()
@@ -309,11 +309,11 @@ generateFeed() {
     eventsChatPushStat({ stepName: "Briefing", stat: invokeAgent3.stats })
 }
 
-simpleEvent() {
+eventsSimple simpleEvent() {
     notifyUser({ title: "Notification", description: "", link: "/briefing?report_id={id}", showDesktop: true })
 }
 
-setupNewElement() {
+eventsSimple setupNewElement() {
     loadConfig()
     const push = arrayPush({ arrayIn: userConfiguration.sources, value: { label: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-label" }).element }).value, content: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, goal: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-goal" }).element }).value, type: (stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "https://" }) || stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "http://" })) ? "RSS" : (stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "r/" }) ? "Reddit" : "Search") } })
     userConfiguration = { general: userConfiguration.general, sources: push.arrayOut }
@@ -321,7 +321,7 @@ setupNewElement() {
     loadConfigDashboard()
 }
 
-loadConfigDashboard() {
+eventsSimple loadConfigDashboard() {
     a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element })
     loadConfig()
     for (const forEach4 of controlForEach({ array: userConfiguration.sources })) {
@@ -331,7 +331,7 @@ loadConfigDashboard() {
     }
 }
 
-showBriefing() {
+eventsSimple showBriefing() {
     const getQueryParams = a2uiGetQueryParams({ paramName: "report_id" })
     if (getQueryParams.exists) {
         if (controlParExecution({ threadModel: "tasks" })) { // exec_out
@@ -362,7 +362,7 @@ showBriefing() {
 notifyProjectUser(success: bool) {
 }
 
-writeReport(title: string, shortSummary: string, report: string, payload: Struct) {
+eventsGeneric writeReport(title: string, shortSummary: string, report: string, payload: Struct) {
     if (reportCreated) {
         return stringFormat({ formatString: "Already created a report" })
     } else {
@@ -380,7 +380,7 @@ writeReport(title: string, shortSummary: string, report: string, payload: Struct
     }
 }
 
-widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
     loadConfig()
     filterSources({ hash: widgetInstanceId })
     saveConfig({ config: userConfiguration })

@@ -451,30 +451,7 @@ export default function Id({
 		(id ?? "") !== "",
 	);
 
-	const { update } = useMobileHeader(
-		{
-			title:
-				metadata.data?.name ??
-				(metadata.isFetching ? (
-					<Skeleton className="h-4 w-24" />
-				) : (
-					"Unknown App"
-				)),
-			right: (
-				<Button
-					key={"open-menu"}
-					variant="outline"
-					size="sm"
-					className="md:hidden"
-					onClick={() => setMobileNavOpen(true)}
-					aria-label="Open menu"
-				>
-					<MenuIcon className="w-4 h-4" />
-				</Button>
-			),
-		},
-		[events.data],
-	);
+	const { update } = useMobileHeader();
 
 	const usableEvents = useMemo(() => {
 		const set = new Set<string>();
@@ -526,21 +503,9 @@ export default function Id({
 
 		update({
 			title: activeItem?.label ?? appName,
-			left: inSubSection ? (
-				<Link
-					key="config-back"
-					href={`/library/config?id=${id}`}
-					className="md:hidden"
-					aria-label="Back to dashboard"
-				>
-					<Button variant="ghost" size="icon" className="size-9">
-						<ChevronLeftIcon className="w-5 h-5" />
-					</Button>
-				</Link>
-			) : undefined,
-			right: [
+			left: [
 				<Button
-					key={"open-menu"}
+					key="config-menu"
 					variant="outline"
 					size="icon"
 					className="md:hidden size-9"
@@ -549,15 +514,27 @@ export default function Id({
 				>
 					<MenuIcon className="w-4 h-4" />
 				</Button>,
-				canUseApp ? (
-					<Link key={"use-app"} href={useAppHref} className="md:hidden">
-						<Button variant="default" size="sm" aria-label="Use App">
-							<SparklesIcon className="w-4 h-4" />
-							Use App
+				inSubSection ? (
+					<Link
+						key="config-back"
+						href={`/library/config?id=${id}`}
+						className="md:hidden"
+						aria-label="Back to dashboard"
+					>
+						<Button variant="ghost" size="icon" className="size-9">
+							<ChevronLeftIcon className="w-5 h-5" />
 						</Button>
 					</Link>
 				) : null,
 			],
+			right: canUseApp ? (
+				<Link key="use-app" href={useAppHref} className="md:hidden">
+					<Button variant="default" size="sm" aria-label="Use App">
+						<SparklesIcon className="w-4 h-4" />
+						Use App
+					</Button>
+				</Link>
+			) : undefined,
 		});
 	}, [
 		metadata.data?.name,
@@ -736,7 +713,7 @@ export default function Id({
 				>
 					<SheetContent
 						side="bottom"
-						className="p-0 flex flex-col max-h-[85dvh] rounded-t-2xl pb-safe"
+						className="h-[85dvh] max-h-[85dvh] overflow-hidden p-0 flex flex-col rounded-t-2xl pb-safe"
 					>
 						<SheetHeader className="p-4 pb-3 border-b text-left space-y-3">
 							<div>
@@ -758,7 +735,7 @@ export default function Id({
 								/>
 							</div>
 						</SheetHeader>
-						<div className="flex-1 min-h-0 overflow-y-auto p-3">
+						<div className="flex-1 min-h-0 overflow-y-auto overscroll-contain touch-pan-y p-3 [-webkit-overflow-scrolling:touch]">
 							<nav
 								className="flex flex-col gap-0.5"
 								key={id + (online?.visibility ?? "")}

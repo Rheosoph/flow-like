@@ -19,6 +19,7 @@ export * from "./runtime-vars-utils";
 
 export * from "./bit/bit";
 export * from "./bit/bit-pack";
+export * from "./bit/local-model-filter";
 export * from "./bit/tts-asset-repair";
 
 export * from "./schema/index";

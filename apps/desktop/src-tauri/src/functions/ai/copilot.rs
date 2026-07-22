@@ -38,7 +38,7 @@ use std::{
     process::Stdio,
     sync::{
         Arc, LazyLock, Mutex as StdMutex,
-        atomic::{AtomicU64, Ordering as AtomicOrdering},
+        atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
     },
     time::{Duration, Instant},
 };
@@ -2248,6 +2248,30 @@ fn frontend_platform_tool_spec(
     }
 }
 
+fn global_orchestrator_tool_scope_error(
+    tool_set: FrontendPlatformToolSet,
+    tool_name: &str,
+) -> Option<String> {
+    use flow_like::flow::copilot::tool_spec::{
+        ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, OPEN_URL_TOOL,
+    };
+
+    (tool_set != FrontendPlatformToolSet::Global
+        && matches!(
+            tool_name,
+            INTERNET_SEARCH_TOOL | OPEN_URL_TOOL | ARCHIVE_LOOKUP_TOOL
+        ))
+    .then(|| {
+        serde_json::json!({
+            "status": "error",
+            "code": "global_orchestrator_tool_only",
+            "tool": tool_name,
+            "message": "Public-web research is available only to the top-level FlowPilot orchestrator."
+        })
+        .to_string()
+    })
+}
+
 /// Desktop implementation of the platform tool bridge. Calls are validated and assigned an
 /// approval policy from the selected shared spec set, then routed over the configured Tauri event
 /// without blocking an async runtime worker.
@@ -2262,7 +2286,7 @@ impl PlatformToolBridge for DesktopPlatformBridge {
     async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
         use super::copilot_sdk_tools::approval_from_spec;
         use super::frontend_tool_bridge::FrontendToolApproval;
-        use flow_like::flow::copilot::tool_spec::{INTERNET_SEARCH_TOOL, missing_required_args};
+        use flow_like::flow::copilot::tool_spec::missing_required_args;
 
         // Do not even enqueue a frontend event after the owning model run has ended. Cancellation
         // is checked again inside the blocking bridge scope to close the race after this preflight.
@@ -2274,6 +2298,9 @@ impl PlatformToolBridge for DesktopPlatformBridge {
             })
             .to_string();
         }
+        if let Some(error) = global_orchestrator_tool_scope_error(self.tool_set, tool_name) {
+            return error;
+        }
         let spec = frontend_platform_tool_spec(self.tool_set, tool_name);
 
         // Reject calls with missing required arguments before any approval dialog or dispatch,
@@ -2282,22 +2309,6 @@ impl PlatformToolBridge for DesktopPlatformBridge {
             && let Some(error) = missing_required_args(spec, &arguments)
         {
             return serde_json::json!({ "status": "error", "error": error }).to_string();
-        }
-
-        // Host-local tool: run the web search in-process instead of round-tripping the frontend.
-        if tool_name == INTERNET_SEARCH_TOOL {
-            let args = arguments.clone();
-            return match tokio::task::spawn_blocking(move || {
-                super::internet_search::run_internet_search(&args)
-            })
-            .await
-            {
-                Ok(value) => serde_json::to_string(&value)
-                    .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
-                Err(err) => {
-                    serde_json::json!({ "status": "error", "error": err.to_string() }).to_string()
-                }
-            };
         }
 
         // Approval + timeout come from the shared platform tool spec, so the Bits path enforces
@@ -2513,6 +2524,7 @@ async fn external_code_agent_chat_internal(
         nested,
         tool_context,
         memory,
+        &raw_user_prompt,
     );
     if read_only {
         tools.retain(|(tool, _)| !is_flowpilot_mutation_tool(&tool.name));
@@ -2635,7 +2647,37 @@ async fn external_code_agent_chat_internal(
                 cancel_invocation.cancel();
             })
         });
-        let run_result = run_external_agent_invocation(
+        let predraft_checkpoint_fired = Arc::new(AtomicBool::new(false));
+        let predraft_checkpoint_watchdog = workflow_state.as_ref().map(|state| {
+            let state = state.clone();
+            let cancel_invocation = invocation_cancellation.clone();
+            let fired = predraft_checkpoint_fired.clone();
+            tokio::spawn(async move {
+                let mut ready_since: Option<Instant> = None;
+                loop {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let waiting = match state.lock() {
+                        Ok(state) => workflow_waiting_for_initial_source_checkpoint(&state),
+                        Err(_) => return,
+                    };
+                    if !waiting {
+                        if ready_since.is_some() {
+                            // A source operation started or a draft was retained; the soft
+                            // checkpoint did its job and must not interfere with validation.
+                            return;
+                        }
+                        continue;
+                    }
+                    let started = ready_since.get_or_insert_with(Instant::now);
+                    if started.elapsed() >= EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET {
+                        fired.store(true, AtomicOrdering::Relaxed);
+                        cancel_invocation.cancel();
+                        return;
+                    }
+                }
+            })
+        });
+        let mut run_result = run_external_agent_invocation(
             invocation,
             channel.clone(),
             parent_request_id.clone(),
@@ -2644,6 +2686,21 @@ async fn external_code_agent_chat_internal(
         .await;
         if let Some(watchdog) = wall_clock_watchdog {
             watchdog.abort();
+        }
+        if let Some(watchdog) = predraft_checkpoint_watchdog {
+            watchdog.abort();
+        }
+        if predraft_checkpoint_fired.load(AtomicOrdering::Relaxed) {
+            if let Some(state) = workflow_state.as_ref()
+                && let Ok(mut state) = state.lock()
+                && !state.flowscript_draft_retained
+            {
+                state.last_status = Some("declarations_ready_no_source".to_string());
+            }
+            run_result = Err(format!(
+                "FlowPilot pre-draft source checkpoint timed out after {} seconds with usable declarations but no source operation; continue in a fresh bounded phase and call write_flowscript immediately",
+                EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET.as_secs()
+            ));
         }
 
         let phase_outcome = match mcp_bridge.finish_phase().await {
@@ -2999,6 +3056,7 @@ async fn copilot_sdk_chat_internal(
         nested,
         tool_context,
         memory,
+        &raw_user_prompt,
     );
     if read_only {
         tools.retain(|(tool, _)| !is_flowpilot_mutation_tool(&tool.name));
@@ -4803,6 +4861,7 @@ fn build_flowpilot_sdk_tools(
     nested: bool,
     tool_context: Option<FrontendToolContext>,
     memory: Option<Arc<AssistantMemory>>,
+    user_prompt: &str,
 ) -> Vec<(copilot_sdk::Tool, copilot_sdk::ToolHandler)> {
     use super::{
         copilot_sdk_tools::{
@@ -4816,7 +4875,7 @@ fn build_flowpilot_sdk_tools(
     // its own bridge event so its tool requests reach the global listener, not the board copilot's.
     if global {
         let bridge = FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT);
-        return create_global_assistant_tools(bridge, memory);
+        return create_global_assistant_tools(bridge, memory, user_prompt);
     }
 
     let mut tools = match scope {
@@ -5069,6 +5128,10 @@ fn mcp_progress_heartbeat_notification(
 /// diagnostics) instead of an opaque outer-channel timeout after a burned turn.
 const NESTED_RUN_WALL_CLOCK_BUDGET: Duration = Duration::from_secs(12 * 60);
 const MAX_EXTERNAL_WORKFLOW_CONTINUATIONS: u8 = 2;
+// Once a usable live declaration batch exists, a provider phase must dispatch its first source
+// checkpoint promptly. If it silently composes until this soft bound, retain the discovery state
+// and move to a fresh continuation instead of letting the phase consume the full nested budget.
+const EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET: Duration = Duration::from_secs(3 * 60);
 const MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS: u8 = 12;
 const MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS: u8 = 3;
 // A continuation phase whose instructions demand more patching must actually be executable:
@@ -5094,6 +5157,7 @@ const MAX_EXTERNAL_TYPED_IR_STALLED_ATTEMPTS: u8 = 3;
 const MAX_EXTERNAL_WORKFLOW_DECLARATION_CALLS: u8 =
     MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS.saturating_add(1);
 const MAX_INITIAL_DECLARATION_ATTEMPTS: u8 = 3;
+const MAX_EXTERNAL_PREDRAFT_CONTEXT_READS: u8 = 6;
 const MAX_REPAIR_DECLARATION_QUERIES: usize = 12;
 const MAX_REPAIR_DECLARATION_QUERY_BYTES: usize = 200;
 const MAX_REPAIR_DECLARATION_ATTEMPTS_PER_KEY: u8 = 2;
@@ -5157,10 +5221,12 @@ struct WorkflowToolLoopSnapshot {
 #[derive(Debug, Default)]
 struct WorkflowToolLoopState {
     current_reads: u8,
+    predraft_context_reads: u8,
     declaration_calls: u8,
     declarations_since_edit: u8,
     declaration_lookup_in_flight: bool,
     initial_declaration_attempts: u8,
+    initial_declaration_lookup_usable: bool,
     initial_declaration_lookup_complete: bool,
     unresolved_declaration_queries: Vec<String>,
     completed_repair_lookup_keys: HashSet<String>,
@@ -5247,6 +5313,7 @@ impl WorkflowToolLoopState {
         state.flowscript_draft_id = Some(context.draft_id.clone());
         state.flowscript_draft_retained = true;
         state.flowscript_revision = Some(context.revision);
+        state.initial_declaration_lookup_usable = true;
         state.initial_declaration_lookup_complete = true;
         state.mutation_path = Some(WorkflowMutationPath::FlowScript);
         if !context.checked && !diagnostics.is_empty() {
@@ -5266,11 +5333,11 @@ impl WorkflowToolLoopState {
     }
 
     fn needs_initial_declaration_coverage(&self) -> bool {
-        // This is an explicit host-owned authorization bit. Incidental source-tool failures must
-        // never waive the first live declaration lookup merely because they populated status,
-        // diagnostics, or a non-authoritative source candidate. Exact retained recovery seeds the
-        // bit directly in `from_flowscript_recovery`.
-        !self.initial_declaration_lookup_complete
+        // This is an explicit host-owned authorization bit. The first usable live-catalog result
+        // unlocks a retained full-shape draft; complete coverage remains separate reporting data.
+        // Compiler diagnostics, rather than exhaustive pre-draft discovery, drive later focused
+        // lookups. Exact retained recovery seeds both bits in `from_flowscript_recovery`.
+        !(self.initial_declaration_lookup_usable || self.initial_declaration_lookup_complete)
     }
 
     fn snapshot(&self) -> WorkflowToolLoopSnapshot {
@@ -5747,6 +5814,15 @@ fn workflow_state_has_retained_candidate(
     }
 }
 
+fn workflow_waiting_for_initial_source_checkpoint(state: &WorkflowToolLoopState) -> bool {
+    state.initial_declaration_lookup_usable
+        && !state.queued
+        && !state.flowscript_draft_retained
+        && !state.typed_draft_retained
+        && state.flowscript_operation_attempts == 0
+        && state.typed_operation_attempts == 0
+}
+
 /// Outcome of preparing the workflow loop budget for one SDK idle continuation.
 #[derive(Debug, PartialEq, Eq)]
 enum IdleContinuationBudget {
@@ -5813,6 +5889,7 @@ fn workflow_tool_preflight_sdk(
     args: &serde_json::Value,
 ) -> Option<copilot_sdk::ToolResultObject> {
     let result = workflow_database_setup_preflight(state, tool_name, args)
+        .or_else(|| workflow_predraft_context_preflight(state, tool_name))
         .or_else(|| workflow_tool_preflight_with_args(state, tool_name, args))
         .or_else(|| workflow_candidate_preflight(state, tool_name, args))?;
     let message = result
@@ -5865,6 +5942,48 @@ fn workflow_database_setup_preflight(
         }),
         false,
     ))
+}
+
+/// Keep ancillary context reads from consuming the entire delegated run before any recoverable
+/// source exists. The first few database/UI/storage inspections remain available for authoritative
+/// context, but after that the specialist must retain a full-shape draft and let compiler
+/// diagnostics drive any additional focused discovery.
+fn workflow_predraft_context_preflight(
+    state: &Arc<StdMutex<WorkflowToolLoopState>>,
+    tool_name: &str,
+) -> Option<rmcp::model::CallToolResult> {
+    if !matches!(tool_name, "database_tool" | "ui_inspect" | "storage_tool") {
+        return None;
+    }
+
+    let Ok(mut state) = state.lock() else {
+        return Some(workflow_loop_state_unavailable_result());
+    };
+    if state.queued || state.flowscript_draft_retained || state.typed_draft_retained {
+        return None;
+    }
+    if state.predraft_context_reads >= MAX_EXTERNAL_PREDRAFT_CONTEXT_READS {
+        return Some(workflow_loop_result(
+            serde_json::json!({
+                "status": "predraft_inspection_budget_exhausted",
+                "code": "PREDRAFT_INSPECTION_BUDGET_EXHAUSTED",
+                "retryable": true,
+                "next_action": if state.initial_declaration_lookup_usable {
+                    "write_flowscript"
+                } else if state.current_reads > 0 {
+                    "get_declarations"
+                } else {
+                    "get_current_flowscript_then_get_declarations"
+                },
+                "inspection_calls": state.predraft_context_reads,
+                "inspection_budget": MAX_EXTERNAL_PREDRAFT_CONTEXT_READS,
+                "message": "The bounded ancillary inspection budget is exhausted before a recoverable workflow draft exists. Reuse the database, UI, and storage context already returned. After one usable declaration batch, call write_flowscript immediately with a full-shape draft; do not repeat or exhaustively inventory schemas and pages."
+            }),
+            false,
+        ));
+    }
+    state.predraft_context_reads = state.predraft_context_reads.saturating_add(1);
+    None
 }
 
 fn guard_sdk_workflow_tools(
@@ -6665,7 +6784,7 @@ fn workflow_tool_preflight_with_args(
                         "next_action": "stop_and_report_unavailable_capabilities",
                         "attempts": state.initial_declaration_attempts,
                         "unresolved_queries": state.unresolved_declaration_queries,
-                        "message": "Every bounded initial declaration attempt left unmatched or omitted capabilities. No FlowScript source write was dispatched; report those unavailable capabilities instead of guessing names or pins."
+                        "message": "No bounded initial declaration attempt returned a usable live signature. No FlowScript source write was dispatched; report the unavailable core capabilities instead of guessing names or pins."
                     }),
                     true,
                 ));
@@ -6675,7 +6794,7 @@ fn workflow_tool_preflight_with_args(
                     "status": "declaration_lookup_required",
                     "retryable": true,
                     "next_action": "get_declarations",
-                    "message": "Before the first FlowScript draft, make one batched get_declarations call covering every planned catalog capability. Exact function, pin, repeated-input, schema, and companion-call guidance from that live result must be used instead of guessed names."
+                    "message": "Before the first FlowScript draft, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape. Do not enumerate every utility operation. After any usable live result, write and retain the full-shape draft immediately; compiler diagnostics authorize focused later lookups."
                 }),
                 false,
             ))
@@ -6787,7 +6906,7 @@ fn workflow_tool_preflight_with_args(
                 serde_json::json!({
                     "status": "discovery_blocked",
                     "next_action": "continue_workflow_draft",
-                    "message": "This is a workflow mutation run. Broad catalog/graph discovery is disabled. Read the current FlowScript once, use one batched get_declarations call, then write_flowscript, patch/check the retained source, and commit_flowscript."
+                    "message": "This is a workflow mutation run. Broad catalog/graph discovery is disabled. Read the current FlowScript once, use one bounded get_declarations batch for the highest-leverage calls, then immediately write_flowscript, patch/check the retained source, and commit_flowscript."
                 }),
                 true,
             ))
@@ -6813,7 +6932,7 @@ fn workflow_tool_preflight_with_args(
                         "retryable": true,
                         "next_action": "get_declarations",
                         "unresolved_queries": state.unresolved_declaration_queries,
-                        "message": "The initial declaration lookup must contain focused queries in `query` or `queries`. Submit one batched lookup covering the planned catalog capabilities; an empty guidance lookup does not unlock FlowScript authoring."
+                        "message": "The initial declaration lookup must contain focused queries in `query` or `queries`. Submit one bounded batch for the highest-leverage catalog calls needed to establish the end-to-end shape; an empty guidance lookup does not unlock FlowScript authoring."
                     }),
                     false,
                 ));
@@ -6848,7 +6967,7 @@ fn workflow_tool_preflight_with_args(
                         "next_action": "stop_and_report_unavailable_capabilities",
                         "attempts": state.initial_declaration_attempts,
                         "unresolved_queries": state.unresolved_declaration_queries,
-                        "message": "The bounded initial declaration lookup could not cover every planned capability. No source write was dispatched. Stop and report the exact unmatched or omitted capabilities instead of guessing names or pins."
+                        "message": "The bounded initial declaration lookup did not return a usable live signature. No source write was dispatched. Stop and report the exact unmatched capabilities instead of guessing names or pins."
                     }),
                     true,
                 ));
@@ -6880,7 +6999,7 @@ fn workflow_tool_preflight_with_args(
             serde_json::json!({
                 "status": "discovery_budget_exhausted",
                 "next_action": "write_or_patch_flowscript",
-                "message": "Declaration discovery for this draft is complete. Submit the complete source with write_flowscript, or patch the retained revision. Then check it; do not restart discovery."
+                "message": "A usable declaration batch is retained. Submit the full-shape source with write_flowscript now, or patch the retained revision. Do not chase omitted or unmatched entries before the first draft; use compiler diagnostics for focused follow-up lookups."
             }),
             false,
         )),
@@ -7791,6 +7910,7 @@ fn workflow_tool_record(
 ) {
     if tool_name == "get_declarations" {
         if let Ok(mut state) = state.lock() {
+            let was_initial_lookup = state.needs_initial_declaration_coverage();
             let usable = declaration_result_is_usable(result_text);
             let mut coverage = declaration_batch_coverage(result_text);
             if let Some(parsed_coverage) = coverage.as_mut()
@@ -7852,12 +7972,13 @@ fn workflow_tool_record(
                 state.declarations_since_edit = 0;
             }
             if usable {
+                state.initial_declaration_lookup_usable = true;
                 state.last_declarations = Some(retain_declaration_result(
                     state.last_declarations.as_deref(),
                     result_text,
                 ));
             }
-            if state.needs_initial_declaration_coverage() {
+            if was_initial_lookup {
                 match coverage {
                     Some(coverage) => {
                         let previous_unresolved =
@@ -7969,8 +8090,10 @@ fn workflow_tool_record(
                         }
                     }
                 }
-                if !state.initial_declaration_lookup_complete {
-                    // Permit a bounded follow-up containing only unmatched/omitted capabilities.
+                if !usable && !state.initial_declaration_lookup_complete {
+                    // No usable signature was returned, so permit a bounded focused retry. Once
+                    // any live signature is retained, the next checkpoint must be source; omitted
+                    // and unmatched capabilities are handled from compiler diagnostics later.
                     state.declarations_since_edit = 0;
                 }
             }
@@ -8550,7 +8673,7 @@ impl FlowPilotMcpServer {
 impl rmcp::ServerHandler for FlowPilotMcpServer {
     fn get_info(&self) -> rmcp::model::ServerInfo {
         let instructions = if self.workflow_state.is_some() {
-            "FlowPilot tools share the exact board/frontend/runtime capabilities used by Bits and GitHub Copilot. WORKFLOW BUILD LOOP: FlowScript is the sole model-authored representation for executable workflow behavior. Read get_current_flowscript, make one batched get_declarations call for every required catalog signature, then write the complete source with write_flowscript. Repair the retained source with patch_flowscript, run check_flowscript, and finish with commit_flowscript at the latest revision. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; structured compiler diagnostics are authoritative. Never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments; it rejects executable commands and every layer mutation. Never use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools; if the request also includes UI, finish it with the UI tool. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes."
+            "FlowPilot tools share the exact board/frontend/runtime capabilities used by Bits and GitHub Copilot. WORKFLOW BUILD LOOP: FlowScript is the sole model-authored representation for executable workflow behavior. Read get_current_flowscript, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, then immediately retain the full-shape source with write_flowscript. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; structured compiler diagnostics are authoritative. Never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments; it rejects executable commands and every layer mutation. Never use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools; if the request also includes UI, finish it with the UI tool. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes."
         } else {
             "Use FlowPilot's reviewed tools for board, UI, runtime, and app operations. Do not use shell or file-edit tools for FlowPilot artifacts. For read-only requests, inspect only what is needed and answer in normal text."
         };
@@ -8633,6 +8756,7 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
 
             if let Some(state) = &self.workflow_state
                 && let Some(result) = workflow_database_setup_preflight(state, &tool_name, &args)
+                    .or_else(|| workflow_predraft_context_preflight(state, &tool_name))
                     .or_else(|| workflow_tool_preflight_with_args(state, &tool_name, &args))
                     .or_else(|| workflow_candidate_preflight(state, &tool_name, &args))
             {
@@ -8828,9 +8952,16 @@ fn flowpilot_tool_result_to_mcp(
                 .unwrap_or_else(|| result.text_result_for_llm.clone()),
         )])
     } else {
-        rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(
-            result.text_result_for_llm,
-        )])
+        let mut contents = vec![rmcp::model::Content::text(result.text_result_for_llm)];
+        if let Some(images) = result.binary_results_for_llm {
+            contents.extend(images.into_iter().filter_map(|image| {
+                image
+                    .mime_type
+                    .starts_with("image/")
+                    .then(|| rmcp::model::Content::image(image.data, image.mime_type))
+            }));
+        }
+        rmcp::model::CallToolResult::success(contents)
     }
 }
 
@@ -9101,13 +9232,18 @@ impl ExternalAgentInvocation {
         let mut args = vec![
             "exec".to_string(),
             "--experimental-json".to_string(),
+            // Keep authentication in CODEX_HOME, but do not inherit user-configured MCP servers,
+            // browser tools, or web-search settings. FlowPilot must expose exactly its scoped MCP
+            // surface: the global orchestrator gets the reviewed public-web tools, while Data
+            // Studio and every other specialist get none.
+            "--ignore-user-config".to_string(),
             "--sandbox".to_string(),
             "read-only".to_string(),
             "--cd".to_string(),
-            std::env::current_dir()
-                .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                .display()
-                .to_string(),
+            // FlowPilot supplies its own scoped context and tools. A neutral cwd
+            // prevents project discovery and macOS Desktop/Documents permission
+            // prompts when the desktop app happened to inherit a protected cwd.
+            std::env::temp_dir().display().to_string(),
             "--skip-git-repo-check".to_string(),
             "--config".to_string(),
             format!("mcp_servers.flowpilot.url={:?}", mcp_url),
@@ -9125,6 +9261,12 @@ impl ExternalAgentInvocation {
             "features.use_rmcp_client=true".to_string(),
             "--config".to_string(),
             "approval_policy=\"never\"".to_string(),
+            "--config".to_string(),
+            // Keep this explicit even with --ignore-user-config: it prevents Codex defaults or
+            // future profile layers from enabling native Responses web search independently of the
+            // scoped MCP surface. Global research must use FlowPilot's reviewed tools, while nested
+            // specialists must remain unable to reach the public web at all.
+            "web_search=\"disabled\"".to_string(),
         ];
         // Model ids reach this point straight from Codex's own auth-aware catalog
         // (discovered via `codex app-server`'s `model/list`), so an explicit
@@ -9314,8 +9456,8 @@ fn build_external_agent_prompt(
         r#"
 THIS IS A WORKFLOW MUTATION RUN. Follow this bounded loop exactly:
 1. FlowScript is the ONE model-authored representation for executable workflow behavior. Direct commands are reserved for visual/layout and non-FlowScript changes; never author workflow logic as command JSON.
-2. Read get_current_flowscript once. Plan the whole request, then make ONE batched get_declarations call containing every required catalog-signature search. Never guess a declaration or pin.
-3. Call write_flowscript with the complete source and a stable draft id. For an existing board, edit the exact returned document and preserve every kept //@n anchor. For a new board, author real functions and Event entries with concrete catalog calls.
+2. Read get_current_flowscript once. Plan the whole request, then make ONE bounded, focused get_declarations batch for only the highest-leverage catalog calls needed to establish the end-to-end shape. Never enumerate every utility or guess a declaration or pin. Use at most six ancillary database/UI/storage inspections before the first write.
+3. After any usable declaration result, call write_flowscript IMMEDIATELY with a stable draft id and a full-shape checkpoint that preserves the complete requested scope. It may retain compiler diagnostics; that is recoverable progress, not success. Do not chase omitted/unmatched declaration queries first. For an existing board, edit the exact returned document and preserve every kept //@n anchor. For a new board, author real functions and Event entries with concrete catalog calls.
 4. If compilation fails, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Call check_flowscript next. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery.
 5. Call commit_flowscript at the latest checked revision. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
 6. When commit_flowscript returns `queued`/`already_queued`, stop workflow tools. If the user also requested UI, finish it with emit_ui; otherwise summarize briefly.
@@ -9346,6 +9488,15 @@ fn build_external_workflow_continuation_prompt(
 ) -> String {
     let status = snapshot
         .and_then(|state| state.last_status.as_deref())
+        .or_else(|| {
+            snapshot
+                .filter(|state| {
+                    state.last_declarations.is_some()
+                        && state.flowscript_operation_attempts == 0
+                        && state.typed_operation_attempts == 0
+                })
+                .map(|_| "declarations_ready_no_source")
+        })
         .unwrap_or("no_edit_submitted");
     let errors = snapshot
         .filter(|state| !state.last_errors.is_empty())
@@ -9425,7 +9576,7 @@ fn build_external_workflow_continuation_prompt(
                 }
             })
             .unwrap_or_else(|| {
-                "\nNo FlowScript draft was submitted. Read the current source, fetch declarations once, then call write_flowscript with the complete implementation.\n".to_string()
+                "\nNo FlowScript draft was submitted. Reuse any retained current source and declarations, then call write_flowscript immediately with a full-shape implementation checkpoint. Do not postpone the first retained source for exhaustive discovery.\n".to_string()
             })
     };
     let declarations = snapshot
@@ -9439,6 +9590,7 @@ fn build_external_workflow_continuation_prompt(
     let unresolved_declarations = snapshot
         .filter(|state| {
             !state.declaration_lookup_complete
+                && state.last_declarations.is_none()
                 && !state.unresolved_declaration_queries.is_empty()
         })
         .map(|state| {
@@ -9482,7 +9634,7 @@ fn build_external_workflow_continuation_prompt(
     } else if retained_source_mode {
         "Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript, run check_flowscript, and call commit_flowscript at the latest revision. Do not repeat broad searches or restart with a smaller candidate."
     } else {
-        "No source draft is retained yet. Continue the bounded pre-draft lifecycle: reuse any retained declarations, resolve only reported declaration misses, then call write_flowscript once with the complete implementation before check and commit."
+        "No source draft is retained yet. Continue the bounded pre-draft lifecycle: reuse any retained declarations and call write_flowscript immediately with a full-shape checkpoint. Do not resolve every omitted or unmatched query first; use compiler diagnostics for narrow follow-ups, then check and commit."
     };
 
     format!(
@@ -9513,7 +9665,11 @@ fn nested_wall_clock_incomplete_error(
     format!(
         "NESTED_RUN_WALL_CLOCK_BUDGET_EXHAUSTED: this nested FlowPilot run reached its {}-minute wall-clock budget and was stopped gracefully; this result is terminal for this run. {}",
         NESTED_RUN_WALL_CLOCK_BUDGET.as_secs() / 60,
-        external_workflow_incomplete_error(snapshot, provider_continuations)
+        external_workflow_incomplete_error_with_fallback(
+            snapshot,
+            provider_continuations,
+            "nested wall-clock budget",
+        )
     )
 }
 
@@ -9521,12 +9677,33 @@ fn external_workflow_incomplete_error(
     snapshot: Option<&WorkflowToolLoopSnapshot>,
     provider_continuations: u8,
 ) -> String {
+    external_workflow_incomplete_error_with_fallback(
+        snapshot,
+        provider_continuations,
+        "provider continuation budget",
+    )
+}
+
+fn external_workflow_incomplete_error_with_fallback(
+    snapshot: Option<&WorkflowToolLoopSnapshot>,
+    provider_continuations: u8,
+    fallback_exhausted: &str,
+) -> String {
     let status = snapshot
         .and_then(|state| state.last_status.as_deref())
+        .or_else(|| {
+            snapshot
+                .filter(|state| {
+                    state.last_declarations.is_some()
+                        && state.flowscript_operation_attempts == 0
+                        && state.typed_operation_attempts == 0
+                })
+                .map(|_| "declarations_ready_no_source")
+        })
         .unwrap_or("no_edit_submitted");
     let exhausted = snapshot
         .and_then(|state| state.exhausted_budget.as_deref())
-        .unwrap_or("provider continuation budget");
+        .unwrap_or(fallback_exhausted);
     let budgets = snapshot
         .map(|state| {
             format!(
@@ -9642,6 +9819,9 @@ async fn run_external_agent_invocation(
     let mut command = tokio::process::Command::new(&invocation.executable);
     command
         .args(&invocation.args)
+        // Claude inherits the process cwd, while Codex also receives the matching
+        // --cd above. Neither should inspect an incidental Finder/Dock launch path.
+        .current_dir(std::env::temp_dir())
         .env("PATH", augmented_path_with_dirs(&invocation.path_dirs))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -11396,7 +11576,6 @@ impl FlowPilotAgentCapabilitySet {
         }
 
         tool_names.extend([
-            "internet_search",
             "database_tool",
             "storage_tool",
             "execute_event",
@@ -11413,6 +11592,29 @@ impl FlowPilotAgentCapabilitySet {
             tool_protocol: FlowPilotAgentTransportKind::DirectSdkTools,
             tool_names: tool_names.into_iter().map(str::to_string).collect(),
         }
+    }
+
+    fn add_global_orchestrator_tools(&mut self) {
+        self.tool_names.extend([
+            "internet_search".to_string(),
+            "open_url".to_string(),
+            "archive_lookup".to_string(),
+        ]);
+        self.tool_names.sort_unstable();
+        self.tool_names.dedup();
+    }
+
+    fn for_surface(
+        scope: CopilotScope,
+        has_board: bool,
+        has_graph_context: bool,
+        global_orchestrator: bool,
+    ) -> Self {
+        let mut capabilities = Self::shared_for(scope, has_board, has_graph_context);
+        if global_orchestrator {
+            capabilities.add_global_orchestrator_tools();
+        }
+        capabilities
     }
 
     fn for_status(transport: FlowPilotAgentTransportKind) -> Self {
@@ -11733,10 +11935,11 @@ fn build_flowpilot_agent_surface(
         ));
     }
 
-    let capabilities = FlowPilotAgentCapabilitySet::shared_for(
+    let capabilities = FlowPilotAgentCapabilitySet::for_surface(
         scope,
         board_arc.is_some(),
         graph_context.is_some(),
+        global.is_some(),
     );
 
     FlowPilotAgentSurface {
@@ -11920,7 +12123,38 @@ fn extra_bin_dirs() -> Vec<std::path::PathBuf> {
         home.join(".bun/bin"),
         home.join(".local/share/pnpm"),
         home.join(".local/bin"),
+        home.join(".asdf/shims"),
     ];
+
+    // Homebrew's documented Linux installation uses the linuxbrew home rather
+    // than either macOS prefix above. A per-user Linuxbrew install is also common.
+    #[cfg(target_os = "linux")]
+    dirs.extend([
+        PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+        home.join(".linuxbrew/bin"),
+    ]);
+
+    // GUI apps on Windows may not see newly added user PATH entries until the
+    // next login. Probe the standard npm and WinGet links directly, plus the
+    // GitHub Copilot CLI location documented by GitHub's SDK guide.
+    #[cfg(windows)]
+    {
+        if let Some(data_dir) = dirs_next::data_dir() {
+            dirs.push(data_dir.join("npm"));
+        }
+        if let Some(local_data_dir) = dirs_next::data_local_dir() {
+            dirs.push(local_data_dir.join("Microsoft/WinGet/Links"));
+            dirs.push(local_data_dir.join("pnpm"));
+        }
+        for variable in ["ProgramFiles", "ProgramW6432"] {
+            if let Ok(program_files) = std::env::var(variable) {
+                let trimmed = program_files.trim();
+                if !trimmed.is_empty() {
+                    dirs.push(PathBuf::from(trimmed).join("GitHub"));
+                }
+            }
+        }
+    }
 
     // nvm – scan all installed node versions
     let nvm_dir = std::env::var("NVM_DIR")
@@ -11991,6 +12225,7 @@ fn codex_ide_extension_candidate_dirs(home: &Path) -> Vec<PathBuf> {
     for root in [
         home.join(".vscode/extensions"),
         home.join(".vscode-insiders/extensions"),
+        home.join(".vscode-oss/extensions"),
         home.join(".cursor/extensions"),
         home.join(".windsurf/extensions"),
     ] {
@@ -12244,14 +12479,6 @@ fn codex_npm_search_roots(app_handle: Option<&AppHandle>) -> Vec<PathBuf> {
             resource_dir.join("node_modules"),
             resource_dir.join("codex/node_modules"),
         ]);
-    }
-
-    if let Ok(current_dir) = std::env::current_dir() {
-        let mut dir = Some(current_dir.as_path());
-        while let Some(path) = dir {
-            roots.push(path.join("node_modules"));
-            dir = path.parent();
-        }
     }
 
     if let Some(home) = dirs_next::home_dir() {
@@ -14616,11 +14843,59 @@ mod tests {
     fn board_prompt_submits_flowscript_before_database_setup() {
         let prompt = flow_like::copilot::prompts::board_sdk_flowscript_system_prompt("", 0);
         assert!(prompt.contains("database setup is\nnever a prerequisite"));
-        assert!(prompt.contains("submit the full board through\n`write_flowscript` before"));
+        assert!(
+            prompt.contains("submit the full-shape board through `write_flowscript` immediately")
+        );
+        assert!(prompt.contains("ONE bounded, focused `get_declarations`"));
         assert!(prompt.contains("One such result proves the capability mismatch"));
         assert!(prompt.contains(
             "Record any remaining requested schemas as pending and finish/apply the board"
         ));
+    }
+
+    #[test]
+    fn external_workflow_prompt_requires_an_early_retained_checkpoint() {
+        let prompt = build_external_agent_prompt("system", "build it", true);
+        assert!(prompt.contains("ONE bounded, focused get_declarations batch"));
+        assert!(prompt.contains("call write_flowscript IMMEDIATELY"));
+        assert!(prompt.contains("at most six ancillary"));
+        assert!(prompt.contains("It may retain compiler diagnostics"));
+        assert!(!prompt.contains("every required catalog-signature search"));
+    }
+
+    #[test]
+    fn predraft_checkpoint_watchdog_arms_until_a_source_operation_starts() {
+        let mut state = WorkflowToolLoopState::default();
+        assert!(!workflow_waiting_for_initial_source_checkpoint(&state));
+        state.initial_declaration_lookup_usable = true;
+        assert!(workflow_waiting_for_initial_source_checkpoint(&state));
+        // An unrelated position/comment operation must not permanently disarm the source
+        // checkpoint. Source/typed operation counters are the authoritative transition.
+        state.edit_in_flight = true;
+        assert!(workflow_waiting_for_initial_source_checkpoint(&state));
+        state.flowscript_operation_attempts = 1;
+        assert!(!workflow_waiting_for_initial_source_checkpoint(&state));
+    }
+
+    #[test]
+    fn continuation_writes_after_partial_but_usable_declaration_coverage() {
+        let snapshot = WorkflowToolLoopSnapshot {
+            last_declarations: Some(
+                "declare function emailImapConnect({ host: string }): (connection: Struct);"
+                    .to_string(),
+            ),
+            declaration_lookup_complete: false,
+            unresolved_declaration_queries: vec!["smtp send".to_string()],
+            ..Default::default()
+        };
+        let prompt =
+            build_external_workflow_continuation_prompt("build support mail", Some(&snapshot), 1);
+        assert!(prompt.contains("DECLARATIONS ALREADY FETCHED"));
+        assert!(prompt.contains("call write_flowscript immediately"));
+        assert!(prompt.contains("last status: declarations_ready_no_source"));
+        assert!(!prompt.contains("UNRESOLVED DECLARATION COVERAGE"));
+        let error = external_workflow_incomplete_error(Some(&snapshot), 0);
+        assert!(error.contains("last status: declarations_ready_no_source"));
     }
 
     #[test]
@@ -14920,7 +15195,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_declaration_coverage_retains_matches_and_gates_source_until_complete() {
+    fn partial_declaration_coverage_retains_matches_and_unlocks_first_source_checkpoint() {
         let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
         let initial = serde_json::json!({ "queries": ["imap receive", "smtp send"] });
         assert!(workflow_tool_preflight_with_args(&state, "get_declarations", &initial).is_none());
@@ -14935,6 +15210,7 @@ mod tests {
         );
         {
             let guard = state.lock().expect("state lock");
+            assert!(guard.initial_declaration_lookup_usable);
             assert!(!guard.initial_declaration_lookup_complete);
             assert_eq!(guard.unresolved_declaration_queries, ["smtp send"]);
             assert!(
@@ -14948,15 +15224,17 @@ mod tests {
             "draft_id": "coverage-gated",
             "source": "eventsSimple() {}"
         });
-        assert!(
-            workflow_tool_preflight_with_args(&state, "write_flowscript", &write_args).is_some()
-        );
-
         let unrelated = serde_json::json!({ "queries": ["string replace"] });
         let rejected = workflow_tool_preflight_with_args(&state, "get_declarations", &unrelated)
-            .expect("an unrelated follow-up must be rejected before dispatch");
+            .expect("a second pre-draft lookup must redirect to the retained source checkpoint");
         let rejected = workflow_call_result_json(&rejected);
-        assert_eq!(rejected["code"], "DECLARATION_FOLLOW_UP_UNRELATED");
+        assert_eq!(rejected["status"], "discovery_budget_exhausted");
+        assert_eq!(rejected["next_action"], "write_or_patch_flowscript");
+        assert!(
+            rejected["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("Do not chase omitted or unmatched"))
+        );
         {
             let guard = state.lock().expect("state lock");
             assert!(!guard.initial_declaration_lookup_complete);
@@ -14964,38 +15242,8 @@ mod tests {
             assert_eq!(guard.initial_declaration_attempts, 1);
         }
         assert!(
-            workflow_tool_preflight_with_args(&state, "write_flowscript", &write_args).is_some(),
-            "a complete but unrelated follow-up must not clear an earlier declaration miss"
-        );
-
-        let follow_up = serde_json::json!({ "queries": ["smtp send"] });
-        assert!(
-            workflow_tool_preflight_with_args(&state, "get_declarations", &follow_up).is_none()
-        );
-        workflow_tool_record(
-            &state,
-            "get_declarations",
-            &follow_up,
-            concat!(
-                "// flowpilot.declaration-batch/v1 {\"processed_count\":1,\"matched_count\":1,\"matched_queries\":[\"smtp send\"],\"unmatched_count\":0,\"unmatched_queries\":[],\"complete\":true,\"omitted_count\":0,\"omitted_queries\":[],\"truncated_query_count\":0}\n",
-                "declare function emailSmtpSend({ to: string, bodyText: string }): void;"
-            ),
-        );
-        let guard = state.lock().expect("state lock");
-        assert!(guard.initial_declaration_lookup_complete);
-        assert!(guard.unresolved_declaration_queries.is_empty());
-        assert!(
-            guard
-                .last_declarations
-                .as_deref()
-                .is_some_and(|declarations| {
-                    declarations.contains("emailImapConnect")
-                        && declarations.contains("emailSmtpSend")
-                })
-        );
-        drop(guard);
-        assert!(
-            workflow_tool_preflight_with_args(&state, "write_flowscript", &write_args).is_none()
+            workflow_tool_preflight_with_args(&state, "write_flowscript", &write_args).is_none(),
+            "one usable live signature must unlock a recoverable full-shape source checkpoint"
         );
     }
 
@@ -16320,6 +16568,39 @@ mod tests {
     }
 
     #[test]
+    fn ancillary_predraft_inspection_is_bounded_until_source_is_retained() {
+        let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let tools = ["database_tool", "ui_inspect", "storage_tool"];
+        for call in 0..MAX_EXTERNAL_PREDRAFT_CONTEXT_READS {
+            assert!(
+                workflow_predraft_context_preflight(&state, tools[usize::from(call) % tools.len()])
+                    .is_none(),
+                "ancillary context call {call} should fit the pre-draft budget"
+            );
+        }
+
+        state
+            .lock()
+            .expect("state lock")
+            .initial_declaration_lookup_usable = true;
+        let blocked = workflow_predraft_context_preflight(&state, "database_tool")
+            .expect("the next exhaustive inspection must redirect to source retention");
+        let blocked = workflow_call_result_json(&blocked);
+        assert_eq!(blocked["status"], "predraft_inspection_budget_exhausted");
+        assert_eq!(blocked["next_action"], "write_flowscript");
+        assert_eq!(
+            blocked["inspection_budget"],
+            u64::from(MAX_EXTERNAL_PREDRAFT_CONTEXT_READS)
+        );
+
+        state.lock().expect("state lock").flowscript_draft_retained = true;
+        assert!(
+            workflow_predraft_context_preflight(&state, "database_tool").is_none(),
+            "focused inspection is available again after a recoverable source exists"
+        );
+    }
+
+    #[test]
     fn failed_empty_event_retry_preserves_last_actionable_flowscript() {
         let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
         let actionable = r#"eventsSimple() {
@@ -16982,6 +17263,7 @@ eventsSimple() {
         let error = nested_wall_clock_incomplete_error(Some(&snapshot), 1);
         assert!(error.contains("NESTED_RUN_WALL_CLOCK_BUDGET_EXHAUSTED"));
         assert!(error.contains("wall-clock budget"));
+        assert!(!error.contains("provider continuation budget"));
         assert!(error.contains("stopped gracefully"));
         assert!(error.contains("terminal for this run"));
         // The shared incomplete path keeps the retained draft coordinates and diagnostics so the
@@ -18330,7 +18612,39 @@ eventsSimple() {
 
     #[test]
     fn board_runtime_bridge_uses_scoped_specs_before_context_injection() {
-        use flow_like::flow::copilot::tool_spec::{ToolApprovalSpec, missing_required_args};
+        use flow_like::flow::copilot::tool_spec::{
+            ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, OPEN_URL_TOOL, ToolApprovalSpec,
+            missing_required_args,
+        };
+
+        for global_only_tool in [INTERNET_SEARCH_TOOL, OPEN_URL_TOOL, ARCHIVE_LOOKUP_TOOL] {
+            let scope_error = global_orchestrator_tool_scope_error(
+                FrontendPlatformToolSet::BoardRuntime,
+                global_only_tool,
+            )
+            .expect("board runtime must reject global-only tools before execution");
+            assert!(scope_error.contains("global_orchestrator_tool_only"));
+            assert!(
+                global_orchestrator_tool_scope_error(
+                    FrontendPlatformToolSet::Global,
+                    global_only_tool
+                )
+                .is_none()
+            );
+            assert!(
+                frontend_platform_tool_spec(
+                    FrontendPlatformToolSet::BoardRuntime,
+                    global_only_tool
+                )
+                .is_none(),
+                "board runtime must not expose global-only tool {global_only_tool}"
+            );
+            assert!(
+                frontend_platform_tool_spec(FrontendPlatformToolSet::Global, global_only_tool)
+                    .is_some(),
+                "global FlowPilot must expose {global_only_tool}"
+            );
+        }
 
         for name in ["execute_event", "execute_node", "query_execution_logs"] {
             assert!(
@@ -18377,7 +18691,7 @@ eventsSimple() {
     }
 
     #[test]
-    fn shared_agent_capability_set_covers_board_frontend_and_runtime_tools() {
+    fn specialist_agent_capability_set_covers_app_tools_without_global_web_tools() {
         let capabilities = FlowPilotAgentCapabilitySet::shared_for(CopilotScope::Both, true, true);
         for tool in [
             "get_declarations",
@@ -18388,7 +18702,6 @@ eventsSimple() {
             "commit_flowscript",
             "emit_commands",
             "emit_ui",
-            "internet_search",
             "database_tool",
             "storage_tool",
             "execute_event",
@@ -18400,6 +18713,15 @@ eventsSimple() {
                 capabilities.tool_names.iter().any(|name| name == tool),
                 "shared FlowPilot capability set must include {tool}; got {:?}",
                 capabilities.tool_names
+            );
+        }
+        for global_only_tool in ["internet_search", "open_url", "archive_lookup"] {
+            assert!(
+                !capabilities
+                    .tool_names
+                    .iter()
+                    .any(|name| name == global_only_tool),
+                "specialist capabilities must not advertise global-only tool {global_only_tool}"
             );
         }
         for legacy_typed_tool in [
@@ -18422,6 +18744,45 @@ eventsSimple() {
             capabilities.prompt_source, "flow_like::copilot::prompts",
             "all agent backends must use the shared prompt module"
         );
+    }
+
+    #[test]
+    fn global_agent_capability_set_advertises_public_web_tools() {
+        let capabilities =
+            FlowPilotAgentCapabilitySet::for_surface(CopilotScope::Both, true, true, true);
+        for tool in ["internet_search", "open_url", "archive_lookup"] {
+            assert!(
+                capabilities.tool_names.iter().any(|name| name == tool),
+                "global FlowPilot capabilities must advertise {tool}"
+            );
+        }
+
+        for scope in [
+            CopilotScope::Board,
+            CopilotScope::Frontend,
+            CopilotScope::Both,
+            CopilotScope::DataStudio,
+        ] {
+            let specialist = FlowPilotAgentCapabilitySet::for_surface(scope, true, true, false);
+            for tool in ["internet_search", "open_url", "archive_lookup"] {
+                assert!(
+                    !specialist.tool_names.iter().any(|name| name == tool),
+                    "specialist surface {scope:?} must not advertise global-only tool {tool}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn scope_neutral_backend_status_does_not_claim_global_web_tools() {
+        let capabilities =
+            FlowPilotAgentCapabilitySet::for_status(FlowPilotAgentTransportKind::DirectSdkTools);
+        for tool in ["internet_search", "open_url", "archive_lookup"] {
+            assert!(
+                !capabilities.tool_names.iter().any(|name| name == tool),
+                "scope-neutral backend status must not advertise global-only tool {tool}"
+            );
+        }
     }
 
     #[test]
@@ -18502,7 +18863,22 @@ eventsSimple() {
         assert!(
             invocation
                 .args
+                .contains(&"--ignore-user-config".to_string())
+        );
+        assert!(
+            invocation
+                .args
                 .contains(&"--skip-git-repo-check".to_string())
+        );
+        let cd_index = invocation
+            .args
+            .iter()
+            .position(|arg| arg == "--cd")
+            .expect("Codex invocation should set a neutral working directory");
+        assert_eq!(
+            invocation.args.get(cd_index + 1),
+            Some(&std::env::temp_dir().display().to_string()),
+            "Codex must not inspect an incidental protected desktop working directory"
         );
         assert!(invocation.args.contains(&"--config".to_string()));
         assert!(
@@ -18551,6 +18927,53 @@ eventsSimple() {
             "codex invocation should run non-interactively through FlowPilot approvals/tools"
         );
         assert!(invocation.prompt.contains("hello"));
+    }
+
+    #[test]
+    fn codex_invocation_isolates_native_and_user_config_web_tools() {
+        for tool_names in [
+            // Nested specialist surface: no public-web MCP tools.
+            vec!["edit_flowscript".to_string()],
+            // Global orchestrator surface: public research is available only through these
+            // reviewed FlowPilot MCP tools, never through Codex's native web-search tool.
+            vec!["internet_search".to_string(), "open_url".to_string()],
+        ] {
+            let invocation = ExternalAgentInvocation::new(
+                FlowPilotAgentBackendKind::Codex,
+                CliResolution::new(
+                    std::path::PathBuf::from("/usr/bin/codex"),
+                    CliResolutionSource::Path,
+                ),
+                "default",
+                None,
+                "http://127.0.0.1:12345/mcp",
+                "hello".to_string(),
+                tool_names,
+                &[],
+            )
+            .expect("codex invocation should build");
+
+            let native_web_disable_overrides = invocation
+                .args
+                .windows(2)
+                .filter(|args| *args == ["--config", "web_search=\"disabled\""])
+                .count();
+            assert_eq!(
+                native_web_disable_overrides, 1,
+                "every FlowPilot Codex invocation must override user config and force public-web access through the scoped MCP surface: {:?}",
+                invocation.args
+            );
+            assert_eq!(
+                invocation
+                    .args
+                    .iter()
+                    .filter(|arg| arg.as_str() == "--ignore-user-config")
+                    .count(),
+                1,
+                "every FlowPilot Codex invocation must exclude user-configured MCP/browser tools while retaining CODEX_HOME auth: {:?}",
+                invocation.args
+            );
+        }
     }
 
     #[test]
@@ -19414,6 +19837,10 @@ eventsSimple() {
         let dirs = extra_bin_dirs();
         assert!(!dirs.is_empty(), "extra_bin_dirs should not be empty");
 
+        let home = dirs_next::home_dir().expect("test requires a home directory");
+        assert!(dirs.contains(&home.join(".local/bin")));
+        assert!(dirs.contains(&home.join(".asdf/shims")));
+
         let paths_str: Vec<String> = dirs.iter().map(|d| d.display().to_string()).collect();
         let has_homebrew = paths_str.iter().any(|p| p.contains("homebrew"));
         let has_usr_local = paths_str.iter().any(|p| p.contains("/usr/local/bin"));
@@ -19422,6 +19849,9 @@ eventsSimple() {
             "Should include /opt/homebrew/bin or /usr/local/bin. Got: {:?}",
             paths_str
         );
+
+        #[cfg(target_os = "linux")]
+        assert!(dirs.contains(&PathBuf::from("/home/linuxbrew/.linuxbrew/bin")));
     }
 
     #[test]

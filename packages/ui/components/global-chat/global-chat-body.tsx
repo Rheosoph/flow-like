@@ -15,6 +15,7 @@ import {
 	SettingsIcon,
 	SparklesIcon,
 	Trash2Icon,
+	TriangleAlertIcon,
 	WorkflowIcon,
 	ZapIcon,
 } from "lucide-react";
@@ -24,6 +25,8 @@ import { toast } from "sonner";
 import {
 	IBitTypes,
 	IRole,
+	filterHostableLlmModels,
+	isFreeLlmModel,
 	useAssistantSurface,
 	useBackend,
 	useCopilotSDK,
@@ -88,6 +91,10 @@ import {
 import { runGlobalChatTool } from "../../state/global-chat/global-chat-tool-registry";
 import { webGlobalChatStart } from "../../state/global-chat/global-chat-web-transport";
 import { FlowScriptWorkspacePanel } from "../flowpilot/flowscript-workspace-panel";
+import {
+	FreeModelCapabilityNotice,
+	type ProviderModelPickerModel,
+} from "../flowpilot/provider-model-reasoning-picker";
 import {
 	type AIProvider,
 	flowPilotModelIdForProvider,
@@ -336,12 +343,16 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		!!settingsProfile.data,
 		[settingsProfile.data?.hub_profile.id],
 	);
+	const canHostLlamaCPP = backend.capabilities().canHostLlamaCPP;
 	const bitsModels = useMemo(() => {
 		const profileBits = settingsProfile.data?.hub_profile.bits;
 		if (!llmBits.data || !profileBits) return [];
 		const ids = new Set(profileBits);
-		return llmBits.data.filter((bit) => ids.has(`${bit.hub}:${bit.id}`));
-	}, [llmBits.data, settingsProfile.data?.hub_profile.bits]);
+		const profileModels = llmBits.data.filter((bit) =>
+			ids.has(`${bit.hub}:${bit.id}`),
+		);
+		return filterHostableLlmModels(profileModels, canHostLlamaCPP);
+	}, [llmBits.data, settingsProfile.data?.hub_profile.bits, canHostLlamaCPP]);
 
 	const normalizedProvider = normalizeAIProvider(provider);
 	const isAgent = isAgentBackendProvider(normalizedProvider);
@@ -758,7 +769,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const sideBySideWorkspace = showWorkspace && canSideBySide;
 
 	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
-	const modelOptions = useMemo(
+	const modelOptions = useMemo<ProviderModelPickerModel[]>(
 		() =>
 			isAgent
 				? copilotSDK.models.map((model) => ({
@@ -768,6 +779,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				: bitsModels.map((bit) => ({
 						id: bit.id,
 						label: bit.meta?.en?.name ?? bit.id,
+						isFree: isFreeLlmModel(bit),
 					})),
 		[isAgent, copilotSDK.models, bitsModels],
 	);
@@ -910,6 +922,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const currentModelLabel = modelOptions.find(
 		(option) => option.id === selectedModelId,
 	)?.label;
+	const selectedModelIsFree =
+		normalizedProvider === "bits" &&
+		modelOptions.find((option) => option.id === selectedModelId)?.isFree ===
+			true;
 
 	// Provider, model, and model-specific reasoning effort live in one compact picker. A model with
 	// configurable reasoning keeps the popover open so the next section can be selected immediately;
@@ -920,7 +936,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				<Button
 					variant="outline"
 					size="sm"
-					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${reasoningEffortOptions.length > 0 ? ` · ${currentReasoningEffortName}` : ""}`}
+					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${reasoningEffortOptions.length > 0 ? ` · ${currentReasoningEffortName}` : ""}${selectedModelIsFree ? " · Free model may be too limited for complete app creation" : ""}`}
 					className="h-9 md:h-7 shrink-0 gap-1.5 px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 				>
 					<CurrentProviderIcon className="size-3.5 shrink-0 text-primary" />
@@ -937,6 +953,12 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								{currentReasoningEffortName}
 							</span>
 						</>
+					)}
+					{selectedModelIsFree && (
+						<TriangleAlertIcon
+							aria-hidden="true"
+							className="size-3.5 shrink-0 text-amber-500"
+						/>
 					)}
 					<ChevronDownIcon className="size-3 shrink-0 opacity-50" />
 				</Button>
@@ -997,6 +1019,13 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						})
 					)}
 				</div>
+				{selectedModelIsFree && (
+					<FreeModelCapabilityNotice
+						agentBackendsAvailable={availableProviders.some((option) =>
+							isAgentBackendProvider(option.id),
+						)}
+					/>
+				)}
 				{reasoningEffortOptions.length > 0 && (
 					<>
 						<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">

@@ -1,5 +1,10 @@
+import {
+	type IPage,
+	type IPageState,
+	type PageListItem,
+	normalizePageForPersistence,
+} from "@flow-like/flow-like-ui";
 import { invoke } from "@tauri-apps/api/core";
-import type { IPage, IPageState, PageListItem } from "@flow-like/flow-like-ui";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -9,13 +14,14 @@ export class PageState implements IPageState {
 	private async pushPageToServer(appId: string, page: IPage): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline || !this.backend.profile || !this.backend.auth) return;
+		const normalizedPage = normalizePageForPersistence(page);
 
 		await fetcher(
 			this.backend.profile,
 			`apps/${appId}/pages/${page.id}`,
 			{
 				method: "PUT",
-				body: JSON.stringify({ page }),
+				body: JSON.stringify({ page: normalizedPage }),
 			},
 			this.backend.auth,
 		);
@@ -176,10 +182,11 @@ export class PageState implements IPageState {
 	}
 
 	async updatePage(appId: string, page: IPage): Promise<void> {
-		await invoke("update_page", { appId, page });
+		const normalizedPage = normalizePageForPersistence(page);
+		await invoke("update_page", { appId, page: normalizedPage });
 
 		try {
-			await this.pushPageToServer(appId, page);
+			await this.pushPageToServer(appId, normalizedPage);
 		} catch (error) {
 			console.error("Failed to sync page update to server:", error);
 		}

@@ -32,6 +32,8 @@ import type { IPrerunBoardResponse } from "./types";
 export interface IApplyFlowScriptResponse {
 	commands: IGenericCommand[];
 	board_commands: BoardCommand[];
+	/** Non-blocking source repairs; reload canonical FlowScript when present. */
+	corrections?: string[];
 	diagnostics: string[];
 	/** Aggregate-only authoritative count after the host refreshes the applied board. */
 	final_board_node_count?: number;

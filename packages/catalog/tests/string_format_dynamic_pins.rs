@@ -59,6 +59,16 @@ fn input_pins_named(node: &Node, name: &str) -> usize {
         .count()
 }
 
+fn input_pin_identity(node: &Node, name: &str) -> (String, u16) {
+    let mut pins = node
+        .pins
+        .values()
+        .filter(|pin| pin.pin_type == PinType::Input && pin.name == name);
+    let pin = pins.next().expect("placeholder input pin");
+    assert!(pins.next().is_none(), "placeholder `{name}` must be unique");
+    (pin.id.clone(), pin.index)
+}
+
 /// Run `on_update` `passes` times, reporting the placeholder pin counts after each pass.
 async fn pin_counts_per_pass(format_string: &str, placeholder: &str, passes: usize) -> Vec<usize> {
     let logic = string_format_logic();
@@ -95,6 +105,44 @@ async fn repeated_placeholder_maps_to_a_single_stable_pin() {
         vec![1; 5],
         "a repeated placeholder must not leak a pin per on_update pass"
     );
+}
+
+#[flow_like_types::tokio::test]
+async fn repeated_sql_parameter_maps_to_one_pin() {
+    let query = "SELECT id, parent_id, title, path, updated_at FROM wiki_pages \
+        WHERE lower(title) LIKE lower('%{query}%') \
+        OR lower(path) LIKE lower('%{query}%') \
+        ORDER BY path LIMIT 50 OFFSET {offset};";
+    let logic = string_format_logic();
+    let board = empty_board();
+    let mut node = logic.get_node();
+    node.pins
+        .values_mut()
+        .find(|pin| pin.name == "format_string")
+        .expect("format_string pin")
+        .default_value = Some(json!(query).to_string().into_bytes());
+
+    // Board stabilization may call `on_update` up to ten times. Neither parameter may grow or be
+    // replaced/reordered between passes, since doing so would invalidate existing connections.
+    let mut expected_identity = None;
+    for _ in 0..10 {
+        logic.on_update(&mut node, &board).await;
+        assert_eq!(input_pins_named(&node, "query"), 1);
+        assert_eq!(input_pins_named(&node, "offset"), 1);
+
+        let query_identity = input_pin_identity(&node, "query");
+        let offset_identity = input_pin_identity(&node, "offset");
+        assert!(
+            query_identity.1 < offset_identity.1,
+            "pin order must follow first placeholder appearance"
+        );
+        let identity = vec![query_identity, offset_identity];
+        if let Some(expected) = &expected_identity {
+            assert_eq!(&identity, expected, "placeholder pins must remain stable");
+        } else {
+            expected_identity = Some(identity);
+        }
+    }
 }
 
 #[flow_like_types::tokio::test]

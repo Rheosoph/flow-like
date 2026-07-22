@@ -17,7 +17,6 @@ import {
 	useState,
 } from "react";
 import { cn } from "../../lib";
-import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
 import {
 	presignCanvasSettings,
 	presignPageAssets,
@@ -40,6 +39,7 @@ import type {
 	Surface,
 	SurfaceComponent,
 } from "../a2ui/types";
+import { ScopedCustomCss } from "../scoped-custom-css";
 import { Button } from "../ui/button";
 import {
 	ResizableHandle,
@@ -910,16 +910,10 @@ function VisualCanvas({ surfaceId }: { surfaceId: string }) {
 			style={{ userSelect: isDragging ? "none" : undefined }}
 		>
 			{/* Custom CSS injection (scoped and sanitized) */}
-			{presignedCanvasSettings.customCss && (
-				<style
-					{...createSanitizedStyleProps(
-						safeScopedCss(
-							presignedCanvasSettings.customCss,
-							`[data-canvas-id="${canvasId}"]`,
-						),
-					)}
-				/>
-			)}
+			<ScopedCustomCss
+				css={presignedCanvasSettings.customCss}
+				scopeSelector={`[data-canvas-id="${canvasId}"]`}
+			/>
 
 			{/* Canvas header with breadcrumb */}
 			<div className="flex items-center gap-2 px-3 py-2 border-b bg-background text-xs text-muted-foreground shrink-0">
@@ -1297,16 +1291,10 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 			}}
 		>
 			{/* Custom CSS injection (scoped and sanitized) */}
-			{presignedCanvasSettings.customCss && (
-				<style
-					{...createSanitizedStyleProps(
-						safeScopedCss(
-							presignedCanvasSettings.customCss,
-							`[data-canvas-id="${previewCanvasId}"]`,
-						),
-					)}
-				/>
-			)}
+			<ScopedCustomCss
+				css={presignedCanvasSettings.customCss}
+				scopeSelector={`[data-canvas-id="${previewCanvasId}"]`}
+			/>
 			<A2UIRenderer
 				surface={surface}
 				widgetRefs={Object.fromEntries(widgetRefs)}

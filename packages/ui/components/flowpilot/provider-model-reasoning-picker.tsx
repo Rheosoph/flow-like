@@ -10,6 +10,7 @@ import {
 	LayersIcon,
 	LogOutIcon,
 	type LucideIcon,
+	TriangleAlertIcon,
 } from "lucide-react";
 import { useState } from "react";
 
@@ -32,6 +33,7 @@ export interface ProviderModelPickerProvider {
 export interface ProviderModelPickerModel {
 	id: string;
 	label: string;
+	isFree?: boolean;
 	supportedReasoningEfforts?: CopilotReasoningEffort[];
 	defaultReasoningEffort?: string;
 }
@@ -64,6 +66,31 @@ const PROVIDER_ICONS: Record<NormalizedAIProvider, LucideIcon> = {
 	codex: Code2Icon,
 	"claude-code": BotIcon,
 };
+
+export function FreeModelCapabilityNotice({
+	agentBackendsAvailable,
+}: {
+	agentBackendsAvailable: boolean;
+}) {
+	return (
+		<div
+			role="note"
+			className="mt-2 flex gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-950 dark:text-amber-100"
+		>
+			<TriangleAlertIcon
+				aria-hidden="true"
+				className="mt-0.5 size-3.5 shrink-0"
+			/>
+			<p>
+				The free model may not be powerful enough to create a complete app.
+				Upgrade your subscription
+				{agentBackendsAvailable
+					? ", or switch to GitHub Copilot, Claude Code, or Codex."
+					: ", or use GitHub Copilot, Claude Code, or Codex in the desktop app."}
+			</p>
+		</div>
+	);
+}
 
 export function reasoningEffortLabels(
 	model: ProviderModelPickerModel | undefined,
@@ -119,6 +146,12 @@ export function ProviderModelReasoningPicker({
 		) ?? providers[0];
 	const ProviderIcon = PROVIDER_ICONS[normalizedProvider] ?? BotIcon;
 	const selectedModel = models.find((model) => model.id === selectedModelId);
+	const showFreeModelNotice =
+		normalizedProvider === "bits" && selectedModel?.isFree === true;
+	const agentBackendsAvailable = providers.some(
+		(option) =>
+			normalizeAIProvider(option.id) !== "bits" && option.disabled !== true,
+	);
 	const reasoning = reasoningEffortLabels(selectedModel, selectedEffort);
 	const modelLabel =
 		selectedModel?.label ??
@@ -127,6 +160,9 @@ export function ProviderModelReasoningPicker({
 		currentProvider?.label,
 		modelLabel,
 		reasoning.efforts.length > 0 ? reasoning.selected : undefined,
+		showFreeModelNotice
+			? "Free model may be too limited for complete app creation"
+			: undefined,
 	]
 		.filter(Boolean)
 		.join(" · ");
@@ -163,6 +199,12 @@ export function ProviderModelReasoningPicker({
 								{reasoning.selected}
 							</span>
 						</span>
+					)}
+					{showFreeModelNotice && (
+						<TriangleAlertIcon
+							aria-hidden="true"
+							className="size-3.5 shrink-0 text-amber-500"
+						/>
 					)}
 					<ChevronDownIcon className="size-3 shrink-0 opacity-50" />
 				</button>
@@ -240,6 +282,11 @@ export function ProviderModelReasoningPicker({
 						})
 					)}
 				</div>
+				{showFreeModelNotice && (
+					<FreeModelCapabilityNotice
+						agentBackendsAvailable={agentBackendsAvailable}
+					/>
+				)}
 
 				{reasoning.efforts.length > 0 && (
 					<>

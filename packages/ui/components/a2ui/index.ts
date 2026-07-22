@@ -23,6 +23,13 @@ export {
 } from "./WidgetActionHandler";
 export { getComponentRenderer, registerComponent } from "./ComponentRegistry";
 export { resolveStyle, resolveInlineStyle, mergeStyles } from "./StyleResolver";
+export {
+	normalizePageForPersistence,
+	normalizeStyleForPersistence,
+	normalizeSurfaceComponentForPersistence,
+	normalizeSurfaceComponentsForPersistence,
+	normalizeWidgetForPersistence,
+} from "./style-normalization";
 export { useElementGatherer, createElementPayload } from "./ElementGatherer";
 export {
 	RouteDialogProvider,

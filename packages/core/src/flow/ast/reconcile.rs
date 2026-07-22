@@ -2067,6 +2067,7 @@ pub(crate) fn dynamic_placeholder_config_pin(node_type: &str) -> Option<&'static
 fn format_string_placeholders(template: &str) -> Vec<String> {
     let bytes = template.as_bytes();
     let mut names = Vec::new();
+    let mut seen = HashSet::new();
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'{' {
@@ -2076,7 +2077,10 @@ fn format_string_placeholders(template: &str) -> Vec<String> {
                 end += 1;
             }
             if end > start && bytes.get(end) == Some(&b'}') {
-                names.push(template[start..end].to_string());
+                let name = &template[start..end];
+                if seen.insert(name) {
+                    names.push(name.to_string());
+                }
                 i = end + 1;
                 continue;
             }
@@ -3434,6 +3438,10 @@ struct StructuralPlanner<'a> {
     /// Ref ids for newly planned Event registration nodes. Event node types are catalog-extensible,
     /// so registration ordering cannot rely on a hard-coded list of built-in `events_*` names.
     event_entry_refs: HashSet<String>,
+    /// Existing Event entries already named by this FlowScript document. Stale-anchor recovery may
+    /// only rebind to an unclaimed live entry; otherwise two declarations could silently collapse
+    /// onto the same trigger node.
+    claimed_event_entries: HashSet<String>,
     disconnect_commands: Vec<BoardCommand>,
     connect_commands: Vec<BoardCommand>,
     update_commands: Vec<BoardCommand>,
@@ -3502,6 +3510,7 @@ impl<'a> StructuralPlanner<'a> {
             result: ReconcileResult::default(),
             add_commands: Vec::new(),
             event_entry_refs: HashSet::new(),
+            claimed_event_entries: HashSet::new(),
             disconnect_commands: Vec::new(),
             connect_commands: Vec::new(),
             update_commands: Vec::new(),
@@ -3524,6 +3533,14 @@ impl<'a> StructuralPlanner<'a> {
         }
     }
 
+    fn reserve_declared_event_entries(&mut self, ast: &BoardAst) {
+        self.claimed_event_entries.extend(
+            declared_event_anchors(ast)
+                .into_iter()
+                .filter(|anchor| find_board_node(self.existing, anchor).is_some()),
+        );
+    }
+
     /// Enrich a resolved node's metadata with the dynamic pins its `on_update` would create for this
     /// call's literal arguments, so the reconciler can resolve those pins. No-op without an enricher
     /// (the default for tests and the non-enriched entry points).
@@ -3543,6 +3560,9 @@ impl<'a> StructuralPlanner<'a> {
 
     fn plan(mut self, ast: &BoardAst) -> ReconcileResult {
         self.interface_schemas = interface_schema_map(ast);
+        // Reserve every still-live explicit event anchor before planning. A stale declaration that
+        // appears earlier in the document must not steal the entry owned by a later declaration.
+        self.reserve_declared_event_entries(ast);
         self.push_scope();
         self.seed_top_level_variables(ast);
         // Function layers are created (and their impurity decided) up front so call sites in
@@ -3930,6 +3950,208 @@ impl<'a> StructuralPlanner<'a> {
             || self.variable_refs.resolve(target).is_some()
     }
 
+    /// Resolve the exact catalog identity carried by an event declaration without invoking the
+    /// Generic/Simple fallback. A stale anchor may only create a replacement when this succeeds;
+    /// an alias-only header such as `wikiExplorerLoad()` does not retain enough type information
+    /// to decide whether the deleted node was Simple, Generic, or package-defined.
+    fn exact_event_metadata(&self, event: &EventBlock) -> Result<Option<NodeMetadata>, String> {
+        if !event.node_type.trim().is_empty() {
+            self.catalog
+                .resolve_type(&event.node_type)
+                .map(Some)
+                .map_err(|reason| {
+                    format!(
+                        "event `{}` declares exact node_type `{}`: {reason}",
+                        event.name, event.node_type
+                    )
+                })
+        } else {
+            Ok(self.catalog.resolve_display(&event.name).ok())
+        }
+    }
+
+    fn node_is_in_target_layer(&self, node: &Node, target_layer: Option<&str>) -> bool {
+        let direct_layer = node.layer.as_deref().filter(|layer| !layer.is_empty());
+        // Canonical flat storage is authoritative even when `layer` is None (root). Consult a
+        // containing layer only for legacy nested-only nodes; mirrored layer clones may be stale.
+        if self.existing.nodes.contains_key(&node.id) {
+            return direct_layer == target_layer;
+        }
+
+        let nested_layer = self
+            .existing
+            .layers
+            .values()
+            .find(|layer| layer.nodes.contains_key(&node.id))
+            .map(|layer| layer.id.as_str());
+        nested_layer == target_layer
+    }
+
+    fn event_entry_targets_node(&self, entry: &Node, target_node_id: &str) -> bool {
+        entry
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Output && is_exec_pin(pin))
+            .flat_map(|pin| pin.connected_to.iter())
+            .any(|target_pin_id| {
+                self.board_index
+                    .pin_owner
+                    .get(target_pin_id.as_str())
+                    .is_some_and(|(owner, _)| owner.id == target_node_id)
+            })
+    }
+
+    /// Recover an event whose explicit identity anchor disappeared from the live board.
+    ///
+    /// Recovery is deliberately deterministic:
+    /// - one compatible, unclaimed entry in the same scope is rebound;
+    /// - no live match is recreated only when the catalog type is exact;
+    /// - incompatible or ambiguous matches stay blocking conflicts.
+    fn recover_missing_event_entry(
+        &mut self,
+        event: &EventBlock,
+        stale_anchor: &str,
+        target_layer: Option<String>,
+    ) -> Option<NodeEntity> {
+        let exact_meta = match self.exact_event_metadata(event) {
+            Ok(meta) => meta,
+            Err(diagnostic) => {
+                self.result.diagnostics.push(format!(
+                    "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; {diagnostic}",
+                    event.name
+                ));
+                return None;
+            }
+        };
+        let canonical_type_display = exact_meta.as_ref().map(|meta| to_camel_case(&meta.name));
+        let desired_alias = event.event_name.as_deref().or_else(|| {
+            canonical_type_display
+                .as_deref()
+                .filter(|display| !pin_name_matches(display, &event.name))
+                .map(|_| event.name.as_str())
+        });
+
+        let mut identity_matches = all_board_nodes(self.existing)
+            .into_iter()
+            .filter(|node| {
+                !self.claimed_event_entries.contains(&node.id)
+                    && self.node_is_in_target_layer(node, target_layer.as_deref())
+                    && node.start == Some(true)
+                    && event_entry_incompatibility(&node_to_metadata(node)).is_none()
+                    && match &exact_meta {
+                        Some(meta) => {
+                            node.name == meta.name
+                                && desired_alias.is_none_or(|alias| {
+                                    pin_name_matches(&node.friendly_name, alias)
+                                })
+                        }
+                        None => {
+                            (pin_name_matches(&node.name, &event.name)
+                                || pin_name_matches(&node.friendly_name, &event.name))
+                                && event.event_name.as_deref().is_none_or(|alias| {
+                                    pin_name_matches(&node.friendly_name, alias)
+                                })
+                        }
+                    }
+            })
+            .collect::<Vec<_>>();
+        identity_matches.sort_by(|left, right| left.id.cmp(&right.id));
+
+        let mut compatible = identity_matches
+            .iter()
+            .copied()
+            .filter(|node| {
+                event_parameter_contracts_match(
+                    node,
+                    &event.params,
+                    &self.interface_schemas,
+                    &self.existing.refs,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        // Several entries may legitimately share one event type. The old body's still-live first
+        // execution node is a stronger identity signal than name alone, so use it to narrow the
+        // candidates when exactly one entry currently drives that body.
+        if compatible.len() > 1
+            && let Some(first_body_node) = first_existing_exec_body_node(self.existing, &event.body)
+        {
+            let connected = compatible
+                .iter()
+                .copied()
+                .filter(|entry| self.event_entry_targets_node(entry, &first_body_node.id))
+                .collect::<Vec<_>>();
+            if connected.len() == 1 {
+                compatible = connected;
+            }
+        }
+
+        match compatible.as_slice() {
+            [entry] => {
+                self.claimed_event_entries.insert(entry.id.clone());
+                self.result.corrections.push(format!(
+                    "Re-anchored event `{}` from missing `{stale_anchor}` to live entry `{}`.",
+                    event.name, entry.id
+                ));
+                return Some(NodeEntity::Existing(entry.id.clone()));
+            }
+            entries @ [_, _, ..] => {
+                self.result.diagnostics.push(format!(
+                    "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; {} compatible live entries in the same scope make automatic re-anchoring ambiguous ({})",
+                    event.name,
+                    entries.len(),
+                    entries
+                        .iter()
+                        .map(|entry| format!("`{}`", entry.id))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+                return None;
+            }
+            [] => {}
+        }
+
+        // A strong alias found the intended live entry but its payload changed. Recreating a
+        // sibling would hide a real contract conflict and leave two identically named triggers.
+        if desired_alias.is_some() && !identity_matches.is_empty() {
+            self.result.diagnostics.push(format!(
+                "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; the matching live entry has an incompatible parameter contract and cannot be re-anchored automatically",
+                event.name
+            ));
+            return None;
+        }
+
+        if exact_meta.is_some() {
+            if block_has_no_executable_statements(&event.body) {
+                self.result.diagnostics.push(format!(
+                    "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; refusing to recreate an event with no executable body nodes",
+                    event.name
+                ));
+                return None;
+            }
+            let recreated = self.add_entry_node(
+                &event.name,
+                &event.node_type,
+                event.event_name.as_deref(),
+                target_layer,
+                &event.params,
+            );
+            if recreated.is_some() {
+                self.result.corrections.push(format!(
+                    "Recreated event `{}` because anchor `{stale_anchor}` no longer exists; the applied board will assign a new anchor.",
+                    event.name
+                ));
+            }
+            return recreated;
+        }
+
+        self.result.diagnostics.push(format!(
+            "event `{}` anchors to `{stale_anchor}`, which no longer exists on the board; no unique compatible live entry was found and the alias-only header does not preserve an exact event type. Refresh FlowScript, or declare an explicit type such as `eventsGeneric {}(...)` before removing the stale anchor",
+            event.name, event.name
+        ));
+        None
+    }
+
     fn plan_event(&mut self, event: &EventBlock, target_layer: Option<String>) {
         if event.anchor.is_none() && block_has_no_executable_statements(&event.body) {
             self.result.diagnostics.push(format!(
@@ -3938,16 +4160,15 @@ impl<'a> StructuralPlanner<'a> {
             ));
         }
         let entry = match &event.anchor {
-            Some(anchor) => {
-                let entry = find_board_node(self.existing, anchor).and_then(|node| {
+            Some(anchor) => match find_board_node(self.existing, anchor) {
+                Some(node) => {
                     if !event.node_type.trim().is_empty() && node.name != event.node_type {
                         self.result.diagnostics.push(format!(
                             "event `{}` declares exact node_type `{}`, but anchor `{anchor}` resolves to `{}`",
                             event.name, event.node_type, node.name
                         ));
-                        return None;
-                    }
-                    if event.node_type.trim().is_empty()
+                        None
+                    } else if event.node_type.trim().is_empty()
                         && !pin_name_matches(&node.name, &event.name)
                         && !pin_name_matches(&node.friendly_name, &event.name)
                     {
@@ -3955,9 +4176,8 @@ impl<'a> StructuralPlanner<'a> {
                             "event `{}` keeps anchor `{anchor}`, but that anchor identifies `{}`; remove the anchor to replace the event type",
                             event.name, node.name
                         ));
-                        return None;
-                    }
-                    if !event_parameter_contracts_match(
+                        None
+                    } else if !event_parameter_contracts_match(
                         node,
                         &event.params,
                         &self.interface_schemas,
@@ -3967,32 +4187,26 @@ impl<'a> StructuralPlanner<'a> {
                             "event `{}` changes the parameter contract of anchored entry `{anchor}`; parameter names, order, types, containers, and authored schemas must match the live event outputs",
                             event.name
                         ));
-                        return None;
-                    }
-                    if let Some(event_name) = event
-                        .event_name
-                        .as_deref()
-                        .filter(|name| !name.trim().is_empty())
-                        && !pin_name_matches(&node.friendly_name, event_name)
-                    {
-                        self.update_commands.push(BoardCommand::RenameNode {
-                            node_id: anchor.clone(),
-                            friendly_name: event_name.to_string(),
-                            summary: Some(format!("Rename event to {event_name}")),
-                        });
-                    }
-                    Some(NodeEntity::Existing(anchor.clone()))
-                });
-                if entry.is_none() {
-                    if find_board_node(self.existing, anchor).is_none() {
-                        self.result.diagnostics.push(format!(
-                            "event `{}` anchors to `{anchor}`, which no longer exists on the board; its body was planned without an execution entry",
-                            event.name
-                        ));
+                        None
+                    } else {
+                        if let Some(event_name) = event
+                            .event_name
+                            .as_deref()
+                            .filter(|name| !name.trim().is_empty())
+                            && !pin_name_matches(&node.friendly_name, event_name)
+                        {
+                            self.update_commands.push(BoardCommand::RenameNode {
+                                node_id: anchor.clone(),
+                                friendly_name: event_name.to_string(),
+                                summary: Some(format!("Rename event to {event_name}")),
+                            });
+                        }
+                        self.claimed_event_entries.insert(anchor.clone());
+                        Some(NodeEntity::Existing(anchor.clone()))
                     }
                 }
-                entry
-            }
+                None => self.recover_missing_event_entry(event, anchor, target_layer.clone()),
+            },
             None => self.add_entry_node(
                 &event.name,
                 &event.node_type,
@@ -8529,6 +8743,73 @@ impl<'a> StructuralPlanner<'a> {
             .rev()
             .find_map(|scope| scope.get(name).cloned())
     }
+}
+
+fn declared_event_anchors(ast: &BoardAst) -> HashSet<String> {
+    fn visit_event(event: &EventBlock, anchors: &mut HashSet<String>) {
+        if let Some(anchor) = &event.anchor {
+            anchors.insert(anchor.clone());
+        }
+        visit_block(&event.body, anchors);
+    }
+
+    fn visit_block(block: &Block, anchors: &mut HashSet<String>) {
+        for statement in &block.stmts {
+            match statement {
+                Stmt::Branch { arms, .. } => {
+                    for arm in arms {
+                        visit_block(&arm.body, anchors);
+                    }
+                }
+                Stmt::Loop { body, .. } => visit_block(body, anchors),
+                Stmt::Handler(event) => visit_event(event, anchors),
+                Stmt::Let { .. }
+                | Stmt::Call { .. }
+                | Stmt::Assign { .. }
+                | Stmt::FieldAssign { .. }
+                | Stmt::LocalAlias { .. }
+                | Stmt::Return { .. }
+                | Stmt::Local(_)
+                | Stmt::Comment(_) => {}
+            }
+        }
+    }
+
+    let mut anchors = HashSet::new();
+    for event in &ast.events {
+        visit_event(event, &mut anchors);
+    }
+    for function in &ast.functions {
+        visit_block(&function.body, &mut anchors);
+    }
+    anchors
+}
+
+/// The first still-live execution statement in an authored event body. Pure aliases/comments are
+/// skipped because an Event entry connects to the first node carrying an Execution input.
+fn first_existing_exec_body_node<'a>(board: &'a Board, block: &Block) -> Option<&'a Node> {
+    for statement in &block.stmts {
+        let anchor = match statement {
+            Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
+                anchor.as_deref().or(call.anchor.as_deref())
+            }
+            Stmt::Branch { call, anchor, .. } | Stmt::Loop { call, anchor, .. } => {
+                anchor.as_deref().or(call.anchor.as_deref())
+            }
+            Stmt::Assign { anchor, .. }
+            | Stmt::FieldAssign { anchor, .. }
+            | Stmt::LocalAlias { anchor, .. }
+            | Stmt::Return { anchor, .. } => anchor.as_deref(),
+            // A nested handler is an independent entry point, not part of this event's chain.
+            Stmt::Handler(_) | Stmt::Local(_) | Stmt::Comment(_) => None,
+        };
+        if let Some(node) = anchor.and_then(|anchor| find_board_node(board, anchor))
+            && exec_input_pin(node).is_some()
+        {
+            return Some(node);
+        }
+    }
+    None
 }
 
 fn ast_has_unanchored_calls(ast: &BoardAst) -> bool {
@@ -14088,6 +14369,406 @@ function second(): (result: int) {
         );
     }
 
+    fn stale_event_entry(
+        id: &str,
+        friendly_name: &str,
+        layer: Option<&str>,
+        query_type: Option<VariableType>,
+    ) -> Node {
+        let mut event = Node::new("events_generic", friendly_name, "", "events");
+        event.id = id.to_string();
+        event.layer = layer.map(str::to_string);
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        if let Some(query_type) = query_type {
+            event.add_output_pin("query", "Query", "", query_type);
+        }
+        event
+    }
+
+    fn stale_event_catalog() -> Vec<NodeMetadata> {
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "events_generic",
+                "Generic Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "notify",
+                "Notify",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    #[test]
+    fn stale_alias_event_anchor_rebinds_unique_compatible_live_entry() {
+        let mut board = empty_board();
+        board.nodes.insert(
+            "live-event".to_string(),
+            stale_event_entry(
+                "live-event",
+                "Wiki Explorer Load",
+                None,
+                Some(VariableType::String),
+            ),
+        );
+        // Same identity and scope, but a different payload contract. It must not make the
+        // compatible String event ambiguous or receive either newly planned edge.
+        board.nodes.insert(
+            "incompatible-event".to_string(),
+            stale_event_entry(
+                "incompatible-event",
+                "Wiki Explorer Load",
+                None,
+                Some(VariableType::Integer),
+            ),
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"wikiExplorerLoad(query: string) {   //@n:gone-event
+    notify({ message: query })
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("gone-event") && correction.contains("live-event")
+        }));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if matches!(node_type.as_str(), "events_simple" | "events_generic")
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, ref_id: Some(ref_id), .. }
+                if node_type == "notify" && ref_id == "$0"
+        )));
+        for (from_pin, to_pin) in [("exec_out", "exec_in"), ("query", "message")] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::ConnectPins {
+                        from_node,
+                        from_pin: actual_from_pin,
+                        to_node,
+                        to_pin: actual_to_pin,
+                        ..
+                    } if from_node == "live-event"
+                        && actual_from_pin == from_pin
+                        && to_node == "$0"
+                        && actual_to_pin == to_pin
+                )),
+                "missing recovered event edge {from_pin} -> {to_pin}: {:?}",
+                result.commands
+            );
+        }
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, .. } if from_node == "incompatible-event"
+        )));
+    }
+
+    #[test]
+    fn stale_typed_event_anchor_recreates_exact_catalog_entry_when_no_live_match() {
+        let ast = BoardAst {
+            events: vec![EventBlock {
+                name: "wikiExplorerLoad".to_string(),
+                node_type: "events_generic".to_string(),
+                event_name: None,
+                params: Vec::new(),
+                body: Block {
+                    stmts: vec![Stmt::Call {
+                        call: Call {
+                            node_type: "notify".to_string(),
+                            display: "notify".to_string(),
+                            args: Vec::new(),
+                            anchor: None,
+                        },
+                        anchor: None,
+                    }],
+                },
+                anchor: Some("gone-event".to_string()),
+            }],
+            ..BoardAst::default()
+        };
+
+        let result = reconcile_with_catalog(&empty_board(), &ast, &stale_event_catalog());
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(
+            result
+                .corrections
+                .iter()
+                .any(|correction| correction.contains("Recreated event")
+                    && correction.contains("gone-event"))
+        );
+        let notify_index = result
+            .commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode { node_type, ref_id: Some(ref_id), .. }
+                        if node_type == "notify" && ref_id == "$1"
+                )
+            })
+            .expect("notify body node");
+        let event_index = result
+            .commands
+            .iter()
+            .position(|command| {
+                matches!(
+                    command,
+                    BoardCommand::AddNode {
+                        node_type,
+                        ref_id: Some(ref_id),
+                        friendly_name: Some(friendly_name),
+                        target_layer: None,
+                        ..
+                    } if node_type == "events_generic"
+                        && ref_id == "$0"
+                        && friendly_name == "wikiExplorerLoad"
+                )
+            })
+            .expect("recreated exact event entry");
+        assert!(
+            event_index > notify_index,
+            "event registration stays last: {:?}",
+            result.commands
+        );
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "$0"
+                    && from_pin == "exec_out"
+                    && to_node == "$1"
+                    && to_pin == "exec_in"
+        )));
+        assert!(!result.commands.iter().any(|command| match command {
+            BoardCommand::ConnectPins {
+                from_node, to_node, ..
+            } => {
+                from_node == "gone-event" || to_node == "gone-event"
+            }
+            BoardCommand::UpdateNodePin { node_id, .. }
+            | BoardCommand::RemoveNode { node_id, .. }
+            | BoardCommand::RenameNode { node_id, .. } => node_id == "gone-event",
+            _ => false,
+        }));
+    }
+
+    #[test]
+    fn stale_event_with_unavailable_explicit_type_does_not_rebind_by_alias() {
+        let mut board = empty_board();
+        board.nodes.insert(
+            "live-event".to_string(),
+            stale_event_entry("live-event", "Wiki Explorer Load", None, None),
+        );
+        let ast = BoardAst {
+            events: vec![EventBlock {
+                name: "wikiExplorerLoad".to_string(),
+                node_type: "events_unavailable".to_string(),
+                event_name: None,
+                params: Vec::new(),
+                body: Block {
+                    stmts: vec![Stmt::Call {
+                        call: Call {
+                            node_type: "notify".to_string(),
+                            display: "notify".to_string(),
+                            args: Vec::new(),
+                            anchor: None,
+                        },
+                        anchor: None,
+                    }],
+                },
+                anchor: Some("gone-event".to_string()),
+            }],
+            ..BoardAst::default()
+        };
+
+        let result = reconcile_with_catalog(&board, &ast, &stale_event_catalog());
+
+        assert!(result.diagnostics.iter().any(|diagnostic| {
+            diagnostic.contains("gone-event")
+                && diagnostic.contains("exact node_type `events_unavailable`")
+                && diagnostic.contains("not available in the catalog")
+        }));
+        assert!(result.corrections.is_empty());
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, .. } if from_node == "live-event"
+        )));
+    }
+
+    #[test]
+    fn stale_canonical_event_header_recreates_exact_catalog_entry() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsGeneric wikiExplorerLoad() {   //@n:gone-event
+    notify({})
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode {
+                node_type,
+                friendly_name: Some(friendly_name),
+                ..
+            } if node_type == "events_generic" && friendly_name == "wikiExplorerLoad"
+        )));
+        assert!(result.corrections.iter().any(|correction| {
+            correction.contains("Recreated event") && correction.contains("gone-event")
+        }));
+    }
+
+    #[test]
+    fn stale_event_anchor_does_not_guess_between_compatible_live_entries() {
+        let mut board = empty_board();
+        for id in ["event-a", "event-b"] {
+            board.nodes.insert(
+                id.to_string(),
+                stale_event_entry(id, "Wiki Explorer Load", None, None),
+            );
+        }
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"wikiExplorerLoad() {   //@n:gone-event
+    notify({})
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("gone-event")
+                    && diagnostic.contains("ambiguous")
+                    && diagnostic.contains("event-a")
+                    && diagnostic.contains("event-b")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if matches!(node_type.as_str(), "events_simple" | "events_generic")
+        )));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, .. }
+                if matches!(from_node.as_str(), "event-a" | "event-b")
+        )));
+    }
+
+    #[test]
+    fn stale_alias_event_anchor_without_live_match_remains_blocking() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"wikiExplorerLoad() {   //@n:gone-event
+    notify({})
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("gone-event")
+                    && diagnostic.contains("alias-only")
+                    && diagnostic.contains("exact event type")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode { node_type, .. }
+                if matches!(node_type.as_str(), "events_simple" | "events_generic")
+        )));
+    }
+
+    #[test]
+    fn nested_stale_event_rebinds_only_within_function_layer() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "helper-layer".to_string(),
+            "Helper".to_string(),
+            LayerType::Function,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+        board.nodes.insert(
+            "root-event".to_string(),
+            stale_event_entry("root-event", "Wiki Explorer Load", None, None),
+        );
+        board.nodes.insert(
+            "nested-event".to_string(),
+            stale_event_entry(
+                "nested-event",
+                "Wiki Explorer Load",
+                Some("helper-layer"),
+                None,
+            ),
+        );
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"function helper() {   //@l:helper-layer
+    wikiExplorerLoad() {   //@n:gone-event
+        notify({})
+    }
+}
+"#,
+            &stale_event_catalog(),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::AddNode {
+                node_type,
+                ref_id: Some(ref_id),
+                target_layer: Some(target_layer),
+                ..
+            } if node_type == "notify"
+                && ref_id == "$0"
+                && target_layer == "helper-layer"
+        )));
+        assert!(result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "nested-event"
+                    && from_pin == "exec_out"
+                    && to_node == "$0"
+                    && to_pin == "exec_in"
+        )));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, .. } if from_node == "root-event"
+        )));
+    }
+
     #[test]
     fn named_event_creates_entry_with_friendly_name() {
         let result = reconcile_text_with_catalog(
@@ -16705,6 +17386,19 @@ eventsSimple() {
             vec![pin_meta("format_string", "String", PinType::Input)],
             vec![pin_meta("value", "String", PinType::Output)],
         )]
+    }
+
+    #[test]
+    fn repeated_string_format_placeholders_are_unique_and_ordered() {
+        let query = "SELECT id, parent_id, title, path, updated_at FROM wiki_pages \
+            WHERE lower(title) LIKE lower('%{query}%') \
+            OR lower(path) LIKE lower('%{query}%') \
+            ORDER BY path LIMIT 50 OFFSET {offset};";
+
+        assert_eq!(
+            format_string_placeholders(query),
+            vec!["query".to_string(), "offset".to_string()]
+        );
     }
 
     fn render_template_dynamic_catalog() -> Vec<NodeMetadata> {

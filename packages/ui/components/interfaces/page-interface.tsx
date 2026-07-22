@@ -11,7 +11,6 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
 import {
 	readPageSurfaceCache,
 	writePageSurfaceCache,
@@ -42,6 +41,7 @@ import type {
 	Surface,
 	SurfaceComponent,
 } from "../a2ui/types";
+import { ScopedCustomCss } from "../scoped-custom-css";
 import type { IUseInterfaceProps } from "./interfaces";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
 
@@ -786,15 +786,14 @@ function PageInterfaceInner({
 
 	return (
 		<div className="h-full w-full overflow-auto bg-background">
-			{customCss && (
-				<style
-					{...createSanitizedStyleProps(
-						safeScopedCss(customCss, `[data-page-id="${pageContainerId}"]`),
-					)}
-				/>
-			)}
+			<ScopedCustomCss
+				css={customCss}
+				scopeSelector={`[data-page-id="${pageContainerId}"]`}
+			/>
 			<div
 				data-page-id={pageContainerId}
+				data-flowpilot-page-event-id={activePageEvent?.id ?? ""}
+				data-flowpilot-page-loading={isLoadEventRunning ? "true" : "false"}
 				className={cn("min-h-full flex flex-col", backgroundClass)}
 				style={canvasStyle}
 			>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { resolveMobileViewportHeight } from "../lib/mobile-viewport";
 import { isMobileDevice, isTauriRuntime } from "../lib/platform";
 
 const MOBILE_VIEWPORT_CONTENT =
@@ -152,12 +153,7 @@ function pollForInsets() {
 
 function syncViewportHeight() {
 	const vv = window.visualViewport;
-	// Scale-normalised: pinch-zoom also shrinks the visual viewport, but only the
-	// soft keyboard should be allowed to resize the app shell. Clamped to the
-	// layout viewport so rounding can never make the shell overflow the screen.
-	const viewportHeight = vv
-		? Math.min(Math.round(vv.height * vv.scale), window.innerHeight)
-		: window.innerHeight;
+	const viewportHeight = resolveMobileViewportHeight(vv, window.innerHeight);
 	document.documentElement.style.setProperty(
 		"--fl-mobile-vvh",
 		`${viewportHeight}px`,
@@ -212,8 +208,9 @@ export function IOSWebviewHardening() {
 
 	// Soft-keyboard handling. Runs on every touch context (not just the Tauri
 	// shell) because plain mobile browsers need it too:
-	//  - --fl-mobile-vvh keeps the app shell (h-vvh) sized to the *visual*
-	//    viewport, so it shrinks when the keyboard opens instead of being covered.
+	//  - --fl-mobile-vvh keeps Blink/Android shells sized to the *visual*
+	//    viewport. The WebKit desktop-app shell stays on 100dvh in global.css to
+	//    avoid combining its native focus pan with a second composer movement.
 	//  - data-fl-keyboard lets CSS reclaim space while typing (the mobile bottom
 	//    nav hides), so the chat composer is never pushed behind the keyboard.
 	useEffect(() => {

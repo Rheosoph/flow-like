@@ -1142,6 +1142,14 @@
 	height: var(--fl-mobile-vvh, 100dvh);
 }
 
+/* WKWebView already pans the visual viewport to reveal a focused input. Keep
+ * the app shell in stable layout coordinates there; consuming the live visual
+ * viewport height as well moves bottom-pinned chat composers upward twice.
+ * Android/Blink continues to use --fl-mobile-vvh through h-vvh above. */
+html[data-desktop-app][data-engine="webkit"] .h-vvh {
+	height: 100dvh;
+}
+
 @layer utilities {
 	.backdrop-blur-fallback {
 		@supports (backdrop-filter: blur(1px)) {
@@ -1198,6 +1206,15 @@ html[data-fl-keyboard="open"] .fl-mobile-bottom-nav {
 	display: none;
 }
 
+/* The phone chat page sits above an in-flow bottom nav. That nav already owns
+ * the home-indicator inset, so keep only a symmetric 12px composer gap here. */
+@media (width < 48rem) {
+	[data-fl-chat-bottom-nav] [data-fl-chat-composer-dock] {
+		--fl-safe-bottom: 0px;
+		--fl-chat-pad-bottom: 0.75rem;
+	}
+}
+
 /*
  * WebKit (WKWebView / Safari) performance gate.
  * A runtime script sets data-engine="webkit" on <html> for WebKit engines, which
@@ -1207,4 +1224,216 @@ html[data-fl-keyboard="open"] .fl-mobile-bottom-nav {
 html[data-engine="webkit"] [class*="backdrop-blur"] {
 	-webkit-backdrop-filter: none !important;
 	backdrop-filter: none !important;
+}
+
+/* Structured A2UI responsive styles use fixed classes so persisted values do
+ * not depend on Tailwind discovering dynamically supplied JSON class names. */
+@media (min-width: 640px) {
+	.a2ui-sm-display {
+		display: var(--a2ui-sm-display);
+	}
+	.a2ui-sm-flex-direction {
+		flex-direction: var(--a2ui-sm-flex-direction);
+	}
+	.a2ui-sm-justify-content {
+		justify-content: var(--a2ui-sm-justify-content);
+	}
+	.a2ui-sm-align-items {
+		align-items: var(--a2ui-sm-align-items);
+	}
+	.a2ui-sm-gap {
+		gap: var(--a2ui-sm-gap);
+	}
+	.a2ui-sm-grid-cols {
+		grid-template-columns: var(--a2ui-sm-grid-cols);
+	}
+	.a2ui-sm-width {
+		width: var(--a2ui-sm-width);
+	}
+	.a2ui-sm-height {
+		height: var(--a2ui-sm-height);
+	}
+	.a2ui-sm-padding {
+		padding: var(--a2ui-sm-padding);
+	}
+	.a2ui-sm-margin {
+		margin: var(--a2ui-sm-margin);
+	}
+	.a2ui-sm-font-size {
+		font-size: var(--a2ui-sm-font-size);
+	}
+	.a2ui-sm-text-align {
+		text-align: var(--a2ui-sm-text-align);
+	}
+	.a2ui-sm-order {
+		order: var(--a2ui-sm-order);
+	}
+}
+
+@media (min-width: 768px) {
+	.a2ui-md-display {
+		display: var(--a2ui-md-display);
+	}
+	.a2ui-md-flex-direction {
+		flex-direction: var(--a2ui-md-flex-direction);
+	}
+	.a2ui-md-justify-content {
+		justify-content: var(--a2ui-md-justify-content);
+	}
+	.a2ui-md-align-items {
+		align-items: var(--a2ui-md-align-items);
+	}
+	.a2ui-md-gap {
+		gap: var(--a2ui-md-gap);
+	}
+	.a2ui-md-grid-cols {
+		grid-template-columns: var(--a2ui-md-grid-cols);
+	}
+	.a2ui-md-width {
+		width: var(--a2ui-md-width);
+	}
+	.a2ui-md-height {
+		height: var(--a2ui-md-height);
+	}
+	.a2ui-md-padding {
+		padding: var(--a2ui-md-padding);
+	}
+	.a2ui-md-margin {
+		margin: var(--a2ui-md-margin);
+	}
+	.a2ui-md-font-size {
+		font-size: var(--a2ui-md-font-size);
+	}
+	.a2ui-md-text-align {
+		text-align: var(--a2ui-md-text-align);
+	}
+	.a2ui-md-order {
+		order: var(--a2ui-md-order);
+	}
+}
+
+@media (min-width: 1024px) {
+	.a2ui-lg-display {
+		display: var(--a2ui-lg-display);
+	}
+	.a2ui-lg-flex-direction {
+		flex-direction: var(--a2ui-lg-flex-direction);
+	}
+	.a2ui-lg-justify-content {
+		justify-content: var(--a2ui-lg-justify-content);
+	}
+	.a2ui-lg-align-items {
+		align-items: var(--a2ui-lg-align-items);
+	}
+	.a2ui-lg-gap {
+		gap: var(--a2ui-lg-gap);
+	}
+	.a2ui-lg-grid-cols {
+		grid-template-columns: var(--a2ui-lg-grid-cols);
+	}
+	.a2ui-lg-width {
+		width: var(--a2ui-lg-width);
+	}
+	.a2ui-lg-height {
+		height: var(--a2ui-lg-height);
+	}
+	.a2ui-lg-padding {
+		padding: var(--a2ui-lg-padding);
+	}
+	.a2ui-lg-margin {
+		margin: var(--a2ui-lg-margin);
+	}
+	.a2ui-lg-font-size {
+		font-size: var(--a2ui-lg-font-size);
+	}
+	.a2ui-lg-text-align {
+		text-align: var(--a2ui-lg-text-align);
+	}
+	.a2ui-lg-order {
+		order: var(--a2ui-lg-order);
+	}
+}
+
+@media (min-width: 1280px) {
+	.a2ui-xl-display {
+		display: var(--a2ui-xl-display);
+	}
+	.a2ui-xl-flex-direction {
+		flex-direction: var(--a2ui-xl-flex-direction);
+	}
+	.a2ui-xl-justify-content {
+		justify-content: var(--a2ui-xl-justify-content);
+	}
+	.a2ui-xl-align-items {
+		align-items: var(--a2ui-xl-align-items);
+	}
+	.a2ui-xl-gap {
+		gap: var(--a2ui-xl-gap);
+	}
+	.a2ui-xl-grid-cols {
+		grid-template-columns: var(--a2ui-xl-grid-cols);
+	}
+	.a2ui-xl-width {
+		width: var(--a2ui-xl-width);
+	}
+	.a2ui-xl-height {
+		height: var(--a2ui-xl-height);
+	}
+	.a2ui-xl-padding {
+		padding: var(--a2ui-xl-padding);
+	}
+	.a2ui-xl-margin {
+		margin: var(--a2ui-xl-margin);
+	}
+	.a2ui-xl-font-size {
+		font-size: var(--a2ui-xl-font-size);
+	}
+	.a2ui-xl-text-align {
+		text-align: var(--a2ui-xl-text-align);
+	}
+	.a2ui-xl-order {
+		order: var(--a2ui-xl-order);
+	}
+}
+
+@media (min-width: 1536px) {
+	.a2ui-xxl-display {
+		display: var(--a2ui-xxl-display);
+	}
+	.a2ui-xxl-flex-direction {
+		flex-direction: var(--a2ui-xxl-flex-direction);
+	}
+	.a2ui-xxl-justify-content {
+		justify-content: var(--a2ui-xxl-justify-content);
+	}
+	.a2ui-xxl-align-items {
+		align-items: var(--a2ui-xxl-align-items);
+	}
+	.a2ui-xxl-gap {
+		gap: var(--a2ui-xxl-gap);
+	}
+	.a2ui-xxl-grid-cols {
+		grid-template-columns: var(--a2ui-xxl-grid-cols);
+	}
+	.a2ui-xxl-width {
+		width: var(--a2ui-xxl-width);
+	}
+	.a2ui-xxl-height {
+		height: var(--a2ui-xxl-height);
+	}
+	.a2ui-xxl-padding {
+		padding: var(--a2ui-xxl-padding);
+	}
+	.a2ui-xxl-margin {
+		margin: var(--a2ui-xxl-margin);
+	}
+	.a2ui-xxl-font-size {
+		font-size: var(--a2ui-xxl-font-size);
+	}
+	.a2ui-xxl-text-align {
+		text-align: var(--a2ui-xxl-text-align);
+	}
+	.a2ui-xxl-order {
+		order: var(--a2ui-xxl-order);
+	}
 }

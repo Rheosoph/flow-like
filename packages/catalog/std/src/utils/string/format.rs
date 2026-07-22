@@ -20,6 +20,20 @@ impl FormatStringNode {
             regex: Regex::new(r"\{([a-zA-Z0-9_]+)\}").unwrap(),
         }
     }
+
+    /// Return placeholder names once, in the order of their first appearance.
+    ///
+    /// Pins are keyed by placeholder name, not by placeholder occurrence. Keeping that contract
+    /// here prevents repeated tokens such as `{query}` from being interpreted as new pins on
+    /// subsequent `on_update` passes.
+    fn placeholders(&self, format_string: &str) -> Vec<String> {
+        let mut seen = HashSet::new();
+        self.regex
+            .captures_iter(format_string)
+            .filter_map(|capture| capture.get(1).map(|value| value.as_str().to_string()))
+            .filter(|placeholder| seen.insert(placeholder.clone()))
+            .collect()
+    }
 }
 
 impl Default for FormatStringNode {
@@ -59,13 +73,7 @@ impl NodeLogic for FormatStringNode {
         let format_string: String = context.evaluate_pin("format_string").await?;
         let mut formatted_string = format_string.clone();
 
-        let placeholders: std::collections::HashSet<String> = self
-            .regex
-            .captures_iter(&format_string)
-            .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
-            .collect();
-
-        for placeholder in placeholders {
+        for placeholder in self.placeholders(&format_string) {
             let value: flow_like_types::Value = context.evaluate_pin(&placeholder).await?;
             // If the JSON value is a string, use it directly; otherwise serialize it.
             let replacement = match value {
@@ -105,25 +113,18 @@ impl NodeLogic for FormatStringNode {
                 .push(pin);
         }
 
-        let mut all_placeholders = HashSet::new();
-        let mut missing_placeholders = HashSet::new();
+        let placeholders = self.placeholders(&format_string);
+        let mut missing_placeholders = Vec::new();
         let mut stale_ids = Vec::new();
 
-        for cap in self.regex.captures_iter(&format_string) {
-            let Some(placeholder) = cap.get(1).map(|m| m.as_str().to_string()) else {
-                continue;
-            };
-            // A placeholder repeated in the format string still maps to a single pin.
-            if !all_placeholders.insert(placeholder.clone()) {
-                continue;
-            }
-            match current_placeholders.remove(&placeholder) {
+        for placeholder in &placeholders {
+            match current_placeholders.remove(placeholder) {
                 Some(mut matched) => {
                     matched.sort_by_key(|pin| (pin.index, pin.id.clone()));
                     stale_ids.extend(matched.iter().skip(1).map(|pin| pin.id.clone()));
                 }
                 None => {
-                    missing_placeholders.insert(placeholder);
+                    missing_placeholders.push(placeholder.clone());
                 }
             }
         }
@@ -142,7 +143,7 @@ impl NodeLogic for FormatStringNode {
             node.add_input_pin(&placeholder, &placeholder, "", VariableType::Generic);
         }
 
-        all_placeholders.iter().for_each(|placeholder| {
+        placeholders.iter().for_each(|placeholder| {
             let _ = node.match_type(placeholder, board, None, None);
         })
     }

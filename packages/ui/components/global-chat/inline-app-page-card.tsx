@@ -8,8 +8,12 @@ import {
 	XIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, UsePageContent } from "../../index";
+import {
+	INLINE_PAGE_REVEAL_EVENT,
+	inlineAppPageSnapshotAttribute,
+} from "../../lib/app-page-snapshot";
 import { EVENT_CONFIG } from "../../lib/event-config";
 import type { InlineAppPage } from "../../state/global-chat/global-chat-store";
 
@@ -37,12 +41,27 @@ export function InlineAppPageCard({
 		eventId: string | null;
 	}>({ routePath: "/", eventId: page.eventId ?? null });
 
+	useEffect(() => {
+		const reveal = (event: Event) => {
+			const detail = (
+				event as CustomEvent<{ appId?: string; eventId?: string }>
+			).detail;
+			if (detail?.appId !== page.appId || detail.eventId !== page.eventId)
+				return;
+			setExpanded(true);
+			setTarget({ routePath: "/", eventId: page.eventId ?? null });
+		};
+		window.addEventListener(INLINE_PAGE_REVEAL_EVENT, reveal);
+		return () => window.removeEventListener(INLINE_PAGE_REVEAL_EVENT, reveal);
+	}, [page.appId, page.eventId]);
+
 	const fullViewRoute = `/use?id=${page.appId}${
 		target.eventId ? `&eventId=${target.eventId}` : ""
 	}`;
 
 	return (
 		<motion.div
+			{...inlineAppPageSnapshotAttribute(page.appId, page.eventId)}
 			layout
 			initial={{ opacity: 0, y: 8, scale: 0.98 }}
 			animate={{ opacity: 1, y: 0, scale: 1 }}
