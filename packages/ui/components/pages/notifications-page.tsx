@@ -730,11 +730,11 @@ function InvitationCard({
 							</p>
 						)}
 
-						<div className="mt-2 flex gap-2">
+						<div className="mt-2 flex flex-wrap gap-2">
 							<Button
 								onClick={() => onAction(invite.id, "accept")}
 								size="sm"
-								className="h-7 gap-1.5 px-3 text-xs"
+								className="h-9 gap-1.5 px-3 text-xs md:h-7"
 							>
 								<Check className="size-3" />
 								Accept
@@ -743,7 +743,7 @@ function InvitationCard({
 								onClick={() => onAction(invite.id, "decline")}
 								variant="ghost"
 								size="sm"
-								className="h-7 gap-1.5 px-3 text-xs"
+								className="h-9 gap-1.5 px-3 text-xs md:h-7"
 							>
 								<X className="size-3" />
 								Decline
@@ -877,7 +877,7 @@ function NotificationCard({
 							</p>
 						)}
 
-						<div className="mt-2 flex gap-2">
+						<div className="mt-2 flex flex-wrap gap-2">
 							{notification.link && (
 								<Button
 									onClick={(event) => {
@@ -886,7 +886,7 @@ function NotificationCard({
 									}}
 									variant="outline"
 									size="sm"
-									className="h-7 gap-1.5 px-3 text-xs"
+									className="h-9 gap-1.5 px-3 text-xs md:h-7"
 								>
 									<ExternalLink className="size-3" />
 									View
@@ -901,7 +901,7 @@ function NotificationCard({
 									}}
 									variant="ghost"
 									size="sm"
-									className="h-7 gap-1.5 px-3 text-xs"
+									className="h-9 gap-1.5 px-3 text-xs md:h-7"
 								>
 									<Check className="size-3" />
 									Read
@@ -915,7 +915,7 @@ function NotificationCard({
 								}}
 								variant="ghost"
 								size="sm"
-								className="h-7 gap-1.5 px-3 text-xs text-destructive hover:text-destructive"
+								className="ml-auto h-9 gap-1.5 px-3 text-xs text-destructive hover:text-destructive md:h-7"
 							>
 								<Trash2 className="size-3" />
 								Delete

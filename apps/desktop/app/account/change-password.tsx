@@ -5,6 +5,7 @@ import {
 	AlertDescription,
 	Button,
 	Dialog,
+	DialogBody,
 	DialogContent,
 	DialogDescription,
 	DialogHeader,
@@ -124,7 +125,7 @@ const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
 					</DialogDescription>
 				</DialogHeader>
 
-				<div className="space-y-4">
+				<DialogBody className="space-y-4">
 					{error && (
 						<Alert variant="destructive">
 							<AlertDescription>{error}</AlertDescription>
@@ -227,7 +228,7 @@ const ChangePasswordDialog: React.FC<ChangePasswordDialogProps> = ({
 							{isLoading ? "Changing..." : "Change Password"}
 						</Button>
 					</div>
-				</div>
+				</DialogBody>
 			</DialogContent>
 		</Dialog>
 	);

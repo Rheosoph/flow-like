@@ -13,6 +13,92 @@
 declare function controlForEachRow({ table: Struct }): { value: Struct, index: int };
 
 
+// === Data Studio/Actions ===
+
+/**
+ * Reads the typed objects and parameters the ontology action was invoked with
+ * @param ontologyId — Saved ontology identifier (types the outputs from the action contract)
+ * @param actionId — Saved ontology action identifier (types the outputs from the action contract)
+ * @returns object — The first (or only) object the action was invoked with
+ * @returns objects — Every object the action was invoked with
+ * @returns parameters — Typed parameters the action was invoked with
+ * @returns objectType — Object type the action targets
+ * @returns objectIds — Identifiers of the targeted objects
+ * @returns idempotencyKey — Client-supplied retry key, if any
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyActionInput({ ontologyId: string, actionId: string }): { object: Struct, objects: Struct[], parameters: Struct, objectType: string, objectIds: string[], idempotencyKey: string };
+
+/**
+ * Builds a validated, typed action request from a Data Studio action binding
+ * @param ontologyId — Saved ontology identifier
+ * @param actionId — Saved ontology action identifier
+ * @param objects — Objects selected for the action
+ * @param parameters (optional) — Typed parameters supplied to the action
+ * @returns errorMessage — Details for a failed action request
+ * @returns actionRequest — Validated action binding, objects, and parameters
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyActionRequest({ ontologyId: string, actionId: string, objects: Struct[], parameters?: Struct }): { errorMessage: string, actionRequest: Struct };
+
+
+// === Data Studio/Objects ===
+
+/**
+ * Reads a bounded object preview through a saved Data Studio ontology
+ * @param ontologyId — Saved ontology identifier
+ * @param objectType — Stable object type label resolved by the ontology
+ * @param limit (optional) — Maximum number of objects to return (capped at 500)
+ * @returns errorMessage — Details for a failed object read
+ * @returns objects — Typed objects from the selected ontology object type
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyQueryObjects({ ontologyId: string, objectType: string, limit?: int }): { errorMessage: string, objects: Struct[] };
+
+
+// === Data Studio/Remote Actions ===
+
+/**
+ * Runs a governed ontology action in a connected project through an installed contract; the producer validates and executes it authoritatively
+ * @param bindingId — Local identifier of the installed remote ontology contract
+ * @param actionId — Action identifier resolved through the installed contract
+ * @param objects — Objects selected for the action
+ * @param parameters (optional) — Typed parameters supplied to the action
+ * @param timeout (optional) — Maximum seconds to wait for the remote action to finish (capped at 1800)
+ * @returns errorMessage — Details for a failed remote action
+ * @returns result — Result payload emitted by the producer's action run
+ * @returns runId — Identifier of the producer-side action run
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyActionRequestRemote({ bindingId: string, actionId: string, objects: Struct[], parameters?: Struct, timeout?: int }): { errorMessage: string, result: Struct, runId: string };
+
+
+// === Data Studio/Remote Objects ===
+
+/**
+ * Expands a parent object's containment children through an installed ontology contract from a connected project
+ * @param bindingId — Local identifier of the installed remote ontology contract
+ * @param objectType — Stable object type identifier of the parent, resolved through the installed contract
+ * @param nodeId — Identifier of the parent object whose children should be loaded
+ * @param limit (optional) — Maximum number of child objects to return (capped at 500)
+ * @returns errorMessage — Details for a failed remote children read
+ * @returns objects — Typed child objects reached through containment edges of the installed contract
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyQueryRemoteChildren({ bindingId: string, objectType: string, nodeId: any, limit?: int }): { errorMessage: string, objects: Struct[] };
+
+/**
+ * Reads a bounded object preview through an installed ontology contract from a connected project
+ * @param bindingId — Local identifier of the installed remote ontology contract
+ * @param objectType — Stable object type identifier resolved through the installed contract
+ * @param limit (optional) — Maximum number of remote objects to return (capped at 500)
+ * @returns errorMessage — Details for a failed remote object read
+ * @returns objects — Typed objects from the installed remote ontology object type
+ * @impure has side effects / drives control flow
+ */
+declare function ontologyQueryRemoteObjects({ bindingId: string, objectType: string, limit?: int }): { errorMessage: string, objects: Struct[] };
+
+
 // === Data/Atlassian ===
 
 /**
@@ -1242,7 +1328,7 @@ declare function dfListTables({ session: Struct }): { tables: Struct[], tableNam
 declare function openLocalDb({ name: string, userScoped?: bool, batchSize?: int }): Struct;
 
 /**
- * Open a shared database of a connected project. The project must have granted this app access with a role that allows reading (and for writes, writing) files or databases. Storage credentials are valid for about an hour — long-running flows with many writes should flush regularly (Flush node).
+ * Open a shared database of a connected project. The project must have granted this app access with a role that allows reading (and for writes, writing) files or databases. The run reuses the connection and refreshes its scoped credentials automatically.
  * @param flowRemoteAppId (optional) — Connected project to open the database from
  * @param flowRemoteDatabase (optional) — Shared database of the selected project
  * @param writeAccess (optional) — Request write access to the remote database. Requires the connection role to allow writing databases (or files).
@@ -1327,6 +1413,16 @@ declare function listGraphOverlays({ userScoped?: bool }): { overlayIds: string[
 // === Data/Database/Graph/Query ===
 
 /**
+ * Computes degree, PageRank, and connected components over a graph overlay
+ * @param graph — Graph connection reference
+ * @param edgeLimit (optional) — Maximum number of edges sampled for the computation
+ * @returns errorMessage — Error details
+ * @returns payload — Metrics: counts, components, top objects by degree and PageRank
+ * @impure has side effects / drives control flow
+ */
+declare function graphAnalytics({ graph: Struct, edgeLimit?: int }): { errorMessage: string, payload: Struct };
+
+/**
  * Executes a Cypher query against the graph overlay
  * @param graph — Graph connection reference
  * @param query — Cypher query string
@@ -1352,6 +1448,44 @@ declare function graphCypherQuery({ graph: Struct, query: string, params: Struct
  * @impure has side effects / drives control flow
  */
 declare function graphNeighbors({ graph: Struct, label: string, nodeId: string, depth?: int, direction?: string, limit?: int }): { errorMessage: string, resultNodes: Struct[], resultEdges: Struct[] };
+
+/**
+ * Finds the shortest connections between two objects, including alternative routes
+ * @param graph — Graph connection reference
+ * @param fromLabel — Object type of the start object
+ * @param fromId — Identity of the start object
+ * @param toLabel — Object type of the target object
+ * @param toId — Identity of the target object
+ * @param maxDepth (optional) — Maximum number of hops to search (1-5)
+ * @param limit (optional) — Maximum number of objects explored during the search
+ * @returns errorMessage — Error details
+ * @returns payload — Found paths with their nodes and edges
+ * @returns found — Whether a connection exists within the depth limit
+ * @impure has side effects / drives control flow
+ */
+declare function graphPaths({ graph: Struct, fromLabel: string, fromId: string, toLabel: string, toId: string, maxDepth?: int, limit?: int }): { errorMessage: string, payload: Struct, found: bool };
+
+/**
+ * Samples objects of a given label from a graph overlay for previewing
+ * @param graph — Graph connection reference
+ * @param label — Object type (node label) to sample from
+ * @param count (optional) — Number of objects to sample (capped at 500)
+ * @returns errorMessage — Error details
+ * @returns rows — Sampled objects
+ * @impure has side effects / drives control flow
+ */
+declare function graphSample({ graph: Struct, label: string, count?: int }): { errorMessage: string, rows: Struct[] };
+
+/**
+ * Searches objects by caption or identifier across the whole graph overlay
+ * @param graph — Graph connection reference
+ * @param query — Text matched against object captions and identifiers
+ * @param limit (optional) — Maximum number of matches to return
+ * @returns errorMessage — Error details
+ * @returns resultNodes — Matching objects
+ * @impure has side effects / drives control flow
+ */
+declare function graphSearch({ graph: Struct, query: string, limit?: int }): { errorMessage: string, resultNodes: Struct[] };
 
 /**
  * Executes a SQL query against graph overlay tables via DataFusion

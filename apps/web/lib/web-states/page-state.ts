@@ -1,4 +1,7 @@
-import type { IPageState } from "@flow-like/flow-like-ui";
+import {
+	type IPageState,
+	normalizePageForPersistence,
+} from "@flow-like/flow-like-ui";
 import type {
 	IPage,
 	PageListItem,
@@ -62,7 +65,12 @@ export class WebPageState implements IPageState {
 	}
 
 	async updatePage(appId: string, page: IPage): Promise<void> {
-		await apiPut(`apps/${appId}/pages/${page.id}`, { page }, this.backend.auth);
+		const normalizedPage = normalizePageForPersistence(page);
+		await apiPut(
+			`apps/${appId}/pages/${page.id}`,
+			{ page: normalizedPage },
+			this.backend.auth,
+		);
 	}
 
 	async deletePage(

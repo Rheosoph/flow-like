@@ -664,7 +664,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 												type="button"
 												size="sm"
 												variant="ghost"
-												className="h-8 w-8 p-0 hover:bg-accent rounded-lg transition-colors"
+												className="h-11 w-11 sm:h-8 sm:w-8 p-0 hover:bg-accent rounded-lg transition-colors"
 											>
 												<Plus className="w-4 h-4 text-muted-foreground" />
 											</Button>
@@ -717,7 +717,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 													type="button"
 													size="sm"
 													variant="ghost"
-													className="h-8 w-8 p-0 hover:bg-accent rounded-lg transition-colors relative"
+													className="h-11 w-11 sm:h-8 sm:w-8 p-0 hover:bg-accent rounded-lg transition-colors relative"
 												>
 													<WrenchIcon className="w-4 h-4 text-muted-foreground" />
 												</Button>
@@ -808,7 +808,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 											size="sm"
 											variant={isTranscribing ? "destructive" : "ghost"}
 											className={cn(
-												"h-8 w-8 p-0 rounded-full transition-colors",
+												"h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-colors",
 												isTranscribing && "animate-pulse",
 											)}
 											onClick={
@@ -831,7 +831,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 													size="sm"
 													variant={isRecording ? "destructive" : "ghost"}
 													className={cn(
-														"h-8 w-8 p-0 rounded-full select-none transition-colors",
+														"h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full select-none transition-colors",
 														isRecording ? "animate-pulse" : "hover:bg-accent",
 													)}
 													disabled={
@@ -861,7 +861,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 													type="button"
 													size="sm"
 													variant="destructive"
-													className="h-8 w-8 p-0 rounded-full animate-pulse"
+													className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full animate-pulse"
 													onClick={stopRecording}
 												>
 													<SquareIcon className="w-3 h-3" />
@@ -870,7 +870,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 													type="button"
 													size="sm"
 													variant="ghost"
-													className="h-8 w-8 p-0 rounded-full"
+													className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full"
 													onClick={cancelRecording}
 												>
 													<X className="w-3 h-3" />
@@ -890,7 +890,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 												type="button"
 												size="sm"
 												variant="ghost"
-												className="h-8 w-8 p-0 rounded-full hover:bg-accent transition-colors"
+												className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full hover:bg-accent transition-colors"
 												onClick={startRecording}
 											>
 												<MicIcon className="w-4 h-4 text-muted-foreground" />
@@ -905,7 +905,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										type="button"
 										size="sm"
 										variant="ghost"
-										className="h-8 w-8 p-0 rounded-full hover:bg-violet-500/10 hover:text-violet-500 transition-colors"
+										className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full hover:bg-violet-500/10 hover:text-violet-500 transition-colors"
 										onClick={onVoiceModeToggle}
 										disabled={isRecording || isTranscribing || sendDisabled}
 										title="Voice mode"
@@ -922,7 +922,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									variant={
 										input.trim() || recordedAudio ? "default" : "secondary"
 									}
-									className="h-9 w-9 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
+									className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
 								>
 									<Send className="w-4 h-4" />
 								</Button>

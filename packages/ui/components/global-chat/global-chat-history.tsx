@@ -79,7 +79,7 @@ export function GlobalChatHistory() {
 					<Button
 						variant="ghost"
 						size="icon"
-						className="h-8 w-8 rounded-lg"
+						className="h-9 w-9 md:h-8 md:w-8 rounded-lg"
 						aria-label="New chat"
 						disabled={isStreaming}
 						onClick={newConversation}
@@ -99,7 +99,7 @@ export function GlobalChatHistory() {
 							<Button
 								variant="ghost"
 								size="icon"
-								className="h-8 w-8 rounded-lg"
+								className="h-9 w-9 md:h-8 md:w-8 rounded-lg"
 								aria-label="Chat history"
 							>
 								<HistoryIcon className="size-4" />

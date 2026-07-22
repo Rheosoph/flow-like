@@ -87,7 +87,7 @@ export default function ConfigurationPage() {
 	return (
 		<main className="justify-start flex flex-col items-start w-full flex-1 max-h-full overflow-y-auto md:overflow-visible grow gap-6">
 			<div className="w-full py-4 border-b">
-				<div className="flex items-center justify-between">
+				<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
 					<div className="space-y-1">
 						<h2 className="text-2xl font-bold">Configuration</h2>
 						<p className="text-sm text-muted-foreground">
@@ -95,7 +95,10 @@ export default function ConfigurationPage() {
 							needed.
 						</p>
 					</div>
-					<Badge variant="secondary" className="gap-1">
+					<Badge
+						variant="secondary"
+						className="gap-1 shrink-0 self-start sm:self-auto"
+					>
 						<SettingsIcon className="w-3 h-3" />
 						{totalVariables} across {configurableBoards.length} flow
 						{configurableBoards.length !== 1 ? "s" : ""}

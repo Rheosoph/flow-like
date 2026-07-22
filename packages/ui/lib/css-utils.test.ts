@@ -33,4 +33,46 @@ describe("safeScopedCss", () => {
 
 		expect(result).toContain(".chat { --primary: blue; }");
 	});
+
+	test("repairs known generated CSS transport sentinels", () => {
+		const result = safeScopedCss(
+			".card{content:__codex_directive_escaped_double_quote____codex_directive_escaped_double_quote__;color:red__codex_directive_quoted_closing_brace__.later{color:blue__codex_directive_quoted_closing_brace__",
+			".surface",
+		);
+
+		expect(result).toContain('.surface .card{content:"";color:red}');
+		expect(result).toContain(".surface .later{color:blue}");
+		expect(result).not.toContain("__codex_directive_");
+	});
+
+	test("keeps valid blocks around a malformed rule", () => {
+		const result = safeScopedCss(
+			".before{color:red}.broken{this is not css}.after{color:blue}",
+			".surface",
+		);
+
+		expect(result).toContain(".surface .before{color:red}");
+		expect(result).not.toContain(".broken");
+		expect(result).toContain(".surface .after{color:blue}");
+	});
+
+	test("keeps complete rules when the final rule is incomplete", () => {
+		const result = safeScopedCss(
+			".complete{display:grid}.incomplete{grid-template",
+			".surface",
+		);
+
+		expect(result).toBe(".surface .complete{display:grid}");
+	});
+
+	test("still sanitizes declarations after best-effort recovery", () => {
+		const result = safeScopedCss(
+			".safe{color:red}.broken{this is not css}.danger{width:expression(alert(1))}",
+			".surface",
+		);
+
+		expect(result).toContain(".surface .safe{color:red}");
+		expect(result).toContain(".surface .danger{}");
+		expect(result).not.toContain("expression");
+	});
 });

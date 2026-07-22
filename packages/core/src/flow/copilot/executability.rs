@@ -1239,6 +1239,8 @@ fn executability_diagnostic(
         phase: FlowScriptDiagnosticPhase::Validation,
         message,
         source_span: None,
+        spans: Vec::new(),
+        additional_sites: 0,
         ast_path: None,
         scope,
         expected: None,

@@ -43,6 +43,11 @@ const DANGEROUS_VALUE_PATTERNS = [
 
 const BLOCKED_AT_RULES = new Set(["import", "charset"]);
 
+const KNOWN_CORRUPTION_TOKENS = new Map([
+	["__codex_directive_quoted_closing_brace__", "}"],
+	["__codex_directive_escaped_double_quote__", '"'],
+]);
+
 function isDangerousValue(value: string): boolean {
 	return DANGEROUS_VALUE_PATTERNS.some((pattern) => pattern.test(value));
 }
@@ -170,6 +175,149 @@ function processAtRule(
 	atRule.walkDecls((decl) => sanitizeDeclaration(decl));
 }
 
+function normalizeCssInput(css: string): string {
+	let normalizedCss = css.trim();
+
+	// Fix double-encoded JSON strings (legacy data corruption).
+	if (normalizedCss.startsWith('"') && normalizedCss.endsWith('"')) {
+		try {
+			const parsed = JSON.parse(normalizedCss);
+			if (typeof parsed === "string") {
+				normalizedCss = parsed.trim();
+			}
+		} catch {
+			// Not valid JSON, continue with the original CSS.
+		}
+	}
+
+	// Some generated A2UI payloads have leaked these transport sentinels into
+	// customCss. They have a single unambiguous CSS meaning, so repair them
+	// before parsing rather than discarding the complete stylesheet.
+	for (const [token, replacement] of KNOWN_CORRUPTION_TOKENS) {
+		normalizedCss = normalizedCss.replaceAll(token, replacement);
+	}
+
+	return normalizedCss;
+}
+
+/**
+ * Split CSS into complete top-level blocks in one pass. This is only used
+ * after parsing the complete input failed, allowing valid rules around a
+ * malformed or incomplete rule to survive without attempting to invent CSS.
+ */
+function splitCompleteTopLevelBlocks(css: string): string[] {
+	const blocks: string[] = [];
+	let start = 0;
+	let braceDepth = 0;
+	let parenDepth = 0;
+	let quote: '"' | "'" | undefined;
+	let escaped = false;
+	let inComment = false;
+
+	for (let index = 0; index < css.length; index += 1) {
+		const character = css[index];
+		const next = css[index + 1];
+
+		if (inComment) {
+			if (character === "*" && next === "/") {
+				inComment = false;
+				index += 1;
+			}
+			continue;
+		}
+
+		if (quote) {
+			if (escaped) {
+				escaped = false;
+				continue;
+			}
+			if (character === "\\") {
+				escaped = true;
+				continue;
+			}
+			if (character === quote) quote = undefined;
+			continue;
+		}
+
+		if (character === "/" && next === "*") {
+			inComment = true;
+			index += 1;
+			continue;
+		}
+		if (character === '"' || character === "'") {
+			quote = character;
+			continue;
+		}
+		if (character === "(") {
+			parenDepth += 1;
+			continue;
+		}
+		if (character === ")") {
+			parenDepth = Math.max(0, parenDepth - 1);
+			continue;
+		}
+		if (character === "{") {
+			braceDepth += 1;
+			continue;
+		}
+		if (character === "}") {
+			braceDepth = Math.max(0, braceDepth - 1);
+			if (braceDepth === 0) {
+				blocks.push(css.slice(start, index + 1));
+				start = index + 1;
+			}
+			continue;
+		}
+
+		// Preserve complete top-level statement at-rules such as @import so the
+		// normal sanitizer can remove them. Semicolons inside functions do not
+		// delimit a top-level block.
+		if (character === ";" && braceDepth === 0 && parenDepth === 0) {
+			blocks.push(css.slice(start, index + 1));
+			start = index + 1;
+		}
+	}
+
+	return blocks.filter((block) => block.trim().length > 0);
+}
+
+function parseCssBestEffort(css: string): {
+	root: Root | null;
+	recoveredBlocks: number;
+	totalBlocks: number;
+} {
+	try {
+		return {
+			root: postcss.parse(css),
+			recoveredBlocks: 0,
+			totalBlocks: 0,
+		};
+	} catch {
+		const blocks = splitCompleteTopLevelBlocks(css);
+		if (blocks.length === 0) {
+			return { root: null, recoveredBlocks: 0, totalBlocks: 0 };
+		}
+
+		const recoveredRoot = postcss.root();
+		let recoveredBlocks = 0;
+		for (const block of blocks) {
+			try {
+				const parsedBlock = postcss.parse(block);
+				recoveredRoot.append(parsedBlock.nodes);
+				recoveredBlocks += 1;
+			} catch {
+				// Keep processing later independent blocks.
+			}
+		}
+
+		return {
+			root: recoveredBlocks > 0 ? recoveredRoot : null,
+			recoveredBlocks,
+			totalBlocks: blocks.length,
+		};
+	}
+}
+
 /**
  * Safely scopes and sanitizes CSS for injection using PostCSS.
  * This is the primary function to use for user-provided CSS.
@@ -177,7 +325,8 @@ function processAtRule(
  * @param css - The CSS string to process
  * @param scopeSelector - The attribute selector for scoping (e.g., '[data-page-id="abc"]')
  * @param options - Optional scoping behavior for self-contained surfaces
- * @returns Safe, scoped CSS ready for injection. Returns empty string on parse errors.
+ * @returns Safe, scoped CSS ready for injection. Returns an empty string only
+ * when no complete, parseable CSS blocks can be recovered.
  */
 export function safeScopedCss(
 	css: string,
@@ -188,44 +337,23 @@ export function safeScopedCss(
 		return "" as SanitizedCSS;
 	}
 
-	// Trim whitespace - empty/whitespace-only CSS is valid
-	let trimmedCss = css.trim();
+	// Trim whitespace and repair narrowly identified transport corruption.
+	const trimmedCss = normalizeCssInput(css);
 	if (!trimmedCss) {
 		return "" as SanitizedCSS;
 	}
 
-	// Fix double-encoded JSON strings (legacy data corruption)
-	// If the CSS starts and ends with quotes and looks like escaped JSON, try to parse it
-	if (trimmedCss.startsWith('"') && trimmedCss.endsWith('"')) {
-		try {
-			const parsed = JSON.parse(trimmedCss);
-			if (typeof parsed === "string") {
-				trimmedCss = parsed.trim();
-			}
-		} catch {
-			// Not valid JSON, continue with original
-		}
-	}
-
-	let root: Root;
-	try {
-		root = postcss.parse(trimmedCss);
-	} catch (error) {
-		// If CSS can't be parsed, reject it entirely
-		// Extract useful error info for debugging
-		const cssError = error as {
-			line?: number;
-			column?: number;
-			reason?: string;
-		};
-		const location = cssError.line
-			? ` at line ${cssError.line}:${cssError.column || 0}`
-			: "";
-		const reason = cssError.reason || "Parse error";
+	const { root, recoveredBlocks, totalBlocks } = parseCssBestEffort(trimmedCss);
+	if (!root) {
 		console.warn(
-			`[safeScopedCss] Invalid CSS${location}: ${reason}. First 200 chars: ${trimmedCss.slice(0, 200)}`,
+			`[safeScopedCss] Invalid CSS could not be recovered. First 200 chars: ${trimmedCss.slice(0, 200)}`,
 		);
 		return "" as SanitizedCSS;
+	}
+	if (recoveredBlocks > 0) {
+		console.warn(
+			`[safeScopedCss] Recovered ${recoveredBlocks} of ${totalBlocks} complete top-level CSS blocks after the full stylesheet failed to parse.`,
+		);
 	}
 
 	// Process top-level rules

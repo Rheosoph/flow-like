@@ -13,6 +13,7 @@ pub mod ir_tools;
 pub mod memory;
 pub mod platform;
 mod provider;
+pub mod public_web;
 mod search;
 pub mod stream;
 pub mod tool_spec;
@@ -932,6 +933,19 @@ impl Copilot {
                     iteration_budget =
                         iteration_budget.max(typed_ir_iteration_budget(module_count));
                 }
+                // Same escalation for the FlowScript path. Without it a whole-app generation got
+                // the 12-round default, which must cover planning, get_declarations, write, every
+                // check/patch repair round and the commit — so large documents ran out of rounds
+                // and the loop terminated with an empty message.
+                if active_workflow_mutation_path
+                    .is_none_or(|path| path == WorkflowMutationPath::FlowScript)
+                    && tool_calls.iter().any(|tool_call| {
+                        workflow_mutation_path(&tool_call.function.name)
+                            == Some(WorkflowMutationPath::FlowScript)
+                    })
+                {
+                    iteration_budget = iteration_budget.max(MIN_FLOWSCRIPT_ITERATION_BUDGET);
+                }
                 let command_count_before_round = all_commands.len();
                 let round_has_pending_board_edit = tool_calls.iter().any(|tool_call| {
                     matches!(
@@ -1186,11 +1200,9 @@ impl Copilot {
                         if let Some(ref callback) = on_token
                             && let Some(payload) =
                                 Self::extract_tag_content(tool_output, "flowscript_workspace")
+                            && let Ok(payload) = serde_json::from_str::<serde_json::Value>(payload)
                         {
-                            callback(format!(
-                                "<flowscript_workspace>{}</flowscript_workspace>",
-                                payload
-                            ));
+                            callback(stream::stream_frame("flowscript_workspace", &payload));
                         }
                     }
 
@@ -1365,15 +1377,26 @@ impl Copilot {
                 // the assistant's tool call message in a single message. We use that
                 // combined tool-result message as the prompt for the next turn.
                 if !tool_results.is_empty() {
+                    // `<flowscript_workspace>` is the host/UI channel, not a model affordance. It
+                    // has already been consumed above (workspace tracking, the `on_token` preview
+                    // frame, `parse_commands`, the stream frames) and the frontend reads it off the
+                    // transport stream, not off this message. This IS the next round's provider
+                    // payload (`current_prompt`, assigned below and sent at the top of the loop) —
+                    // not a history-only copy. The retained document is by construction exactly
+                    // what the model last wrote or the exact `replacen` it last requested, its own
+                    // `write_flowscript` arguments stay in history at the assistant push above, and
+                    // a run resuming a draft it has not seen gets the source from
+                    // `flowscript_recovery_system_instruction` in the system prompt. Echoing a
+                    // 72 KB document back on every round therefore bought nothing.
                     let mut tool_result_contents: Vec<UserContent> = tool_results
                         .iter()
                         .map(|(tool_id, _tool_name, tool_output)| {
+                            let mut compacted = tool_output.clone();
+                            Self::strip_tag_block(&mut compacted, "flowscript_workspace");
                             UserContent::ToolResult(RigToolResult {
                                 id: tool_id.clone(),
                                 call_id: None,
-                                content: OneOrMany::one(ToolResultContent::text(
-                                    tool_output.clone(),
-                                )),
+                                content: OneOrMany::one(ToolResultContent::text(compacted)),
                             })
                         })
                         .collect();
@@ -2436,6 +2459,12 @@ fn should_defer_runtime_verification(tool_name: &str, round_has_pending_board_ed
 
 const DEFAULT_WORKFLOW_ITERATION_BUDGET: u64 = 12;
 const MIN_TYPED_IR_ITERATION_BUDGET: u64 = 24;
+// The FlowScript path has the same write/check/repair/commit shape as typed IR, so it gets the
+// same floor. It is deliberately NOT scaled by document size: `patch_flowscript` is in
+// `workflow_tool_requires_order`, so a single provider response can carry several sequential
+// patches, and the prompt also offers `write_flowscript { replace_existing: true }` as a
+// whole-document repair. Repair rounds therefore do not track call-site count.
+const MIN_FLOWSCRIPT_ITERATION_BUDGET: u64 = MIN_TYPED_IR_ITERATION_BUDGET;
 // One round for each maximum-sized module plus planning/header/validation/commit and repair room.
 const MAX_TYPED_IR_ITERATION_BUDGET: u64 = ir::MAX_FLOW_IR_MODULES as u64 + 16;
 // A single provider response can contain many sequential tool calls, so iteration limits alone do
@@ -2693,7 +2722,7 @@ impl TypedIrOperationLedger {
     }
 }
 
-const FLOWSCRIPT_FORCE_INSTRUCTION: &str = "You have enough context. Continue the retained FlowScript source lifecycle now. If no source draft exists, call write_flowscript with one fresh draft_id and the complete program. If diagnostics exist, patch that exact revision in place. If the retained revision has no diagnostics, call check_flowscript; after status valid, call commit_flowscript at that exact revision. Preserve all requested helpers, variables, Events, and //@n anchors across repairs. Do not submit TODOs, stubs, plan comments, a test-only Event, or hand-authored command JSON. Use emit_commands only for position-only MoveNode or canvas comments; it cannot mutate layers.";
+const FLOWSCRIPT_FORCE_INSTRUCTION: &str = "You have enough context. Continue the retained FlowScript source lifecycle now. If no source draft exists, call write_flowscript immediately with one fresh draft_id and the complete full-shape program; do not chase omitted or unmatched declaration queries before this recoverable checkpoint. If diagnostics exist, patch that exact revision in place and use only diagnostic-directed declaration lookups. If the retained revision has no diagnostics, call check_flowscript; after status valid, call commit_flowscript at that exact revision. Preserve all requested helpers, variables, Events, and //@n anchors across repairs. Do not submit TODOs, stubs, plan comments, a test-only Event, or hand-authored command JSON. Use emit_commands only for position-only MoveNode or canvas comments; it cannot mutate layers.";
 const FLOWSCRIPT_FORCE_ESCALATION: &str = "STOP analyzing and take the next FlowScript compiler action now: write the complete source, patch the retained diagnostic at its exact revision, check that revision, or commit it after status valid. Never restart from the live board after a failed draft, reduce the requested program to a smoke test, switch to JSON IR, or answer with only text.";
 const TYPED_IR_FORCE_INSTRUCTION: &str = "Continue the active typed Flow IR path now. If plan_flow_ir returned selection_required, copy one semantically compatible candidate.node_type into exact_node_type for every required capability and resubmit the complete plan; only begin_flow_ir_draft after feasible is true. Otherwise repair the capability request from its structured feedback. After the draft exists, add or repair complete modules with update_flow_ir_draft and upsert_flow_ir_module at the exact latest revision, then validate_flow_ir_draft. Preserve every expected module and requested capability. Do not switch mutation representations or answer with only text.";
 const TYPED_IR_FORCE_ESCALATION: &str = "STOP analyzing and continue the typed Flow IR path. If the latest plan contains selection_required, resubmit the complete plan now with one compatible candidate.node_type copied into exact_node_type for every required capability. Otherwise use the exact latest revision and call the next typed draft operation now: begin the feasible planned draft, update its retained header, upsert a complete expected module, or validate it. Preserve full requested scope and do not switch mutation representations.";
@@ -3177,6 +3206,72 @@ mod runtime_bridge_tests {
         board::{ExecutionMode, ExecutionStage},
         execution::LogLevel,
     };
+
+    /// The `<flowscript_workspace>` tag is the host/UI channel. It used to be echoed back to the
+    /// provider inside every tool result, so a 72 KB document cost ~37k tokens per FlowScript round
+    /// on top of the copy already in the model's own `write_flowscript` arguments. The structured
+    /// envelope beside it must survive intact — that is what carries diagnostics and revision.
+    #[test]
+    fn flowscript_workspace_echo_is_stripped_from_the_provider_payload() {
+        let mut rendered = String::from(
+            "<flowscript_workspace>{\"source\":\"eventsSimple x() {}\",\"status\":\"valid\"}             </flowscript_workspace>\n<flowscript_draft_result>{\"status\":\"valid\",             \"revision\":3}</flowscript_draft_result>",
+        );
+        Copilot::strip_tag_block(&mut rendered, "flowscript_workspace");
+
+        assert!(
+            !rendered.contains("flowscript_workspace"),
+            "the workspace echo must not reach the provider: {rendered}"
+        );
+        assert!(
+            !rendered.contains("eventsSimple x() {}"),
+            "the document body must not reach the provider: {rendered}"
+        );
+        assert!(
+            rendered.contains("<flowscript_draft_result>") && rendered.contains("\"revision\":3"),
+            "the structured envelope must survive: {rendered}"
+        );
+    }
+
+    #[test]
+    fn flowscript_workspace_round_trip_survives_an_embedded_closing_sentinel() {
+        let source = "eventsSimple() { logInfo({ message: \"</flowscript_workspace>\" }) }";
+        let frame = tools::flowscript_workspace_tag(source, "queued");
+
+        assert_eq!(
+            Copilot::parse_flowscript_workspace(&frame).as_deref(),
+            Some(source)
+        );
+        let payload = Copilot::extract_tag_content(&frame, "flowscript_workspace").unwrap();
+        let payload: serde_json::Value = serde_json::from_str(payload).unwrap();
+        let reemitted = stream::stream_frame("flowscript_workspace", &payload);
+        assert_eq!(
+            Copilot::parse_flowscript_workspace(&reemitted).as_deref(),
+            Some(source)
+        );
+        assert_eq!(
+            Copilot::parse_flowscript_workspace_status(&reemitted).as_deref(),
+            Some("queued")
+        );
+    }
+
+    /// A whole-app FlowScript generation used to get the 12-round default while typed IR got 24+,
+    /// so it ran out of iterations mid-repair and the loop broke out with an empty final message.
+    #[test]
+    fn flowscript_path_leaves_the_twelve_round_default() {
+        assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET > DEFAULT_WORKFLOW_ITERATION_BUDGET);
+        assert!(MIN_FLOWSCRIPT_ITERATION_BUDGET <= MAX_TYPED_IR_ITERATION_BUDGET);
+        for tool in [
+            "write_flowscript",
+            "patch_flowscript",
+            "check_flowscript",
+            "commit_flowscript",
+        ] {
+            assert_eq!(
+                workflow_mutation_path(tool),
+                Some(WorkflowMutationPath::FlowScript)
+            );
+        }
+    }
 
     #[derive(Default)]
     struct RecordingRuntimeBridge {

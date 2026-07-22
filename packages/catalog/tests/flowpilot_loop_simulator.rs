@@ -432,15 +432,15 @@ async fn golden_path() {
 /// through member-access chains. The write must check valid, the queued batch
 /// must feed every declared boundary return pin, and the applied board must
 /// lower back to a no-op — protecting multi-value return wiring end to end.
-const MULTI_OUTPUT_RETURN_SCRIPT: &str = r#"function getOwnerIdentity(): (ownerSub: string, ownerKey: string, hasUser: bool) {
+const MULTI_OUTPUT_RETURN_SCRIPT: &str = r#"function getOwnerIdentity(salt: string): (ownerSub: string, ownerKey: string, hasUser: bool, echoedSalt: string) {
     const user = utilsUserGetExecutingUser()
     const asText = valToString({ value: user.userContext.sub, pretty: false })
     const hashed = utilsHashSha256({ input: asText.string })
-    return hashed.hash, asText.string, user.hasUser
+    return hashed.hash, asText.string, user.hasUser, salt
 }
 
 eventsSimple() {
-    const identity = getOwnerIdentity()
+    const identity = getOwnerIdentity({ salt: "seed" })
     if (identity.hasUser) {
         logInfo({ message: identity.ownerKey })
     } else {
@@ -502,7 +502,10 @@ async fn multi_output_return_golden_path() {
         .values()
         .find(|layer| layer.name == "getOwnerIdentity")
         .expect("function layer exists on the applied board");
-    for return_pin in ["ownerSub", "ownerKey", "hasUser"] {
+    // `echoedSalt` returns a bare function PARAMETER. That value both enters and leaves the same
+    // layer, so it must route through a spliced `reroute` inside the layer — a direct boundary
+    // self-edge is rejected by `connect_pins` and rolls the whole apply batch back.
+    for return_pin in ["ownerSub", "ownerKey", "hasUser", "echoedSalt"] {
         let boundary = layer
             .pins
             .values()

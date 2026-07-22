@@ -97,7 +97,9 @@ export function profileFlowScriptCandidate(
 		const helperDeclaration = line.match(
 			/^function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/,
 		);
-		const eventDeclaration = line.match(/^(events[A-Za-z0-9_]*)\s*\(/);
+		const eventDeclaration = line.match(
+			/^(events[A-Za-z0-9_]*)(?:\s+([A-Za-z_][A-Za-z0-9_]*))?\s*\(/,
+		);
 		const interfaceDeclaration = line.match(
 			/^interface\s+([A-Za-z_][A-Za-z0-9_]*)/,
 		);
@@ -124,10 +126,16 @@ export function profileFlowScriptCandidate(
 			};
 		}
 
+		const helperDeclarationName = normalizedSymbol(
+			helperDeclaration?.[1] ?? "",
+		);
+		const eventDeclarationType = normalizedSymbol(eventDeclaration?.[1] ?? "");
+		const eventDeclarationAlias = normalizedSymbol(eventDeclaration?.[2] ?? "");
 		const calls = callNamesInLine(line).filter(
 			(name) =>
-				name !== normalizedSymbol(helperDeclaration?.[1] ?? "") &&
-				name !== normalizedSymbol(eventDeclaration?.[1] ?? ""),
+				name !== helperDeclarationName &&
+				name !== eventDeclarationType &&
+				name !== eventDeclarationAlias,
 		);
 		for (const name of calls) {
 			callSites += 1;

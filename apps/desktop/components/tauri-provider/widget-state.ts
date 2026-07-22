@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import {
 	IAppVisibility,
 	type IMetadata,
@@ -6,9 +5,11 @@ import {
 	type IWidgetState,
 	type Version,
 	type VersionType,
+	normalizeWidgetForPersistence,
 } from "@flow-like/flow-like-ui";
-import { appsDB } from "../../lib/apps-db";
+import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
+import { appsDB } from "../../lib/apps-db";
 import type { TauriBackend } from "../tauri-provider";
 
 export class WidgetState implements IWidgetState {
@@ -48,12 +49,13 @@ export class WidgetState implements IWidgetState {
 		widget: IWidget,
 	): Promise<void> {
 		if (!this.backend.profile) return;
+		const normalizedWidget = normalizeWidgetForPersistence(widget);
 		await fetcher(
 			this.backend.profile,
 			`apps/${appId}/widgets/${widget.id}`,
 			{
 				method: "PUT",
-				body: JSON.stringify({ widget }),
+				body: JSON.stringify({ widget: normalizedWidget }),
 			},
 			this.getRemoteAuth(),
 		);
@@ -230,7 +232,10 @@ export class WidgetState implements IWidgetState {
 				try {
 					await invoke("update_widget", { appId, widget: remote });
 				} catch (e) {
-					console.warn("[WidgetState] Failed to cache remote widget locally:", e);
+					console.warn(
+						"[WidgetState] Failed to cache remote widget locally:",
+						e,
+					);
 				}
 			}
 			return remote;
@@ -272,12 +277,13 @@ export class WidgetState implements IWidgetState {
 	}
 
 	async updateWidget(appId: string, widget: IWidget): Promise<void> {
-		await invoke("update_widget", { appId, widget });
+		const normalizedWidget = normalizeWidgetForPersistence(widget);
+		await invoke("update_widget", { appId, widget: normalizedWidget });
 
 		const isOffline = await this.backend.isOffline(appId);
 		if (!isOffline && this.hasRemote()) {
 			try {
-				await this.pushWidgetRemote(appId, widget);
+				await this.pushWidgetRemote(appId, normalizedWidget);
 			} catch (e) {
 				console.warn(
 					"[WidgetState] Failed to push widget update to remote:",

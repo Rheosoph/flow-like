@@ -8,6 +8,7 @@ import {
 	ShoppingCart,
 	Star,
 } from "lucide-react";
+import { useIsMobile } from "../../hooks/use-mobile";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import { formatAppCategory } from "../../lib/app-category";
 import type { IAppVisibility } from "../../lib/schema/app/app";
@@ -61,6 +62,8 @@ export function StoreHero({
 	actionsExtra?: React.ReactNode;
 }>) {
 	const { primaryHue, isDark } = useThemeInfo();
+	const isMobile = useIsMobile();
+	const primarySize = isMobile ? "default" : "sm";
 
 	return (
 		<section className="relative">
@@ -143,20 +146,34 @@ export function StoreHero({
 						</div>
 					</div>
 
-					<div className="flex items-center gap-2 shrink-0 sm:pb-1">
+					<div className="flex w-full flex-col items-stretch gap-2 sm:w-auto sm:flex-row sm:items-center sm:shrink-0 sm:pb-1">
 						{isMember ? (
 							<>
 								{canUseApp && (
-									<Button size="sm" onClick={onUse}>
+									<Button
+										size={primarySize}
+										className="w-full sm:w-auto"
+										onClick={onUse}
+									>
 										<Play className="h-3.5 w-3.5 mr-1.5" /> Use
 									</Button>
 								)}
-								<Button size="sm" variant="outline" onClick={onSettings}>
+								<Button
+									size={primarySize}
+									variant="outline"
+									className="w-full sm:w-auto"
+									onClick={onSettings}
+								>
 									<SettingsIcon className="h-3.5 w-3.5 mr-1.5" /> Settings
 								</Button>
 							</>
 						) : price > 0 ? (
-							<Button size="sm" onClick={onBuy} disabled={isPurchasing}>
+							<Button
+								size={primarySize}
+								className="w-full sm:w-auto"
+								onClick={onBuy}
+								disabled={isPurchasing}
+							>
 								{isPurchasing ? (
 									"Processing..."
 								) : (
@@ -166,24 +183,35 @@ export function StoreHero({
 								)}
 							</Button>
 						) : visibility === AppVis.Public ? (
-							<Button size="sm" onClick={onJoinOrRequest}>
+							<Button
+								size={primarySize}
+								className="w-full sm:w-auto"
+								onClick={onJoinOrRequest}
+							>
 								<Download className="h-3.5 w-3.5 mr-1.5" /> Get
 							</Button>
 						) : (
-							<Button size="sm" onClick={onJoinOrRequest}>
+							<Button
+								size={primarySize}
+								className="w-full sm:w-auto"
+								onClick={onJoinOrRequest}
+							>
 								<KeyRound className="h-3.5 w-3.5 mr-1.5" />
 								{visibility === AppVis.PublicRequestAccess
 									? "Request join"
 									: "Request access"}
 							</Button>
 						)}
-						{actionsExtra}
-						<ShareButton
-							appId={appId}
-							appName={appName}
-							variant="outline"
-							size="sm"
-						/>
+						<div className="flex items-center gap-2 sm:contents">
+							{actionsExtra}
+							<ShareButton
+								appId={appId}
+								appName={appName}
+								variant="outline"
+								size={primarySize}
+								className="flex-1 sm:flex-none"
+							/>
+						</div>
 					</div>
 				</div>
 			</div>

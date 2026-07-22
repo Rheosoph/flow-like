@@ -5,7 +5,6 @@ import {
 	type ReactNode,
 	useEffect,
 	useId,
-	useMemo,
 	useState,
 } from "react";
 import {
@@ -14,16 +13,13 @@ import {
 	resolveChatColorScheme,
 } from "../../../lib/chat-appearance";
 import {
-	createSanitizedStyleProps,
-	safeScopedCss,
-} from "../../../lib/css-utils";
-import {
 	isStoragePrefix,
 	presignSinglePath,
 } from "../../../lib/presign-assets";
 import type { IEventPayloadChat } from "../../../lib/schema/flow/event-payload-chat";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
+import { ScopedCustomCss } from "../../scoped-custom-css";
 
 interface ChatAppearanceProps {
 	appId?: string;
@@ -90,15 +86,7 @@ export function ChatAppearance({
 			: undefined
 		: configuredBackgroundImage || undefined;
 	const backgroundImage = createChatBackgroundImage(resolvedBackgroundImage);
-	const sanitizedCss = useMemo(
-		() =>
-			safeScopedCss(
-				typeof config.custom_css === "string" ? config.custom_css : "",
-				`[data-fl-chat-root="${escapeCssAttributeValue(scopeKey)}"]`,
-				{ scopeRoot: true },
-			),
-		[config.custom_css, scopeKey],
-	);
+	const customCssScope = `[data-fl-chat-root="${escapeCssAttributeValue(scopeKey)}"]`;
 
 	const style: CSSProperties = {
 		backgroundImage,
@@ -121,7 +109,11 @@ export function ChatAppearance({
 			data-fl-chat-has-background={backgroundImage ? "true" : undefined}
 			style={style}
 		>
-			{sanitizedCss && <style {...createSanitizedStyleProps(sanitizedCss)} />}
+			<ScopedCustomCss
+				css={config.custom_css}
+				scopeSelector={customCssScope}
+				options={{ scopeRoot: true }}
+			/>
 			{children}
 		</div>
 	);

@@ -124,10 +124,32 @@ impl Parser<'_> {
 
     // ---- trailing comments (labels / anchors) ---------------------------------------------
 
-    /// Consume a trailing anchor comment (`//@n:id`) if present; returns the id.
+    /// Consume a *trailing* anchor comment (`//@n:id`) if present; returns the id.
     /// Only the known anchor kinds (`n`/`v`/`l`) qualify — any other `@…` comment is an
     /// ordinary user comment and must not be swallowed as an anchor.
+    ///
+    /// The anchor must not be the first thing on its source line. `render::Writer::anchor`
+    /// appends to the current line and never opens one, so this rejects nothing the renderer
+    /// emits — but it stops a finished statement from swallowing an anchor authored on the next
+    /// line, which today both mis-attributes identity and can mutate the anchor kind (a `//@n:`
+    /// stolen by `fn_decl` is re-emitted as `//@l:`). Anchors are the only stable identity across
+    /// a round-trip, so a stolen one makes reconcile rewrite one node with another's content and
+    /// report the real one as deleted.
+    ///
+    /// This mirrors the positional rule `take_label_on_line` already applies to arm labels.
     fn take_anchor(&mut self) -> Option<String> {
+        if self.comment_starts_its_line() {
+            return None;
+        }
+        self.take_anchor_before_arms()
+    }
+
+    /// Anchor consumption for a block whose body is nothing but labelled branch arms
+    /// (`call(…) { … }` / `bind { … }`). `BranchArm` has no anchor field, so a comment before the
+    /// first arm can only be the branch's — accept it there even on its own line, and re-render it
+    /// trailing. Without this exemption the strict rule above turns currently-parsing documents
+    /// into `expected identifier, found Comment(...)` at the first arm.
+    fn take_anchor_before_arms(&mut self) -> Option<String> {
         if let Tok::Comment(text) = self.cur()
             && let Some(rest) = text.strip_prefix('@')
             && let Some((kind, id)) = rest.split_once(':')
@@ -138,6 +160,23 @@ impl Parser<'_> {
             return Some(id);
         }
         None
+    }
+
+    /// True when the cursor is a comment that is the first non-whitespace on its source line.
+    ///
+    /// Byte-based, not `Token::line`-based: a multi-line string literal records its *start* line,
+    /// so a genuinely trailing anchor after `const a = "x\ny"` would compare unequal and be
+    /// wrongly rejected. The lexer also splits `{ // label   //@n:id` into two comment tokens and
+    /// points the second at the embedded `//@`, whose line prefix is non-empty — so that
+    /// renderer-emitted form is correctly treated as trailing. Do not "simplify" this to a column
+    /// or token-index check.
+    fn comment_starts_its_line(&self) -> bool {
+        if !matches!(self.cur(), Tok::Comment(_)) {
+            return false;
+        }
+        let byte = self.cur_token().byte;
+        let line_start = self.src[..byte].rfind('\n').map_or(0, |i| i + 1);
+        self.src[line_start..byte].trim().is_empty()
     }
 
     /// Consume a trailing non-anchor comment on `line` (a branch arm label) if present.
@@ -767,7 +806,9 @@ impl Parser<'_> {
         // `call(...) { … }` — a general N-way branch fan-out.
         if matches!(self.cur(), Tok::LBrace) {
             self.bump(); // {
-            let anchor = self.take_anchor();
+            // Arm-only body: an own-line anchor here is unambiguous, so stay permissive.
+            // See `take_anchor_before_arms`. This is the single exempt call site.
+            let anchor = self.take_anchor_before_arms();
             let mut arms = Vec::new();
             while !matches!(self.cur(), Tok::RBrace) {
                 let label = self.ident()?;
@@ -806,48 +847,86 @@ impl Parser<'_> {
     fn branch_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.bump(); // if
         self.expect(&Tok::LParen)?;
-        // Negated single-arm form: `if (!(cond)) { … }`.
-        let negated = matches!(self.cur(), Tok::Bang);
-        if negated {
-            self.bump(); // !
-            self.expect(&Tok::LParen)?;
-            let cond = self.expr()?;
-            self.expect(&Tok::RParen)?;
-            self.expect(&Tok::RParen)?;
-            self.expect(&Tok::LBrace)?;
-            let anchor = self.take_anchor();
-            let body = self.block_body()?;
-            return Ok(Stmt::Branch {
-                bind: None,
-                call: placeholder_call(),
-                condition: Some(cond),
-                arms: vec![BranchArm {
-                    label: "False".to_string(),
-                    body,
-                }],
-                anchor,
-            });
-        }
+        let leading_bang = matches!(self.cur(), Tok::Bang);
         let cond = self.expr()?;
         self.expect(&Tok::RParen)?;
+        // A leading `!` spanning the WHOLE condition is the renderer's single-`False`-arm form
+        // (`if (!(cond)) { … }`). `!a && b` parses to a binary root and an author-written
+        // `boolNot(…)` carries no leading bang, so neither is re-sugared into it: doing so would
+        // delete a real `bool_not` node and flip the arm True -> False.
+        let negated = leading_bang
+            .then(|| not_call_operand(&cond).cloned())
+            .flatten();
         let true_brace_line = self.line();
         self.expect(&Tok::LBrace)?;
-        // A trailing non-anchor comment marks the labelled (call-based) branch form. The anchor
-        // comment can FOLLOW the label on the same line (`{ // exec_out   //@n:id`) — the lexer
-        // splits them into separate Comment tokens, so consume the anchor after the label or the
-        // branch node counts as deleted on reconcile.
-        let true_label = self.take_label_on_line(true_brace_line);
+        // A trailing non-anchor comment is an exec-pin LABEL only in the labelled call-branch
+        // form, which the renderer emits solely when `condition` is `None`. On a boolean or
+        // negated condition the renderer never emits one, so it is ordinary user text — but it
+        // must still be LIFTED off the brace line, because the anchor can sit behind it
+        // (`{ // note   //@n:id`) and `take_anchor` only inspects the cursor. Re-insert it as the
+        // block's first statement.
+        let condition_is_call = negated.is_none() && matches!(cond, Expr::Call(_));
+        let brace_comment = self.take_label_on_line(true_brace_line);
+        let (true_label, leading_note) = if condition_is_call {
+            (brace_comment, None)
+        } else {
+            (None, brace_comment)
+        };
         let anchor = self.take_anchor();
-        let true_body = self.block_body()?;
+        let mut true_body = self.block_body()?;
+        if let Some(note) = leading_note {
+            true_body.stmts.insert(0, Stmt::Comment(note));
+        }
 
         let mut else_label = None;
         let mut else_body = None;
         if self.is_ident("else") {
             self.bump(); // else
-            let else_brace_line = self.line();
-            self.expect(&Tok::LBrace)?;
-            else_label = self.take_label_on_line(else_brace_line);
-            else_body = Some(self.block_body()?);
+            if self.is_ident("if") {
+                // `else if (c) { … }` desugars to the nested `else { if (c) { … } }` ladder the
+                // renderer emits. `expr()` restores `self.depth` on the way out, so a ladder
+                // accumulates no budget of its own — this guard IS what bounds the recursion.
+                if self.depth >= MAX_NESTING_DEPTH {
+                    return Err(self.err("block nesting too deep"));
+                }
+                self.depth += 1;
+                let nested = self.branch_stmt();
+                self.depth -= 1;
+                else_body = Some(Block {
+                    stmts: vec![nested?],
+                });
+            } else {
+                let else_brace_line = self.line();
+                self.expect(&Tok::LBrace)?;
+                let else_comment = self.take_label_on_line(else_brace_line);
+                let mut body = self.block_body()?;
+                // Gate on `true_label.is_some()`, NOT on `condition_is_call`: with a call
+                // condition and no true label the old code took this comment and then never read
+                // it, silently deleting user text.
+                if true_label.is_some() {
+                    else_label = else_comment;
+                } else if let Some(note) = else_comment {
+                    body.stmts.insert(0, Stmt::Comment(note));
+                }
+                else_body = Some(body);
+            }
+        }
+
+        // Negated single-arm form: the branch's `False` exec output is the only connected arm.
+        // With an `else` both arms exist, so the negation stays inside the condition instead.
+        if let Some(inner) = negated
+            && else_body.is_none()
+        {
+            return Ok(Stmt::Branch {
+                bind: None,
+                call: placeholder_call(),
+                condition: Some(inner),
+                arms: vec![BranchArm {
+                    label: "False".to_string(),
+                    body: true_body,
+                }],
+                anchor,
+            });
         }
 
         if let Some(label) = true_label {
@@ -914,6 +993,7 @@ impl Parser<'_> {
             return Err(self.err("expected `of` in for-of loop"));
         }
         self.bump(); // of
+        self.reject_boolean_loop_head()?;
         let call = self.expr_call()?;
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::LBrace)?;
@@ -931,6 +1011,7 @@ impl Parser<'_> {
     fn while_stmt(&mut self) -> Result<Stmt, ParseError> {
         self.bump(); // while
         self.expect(&Tok::LParen)?;
+        self.reject_boolean_loop_head()?;
         let call = self.expr_call()?;
         self.expect(&Tok::RParen)?;
         self.expect(&Tok::LBrace)?;
@@ -943,6 +1024,19 @@ impl Parser<'_> {
             body,
             anchor,
         })
+    }
+
+    /// `expr_call` accepts any `Expr::Call`, and `boolNot(…)` is one — so without this a
+    /// `while (!done)` would build a `bool_not` node with ZERO exec outputs, leave the body
+    /// unwired, and report no diagnostics at all. A clean parse error beats a silently broken
+    /// board.
+    fn reject_boolean_loop_head(&mut self) -> Result<(), ParseError> {
+        if matches!(self.cur(), Tok::Bang) {
+            return Err(self.err(
+                "a loop head must be a loop-node call (e.g. `controlForEach({ array: items })`), not a boolean expression",
+            ));
+        }
+        Ok(())
     }
 
     fn expr_call(&mut self) -> Result<Call, ParseError> {
@@ -989,7 +1083,7 @@ impl Parser<'_> {
     }
 
     fn binary_precedence(&mut self, minimum: u8) -> Result<Expr, ParseError> {
-        let mut lhs = self.postfix()?;
+        let mut lhs = self.unary()?;
         while let Tok::Op(op) = self.cur().clone() {
             let Some(precedence) = binary_operator_precedence(&op) else {
                 break;
@@ -1019,6 +1113,24 @@ impl Parser<'_> {
             };
         }
         Ok(lhs)
+    }
+
+    /// Prefix `!`. Desugars to a `boolNot({ boolean: … })` call, which is exactly what the
+    /// renderer emits for a pure single-data-output node — so the result is a fixpoint.
+    /// `Tok::Bang` was previously reachable only in `branch_stmt`'s negated form, which is what
+    /// makes routing `binary_precedence` through here non-breaking by construction.
+    fn unary(&mut self) -> Result<Expr, ParseError> {
+        if matches!(self.cur(), Tok::Bang) {
+            if self.depth >= MAX_NESTING_DEPTH {
+                return Err(self.err("expression nesting too deep"));
+            }
+            self.bump(); // !
+            self.depth += 1;
+            let operand = self.unary();
+            self.depth -= 1;
+            return Ok(not_call(operand?));
+        }
+        self.postfix()
     }
 
     fn postfix(&mut self) -> Result<Expr, ParseError> {
@@ -1091,6 +1203,13 @@ impl Parser<'_> {
                     }
                 }
             },
+            // There is no numeric-negation node in the catalog (`intAbs`/`floatAbs` do not
+            // negate), so `-x` has no lowering. `0 - x` does: reconcile picks
+            // `int_subtract`/`float_subtract` from the operand types, which the parser cannot do
+            // blind. A negative literal such as `-1` lexes as one token and is unaffected.
+            Tok::Op(op) if op == "-" => Err(self.err(
+                "unary `-` is not supported; write `0 - x` (a negative literal such as `-1` is fine)",
+            )),
             other => Err(self.err(format!("unexpected token in expression: `{other:?}`"))),
         }
     }
@@ -1222,7 +1341,7 @@ impl Parser<'_> {
                 if let Some(raw) = self.try_canonical_json()? {
                     Ok(Literal::Json(raw))
                 } else {
-                    Err(self.err("expected a literal value"))
+                    Err(self.err("a `{…}`/`[…]` initializer must be compact canonical JSON: double-quoted keys, no spaces, JSON escapes only"))
                 }
             }
             other => Err(self.err(format!("expected literal, found `{other:?}`"))),
@@ -1231,6 +1350,34 @@ impl Parser<'_> {
 }
 
 /// A placeholder call for sugared boolean branches whose original node is not surfaced in text.
+/// Catalog coupling: `!x` has no AST-level representation, so it lowers to the boolean-NOT node.
+/// See `packages/catalog/std/src/utils/bool/not.rs`. This is this crate's only catalog coupling —
+/// the module doc's "purely syntactic" claim is qualified by exactly this pair of constants.
+const NOT_CALL_DISPLAY: &str = "boolNot";
+const NOT_CALL_INPUT: &str = "boolean";
+
+fn not_call(operand: Expr) -> Expr {
+    Expr::Call(Call {
+        node_type: String::new(),
+        display: NOT_CALL_DISPLAY.to_string(),
+        args: vec![Arg {
+            name: NOT_CALL_INPUT.to_string(),
+            value: operand,
+        }],
+        anchor: None,
+    })
+}
+
+/// The operand of a `boolNot({ boolean: x })` call, matching the root shape only.
+fn not_call_operand(expr: &Expr) -> Option<&Expr> {
+    let Expr::Call(call) = expr else { return None };
+    if call.display != NOT_CALL_DISPLAY || call.args.len() != 1 {
+        return None;
+    }
+    let arg = &call.args[0];
+    (arg.name == NOT_CALL_INPUT).then_some(&arg.value)
+}
+
 fn placeholder_call() -> Call {
     Call {
         node_type: String::new(),

@@ -72,6 +72,23 @@ export function readPersistedOverlayMode(): GlobalChatMode | null {
 	}
 }
 
+/** The FlowPilot provider/model/effort the user last *explicitly* chose. Remembered
+ * across sessions and hydrated by useHydrateAgentSelection so every surface (hero,
+ * /chat, overlay) opens on the same picks. Written only by the select* actions —
+ * the plain setters stay non-persisting so a transient "keep a valid model"
+ * fallback can never overwrite the remembered choice. */
+export const AGENT_PROVIDER_KEY = "flowpilot.hero.provider";
+export const AGENT_MODEL_KEY = "flowpilot.hero.model";
+export const AGENT_REASONING_KEY = "flowpilot.hero.reasoning-effort";
+
+function persistAgentPref(key: string, value: string) {
+	try {
+		if (typeof window !== "undefined") localStorage.setItem(key, value);
+	} catch {
+		// persistence is best-effort
+	}
+}
+
 export interface InlineAppChat {
 	id: string;
 	appId: string;
@@ -141,6 +158,9 @@ export interface GlobalToolPrompt {
 	 * resolve the raw id to the app's name + icon instead of showing the opaque id.
 	 */
 	appId?: string;
+	/** A gate that must never be answered without the user (e.g. the FlowScript deletion
+	 * re-apply). Auto mode skips these — waiving permission never extends to deletions. */
+	destructive?: boolean;
 	/** Present only when `kind === "ask"`: drives freeform vs. single/multiple choice rendering. */
 	ask?: GlobalToolAsk;
 	respond: (value: GlobalToolPromptResolution) => void;
@@ -181,6 +201,10 @@ interface GlobalChatState {
 	reasoningEffort: string;
 	/** Embedding bit id used for profile-scoped memory ("" = memory off). */
 	embeddingModelId: string;
+	/** Waive tool-approval prompts and the pending-change review gate. Deliberately not
+	 * persisted — it resets on page load, unlike the picker preferences above. Never waives
+	 * `ask_user` or destructive-deletion approval. */
+	autoMode: boolean;
 	/** App chat events the agent surfaced inline in the global chat view. */
 	inlineAppChats: InlineAppChat[];
 	/** App UI pages the agent embedded inline in the global chat view (artifact-like). */
@@ -258,7 +282,13 @@ interface GlobalChatState {
 	setProvider: (provider: AIProvider) => void;
 	setSelectedModelId: (modelId: string) => void;
 	setReasoningEffort: (effort: string) => void;
+	/** Explicit (user-driven) picks — these also persist across sessions. The plain
+	 * setters above stay non-persisting for internal "keep a valid model" fallbacks. */
+	selectProvider: (provider: AIProvider) => void;
+	selectModel: (modelId: string) => void;
+	selectReasoningEffort: (effort: string) => void;
 	setEmbeddingModelId: (modelId: string) => void;
+	setAutoMode: (autoMode: boolean) => void;
 	addInlineAppChat: (chat: Omit<InlineAppChat, "id">) => void;
 	removeInlineAppChat: (id: string) => void;
 	addInlineAppPage: (page: Omit<InlineAppPage, "id">) => void;
@@ -325,6 +355,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	selectedModelId: "",
 	reasoningEffort: "",
 	embeddingModelId: "",
+	autoMode: false,
 	inlineAppChats: [],
 	inlineAppPages: [],
 	inlineAppSurfaces: [],
@@ -369,7 +400,20 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	setProvider: (provider) => set({ provider }),
 	setSelectedModelId: (selectedModelId) => set({ selectedModelId }),
 	setReasoningEffort: (reasoningEffort) => set({ reasoningEffort }),
+	selectProvider: (provider) => {
+		persistAgentPref(AGENT_PROVIDER_KEY, provider);
+		set({ provider });
+	},
+	selectModel: (selectedModelId) => {
+		persistAgentPref(AGENT_MODEL_KEY, selectedModelId);
+		set({ selectedModelId });
+	},
+	selectReasoningEffort: (reasoningEffort) => {
+		persistAgentPref(AGENT_REASONING_KEY, reasoningEffort);
+		set({ reasoningEffort });
+	},
 	setEmbeddingModelId: (embeddingModelId) => set({ embeddingModelId }),
+	setAutoMode: (autoMode) => set({ autoMode }),
 	addInlineAppChat: (chat) =>
 		set((state) => {
 			// One card per (app, event) — surfacing the same chat twice just keeps the existing card.

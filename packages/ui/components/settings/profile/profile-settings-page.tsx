@@ -734,10 +734,14 @@ function TagsInput({
 							className="flex items-center gap-1 max-w-full break-words"
 						>
 							{tag}
-							<X
-								className="h-3 w-3 cursor-pointer hover:text-destructive"
+							<button
+								type="button"
+								aria-label={`Remove ${tag}`}
+								className="-mr-1 ml-0.5 rounded p-1.5 extend-touch-target hover:text-destructive"
 								onClick={() => onTagsChange(tags.filter((_, i) => i !== index))}
-							/>
+							>
+								<X className="h-3 w-3" />
+							</button>
 						</Badge>
 					))}
 				</div>

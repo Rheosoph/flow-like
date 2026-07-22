@@ -17,6 +17,7 @@ import {
 	isSemanticBoxTag,
 	normalizeSemanticBoxTag,
 } from "../a2ui/semantic-box-tags";
+import { normalizeSurfaceComponentForPersistence } from "../a2ui/style-normalization";
 import type {
 	BoundValue,
 	CanvasSettings,
@@ -66,6 +67,7 @@ export const BASE_PROPS = new Set<string>(["type", ...COMPONENT_BASE_PROPS]);
 
 /** Required props that MUST exist (non-optional in the TS interface). */
 const REQUIRED_PROPS: Record<string, string[]> = {
+	overlay: ["baseComponentId", "overlays"],
 	text: ["content"],
 	image: ["src"],
 	icon: ["name"],
@@ -86,16 +88,34 @@ const REQUIRED_PROPS: Record<string, string[]> = {
 	dateTimeInput: ["value"],
 	fileInput: ["value"],
 	imageInput: ["value"],
+	voiceInput: ["value"],
 	link: ["href"],
 	modal: ["open"],
-	tabs: ["value"],
+	tabs: ["value", "tabs"],
+	accordion: ["items"],
+	drawer: ["open"],
+	tooltip: ["content"],
+	popover: ["contentComponentId"],
+	table: ["columns", "data"],
+	tableRow: ["cells"],
+	tableCell: ["content"],
 	canvas2d: ["width", "height"],
 	sprite: ["src", "x", "y"],
 	shape: ["shapeType", "x", "y"],
 	scene3d: ["width", "height"],
 	model3d: ["src"],
+	dialogue: ["text"],
+	characterPortrait: ["image"],
+	choiceMenu: ["choices"],
+	inventoryGrid: ["items"],
+	healthBar: ["value", "maxValue"],
+	miniMap: ["width", "height"],
 	aspectRatio: ["ratio"],
-	boundingBoxOverlay: ["src"],
+	nivoChart: ["chartType"],
+	boundingBoxOverlay: ["src", "boxes"],
+	imageLabeler: ["src", "labels"],
+	imageHotspot: ["src", "hotspots"],
+	widgetInstance: ["instanceId", "widgetId"],
 	calendar: ["events"],
 	gantt: ["tasks"],
 };
@@ -119,12 +139,37 @@ const DEFAULT_BOUND_VALUES: Record<string, BoundValue> = {
 	y: { literalNumber: 0 },
 	shapeType: { literalString: "rectangle" },
 	ratio: { literalNumber: 1 },
+	text: { literalString: "" },
+	maxValue: { literalNumber: 100 },
+	chartType: { literalString: "bar" },
 };
+
+function defaultRequiredProp(type: string, prop: string): unknown {
+	if (
+		prop === "overlays" ||
+		(type === "tabs" && prop === "tabs") ||
+		(type === "accordion" && prop === "items")
+	) {
+		return [];
+	}
+	if (
+		prop === "columns" ||
+		prop === "data" ||
+		prop === "cells" ||
+		prop === "choices" ||
+		prop === "items" ||
+		prop === "boxes" ||
+		prop === "labels" ||
+		prop === "hotspots"
+	) {
+		return { literalJson: "[]" } satisfies BoundValue;
+	}
+	return DEFAULT_BOUND_VALUES[prop];
+}
 
 const MAX_COMPONENTS = 120;
 const MAX_COMPONENT_ID_CHARS = 120;
 const MAX_BOUND_STRING_CHARS = 8_000;
-const MAX_CUSTOM_CSS_CHARS = 12_000;
 
 // ---------------------------------------------------------------------------
 // BoundValue coercion
@@ -432,19 +477,26 @@ export function validateComponents(
 
 		// Inject defaults for missing required props
 		const required = REQUIRED_PROPS[type];
+		let missingUnfixableRequiredProp = false;
 		if (required) {
 			for (const prop of required) {
 				if (!(prop in cleaned)) {
-					const defaultVal = DEFAULT_BOUND_VALUES[prop];
-					if (defaultVal) {
+					const defaultVal = defaultRequiredProp(type, prop);
+					if (defaultVal !== undefined) {
 						cleaned[prop] = defaultVal;
 						warnings.push(
 							`${componentId}: injected default for required prop "${prop}" on ${type}`,
+						);
+					} else {
+						missingUnfixableRequiredProp = true;
+						warnings.push(
+							`${componentId}: skipped ${type} because required prop "${prop}" is missing`,
 						);
 					}
 				}
 			}
 		}
+		if (missingUnfixableRequiredProp) continue;
 
 		// Validate children references
 		const rawChildren = rawComponent.children;
@@ -455,11 +507,13 @@ export function validateComponents(
 			warnings.push(`${componentId}: removed invalid children reference`);
 		}
 
-		validated.push({
-			id: componentId,
-			style: comp.style,
-			component: cleaned as unknown as SurfaceComponent["component"],
-		});
+		validated.push(
+			normalizeSurfaceComponentForPersistence({
+				id: componentId,
+				style: comp.style,
+				component: cleaned as unknown as SurfaceComponent["component"],
+			}),
+		);
 	}
 
 	const validIds = new Set(validated.map((component) => component.id));
@@ -498,7 +552,10 @@ export function validateCanvasSettings(
 		result.padding = obj.padding;
 	}
 	if (typeof obj.customCss === "string") {
-		result.customCss = obj.customCss.slice(0, MAX_CUSTOM_CSS_CHARS);
+		// CSS cannot be truncated safely at an arbitrary character boundary: a
+		// cut inside a declaration, string, or nested at-rule invalidates the
+		// stylesheet. Large stylesheets are parsed off-thread by ScopedCustomCss.
+		result.customCss = obj.customCss;
 	}
 	if (typeof obj.backgroundImage === "string") {
 		const image = obj.backgroundImage.trim();

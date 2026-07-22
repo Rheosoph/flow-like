@@ -466,8 +466,8 @@ export function LibraryPage({
 			<div
 				className={`pt-5 pb-3 space-y-3 ${isMobile ? "px-4" : "px-4 sm:px-8 pb-4"}`}
 			>
-				<div className="flex items-center gap-2">
-					<div className="relative flex-1 max-w-lg">
+				<div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+					<div className="relative w-full sm:flex-1 sm:max-w-lg">
 						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
 						<Input
 							placeholder="Search…"
@@ -476,7 +476,7 @@ export function LibraryPage({
 								search(e.target.value);
 								setSearchQuery(e.target.value);
 							}}
-							className="pl-11 h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
+							className="pl-11 h-11 sm:h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
 						/>
 						{searchQuery && (
 							<button
@@ -498,7 +498,7 @@ export function LibraryPage({
 								<Button
 									variant="ghost"
 									size="icon"
-									className={`h-8 w-8 rounded-full ${
+									className={`h-11 w-11 sm:h-8 sm:w-8 rounded-full ${
 										sortMode === "alpha"
 											? "text-foreground/80 bg-muted/40"
 											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
@@ -519,16 +519,19 @@ export function LibraryPage({
 							</TooltipContent>
 						</Tooltip>
 
-						<JoinInline />
-
-						{extraToolbarActions}
+						{!isMobile && (
+							<>
+								<JoinInline />
+								{extraToolbarActions}
+							</>
+						)}
 
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
 									variant="ghost"
 									size="icon"
-									className="h-8 w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+									className="h-11 w-11 sm:h-8 sm:w-8 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
 									onClick={handleOpenCreateFlow}
 								>
 									<Plus className="h-4 w-4" />
@@ -542,7 +545,7 @@ export function LibraryPage({
 								<Button
 									variant={visibilityMode ? "secondary" : "ghost"}
 									size="icon"
-									className={`h-8 w-8 rounded-full ${
+									className={`h-11 w-11 sm:h-8 sm:w-8 rounded-full ${
 										visibilityMode
 											? "text-primary bg-primary/10"
 											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"

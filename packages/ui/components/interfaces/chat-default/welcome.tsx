@@ -255,9 +255,9 @@ export function ChatWelcome({
 				</div>
 			)}
 			{/* Welcome Content */}
-			<div className="flex min-h-0 flex-1 items-start justify-center overflow-y-auto p-3 sm:items-center sm:p-6 lg:p-8">
+			<div className="flex min-h-0 flex-1 justify-center overflow-y-auto p-3 sm:p-6 lg:p-8">
 				<div
-					className="w-full space-y-6"
+					className="my-auto w-full space-y-6"
 					data-fl-chat-welcome-panel
 					style={{
 						maxWidth: "min(var(--fl-chat-content-width, 64rem), 40rem)",

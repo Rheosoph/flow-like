@@ -7,6 +7,7 @@
 // Bit -> bit.flow.d
 // Control -> control.flow.d
 // Data -> data.flow.d
+// Data Studio -> data-studio.flow.d
 // Diagnostics -> diagnostics.flow.d
 // Document -> document.flow.d
 // Email -> email.flow.d

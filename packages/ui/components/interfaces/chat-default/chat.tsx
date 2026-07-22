@@ -109,7 +109,6 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		ref,
 	) => {
 		const { resolvedTheme } = useTheme();
-		const messagesEndRef = useRef<HTMLDivElement>(null);
 		const scrollContainerRef = useRef<HTMLDivElement>(null);
 		const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 		const [currentMessage, setCurrentMessage] = useState<IMessage | null>(null);
@@ -285,19 +284,21 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			}
 		}, [localMessages.length, hasInitiallyScrolled]);
 
+		const scrollMessagesToEnd = useCallback(() => {
+			const container = scrollContainerRef.current;
+			if (!container) return;
+			container.scrollTop = container.scrollHeight;
+		}, []);
+
 		const scrollToBottom = useCallback(() => {
-			if (!messagesEndRef.current) return;
 			if (!shouldAutoScroll) return;
 			isScrollingProgrammatically.current = true;
-			messagesEndRef.current.scrollIntoView({
-				behavior: "instant",
-				block: "end",
-			});
+			scrollMessagesToEnd();
 			// Reset the flag after scroll animation completes
 			setTimeout(() => {
 				isScrollingProgrammatically.current = false;
 			}, 500);
-		}, [shouldAutoScroll]);
+		}, [scrollMessagesToEnd, shouldAutoScroll]);
 
 		const isAtBottom = useCallback(() => {
 			if (!scrollContainerRef.current) return false;
@@ -372,26 +373,22 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			[handleSendMessage],
 		);
 
-		// iOS keyboard/open focus handling to reduce layout jump and zoom
+		// Keep the transcript pinned without asking scrollIntoView to pan the
+		// document/visual viewport while iOS is opening its keyboard.
 		useEffect(() => {
+			let focusTimer = 0;
 			const onFocusIn = (e: FocusEvent) => {
 				const target = e.target as HTMLElement | null;
-				if (!target) return;
-				// Ensure the input stays visible when keyboard opens
-				if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
-					setTimeout(() => {
-						try {
-							messagesEndRef.current?.scrollIntoView({
-								block: "end",
-								behavior: "smooth",
-							});
-						} catch {}
-					}, 100);
-				}
+				if (!target?.closest("[data-fl-chat-composer]")) return;
+				window.clearTimeout(focusTimer);
+				focusTimer = window.setTimeout(scrollMessagesToEnd, 100);
 			};
 			document.addEventListener("focusin", onFocusIn);
-			return () => document.removeEventListener("focusin", onFocusIn);
-		}, []);
+			return () => {
+				window.clearTimeout(focusTimer);
+				document.removeEventListener("focusin", onFocusIn);
+			};
+		}, [scrollMessagesToEnd]);
 
 		// Dismiss keyboard when tapping outside inputs on iOS
 		useEffect(() => {
@@ -581,7 +578,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								</div>
 							),
 						)}
-						<div ref={messagesEndRef} />
+						<div aria-hidden="true" />
 					</div>
 
 					{inlinePrompt && (

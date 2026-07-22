@@ -370,7 +370,7 @@ export function registerFlowScriptLanguage(monaco: Monaco): void {
 			"|",
 		],
 		symbols: /[=><!~?:&|+\-*/^%]+/,
-		escapes: /\\(?:["\\/nrt]|u[0-9A-Fa-f]{4})/,
+		escapes: /\\(?:['"\\/bfnrt]|u[0-9A-Fa-f]{4})/,
 		tokenizer: {
 			root: [
 				// Anchor comments carry round-trip identity — highlight distinctly.
@@ -764,6 +764,23 @@ interface DocumentSymbols {
 	interfaces: Set<string>;
 }
 
+/**
+ * Collects callable names declared by top-level and nested event headers.
+ *
+ * FlowScript supports both the legacy `alias(...) {` spelling and the canonical
+ * `nodeType alias(...) {` spelling. In the canonical form the alias is the
+ * document symbol; the leading identifier preserves the exact catalog node type.
+ */
+function collectEventHeaderNames(text: string): Set<string> {
+	const names = new Set<string>();
+	const eventHeadRe =
+		/(?:^|\n)[\t ]*([A-Za-z_$][\w$]*)(?:[\t ]+([A-Za-z_$][\w$]*))?[\t ]*\([^)]*\)[\t ]*\{/g;
+	for (let m = eventHeadRe.exec(text); m; m = eventHeadRe.exec(text)) {
+		if (!KEYWORD_SET.has(m[1])) names.add(m[2] ?? m[1]);
+	}
+	return names;
+}
+
 /** Scans the FlowScript document for its own declared variables, functions and interfaces. */
 function collectDocumentSymbols(masked: string): DocumentSymbols {
 	const variables = new Map<string, string | undefined>();
@@ -781,10 +798,7 @@ function collectDocumentSymbols(masked: string): DocumentSymbols {
 	}
 	const fnRe = /\b(?:function|event)\s+([A-Za-z_$][\w$]*)/g;
 	for (let m = fnRe.exec(masked); m; m = fnRe.exec(masked)) functions.add(m[1]);
-	const eventHeadRe = /(?:^|\n)\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g;
-	for (let m = eventHeadRe.exec(masked); m; m = eventHeadRe.exec(masked)) {
-		if (!KEYWORD_SET.has(m[1])) functions.add(m[1]);
-	}
+	for (const name of collectEventHeaderNames(masked)) functions.add(name);
 	const ifaceRe = /\b(?:interface|struct)\s+([A-Za-z_$][\w$]*)/g;
 	for (let m = ifaceRe.exec(masked); m; m = ifaceRe.exec(masked))
 		interfaces.add(m[1]);
@@ -1425,10 +1439,7 @@ function collectDeclaredNames(text: string): Set<string> {
 	const names = new Set<string>();
 	const declared = /\b(?:function|event)\s+([A-Za-z_$][\w$]*)/g;
 	for (let m = declared.exec(text); m; m = declared.exec(text)) names.add(m[1]);
-	// Top-level event functions render as `name() {` with no keyword.
-	const eventHead = /(^|\n)\s*([A-Za-z_$][\w$]*)\s*\([^)]*\)\s*\{/g;
-	for (let m = eventHead.exec(text); m; m = eventHead.exec(text))
-		names.add(m[2]);
+	for (const name of collectEventHeaderNames(text)) names.add(name);
 	return names;
 }
 

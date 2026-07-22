@@ -201,12 +201,12 @@ function perpareNews(source: Struct) {   //@l:laeilytd08anlyzir5qut79v
         const invokeAgent = agentInvoke({ agent: agentRegisterFunctionTools({ agentIn: agentFromModel({ model: model, maxIter: 20, infiniteContext: true, contextMode: "summarize", maxContextTokens: 32000 }), tools: [fetchPage, addNews] }), history: pushMessage.historyOut })   //@n:e8uj88d24q9xipxgczs1ktio
         eventsChatPushStat({ stepName: source.label, stat: invokeAgent.stats })   //@n:i21zjcs446mtx5m26ae2mvpu
     }
-    addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {   //@n:qtx8zi1adxqna4vd82y9g58u
+    eventsGeneric addNews(title: string, summary: string, uri: string, date: string, payload: Struct) {   //@n:qtx8zi1adxqna4vd82y9g58u
         const push2 = arrayPush({ arrayIn: reportEntry, value: { title: title, uri: uri, summary: summary, interest: label, date: date, report_id: reportID } })   //@n:lbkgeatcq8gvwe8fye2pq7tr
         reportEntry = push2.arrayOut   //@n:l2fh63vjftwrfgsrqmzlcl0y
         return stringFormat({ formatString: "Successfully Added" })   //@n:ia430e904bgj81jzpeh2plyf
     }
-    fetchPage(url: string, payload: Struct) {   //@n:owypi2kzuovvg7cnelos4uvi
+    eventsGeneric fetchPage(url: string, payload: Struct) {   //@n:owypi2kzuovvg7cnelos4uvi
         eventsChatPushStep({ title: "Reading Website", description: url })   //@n:ow3fh5re5xfh3pb00zcxg6xt
         const aPICall = httpFetch({ request: httpMakeRequest({ method: "GET", url: url }) })   //@n:det2l9brnyojanawng1zvj6x
         aPICall {
@@ -220,7 +220,7 @@ function perpareNews(source: Struct) {   //@l:laeilytd08anlyzir5qut79v
             }
         }
     }
-    search(query: string, language: string, page: int, payload: Struct) {   //@n:fod9pjzyu28a3lj4s6y67yhf
+    eventsGeneric search(query: string, language: string, page: int, payload: Struct) {   //@n:fod9pjzyu28a3lj4s6y67yhf
         eventsChatPushStep({ title: "Searching Internet", description: query })   //@n:ug86onmkffwjavx5kmmxwgtu
         const aPICall3 = httpFetch({ request: httpMakeRequest({ method: "GET", url: stringFormat({ formatString: "https://search.flow-like.com/search?q={q}&format=json&pageno={page}&language={lang}", page: utilsTypesFallback({ value: page, default: 1 }).result, lang: utilsTypesFallback({ value: language, default: "en-US" }).result, q: a2uiUrlEncode({ input: query }) }) }) })   //@n:yvrx5rql2ap186ojffngs067
         aPICall3 {
@@ -239,7 +239,7 @@ function saveConfig(config: Struct) {   //@l:ssdi5toh4f9nza4w0a35p3rt
     writeString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }), content: valToString({ value: config, pretty: true }) })   //@n:h140ef1az7ofufnf2flso6du
 }
 
-clickLatestOverview() {   //@n:ionkvw3l0f7dmb82l3pxyb0s
+eventsSimple clickLatestOverview() {   //@n:ionkvw3l0f7dmb82l3pxyb0s
     const openDatabase2 = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:q10tbt024z0h8ivmx9jr4df4
     const createDataFusionSession2 = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:juj7x1sv8ngrhec1wbd8a0i9
     dfRegisterLance({ session: createDataFusionSession2.session, database: openDatabase2.database, tableName: "reports" })   //@n:hiopuc2c1i4f3gvgzfpjmygn
@@ -247,10 +247,10 @@ clickLatestOverview() {   //@n:ionkvw3l0f7dmb82l3pxyb0s
     a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: sQLQuery2.rows[0].report_id }) })   //@n:kngou6wcb3yk0b89zop3bbl0
 }
 
-setReportCreated(valueRef: bool) {   //@n:pwyjqi9tgqajltsx4hsjhmlk
+variableSet setReportCreated(valueRef: bool) {   //@n:pwyjqi9tgqajltsx4hsjhmlk
 }
 
-loadOverview() {   //@n:cp2174i4ocaiiazla6bqz0ye
+eventsSimple loadOverview() {   //@n:cp2174i4ocaiiazla6bqz0ye
     const openDatabase = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })   //@n:gl0879875qtlwr4lulkx2uux
     const createDataFusionSession = dfCreateSession({ sessionName: "default", targetPartitions: 0, batchSize: 8192, repartitionJoins: true, repartitionAggregations: true, repartitionSorts: true, coalesceBatches: true, parquetPruning: true, collectStatistics: true })   //@n:a3fuso8y4ckr2kuz3sn25mfc
     dfRegisterLance({ session: createDataFusionSession.session, database: openDatabase.database, tableName: "reports" })   //@n:n6dh9c7lm3xi6l2abxmf36ik
@@ -271,11 +271,11 @@ loadOverview() {   //@n:cp2174i4ocaiiazla6bqz0ye
     a2uiShowScreen()   //@n:tuaeuvu02xlcd81hbhx320n9
 }
 
-widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:pdcl5guw4gvgulosa65xi0hf
+eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:pdcl5guw4gvgulosa65xi0hf
     a2uiNavigateTo({ route: stringFormat({ formatString: "/briefing?report_id={id}", id: widgetInstanceId }) })   //@n:li2clmb381ynjcwv12igz58y
 }
 
-loadConfig() {   //@n:tqrj7u4u74hax5s5ot60makw
+eventsSimple loadConfig() {   //@n:tqrj7u4u74hax5s5ot60makw
     if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })) { // exec_out_exists   //@n:c3yjqmja8bew8bt8qov3o4m9
         const readToString = readToString({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: "config.json" }) })   //@n:gs15p43h9q8ij93r0yiy75ae
         userConfiguration = valFromString({ string: readToString.content })   //@n:g9y2k569dbrivxfc15r7d95v
@@ -285,7 +285,7 @@ loadConfig() {   //@n:tqrj7u4u74hax5s5ot60makw
     }
 }
 
-generateFeed() {   //@n:mg0wgy131u070iv1cs4xidt5
+eventsSimple generateFeed() {   //@n:mg0wgy131u070iv1cs4xidt5
     const findModel = aiGenerativeFindModel({ preferences: {"multimodal":null,"cost_weight":null,"speed_weight":null,"reasoning_weight":null,"creativity_weight":null,"factuality_weight":null,"function_calling_weight":null,"safety_weight":null,"openness_weight":null,"multilinguality_weight":null,"coding_weight":null,"model_hint":null} })   //@n:ra3hwylcjaccq0tg2i7pl3yy
     model = findModel.model   //@n:y563bdthcxcs4hkac7wp12bn
     const cUIDV22 = cuid()   //@n:o1ortq2qc4bky6lvb90iekj0
@@ -309,11 +309,11 @@ generateFeed() {   //@n:mg0wgy131u070iv1cs4xidt5
     eventsChatPushStat({ stepName: "Briefing", stat: invokeAgent3.stats })   //@n:wpz4z5uik2f28nf4ymlw8wcn
 }
 
-simpleEvent() {   //@n:vnb84qc8e5e3sfz2oe0ltwo7
+eventsSimple simpleEvent() {   //@n:vnb84qc8e5e3sfz2oe0ltwo7
     notifyUser({ title: "Notification", description: "", link: "/briefing?report_id={id}", showDesktop: true })   //@n:m10ar7n0ln7ga6xvd4kid7ln
 }
 
-setupNewElement() {   //@n:r1r8h9t64xbt8tt4p2xpoufo
+eventsSimple setupNewElement() {   //@n:r1r8h9t64xbt8tt4p2xpoufo
     loadConfig()   //@n:x2zjntfxkcmuozxqjg17s7mw
     const push = arrayPush({ arrayIn: userConfiguration.sources, value: { label: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-label" }).element }).value, content: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, goal: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-goal" }).element }).value, type: (stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "https://" }) || stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "http://" })) ? "RSS" : (stringStartsWith({ string: a2uiGetElementValue({ elementRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pa-content" }).element }).value, prefix: "r/" }) ? "Reddit" : "Search") } })   //@n:aabbfwmtsy6qwe4in41kp9b5
     userConfiguration = { general: userConfiguration.general, sources: push.arrayOut }   //@n:zrz69ge5y0gc7yoxf4pggnza
@@ -321,7 +321,7 @@ setupNewElement() {   //@n:r1r8h9t64xbt8tt4p2xpoufo
     loadConfigDashboard()   //@n:flak8id73uvvv8rtoq9rqvi3
 }
 
-loadConfigDashboard() {   //@n:s85v1o1rezf5cs3el8vhv6qi
+eventsSimple loadConfigDashboard() {   //@n:s85v1o1rezf5cs3el8vhv6qi
     a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "yg7y9ag1wz4ib8wg95k93erh/pi-list" }).element })   //@n:ub0bgb5wpynm6yr5jipyfr6q
     loadConfig()   //@n:yu47nfi83y7o1gw30y43kx40
     for (const forEach4 of controlForEach({ array: userConfiguration.sources })) {   //@n:xy143hbqc8n42y6oj5fitzbz
@@ -331,7 +331,7 @@ loadConfigDashboard() {   //@n:s85v1o1rezf5cs3el8vhv6qi
     }
 }
 
-showBriefing() {   //@n:n96hjt7sz5985doebt2z77uj
+eventsSimple showBriefing() {   //@n:n96hjt7sz5985doebt2z77uj
     const getQueryParams = a2uiGetQueryParams({ paramName: "report_id" })   //@n:b1nflz22aqijhrfjcflily63
     if (getQueryParams.exists) {   //@n:mpv7ra68y2rhmvi7nbkb6oim
         if (controlParExecution({ threadModel: "tasks" })) { // exec_out   //@n:eobh50rj59v0xo70mlc7o7mp
@@ -362,7 +362,7 @@ showBriefing() {   //@n:n96hjt7sz5985doebt2z77uj
 notifyProjectUser(success: bool) {   //@n:iykhixlujrwjsexflb8ekm93
 }
 
-writeReport(title: string, shortSummary: string, report: string, payload: Struct) {   //@n:etvo5oyizc9rbdeq0t0lmuhq
+eventsGeneric writeReport(title: string, shortSummary: string, report: string, payload: Struct) {   //@n:etvo5oyizc9rbdeq0t0lmuhq
     if (reportCreated) {   //@n:yg4t28sqthqd2bwo3gsbgp8r
         return stringFormat({ formatString: "Already created a report" })   //@n:rkd57x855lzb6sr1lyatwt2h
     } else {
@@ -380,7 +380,7 @@ writeReport(title: string, shortSummary: string, report: string, payload: Struct
     }
 }
 
-widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:fjg1gjwpn3yjke2qa2fz04tn
+eventsWidgetAction widgetActionEvent(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {   //@n:fjg1gjwpn3yjke2qa2fz04tn
     loadConfig()   //@n:pnrthxg45xmamey3u4ohy6mn
     filterSources({ hash: widgetInstanceId })   //@n:efukkvhntw0zqzovze5miev6
     saveConfig({ config: userConfiguration })   //@n:zjbodntlzzvdtaujg2nf9j0c
