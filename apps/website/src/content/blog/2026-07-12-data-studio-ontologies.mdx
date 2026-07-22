@@ -1,0 +1,84 @@
+---
+title: "Data Studio: From Tables to a Working Knowledge Graph"
+description: "Data Studio turns existing tables into ontologies you can explore, analyze, share across apps, automate through governed actions, and query with FlowPilot."
+date: 2026-07-12
+tags: ["data-studio", "ontology", "knowledge-graph", "analytics", "flowpilot", "flow-like"]
+cover: "/images/data-studio-ontologies.jpg"
+draft: false
+---
+
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
+Storing data is not the same as understanding it. A table can tell you that `customer_id = 481`; it cannot tell the rest of your product that this row is a Customer, which Orders belong to it, or which approved action can resolve its account.
+
+The new **Data Studio** adds that missing semantic and operational layer. It turns an app's existing tables into object types, relationships, views, and governed actions — then makes that ontology available to people, workflows, FlowPilot, and permitted connected apps.
+
+Nothing is copied into a separate graph database. An ontology is metadata over the tables your flows already use.
+
+<BlogInteractiveDemo client:only="react" preset="data-studio-tour" />
+
+## Model the business, not another storage system
+
+The ontology setup flow starts from real tables. For each source, you choose an object name and stable API name, its unique ID, display property, and exposed property columns. Relationship mappings connect those object types through source and destination columns. Data Studio validates tables, columns, identifiers, and duplicate labels against the live database before it saves the overlay.
+
+The result can describe a domain in the language its users already speak:
+
+```text
+Customer ── placed ──▶ Order ── contains ──▶ Line Item
+                           └── fulfilled_by ──▶ Warehouse
+```
+
+Mark a relationship as containment and it becomes a hierarchy spine. The graph explorer loads children lazily, one level at a time, so a Plant can expand into Departments, People, and downstream systems without materializing the entire graph. A child can come from the current ontology, another local ontology, or an installed remote contract.
+
+This is a graph **overlay**: the rows stay where they are, normal database access keeps working, and several ontologies can describe the same tables for different use cases.
+
+## Explore, query, and analyze in one place
+
+Data Studio is not only a schema designer. Explore gives every object type a preview table and an object inspector with its title, prominent properties, relationships, and available actions. The WebGL graph supports search, targeted neighbor expansion, and bounded subgraphs rather than assuming every dataset fits on one canvas.
+
+Pathfinding answers “how are these two objects connected?” with the shortest path and up to two alternatives. The underlying request is deliberately explicit and bounded:
+
+```json
+{
+  "from_label": "Supplier",
+  "from_id": "sup-104",
+  "to_label": "Shipment",
+  "to_id": "ship-8821",
+  "max_depth": 4,
+  "limit": 500
+}
+```
+
+Graph Analytics adds exact mapped-object counts and a bounded edge snapshot for connected components, isolated objects, degree, and PageRank. When the edge limit truncates the snapshot, the result says so instead of presenting sampled centrality as exact.
+
+The query workbench covers the relational side too. It is a read-only SQL surface over native tables and ontology projections, with bound parameters, table/schema inspection, results as tables, charts or graphs, and saved queries. A saved view becomes a named virtual table other queries can compose. Remote queries remain read-only previews and are intentionally not persisted.
+
+<BlogInteractiveDemo client:only="react" preset="graph-analytics" />
+
+## Actions turn semantics into safe operations
+
+An ontology can attach actions such as **Approve order**, **Enrich contact**, or **Dispatch vehicle** to an object type. Each action points to a board and start node; Data Studio derives its parameter schema from that node instead of trusting hand-written client metadata.
+
+Saving the action pins an immutable board version, publishing a safe snapshot when necessary, and materializes a protected internal event. The event stores a hash over the ontology, action, object mapping, and exact readable column projection. That hash is checked again at invocation, so editing ontology metadata cannot quietly widen what an existing action may read or execute.
+
+Actions can be disabled, hidden from remote consumers, or allowed in bulk up to 100 objects. They appear in object inspectors and as generated board bindings. FlowPilot can list and describe them without approval; executing one remains an explicit side effect that asks first.
+
+## Share a contract, not an implementation
+
+Remote ontologies build on [App Connections](/blog/app-connections-process-lineage/). A producer marks an ontology as exposed. A connected consumer with a role that can read files or databases can discover and install a sanitized snapshot of the contract.
+
+The consumer receives object types, relationships, hierarchy semantics, and the public shape of exposed actions. It does **not** receive board IDs, board versions, start-node IDs, internal event IDs, or links into unexposed ontologies. Those implementation coordinates are stripped before the contract leaves the producer.
+
+Installed contracts remember the source version, advertise when an update is available, and generate typed nodes for querying remote objects, expanding remote children, and invoking remote actions. Execution still happens in the producer app, where its current connection role, exposure flag, parameter schema, pinned version, and contract hash are enforced. Revoking exposure stops subsequent remote access; uninstalling remains available even after the connection is gone.
+
+<BlogInteractiveDemo client:only="react" preset="remote-ontology" />
+
+## FlowPilot gets a data specialist
+
+With Data Studio open, “analyze this ontology” now has a concrete meaning. FlowPilot delegates to a Data Studio specialist that knows the current app and selected overlay. It can inspect databases, create or update ontologies, write SQL or Cypher, run paths and analytics, add graph elements, execute governed actions, and return interactive charts.
+
+Read-only inspection runs directly. Mutating tables or overlays, adding elements, and executing actions require approval. The specialist reports the queries it ran, its step log, and links back to the relevant Data Studio objects, so the answer stays reviewable rather than disappearing into an agent transcript.
+
+Data Studio is the point where Flow-Like's data becomes a reusable product surface: understandable by people, addressable by workflows, operable by agents, and shareable across apps without exporting the implementation.
+
+The overhaul landed in [PR #715](https://github.com/Rheosoph/flow-like/pull/715) for [issue #704](https://github.com/Rheosoph/flow-like/issues/704). It ships as part of [Flow-Like Beta v0.1.6](/blog/beta-0-1-6/).

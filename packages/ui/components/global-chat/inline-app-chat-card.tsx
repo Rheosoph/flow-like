@@ -36,7 +36,7 @@ export function InlineAppChatCard({
 	const router = useRouter();
 	const [event, setEvent] = useState<IEvent | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [expanded, setExpanded] = useState(true);
+	const [expanded, setExpanded] = useState(false);
 	const toolbarRef = useRef(null);
 	const sidebarRef = useRef(null);
 

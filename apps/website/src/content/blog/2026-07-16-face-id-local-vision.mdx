@@ -1,0 +1,86 @@
+---
+title: "Local Vision, Useful Results: Face Analysis Comes to Flow-Like"
+description: "Flow-Like adds local SCRFD face detection, ArcFace embeddings, age and gender estimates, verified model caching, and one ONNX acceleration policy across platforms."
+date: 2026-07-16
+tags: ["local-ai", "computer-vision", "face-analysis", "onnx", "arcface", "flow-like"]
+cover: "/images/face-id-local-vision.jpg"
+draft: false
+---
+
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
+Face analysis should not begin with uploading a frame to somebody else's server.
+
+In Flow-Like 0.1.6, it can begin with three nodes. Load a local analyzer, pass it an image, and receive a normal typed array containing every detected face. The models execute through ONNX Runtime inside the Flow-Like runtime; once their verified weights are cached, the image does not need to leave that environment for inference.
+
+[PR #703](https://github.com/Rheosoph/flow-like/pull/703) brings that pipeline to the catalog and closes [issue #682](https://github.com/Rheosoph/flow-like/issues/682). It also tackles the less glamorous work that makes local ML genuinely cross-platform: a shared execution-provider policy, current mobile runtimes, DirectML packaging on Windows, and predictable CPU fallback. That platform work also resolves [issue #687](https://github.com/Rheosoph/flow-like/issues/687).
+
+## One analyzer, three models
+
+The new `AI/ML/ONNX/Face` catalog starts with a deliberately small lifecycle:
+
+- **Load Face Analyzer** materializes and opens the models.
+- **Analyze Faces** runs them against a Flow-Like image.
+- **Unload Face Analyzer** releases the shared sessions when the app is done.
+
+Under that handle are three separate jobs. **SCRFD** locates faces and five-point landmarks. **ArcFace** aligns each face and produces a 512-dimensional, L2-normalized identity embedding. A third InsightFace model estimates age and gender from a bounded crop. Work is batched—up to 16 prepared faces on desktop and four on mobile—and guarded by concurrency limits so one workflow cannot casually multiply several expensive sessions.
+
+The output is a real catalog contract, not a provider-specific blob:
+
+```rust
+pub struct FaceIdResult {
+    /// Pixel-space box with confidence and class_name = "face"
+    pub bbox: BoundingBox,
+    /// Five pixel-space landmarks: eyes, nose, and mouth corners
+    pub landmarks: Option<Vec<[f32; 2]>>,
+    /// 512-dimensional, L2-normalized ArcFace vector
+    pub embedding: Vec<f32>,
+    /// "Male" or "Female" as returned by the attribute model
+    pub gender: String,
+    /// Estimated age in years
+    pub age: u8,
+}
+```
+
+Bounding boxes and landmarks are converted back into source-image pixels, so they plug into the same image annotation and A2UI overlay tools as other detections. The embedding can be stored or compared with the vector tools already available in a flow. It is an identity *representation*, not an automatic directory of names: deciding what to compare it with, at what threshold, and under what consent policy remains part of the application.
+
+<BlogInteractiveDemo client:only="react" preset="face-vision" />
+
+## Download once, verify every byte
+
+Local models create a new supply-chain problem: “download this URL” is not enough. The loader defaults to immutable, commit-pinned model URLs and requires a SHA-256 digest for each of the detector, embedder, and attribute models.
+
+When an analyzer identity is first built, Flow-Like streams those weights into a `FlowPath` cache, verifies their size and digest, and then creates the ONNX sessions from local temporary files. Equivalent configurations reuse a process-wide session set; the cache key includes the three model digests, detector input size, and active execution providers. Score and IoU thresholds remain per-call settings, so changing sensitivity does not duplicate all three sessions.
+
+The defensive details are substantial. Input size, thresholds, source dimensions, output coordinates, landmark count, embedding length, and finite values are validated. Cache writes are locked, partial multipart uploads are aborted, managed cache space is bounded, and model materialization happens once even when two runs arrive together. The **Unload** node invalidates equivalent handles together rather than leaving a mystery session alive.
+
+That is the difference between a demo that can detect a face and a catalog primitive an app can depend on.
+
+## One ONNX policy before the first session
+
+ONNX Runtime fixes important process-wide choices when its first session is created. Flow-Like has several local-model paths—raw ONNX nodes, FastEmbed, image embeddings, and now face analysis—so whichever path happened to initialize first could previously determine acceleration for everything else.
+
+0.1.6 moves that decision into a shared model-provider layer. Every Flow-Like-managed ONNX session now starts behind the same ordered policy:
+
+```text
+TensorRT / CUDA        when compiled and available
+CoreML                 on Apple platforms
+DirectML               on Windows
+NNAPI                  on supported Android devices
+XNNPACK                optimized CPU on common desktop/mobile architectures
+CPU                    always the final fallback
+```
+
+The policy is capability-aware rather than optimistic. Providers are checked at runtime; unavailable acceleration emits a warning and yields to the next provider. Flow-Like refuses to create a new managed session if some other code has already fixed ONNX Runtime with unknown settings, avoiding a silent “GPU configured, CPU actually used” state.
+
+Windows needs special treatment because DirectML requires memory patterns and parallel execution to be disabled per session. Flow-Like attaches the ordered provider list on each compatible session and stages `DirectML.dll` beside the desktop application for both x64 and Arm64 builds. Apple and Android receive updated official ONNX Runtime 1.24.3 packages; Apple can use CoreML, while Android supports NNAPI from API 27 and falls back through XNNPACK to CPU. The Rust stack is aligned on ONNX Runtime C API 24 so raw sessions and the higher-level embedding libraries share one native runtime.
+
+## Local is a capability, not a permission slip
+
+Face embeddings are biometric data. Age and gender are model estimates, can be wrong, and expose a binary label space inherited from the selected model. Local execution improves data control, but it does not make every use appropriate.
+
+Build with explicit consent. Keep retention short. Protect embeddings like credentials, do not use estimated attributes for consequential decisions, and test accuracy across the people and conditions your app will actually encounter. For access control or identity verification, add application-specific liveness, threshold calibration, auditability, and a non-biometric fallback; the catalog nodes alone are not an authentication system.
+
+Used with that discipline, this is an unusually flexible local building block: redact faces before storage, count occupancy without uploading video, cluster a private photo library, attach visual identity hints to an offline assistant, or route uncertain matches to a human review surface.
+
+Face analysis is one part of the much larger local-media push in [Flow-Like Beta v0.1.6](/blog/beta-0-1-6/). For the engineering receipts, see [PR #703](https://github.com/Rheosoph/flow-like/pull/703), [issue #682](https://github.com/Rheosoph/flow-like/issues/682), and the ONNX runtime follow-up in [issue #687](https://github.com/Rheosoph/flow-like/issues/687).

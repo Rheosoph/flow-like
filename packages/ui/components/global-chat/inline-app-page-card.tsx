@@ -35,7 +35,7 @@ export function InlineAppPageCard({
 	compact = false,
 }: InlineAppPageCardProps) {
 	const router = useRouter();
-	const [expanded, setExpanded] = useState(true);
+	const [expanded, setExpanded] = useState(false);
 	const [target, setTarget] = useState<{
 		routePath: string;
 		eventId: string | null;

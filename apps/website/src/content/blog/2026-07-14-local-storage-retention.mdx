@@ -1,0 +1,90 @@
+---
+title: "Your Local-First Workspace, Under Control"
+description: "Flow-Like Studio now shows what lives on your device, explains every storage category, and can safely retire old local run logs on your schedule."
+date: 2026-07-14
+tags: ["local-first", "storage", "retention", "desktop", "privacy", "performance", "flow-like"]
+cover: "/images/local-storage-retention.jpg"
+draft: false
+---
+
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
+Local-first software makes a useful promise: your work can live with you. It also creates a responsibility that cloud-only products can hide — sooner or later, somebody has to explain what is consuming the disk.
+
+Models are large. Workflow runs produce debug history. Apps own boards, databases, media, and files. The embedded WebView has its own local preferences and IndexedDB databases. Temporary execution files are temporary in purpose, not necessarily in lifespan.
+
+[PR #706](https://github.com/Rheosoph/flow-like/pull/706) gives all of that a home in **Settings → Local Storage**. It is an inventory, a selective cleanup tool, and a retention policy for local run logs — with enough guardrails that “free some space” does not become “delete the thing that is currently running.”
+
+## One device, seven understandable buckets
+
+The new overview calculates the space used by Studio on this device, then breaks it into categories with item counts, sizes, last-change times, and plain-language descriptions:
+
+- **Apps & projects** — local boards, databases, media, and app-owned files.
+- **Downloaded bits** — model weights and reusable runtime artifacts; the dependency cache stays protected.
+- **Run logs** — per-run local execution and debug history.
+- **Offloaded browser files** — large IndexedDB payloads moved to disk to keep the WebView responsive.
+- **Browser storage** — local preferences, IndexedDB databases, and browser-managed origin data.
+- **Cache & support data** — rebuildable caches and supporting local databases.
+- **Temporary files** — intermediates created while workflows run.
+
+The distinctions matter because not every byte should present a delete button. Apps, downloaded bits, completed run logs, and temporary items can be selected for deletion. Browser storage, offloaded payloads, and cache/support data are shown as managed: useful for understanding the footprint, but not offered as casually removable files without the product-specific cleanup semantics they need.
+
+Everything on this page is local. It does not count cloud storage and cannot delete cloud data.
+
+<BlogInteractiveDemo client:only="react" preset="storage-overview" />
+
+## Fast summary first, detail when you ask
+
+Walking every directory and every IndexedDB record would make a terrible settings-page loading strategy, so the overview does the work in layers.
+
+Native filesystem scanning runs in a blocking task away from the async runtime. The WebView starts with the cheap `navigator.storage.estimate()` total. Only when you open **Browser storage** does Studio enumerate local preferences and scan IndexedDB object stores with read-only cursors. Those browser sizes are explicitly estimates: values are measured by type, while any remaining origin usage is reported as “Other WebView data.”
+
+That keeps the first view fast while still making a deep inspection available. It also handles hardened WebViews and databases that are currently in use without failing the entire page.
+
+## Retention that starts conservative
+
+Automatic cleanup is **off by default**, with 30 days prepared as the initial policy. Turn it on and choose 7, 14, 30, 60, 90, 180, or 365 days — or enter any value from 1 to 3,650 days. Enabling or changing an active policy runs cleanup immediately; future desktop starts schedule another check two seconds after launch.
+
+The scope is intentionally narrow: automatic retention removes only expired local run logs. It does not touch apps, boards, models, browser databases, or cloud history. Active runs are resolved from the execution registry and marked non-deletable. The shared `runs.lance` metadata table is excluded from the run list entirely, because deleting an index is not the same operation as deleting one run.
+
+The core loop reads almost like the policy:
+
+```rust
+for item in log_items(&paths.logs_dir, active_runs) {
+    let expired = item.updated_at_ms
+        .and_then(|ms| UNIX_EPOCH.checked_add(Duration::from_millis(ms)))
+        .is_some_and(|modified| modified < cutoff);
+
+    if !expired || !item.deletable {
+        continue;
+    }
+
+    // Remove this run, account for freed bytes, then prune empty parents.
+}
+```
+
+There is a subtle companion fix here. A finished run is removed from the active-run registry even if flushing its logs fails. Without that release, a completed run could remain labeled “in use” until Studio restarted and become impossible to clean up from the new page.
+
+<BlogInteractiveDemo client:only="react" preset="storage-retention" />
+
+## Deletion is an inventory operation, not a path API
+
+Selective cleanup crosses a native boundary, so the backend does not trust a category and arbitrary path from the UI. It rebuilds the current inventory, verifies every requested ID exists in that category, checks its `deletable` flag again, and rechecks the active-run set immediately before removal.
+
+Requests must contain between one and 500 items. Path components reject `.`, `..`, forward slashes, and backslashes. Recursive size inspection uses symlink metadata and does not follow symlinked directories. Empty app/board folders left by run deletion are pruned only up to the known runs root. If an app is deliberately removed, its local profile membership is updated too.
+
+The result reports three things separately: items deleted, bytes freed, and IDs skipped. The UI puts the selected count and size in a confirmation dialog before making the request, then refreshes the inventory from disk. Partial failure is visible instead of being rounded up to success.
+
+```rust
+if !item.deletable
+    || (category == "logs"
+        && run_id_from_item_id(&id).is_some_and(|run| active_runs.contains(run)))
+{
+    result.skipped_items.push(id);
+    continue;
+}
+```
+
+That small check captures the philosophy of the feature. Storage management should be powerful enough to reclaim gigabytes and boring enough to trust.
+
+The work closes [issue #702](https://github.com/Rheosoph/flow-like/issues/702) and ships in [Flow-Like Beta 0.1.6](/blog/beta-0-1-6/). Local-first now comes with a dashboard, a retention policy, and — most importantly — a clear answer to “what exactly is stored here?”

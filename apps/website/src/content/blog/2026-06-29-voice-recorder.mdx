@@ -9,6 +9,8 @@ draft: false
 
 {/* Cover image prompt: A clean, modern dark-mode UI mockup of a voice recording panel floating on a soft violet-to-transparent radial gradient. Center: a glowing violet orb visualizer made of deformable liquid light with an outer bloom, mid-record, surrounded by faint expanding sonar rings. Beside it, small thumbnails of alternate visualizer styles — a mirrored waveform, a spiral galaxy of particles, and a plasma shader disc. A crisp red recording dot and a monospace timer 0:14. Techy, high-contrast, minimalist, subtle glassmorphism, deep navy background, violet (#8b5cf6) and red (#ef4444) accents, sharp vector UI. No text clutter. */}
 
+import { BlogInteractiveDemo } from "../../components/blog/BlogInteractiveDemo";
+
 Voice is one of those features that looks tiny in a mockup and turns into a swamp the moment you build it: microphone permissions, MIME types that differ per browser, an audio graph that has to react in real time, a recording that clips the last word because you stopped a beat too early. We went through that swamp once, extracted everything we learned into a shared toolkit, and used it to ship three things at once.
 
 ## A recorder that behaves
@@ -31,6 +33,8 @@ export const VOICE_VARIANTS: Record<VoiceVariant, ComponentType<VoiceVisualizerP
 ```
 
 The Canvas-based ones (waveform, orb, vortex, pulse) draw from the live analyser each frame; the two shader styles feed audio energy into a GLSL uniform and gracefully fall back to the orb canvas if WebGL isn't available. Every visualizer reacts to the same four states — `idle`, `recording`, `processing`, `speaking` — so the same orb that pulses while *you* talk can pulse while the *app* talks back.
+
+<BlogInteractiveDemo client:only="react" preset="voice-studio" />
 
 ## Three places it shows up
 

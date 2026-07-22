@@ -6,7 +6,6 @@ import {
 	isFreeLlmModel,
 	isLocalLlmModel,
 } from "./local-model-filter";
-
 function bit(providerName?: string): IBit {
 	return {
 		id: providerName ?? "no-provider",
@@ -70,3 +69,4 @@ describe("hosted model tiers", () => {
 		expect(isFreeLlmModel(paid)).toBe(false);
 	});
 });
+
