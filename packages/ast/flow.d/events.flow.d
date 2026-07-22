@@ -248,7 +248,7 @@ declare function eventsGenericReturnResult({ response: any }): void;
  * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the input and output pins.
  * @param payload — Input payload passed to the remote event
  * @param waitForResult (optional) — Wait for the remote run to finish and return its result
- * @param timeoutSeconds (optional) — Maximum time to wait for the remote run to finish
+ * @param timeoutSeconds (optional) — Maximum time to wait for the remote request to finish
  * @returns runId — Remote run id
  * @returns status — Final run status
  * @returns result — Result payload of the remote run

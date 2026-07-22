@@ -15,7 +15,9 @@ import {
 	SettingsIcon,
 	SparklesIcon,
 	Trash2Icon,
+	TriangleAlertIcon,
 	WorkflowIcon,
+	ZapIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
@@ -24,6 +26,7 @@ import {
 	IBitTypes,
 	IRole,
 	filterHostableLlmModels,
+	isFreeLlmModel,
 	useAssistantSurface,
 	useBackend,
 	useCopilotSDK,
@@ -71,7 +74,10 @@ import {
 	globalChatMemoryStatus,
 	listGlobalChatMemories,
 } from "../../state/global-chat/global-chat-memory";
-import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
+import {
+	AGENT_MODEL_KEY,
+	useGlobalChatStore,
+} from "../../state/global-chat/global-chat-store";
 import {
 	LAST_CONVERSATION_KEY,
 	driveGlobalChatStream,
@@ -85,6 +91,10 @@ import {
 import { runGlobalChatTool } from "../../state/global-chat/global-chat-tool-registry";
 import { webGlobalChatStart } from "../../state/global-chat/global-chat-web-transport";
 import { FlowScriptWorkspacePanel } from "../flowpilot/flowscript-workspace-panel";
+import {
+	FreeModelCapabilityNotice,
+	type ProviderModelPickerModel,
+} from "../flowpilot/provider-model-reasoning-picker";
 import {
 	type AIProvider,
 	flowPilotModelIdForProvider,
@@ -102,6 +112,7 @@ import { InlineAppPageCard } from "./inline-app-page-card";
 import { InlineAppSurfaceCard } from "./inline-app-surface-card";
 import { InlineToolPrompt } from "./inline-tool-prompt";
 import { PendingComponentsCard } from "./pending-components-card";
+import { useHydrateAgentSelection } from "./use-agent-persistence";
 import { useGlobalChatRunWidgetAction } from "./use-global-widget-action";
 
 // The streaming engine (parse the FlowPilot protocol → message content + plan_steps → store) lives
@@ -169,8 +180,17 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const setProvider = useGlobalChatStore((s) => s.setProvider);
 	const setSelectedModelId = useGlobalChatStore((s) => s.setSelectedModelId);
 	const setReasoningEffort = useGlobalChatStore((s) => s.setReasoningEffort);
+	// Explicit picks persist across sessions; the "keep a valid model" fallbacks
+	// below use the plain setters so a still-loading catalog can never clobber them.
+	const selectProvider = useGlobalChatStore((s) => s.selectProvider);
+	const selectModel = useGlobalChatStore((s) => s.selectModel);
+	const selectReasoningEffort = useGlobalChatStore(
+		(s) => s.selectReasoningEffort,
+	);
 	const embeddingModelId = useGlobalChatStore((s) => s.embeddingModelId);
 	const setEmbeddingModelId = useGlobalChatStore((s) => s.setEmbeddingModelId);
+	const autoMode = useGlobalChatStore((s) => s.autoMode);
+	const setAutoMode = useGlobalChatStore((s) => s.setAutoMode);
 	const appendMessage = useGlobalChatStore((s) => s.appendMessage);
 	const setStreaming = useGlobalChatStore((s) => s.setStreaming);
 	const consumeDraft = useGlobalChatStore((s) => s.consumeDraft);
@@ -189,6 +209,15 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	);
 	const flowscriptWorkspace = useGlobalChatStore((s) => s.flowscriptWorkspace);
 	const pendingComponents = useGlobalChatStore((s) => s.pendingComponents);
+	// Turning auto mode on mid-run settles approval cards whose promises the bridge captured
+	// before the flip; queued ones drain as each is answered. `ask` prompts are never
+	// auto-answered — auto mode waives permission, not questions — and neither are prompts
+	// flagged `destructive` (the deletion gate), which always need a real user decision.
+	useEffect(() => {
+		if (!autoMode || toolPrompt?.kind !== "approval" || toolPrompt.destructive)
+			return;
+		toolPrompt.respond({ approved: true, remember: false });
+	}, [autoMode, toolPrompt]);
 	// Live board surface (open canvas) the assistant can see and edit — shown as a context chip.
 	const boardSurface = useAssistantSurface((s) => s.boardSurface);
 	const runWidgetAction = useGlobalChatRunWidgetAction();
@@ -267,6 +296,11 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		});
 	}, []);
 
+	// Restore the last explicit provider/model/effort. /chat is often the first
+	// FlowPilot surface mounted (deep link, mobile bottom nav), so it has to
+	// hydrate the shared store itself rather than relying on the hero.
+	useHydrateAgentSelection();
+
 	// Auth token + identity: profile (Bits) models may need the bearer token, and the assistant's
 	// self-awareness context includes the signed-in user (kept fresh via a ref for the send closure).
 	const auth = useAuth();
@@ -339,11 +373,26 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		copilotSDK.start,
 	]);
 
-	// Pick a sensible default model whenever the model list for the active provider changes.
+	// Pick a sensible default model whenever the model list for the active provider
+	// changes — but re-apply the user's remembered pick the moment the catalog that
+	// offers it loads, so a slow/fallback catalog can't strand them on another model.
+	// Uses the plain setter throughout: none of this is a new user choice.
 	useEffect(() => {
+		let remembered: string | null = null;
+		try {
+			remembered = localStorage.getItem(AGENT_MODEL_KEY);
+		} catch {}
 		if (isAgent) {
 			const models = copilotSDK.models;
 			if (models.length === 0) return;
+			if (
+				remembered &&
+				remembered !== selectedModelId &&
+				models.some((m) => m.id === remembered)
+			) {
+				setSelectedModelId(remembered);
+				return;
+			}
 			if (!selectedModelId || !models.some((m) => m.id === selectedModelId)) {
 				setSelectedModelId(models[0].id);
 			}
@@ -352,6 +401,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		if (!llmBits.data) return;
 		if (bitsModels.length === 0) {
 			if (selectedModelId) setSelectedModelId("");
+			return;
+		}
+		if (
+			remembered &&
+			remembered !== selectedModelId &&
+			bitsModels.some((bit) => bit.id === remembered)
+		) {
+			setSelectedModelId(remembered);
 			return;
 		}
 		if (!bitsModels.some((bit) => bit.id === selectedModelId)) {
@@ -712,7 +769,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const sideBySideWorkspace = showWorkspace && canSideBySide;
 
 	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
-	const modelOptions = useMemo(
+	const modelOptions = useMemo<ProviderModelPickerModel[]>(
 		() =>
 			isAgent
 				? copilotSDK.models.map((model) => ({
@@ -722,6 +779,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				: bitsModels.map((bit) => ({
 						id: bit.id,
 						label: bit.meta?.en?.name ?? bit.id,
+						isFree: isFreeLlmModel(bit),
 					})),
 		[isAgent, copilotSDK.models, bitsModels],
 	);
@@ -801,7 +859,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					onValueChange={handleEmbeddingChange}
 				>
 					<SelectTrigger
-						className="h-7 data-[size=default]:h-7 min-w-0 max-w-36 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						className="h-9 md:h-7 data-[size=default]:h-9 md:data-[size=default]:h-7 min-w-0 max-w-36 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 						title="Profile memory embedding model"
 					>
 						<BrainIcon className="size-3.5 mr-1 text-muted-foreground shrink-0" />
@@ -864,6 +922,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const currentModelLabel = modelOptions.find(
 		(option) => option.id === selectedModelId,
 	)?.label;
+	const selectedModelIsFree =
+		normalizedProvider === "bits" &&
+		modelOptions.find((option) => option.id === selectedModelId)?.isFree ===
+			true;
 
 	// Provider, model, and model-specific reasoning effort live in one compact picker. A model with
 	// configurable reasoning keeps the popover open so the next section can be selected immediately;
@@ -874,8 +936,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				<Button
 					variant="outline"
 					size="sm"
-					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${reasoningEffortOptions.length > 0 ? ` · ${currentReasoningEffortName}` : ""}`}
-					className="h-7 shrink-0 gap-1.5 px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${reasoningEffortOptions.length > 0 ? ` · ${currentReasoningEffortName}` : ""}${selectedModelIsFree ? " · Free model may be too limited for complete app creation" : ""}`}
+					className="h-9 md:h-7 shrink-0 gap-1.5 px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 				>
 					<CurrentProviderIcon className="size-3.5 shrink-0 text-primary" />
 					<span className="max-w-28 truncate">
@@ -892,6 +954,12 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							</span>
 						</>
 					)}
+					{selectedModelIsFree && (
+						<TriangleAlertIcon
+							aria-hidden="true"
+							className="size-3.5 shrink-0 text-amber-500"
+						/>
+					)}
 					<ChevronDownIcon className="size-3 shrink-0 opacity-50" />
 				</Button>
 			</PopoverTrigger>
@@ -907,7 +975,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								key={id}
 								type="button"
 								title={label}
-								onClick={() => setProvider(id)}
+								onClick={() => selectProvider(id)}
 								className={`flex h-7 flex-1 items-center justify-center rounded-md outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-linear-to-br from-primary to-purple-600 text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-muted hover:text-foreground"}`}
 							>
 								<Icon className="size-4" />
@@ -931,7 +999,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 									key={option.id}
 									type="button"
 									onClick={() => {
-										setSelectedModelId(option.id);
+										selectModel(option.id);
 										const nextModel = copilotSDK.models.find(
 											(model) => model.id === option.id,
 										);
@@ -951,6 +1019,13 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						})
 					)}
 				</div>
+				{selectedModelIsFree && (
+					<FreeModelCapabilityNotice
+						agentBackendsAvailable={availableProviders.some((option) =>
+							isAgentBackendProvider(option.id),
+						)}
+					/>
+				)}
 				{reasoningEffortOptions.length > 0 && (
 					<>
 						<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -960,7 +1035,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							<button
 								type="button"
 								onClick={() => {
-									setReasoningEffort("");
+									selectReasoningEffort("");
 									setPickerOpen(false);
 								}}
 								className={`col-span-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${!reasoningEffort ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
@@ -981,7 +1056,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 										type="button"
 										title={option.description}
 										onClick={() => {
-											setReasoningEffort(option.id);
+											selectReasoningEffort(option.id);
 											setPickerOpen(false);
 										}}
 										className={`flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
@@ -1000,61 +1075,79 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 
 	return (
 		<div className="flex flex-col flex-1 min-h-0 w-full h-full">
-			<header className="flex items-center gap-1.5 px-3 py-2 border-b border-border/50 shrink-0 overflow-x-auto">
-				{providerModelPicker}
-				{memoryPicker}
-				{memoryModels.length > 0 && profileId && (
+			<header className="flex items-center gap-1.5 px-3 py-2 border-b border-border/50 shrink-0">
+				<div className="flex flex-1 min-w-0 items-center gap-1.5 overflow-x-auto no-scrollbar">
+					{providerModelPicker}
+					{memoryPicker}
+					{memoryModels.length > 0 && profileId && (
+						<Button
+							type="button"
+							variant="outline"
+							size="icon"
+							onClick={() => setMemoryManagerOpen(true)}
+							title="Review & manage saved memories"
+							className="size-9 md:size-7 shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						>
+							<SettingsIcon className="size-3.5 shrink-0 text-muted-foreground" />
+						</Button>
+					)}
 					<Button
 						type="button"
-						variant="outline"
-						size="icon"
-						onClick={() => setMemoryManagerOpen(true)}
-						title="Review & manage saved memories"
-						className="size-7 shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-					>
-						<SettingsIcon className="size-3.5 shrink-0 text-muted-foreground" />
-					</Button>
-				)}
-				{boardSurface && (
-					<div
-						className="flex h-7 shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 text-xs text-foreground/80"
-						title="The assistant can see and edit this board"
-					>
-						<WorkflowIcon className="size-3.5 shrink-0 text-primary" />
-						<span className="truncate max-w-32">
-							{boardSurface.board?.name || "Board"}
-						</span>
-						{boardSurface.selectedNodeIds.length > 0 && (
-							<span className="shrink-0 text-muted-foreground">
-								· {boardSurface.selectedNodeIds.length} selected
-							</span>
-						)}
-					</div>
-				)}
-				{flowscriptWorkspace && (
-					<Button
-						type="button"
-						variant={showWorkspace ? "default" : "outline"}
+						variant={autoMode ? "default" : "outline"}
 						size="sm"
-						aria-pressed={showWorkspace}
-						onClick={() => setFlowscriptHidden((hidden) => !hidden)}
+						aria-pressed={autoMode}
+						onClick={() => setAutoMode(!autoMode)}
 						title={
-							showWorkspace
-								? "Hide the FlowScript workspace"
-								: "Show the FlowScript workspace"
+							autoMode
+								? "Auto mode on — tools run and changes apply without asking, including destructive ones. Only board-item deletion still asks."
+								: "Auto mode off — the assistant asks before acting"
 						}
-						className="h-7 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						className="h-9 md:h-7 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 					>
-						<FileCode2Icon className="size-3.5 shrink-0" />
-						FlowScript
-						{flowscriptWorkspace.status === "validation_errors" && (
-							<span
-								className="size-1.5 shrink-0 rounded-full bg-red-500"
-								aria-hidden
-							/>
-						)}
+						<ZapIcon className="size-3.5 shrink-0" />
+						Auto
 					</Button>
-				)}
+					{boardSurface && (
+						<div
+							className="flex h-9 md:h-7 shrink-0 items-center gap-1.5 rounded-lg border border-primary/20 bg-primary/5 px-2.5 text-xs text-foreground/80"
+							title="The assistant can see and edit this board"
+						>
+							<WorkflowIcon className="size-3.5 shrink-0 text-primary" />
+							<span className="truncate max-w-32">
+								{boardSurface.board?.name || "Board"}
+							</span>
+							{boardSurface.selectedNodeIds.length > 0 && (
+								<span className="shrink-0 text-muted-foreground">
+									· {boardSurface.selectedNodeIds.length} selected
+								</span>
+							)}
+						</div>
+					)}
+					{flowscriptWorkspace && (
+						<Button
+							type="button"
+							variant={showWorkspace ? "default" : "outline"}
+							size="sm"
+							aria-pressed={showWorkspace}
+							onClick={() => setFlowscriptHidden((hidden) => !hidden)}
+							title={
+								showWorkspace
+									? "Hide the FlowScript workspace"
+									: "Show the FlowScript workspace"
+							}
+							className="h-9 md:h-7 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						>
+							<FileCode2Icon className="size-3.5 shrink-0" />
+							FlowScript
+							{flowscriptWorkspace.status === "validation_errors" && (
+								<span
+									className="size-1.5 shrink-0 rounded-full bg-red-500"
+									aria-hidden
+								/>
+							)}
+						</Button>
+					)}
+				</div>
 				<GlobalChatHistory />
 			</header>
 
@@ -1124,7 +1217,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 										key={label}
 										variant="outline"
 										size="sm"
-										className="h-8 gap-1.5 rounded-full border-border/60 bg-background/80 text-xs text-foreground/80 outline-none transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover:shadow-sm focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0 motion-safe:hover:-translate-y-px"
+										className="h-10 md:h-8 gap-1.5 rounded-full border-border/60 bg-background/80 text-xs text-foreground/80 outline-none transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover:shadow-sm focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0 motion-safe:hover:-translate-y-px"
 										onClick={() => void handleSendMessage(prompt)}
 									>
 										<Icon className="size-3.5" />

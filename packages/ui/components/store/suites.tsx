@@ -29,7 +29,7 @@ export function SuiteCard({
 		<button
 			type="button"
 			onClick={() => onOpen(group)}
-			className="group relative w-[320px] shrink-0 text-left rounded-2xl border bg-card overflow-hidden shadow-sm transition-all hover:shadow-lg hover:-translate-y-0.5 hover:border-primary/40"
+			className="group relative w-[85vw] max-w-80 shrink-0 snap-start text-left rounded-2xl border bg-card overflow-hidden shadow-sm transition-all hover:shadow-lg hover:-translate-y-0.5 hover:border-primary/40"
 		>
 			<div
 				className="h-24 relative"
@@ -123,7 +123,7 @@ export function SuitesRail() {
 					Related apps, grouped as one
 				</span>
 			</div>
-			<div className="flex gap-4 overflow-x-auto pb-3 -mx-1 px-1">
+			<div className="flex snap-x snap-mandatory gap-4 overflow-x-auto pb-3 -mx-1 px-1">
 				{groups.map((group) => (
 					<SuiteCard
 						key={group.id}

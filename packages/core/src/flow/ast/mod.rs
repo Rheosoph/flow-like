@@ -847,7 +847,9 @@ mod lower_tests {
 
         assert_eq!(ast.events.len(), 1, "one event lowered");
         let ev = &ast.events[0];
-        assert_eq!(ev.name, "now");
+        assert_eq!(ev.name, "eventsGeneric");
+        assert_eq!(ev.node_type, "events_generic");
+        assert_eq!(ev.event_name.as_deref(), Some("now"));
         let params: Vec<(&str, &str)> = ev
             .params
             .iter()
@@ -892,8 +894,8 @@ mod lower_tests {
 
         let text_out = board_to_flowscript(&board, &RenderOptions::default());
         assert!(
-            text_out.contains("now(title: string)"),
-            "event declares its payload param:\n{text_out}"
+            text_out.contains("eventsGeneric now(title: string)"),
+            "event preserves its catalog type, alias, and payload param:\n{text_out}"
         );
         assert!(
             text_out.contains("log({ text: title })"),
@@ -903,6 +905,41 @@ mod lower_tests {
             !text_out.contains("now.title"),
             "body must not leak qualified payload ref:\n{text_out}"
         );
+    }
+
+    /// An unnamed entry still renders its exact catalog selector without inventing an alias.
+    #[test]
+    fn unnamed_event_renders_canonical_catalog_type() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_widget_action", "", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+
+        let ast = lower_to_ast(&board);
+        assert_eq!(ast.events[0].name, "eventsWidgetAction");
+        assert_eq!(ast.events[0].node_type, "events_widget_action");
+        assert_eq!(ast.events[0].event_name, None);
+
+        let text = board_to_flowscript(&board, &RenderOptions::default());
+        assert!(text.starts_with("eventsWidgetAction() {"), "{text}");
+    }
+
+    /// A friendly name occupies the optional alias slot instead of replacing catalog identity.
+    #[test]
+    fn named_event_renders_catalog_type_before_alias() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Dashboard Load", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(event.id.clone(), event);
+
+        let text = board_to_flowscript(&board, &RenderOptions::default());
+        assert!(text.starts_with("eventsSimple dashboardLoad() {"), "{text}");
     }
 
     /// `events_generic_return_result` sugars into a bare `return <response>` statement.

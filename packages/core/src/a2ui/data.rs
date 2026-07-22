@@ -129,6 +129,10 @@ impl DataModel {
                 serde_json::Number::from_f64(*value).unwrap_or(serde_json::Number::from(0)),
             ),
             BoundValue::LiteralBool { value } => Value::Bool(*value),
+            BoundValue::LiteralOptions { value } => {
+                serde_json::to_value(value).unwrap_or(Value::Null)
+            }
+            BoundValue::LiteralJson { value } => serde_json::from_str(value).unwrap_or(Value::Null),
             BoundValue::PathBinding(pb) => self.get(&pb.path).cloned().unwrap_or_else(|| match &pb
                 .default_value
             {

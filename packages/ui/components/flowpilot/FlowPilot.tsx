@@ -21,13 +21,15 @@ import {
 	WorkflowIcon,
 	WrenchIcon,
 	XIcon,
+	ZapIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCopilotSDK, useInvoke } from "../../hooks";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
-import { IBitTypes, filterHostableLlmModels } from "../../lib";
+import { IBitTypes, filterHostableLlmModels, isFreeLlmModel } from "../../lib";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
+import { flowPilotCommandApplyDiagnostics } from "../../lib/flowpilot-command-apply";
 import {
 	type IFlowPilotConversation,
 	addMessage,
@@ -155,6 +157,28 @@ const DESTRUCTIVE_FLOWSCRIPT_DIAGNOSTIC_PREFIX =
 	"FlowScript edit would delete ";
 const FLOW_IR_DISMISS_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000] as const;
 const FLOWSCRIPT_DRAFT_PREVIEW_INTERVAL_MS = 80;
+const HOST_BOARD_APPLY_FEEDBACK_PREFIX = "Host board apply result:";
+const HOST_BOARD_APPLY_FAILURE_PREFIX = `${HOST_BOARD_APPLY_FEEDBACK_PREFIX}\nThe queued board change was not fully applied.`;
+
+function isHostBoardApplyFeedbackMessage(message: CopilotMessage): boolean {
+	return (
+		message.role === "assistant" &&
+		message.content.startsWith(HOST_BOARD_APPLY_FEEDBACK_PREFIX)
+	);
+}
+
+function latestUnresolvedBoardApplyFeedback(
+	messages: CopilotMessage[],
+): string {
+	for (let index = messages.length - 1; index >= 0; index--) {
+		const message = messages[index];
+		if (!isHostBoardApplyFeedbackMessage(message)) continue;
+		return message.content.startsWith(HOST_BOARD_APPLY_FAILURE_PREFIX)
+			? message.content
+			: "";
+	}
+	return "";
+}
 
 function applyResultDiagnostics(applyResult: unknown): string[] {
 	if (!applyResult || typeof applyResult !== "object") return [];
@@ -259,6 +283,10 @@ function getProcessToolLabel(toolName?: string): string {
 			return "Checking missing inputs";
 		case "internet_search":
 			return "Searching web";
+		case "open_url":
+			return "Reading web source";
+		case "archive_lookup":
+			return "Checking web archive";
 		case "database_tool":
 			return "Using database";
 		case "storage_tool":
@@ -380,10 +408,6 @@ type TauriEventModule = {
 	) => Promise<() => void>;
 };
 
-type TauriHttpModule = {
-	fetch: typeof fetch;
-};
-
 const FLOWPILOT_FRONTEND_TOOL_EVENT = "flowpilot://frontend-tool-request";
 const FLOWPILOT_FRONTEND_TOOL_CANCEL_EVENT = "flowpilot://frontend-tool-cancel";
 
@@ -401,10 +425,6 @@ async function importTauriEvent(): Promise<TauriEventModule> {
 	return import("@tauri-apps/api/event") as Promise<TauriEventModule>;
 }
 
-async function importTauriHttp(): Promise<TauriHttpModule> {
-	return import("@tauri-apps/plugin-http") as Promise<TauriHttpModule>;
-}
-
 function getArgString(
 	args: Record<string, unknown>,
 	snake: string,
@@ -412,38 +432,6 @@ function getArgString(
 ): string | undefined {
 	const value = args[snake] ?? args[camel];
 	return typeof value === "string" && value.trim() ? value : undefined;
-}
-
-function getArgNumber(
-	args: Record<string, unknown>,
-	snake: string,
-	camel = snake,
-	defaultValue = 0,
-): number {
-	const value = args[snake] ?? args[camel];
-	return typeof value === "number" && Number.isFinite(value)
-		? value
-		: defaultValue;
-}
-
-function clampToolLimit(value: number, defaultValue: number, maxValue: number) {
-	if (!Number.isFinite(value) || value <= 0) return defaultValue;
-	return Math.min(Math.floor(value), maxValue);
-}
-
-async function fetchJsonViaTauri(url: string): Promise<unknown> {
-	try {
-		if (!isTauriRuntime()) throw new Error("Tauri runtime is unavailable.");
-		const http = await importTauriHttp();
-		const response = await http.fetch(url, { method: "GET" });
-		return await response.json();
-	} catch {
-		const response = await fetch(url);
-		if (!response.ok) {
-			throw new Error(`Search request failed with HTTP ${response.status}`);
-		}
-		return await response.json();
-	}
 }
 
 type FlowScriptDiffLine = {
@@ -581,6 +569,12 @@ function FlowPilotImpl({
 	} | null>(null);
 	const [destructiveApplyPending, setDestructiveApplyPending] = useState(false);
 	const [showWorkspace, setShowWorkspace] = useState(false);
+	// Session-only: auto mode resets whenever the panel remounts. It waives frontend
+	// tool-approval prompts and the pending-change review gate. It never waives `ask_user`
+	// or the destructive-deletion dialog.
+	const [autoMode, setAutoMode] = useState(false);
+	const autoModeRef = useRef(false);
+	autoModeRef.current = autoMode;
 	const [processEvents, setProcessEvents] = useState<FlowPilotProcessEvent[]>(
 		[],
 	);
@@ -604,7 +598,10 @@ function FlowPilotImpl({
 	const generationMetricsRunRef = useRef<
 		FlowPilotGenerationMetricsRun | undefined
 	>(undefined);
+	const lastBoardApplyFeedbackRef = useRef("");
 	const flowIrApplyInFlightRef = useRef(false);
+	const autoApplyAttemptRef = useRef<string | null>(null);
+	const autoApplyComponentsAttemptRef = useRef<string | null>(null);
 	const currentBoardIdRef = useRef<string | undefined>(board?.id);
 	const currentBoardNodeCountRef = useRef<number | undefined>(
 		flowPilotBoardNodeCount(board),
@@ -612,6 +609,57 @@ function FlowPilotImpl({
 	const previousBoardIdRef = useRef<string | undefined>(board?.id);
 	currentBoardIdRef.current = board?.id;
 	currentBoardNodeCountRef.current = flowPilotBoardNodeCount(board);
+	const recordBoardApplyFailure = useCallback(
+		(diagnostics: string[]) => {
+			const normalizedDiagnostics = [
+				...new Set(
+					diagnostics
+						.map((diagnostic) => diagnostic.replace(/\s+/g, " ").trim())
+						.filter(Boolean),
+				),
+			].slice(0, 12);
+			if (normalizedDiagnostics.length === 0) {
+				normalizedDiagnostics.push("The queued board change failed to apply.");
+			}
+			setValidationWarnings(normalizedDiagnostics);
+
+			const feedback = `${HOST_BOARD_APPLY_FAILURE_PREFIX} The live board was checked, and failed apply paths attempt a canonical refetch before this result is recorded. Inspect the current board and repair these exact failures on the next agent turn:\n${normalizedDiagnostics
+				.map((diagnostic) => `- ${diagnostic}`)
+				.join("\n")}`;
+			if (lastBoardApplyFeedbackRef.current === feedback) return;
+			lastBoardApplyFeedbackRef.current = feedback;
+			setMessages((previous) => [
+				...previous,
+				{ role: "assistant", content: feedback },
+			]);
+			if (currentConversationId) {
+				void addMessage(currentConversationId, {
+					role: "assistant",
+					content: feedback,
+				}).catch((error) =>
+					console.error("Failed to persist board apply feedback:", error),
+				);
+			}
+		},
+		[currentConversationId],
+	);
+	const recordBoardApplySuccess = useCallback(() => {
+		if (!lastBoardApplyFeedbackRef.current) return;
+		lastBoardApplyFeedbackRef.current = "";
+		const feedback = `${HOST_BOARD_APPLY_FEEDBACK_PREFIX}\nThe previously reported queued-change failure was resolved and the reviewed board change was applied successfully.`;
+		setMessages((previous) => [
+			...previous,
+			{ role: "assistant", content: feedback },
+		]);
+		if (currentConversationId) {
+			void addMessage(currentConversationId, {
+				role: "assistant",
+				content: feedback,
+			}).catch((error) =>
+				console.error("Failed to persist board apply recovery:", error),
+			);
+		}
+	}, [currentConversationId]);
 	const settleGenerationReview = useCallback(
 		(
 			disposition: "applied" | "dismissed" | "stale" | "error",
@@ -744,6 +792,10 @@ function FlowPilotImpl({
 
 		const pendingToken = pendingFlowIrCommitRef.current;
 		pendingFlowIrCommitRef.current = undefined;
+		lastBoardApplyFeedbackRef.current = "";
+		setMessages((previous) =>
+			previous.filter((message) => !isHostBoardApplyFeedbackMessage(message)),
+		);
 		setPendingFlowIrCommit(undefined);
 		setPendingCommands([]);
 		setDestructiveApplyRequest(null);
@@ -888,7 +940,12 @@ function FlowPilotImpl({
 			const sessionKey =
 				approval?.sessionKey ||
 				`${request.toolName}:${approval?.kind ?? "none"}`;
+			// Auto mode is read through a ref so toggling it never changes this callback's
+			// identity: the Tauri bridge listener would otherwise tear down and cancel every
+			// in-flight request. `remember: false` keeps auto-approvals out of the session
+			// allowlist, so turning auto mode off restores prompting.
 			if (
+				autoModeRef.current ||
 				approval?.kind === "none" ||
 				shouldSkipUnavailableCreateTableApproval(
 					request.toolName,
@@ -998,49 +1055,6 @@ function FlowPilotImpl({
 		}
 	}, []);
 
-	const runInternetSearchTool = useCallback(
-		async (args: Record<string, unknown>) => {
-			const query = getArgString(args, "query");
-			if (!query) throw new Error("internet_search requires query.");
-			const language = getArgString(args, "language") ?? "en-US";
-			const page = Math.max(1, getArgNumber(args, "page", "page", 1));
-			const limit = clampToolLimit(
-				getArgNumber(args, "limit", "limit", 8),
-				8,
-				20,
-			);
-			const url = new URL("https://search.flow-like.com/search");
-			url.searchParams.set("q", query);
-			url.searchParams.set("format", "json");
-			url.searchParams.set("pageno", String(page));
-			url.searchParams.set("language", language);
-
-			const json = (await fetchJsonViaTauri(url.toString())) as Record<
-				string,
-				unknown
-			>;
-			const results = Array.isArray(json.results) ? json.results : [];
-			return {
-				status: "ok",
-				query,
-				page,
-				results: results.slice(0, limit).map((result) => {
-					const item = result as Record<string, unknown>;
-					return {
-						title: item.title,
-						url: item.url,
-						content: item.content,
-						publishedDate: item.publishedDate,
-						engine: item.engine,
-						category: item.category,
-						score: item.score,
-					};
-				}),
-			};
-		},
-		[],
-	);
-
 	const executeFrontendToolRequest = useCallback(
 		async (
 			request: FrontendToolRequest,
@@ -1078,9 +1092,6 @@ function FlowPilotImpl({
 				lease.assertActive("tool execution");
 				let result: unknown;
 				switch (request.toolName) {
-					case "internet_search":
-						result = await runInternetSearchTool(request.arguments);
-						break;
 					case "database_tool":
 					case "storage_tool":
 					case "ui_inspect":
@@ -1114,7 +1125,6 @@ function FlowPilotImpl({
 			executeRuntimeTool,
 			requestFrontendToolApproval,
 			requestFrontendUserInput,
-			runInternetSearchTool,
 		],
 	);
 	const executeFrontendToolRequestRef = useRef(executeFrontendToolRequest);
@@ -1241,6 +1251,45 @@ function FlowPilotImpl({
 		},
 		[],
 	);
+
+	// Turning auto mode on mid-run must settle approval dialogs that are already on screen or
+	// queued; their promises were captured before the flip and would otherwise block until the
+	// backend deadline. `ask_user` dialogs stay up — auto mode never answers questions.
+	const flushPendingToolApprovals = useCallback(() => {
+		if (frontendToolDialogRef.current?.type === "approval") {
+			const resolver = frontendToolDialogResolverRef.current;
+			frontendToolDialogResolverRef.current = null;
+			frontendToolDialogRef.current = null;
+			resolver?.({ approved: true, remember: false });
+			setFrontendToolDialog(null);
+		}
+
+		const retained: FrontendToolQueuedDialog[] = [];
+		for (const queued of frontendToolDialogQueueRef.current) {
+			if (queued.dialog.type !== "approval") {
+				retained.push(queued);
+				continue;
+			}
+			queued.resolve({ approved: true, remember: false });
+		}
+		frontendToolDialogQueueRef.current = retained;
+
+		if (!frontendToolDialogResolverRef.current) {
+			const next = frontendToolDialogQueueRef.current.shift();
+			if (next) {
+				frontendToolDialogResolverRef.current = next.resolve;
+				frontendToolDialogRef.current = next.dialog;
+				setFrontendToolDialog(next.dialog);
+			}
+		}
+	}, []);
+
+	const handleToggleAutoMode = useCallback(() => {
+		const next = !autoModeRef.current;
+		autoModeRef.current = next;
+		setAutoMode(next);
+		if (next) flushPendingToolApprovals();
+	}, [flushPendingToolApprovals]);
 
 	useEffect(
 		() => () => {
@@ -1411,6 +1460,11 @@ function FlowPilotImpl({
 		setProcessEvents([]);
 		setCurrentConversationId(undefined);
 		currentMessageIdRef.current = undefined;
+		// A regenerated review can be byte-identical to the last one; clearing the stamps keeps
+		// auto mode from mistaking it for an apply it already attempted.
+		autoApplyAttemptRef.current = null;
+		autoApplyComponentsAttemptRef.current = null;
+		lastBoardApplyFeedbackRef.current = "";
 		setShowHistory(false);
 	}, [dismissPendingFlowIrCommit, pendingFlowIrCommit, settleGenerationReview]);
 
@@ -1454,6 +1508,10 @@ function FlowPilotImpl({
 				setValidationWarnings([]);
 				setProcessEvents([]);
 				currentMessageIdRef.current = undefined;
+				autoApplyAttemptRef.current = null;
+				autoApplyComponentsAttemptRef.current = null;
+				lastBoardApplyFeedbackRef.current =
+					latestUnresolvedBoardApplyFeedback(loadedMessages);
 				setShowHistory(false);
 			} catch (err) {
 				console.error("Failed to load conversation:", err);
@@ -1563,7 +1621,11 @@ function FlowPilotImpl({
 		(appliedBoardCommands: BoardCommand[]) => {
 			const lastAssistantMessage = [...messages]
 				.reverse()
-				.find((message) => message.role === "assistant");
+				.find(
+					(message) =>
+						message.role === "assistant" &&
+						!isHostBoardApplyFeedbackMessage(message),
+				);
 			const nextExecutedCommands = [
 				...(lastAssistantMessage?.executedCommands ?? []),
 				...appliedBoardCommands,
@@ -1571,7 +1633,10 @@ function FlowPilotImpl({
 			setMessages((prev) => {
 				const newMessages = [...prev];
 				for (let i = newMessages.length - 1; i >= 0; i--) {
-					if (newMessages[i].role === "assistant") {
+					if (
+						newMessages[i].role === "assistant" &&
+						!isHostBoardApplyFeedbackMessage(newMessages[i])
+					) {
 						const existingCommands = newMessages[i].executedCommands || [];
 						newMessages[i] = {
 							...newMessages[i],
@@ -1596,7 +1661,7 @@ function FlowPilotImpl({
 		const result = await resolveFlowIrCommit(pendingFlowIrCommit, "preflight");
 		if (result.status === "current") return true;
 
-		setValidationWarnings([
+		recordBoardApplyFailure([
 			result.message ||
 				"The board changed after this compiled workflow was generated. Regenerate it from the current board before applying.",
 		]);
@@ -1614,7 +1679,12 @@ function FlowPilotImpl({
 			}
 		}
 		return false;
-	}, [pendingFlowIrCommit, resolveFlowIrCommit, settleGenerationReview]);
+	}, [
+		pendingFlowIrCommit,
+		recordBoardApplyFailure,
+		resolveFlowIrCommit,
+		settleGenerationReview,
+	]);
 
 	// Board mode handlers
 	const executePendingCommands = useCallback(async () => {
@@ -1654,7 +1724,7 @@ function FlowPilotImpl({
 				if (hasRetainedCompiledBatch) {
 					const token = pendingFlowIrCommit;
 					if (!token || !onApplyFlowIrCommit) {
-						setValidationWarnings([
+						recordBoardApplyFailure([
 							"This backend cannot atomically apply the retained compiled workflow batch. It was not re-reconciled or partially executed; dismiss it and regenerate on a supported host.",
 						]);
 						return;
@@ -1673,9 +1743,11 @@ function FlowPilotImpl({
 					appliedBoardCommands = compiledResult.board_commands;
 					finalBoardNodeCount = compiledResult.final_board_node_count;
 					if (compiledResult.status !== "applied") {
-						setValidationWarnings([
+						recordBoardApplyFailure([
+							...(compiledResult.code ? [`${compiledResult.code}`] : []),
 							compiledResult.message ||
 								"The live board no longer matches this compiled workflow review.",
+							...compiledResult.diagnostics,
 						]);
 						if (compiledResult.status === "stale") {
 							settleGenerationReview("stale", token);
@@ -1728,6 +1800,7 @@ function FlowPilotImpl({
 						});
 						return;
 					}
+					recordBoardApplyFailure(diagnostics);
 					setFlowscriptWorkspaceStatus("validation_errors");
 					settleGenerationReview("error", pendingFlowIrCommit);
 					return;
@@ -1738,6 +1811,7 @@ function FlowPilotImpl({
 				}
 			} catch (error) {
 				settleGenerationReview("error", pendingFlowIrCommit);
+				recordBoardApplyFailure(flowPilotCommandApplyDiagnostics(error));
 				console.error("Failed to apply FlowPilot commands:", error);
 				return;
 			}
@@ -1746,6 +1820,7 @@ function FlowPilotImpl({
 				pendingFlowIrCommit,
 				finalBoardNodeCount,
 			);
+			recordBoardApplySuccess();
 			recordExecutedBoardCommands(appliedBoardCommands);
 			setPendingCommands([]);
 			setDestructiveApplyRequest(null);
@@ -1762,6 +1837,8 @@ function FlowPilotImpl({
 		dismissPendingFlowIrCommit,
 		onApplyFlowIrCommit,
 		recordExecutedBoardCommands,
+		recordBoardApplyFailure,
+		recordBoardApplySuccess,
 		settleGenerationReview,
 	]);
 	const handleExecuteCommands = useCallback(
@@ -1781,7 +1858,11 @@ function FlowPilotImpl({
 				const command = pendingCommands[index];
 				const lastAssistantMessage = [...messages]
 					.reverse()
-					.find((message) => message.role === "assistant");
+					.find(
+						(message) =>
+							message.role === "assistant" &&
+							!isHostBoardApplyFeedbackMessage(message),
+					);
 				const nextExecutedCommands = [
 					...(lastAssistantMessage?.executedCommands ?? []),
 					command,
@@ -1789,16 +1870,21 @@ function FlowPilotImpl({
 				try {
 					await onExecuteCommands([command]);
 				} catch (error) {
+					recordBoardApplyFailure(flowPilotCommandApplyDiagnostics(error));
 					console.error("Failed to apply FlowPilot command:", error);
 					return;
 				}
 				if (pendingCommands.length === 1) {
 					settleGenerationReview("applied");
 				}
+				recordBoardApplySuccess();
 				setMessages((prev) => {
 					const newMessages = [...prev];
 					for (let i = newMessages.length - 1; i >= 0; i--) {
-						if (newMessages[i].role === "assistant") {
+						if (
+							newMessages[i].role === "assistant" &&
+							!isHostBoardApplyFeedbackMessage(newMessages[i])
+						) {
 							const existingCommands = newMessages[i].executedCommands || [];
 							newMessages[i] = {
 								...newMessages[i],
@@ -1823,6 +1909,8 @@ function FlowPilotImpl({
 			onExecuteCommands,
 			pendingCommands,
 			pendingFlowIrCommit,
+			recordBoardApplyFailure,
+			recordBoardApplySuccess,
 			settleGenerationReview,
 		],
 	);
@@ -1860,6 +1948,7 @@ function FlowPilotImpl({
 				applyResultCommandCount(applyResult) === 0 &&
 				diagnostics.length > 0
 			) {
+				recordBoardApplyFailure(diagnostics);
 				setFlowscriptWorkspaceStatus("validation_errors");
 				setDestructiveApplyRequest(null);
 				settleGenerationReview("error");
@@ -1870,10 +1959,12 @@ function FlowPilotImpl({
 			recordExecutedBoardCommands(applyResultBoardCommands(applyResult));
 			setAppliedFlowScriptWorkspace(destructiveApplyRequest.flowscript);
 			setFlowscriptWorkspaceStatus("applied");
+			recordBoardApplySuccess();
 			setPendingCommands([]);
 			setDestructiveApplyRequest(null);
 		} catch (error) {
 			settleGenerationReview("error");
+			recordBoardApplyFailure(flowPilotCommandApplyDiagnostics(error));
 			console.error("Failed to apply destructive FlowScript edit:", error);
 		} finally {
 			setDestructiveApplyPending(false);
@@ -1883,6 +1974,8 @@ function FlowPilotImpl({
 		onApplyFlowScript,
 		preflightPendingFlowIrCommit,
 		recordExecutedBoardCommands,
+		recordBoardApplyFailure,
+		recordBoardApplySuccess,
 		settleGenerationReview,
 	]);
 
@@ -1894,7 +1987,10 @@ function FlowPilotImpl({
 			setMessages((prev) => {
 				const newMessages = [...prev];
 				for (let i = newMessages.length - 1; i >= 0; i--) {
-					if (newMessages[i].role === "assistant") {
+					if (
+						newMessages[i].role === "assistant" &&
+						!isHostBoardApplyFeedbackMessage(newMessages[i])
+					) {
 						newMessages[i] = {
 							...newMessages[i],
 							appliedComponents: [...pendingComponents],
@@ -2320,7 +2416,9 @@ function FlowPilotImpl({
 								toolName.includes("search") ||
 								toolName.includes("catalog") ||
 								toolName === "get_declarations" ||
-								toolName === "internet_search"
+									toolName === "internet_search" ||
+									toolName === "open_url" ||
+									toolName === "archive_lookup"
 							) {
 								setLoadingPhase("searching");
 							} else if (
@@ -3225,6 +3323,56 @@ function FlowPilotImpl({
 		visiblePendingCommands.length === 0 &&
 		flowscriptWorkspaceStatus === "stale";
 
+	// Auto mode applies a settled review as soon as generation finishes, mirroring the exact
+	// condition that renders the review card. The attempt stamp makes this fire once per
+	// distinct review: every early return inside executePendingCommands either leaves the
+	// review untouched (key unchanged, so no retry) or clears it outright. Bailing on
+	// `destructiveApplyRequest` is load-bearing — cancelling that dialog restores the
+	// applicable workspace, and without the bail the effect would immediately re-raise it.
+	const autoApplyKey =
+		!autoMode ||
+		loading ||
+		destructiveApplyRequest !== null ||
+		hasDismissOnlyStaleReview ||
+		!(agentMode === "board" || agentMode === "both") ||
+		!(visiblePendingCommands.length > 0 || hasUnappliedFlowScriptWorkspace)
+			? null
+			: [
+					pendingFlowIrCommit?.claim_id ?? "",
+					hasUnappliedFlowScriptWorkspace ? flowscriptWorkspace : "",
+					visiblePendingCommands
+						.map((command) => JSON.stringify(command))
+						.join("|"),
+				].join("::");
+
+	useEffect(() => {
+		if (!autoApplyKey || autoApplyAttemptRef.current === autoApplyKey) return;
+		autoApplyAttemptRef.current = autoApplyKey;
+		void executePendingCommands();
+	}, [autoApplyKey, executePendingCommands]);
+
+	// Components stream in batches during generation, so this waits for `!loading` rather
+	// than applying partial batches.
+	const autoApplyComponentsKey =
+		!autoMode ||
+		loading ||
+		!(agentMode === "ui" || agentMode === "both") ||
+		pendingComponents.length === 0
+			? null
+			: pendingComponents
+					.map((component) => JSON.stringify(component))
+					.join("|");
+
+	useEffect(() => {
+		if (
+			!autoApplyComponentsKey ||
+			autoApplyComponentsAttemptRef.current === autoApplyComponentsKey
+		)
+			return;
+		autoApplyComponentsAttemptRef.current = autoApplyComponentsKey;
+		handleApplyComponents();
+	}, [autoApplyComponentsKey, handleApplyComponents]);
+
 	useEffect(() => {
 		onWorkspaceVisibleChange?.(showFlowScriptWorkspace);
 	}, [onWorkspaceVisibleChange, showFlowScriptWorkspace]);
@@ -3268,6 +3416,8 @@ function FlowPilotImpl({
 				hasWorkspace={hasFlowScriptWorkspace}
 				showWorkspace={showWorkspace}
 				onToggleWorkspace={() => setShowWorkspace((value) => !value)}
+				autoMode={autoMode}
+				onToggleAutoMode={handleToggleAutoMode}
 			/>
 
 			<div
@@ -3581,8 +3731,8 @@ function FlowPilotImpl({
 					<DialogHeader>
 						<DialogTitle>Approve deletion</DialogTitle>
 						<DialogDescription>
-							FlowScript apply needs to delete existing board items before it
-							can continue.
+							Applying this FlowScript needs to delete existing board items
+							before it can continue. Deletions are never automatic.
 						</DialogDescription>
 					</DialogHeader>
 					<DialogBody>
@@ -3873,6 +4023,8 @@ interface HeaderProps {
 	hasWorkspace: boolean;
 	showWorkspace: boolean;
 	onToggleWorkspace: () => void;
+	autoMode: boolean;
+	onToggleAutoMode: () => void;
 }
 
 const Header = memo(function Header({
@@ -3899,6 +4051,8 @@ const Header = memo(function Header({
 	hasWorkspace,
 	showWorkspace,
 	onToggleWorkspace,
+	autoMode,
+	onToggleAutoMode,
 }: HeaderProps) {
 	const normalizedProvider = normalizeAIProvider(provider);
 	const pickerProviders: ProviderModelPickerProvider[] = [
@@ -3928,6 +4082,7 @@ const Header = memo(function Header({
 					id: model.id as string,
 					label:
 						model.meta?.en?.name ?? model.friendly_name ?? (model.id as string),
+					isFree: isFreeLlmModel(model),
 				}))
 			: copilotSDK.models.map((model) => ({
 					id: model.id,
@@ -4035,6 +4190,24 @@ const Header = memo(function Header({
 							</TooltipContent>
 						</Tooltip>
 					)}
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant={autoMode ? "secondary" : "ghost"}
+								size="icon"
+								aria-pressed={autoMode}
+								className="h-7 w-7 rounded-md hover:bg-accent/50"
+								onClick={onToggleAutoMode}
+							>
+								<ZapIcon className="w-4 h-4" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent side="bottom" className="text-xs">
+							{autoMode
+								? "Auto mode on — tools run and changes apply without asking, including destructive ones. Only board-item deletion still asks."
+								: "Auto mode off — FlowPilot asks before acting"}
+						</TooltipContent>
+					</Tooltip>
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Button

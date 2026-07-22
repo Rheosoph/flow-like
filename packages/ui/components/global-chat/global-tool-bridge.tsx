@@ -18,7 +18,9 @@ import {
 	useBackend,
 	useQueryClient,
 } from "../../index";
+import { captureInlineAppPageSnapshots } from "../../lib/app-page-snapshot";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
+import { getErrorMessage } from "../../lib/error-message";
 import { EVENT_CONFIG, isChatEventType } from "../../lib/event-config";
 import { flowPilotDebugLog } from "../../lib/flowpilot-debug";
 import type { FlowIrCommitToken } from "../../lib/schema/copilot";
@@ -61,19 +63,24 @@ import type {
 } from "../a2ui/types";
 import {
 	BoardEditRecoveryStore,
+	BoardZeroProgressRetryGuard,
 	CreatedArtifactJournal,
+	type FlowScriptBaselineFingerprint,
 	FrontendRequestExecutionFence,
 	type FrontendRequestExecutionLease,
+	assessFlowScriptCorrectionReadback,
 	assessFlowScriptReadback,
 	boardEditCoordinator,
 	boardEditInterruptionResult,
 	boardEditLockKey,
 	boardEditRecoveryKey,
 	flowScriptSnapshotChanged,
+	flowScriptSnapshotFingerprint,
 	hasActiveFrontendRequestOwnership,
 	isCreatedAppBuildTargetMismatch,
 	resolveFrontendToolExecutionDeadline,
 	retainedFlowScriptRecoveryInstruction,
+	retainedFlowScriptReferenceInstruction,
 	retryCreatedAppReadiness,
 	safeFlowScriptPlanReasoning,
 } from "../flowpilot/board-edit-guard";
@@ -201,6 +208,8 @@ export interface FrontendToolResponse {
 interface DialogOverride {
 	title: string;
 	description?: string;
+	/** Marks a gate that must never be answered without the user (auto mode, batch approvers). */
+	destructive?: boolean;
 }
 
 type DialogState =
@@ -391,13 +400,6 @@ function parseAsk(args: Record<string, unknown>): GlobalToolAsk {
 	};
 }
 
-/** Event types that render a UI surface (have a use-interface in the desktop event config). */
-const UI_EVENT_TYPES = new Set(
-	Object.values(EVENT_CONFIG).flatMap((config) =>
-		Object.keys(config.useInterfaces ?? {}),
-	),
-);
-
 type EventInterfaceKind = "chat" | "page" | "headless";
 
 /** How an event is consumed: inline chat, embeddable UI page, or headless execution. */
@@ -406,8 +408,7 @@ function classifyEvent(event: {
 	default_page_id?: string | null;
 }): EventInterfaceKind {
 	if (isChatEventType(event.event_type)) return "chat";
-	if (event.default_page_id || UI_EVENT_TYPES.has(event.event_type))
-		return "page";
+	if (event.default_page_id) return "page";
 	return "headless";
 }
 
@@ -744,6 +745,7 @@ function promptForDialog(
 	return {
 		id: promptId,
 		kind: "approval" as const,
+		destructive: dialog.override?.destructive ?? false,
 		toolName: request.toolName,
 		title:
 			dialog.override?.title || request.approval?.title || "Approve action",
@@ -854,10 +856,19 @@ export function GlobalToolBridge() {
 	// Failed repair candidates are board-scoped (not message-scoped), so a retry in a new turn can
 	// continue the closest source after a provider deadline or lost MCP response.
 	const boardRecoveryRef = useRef(new BoardEditRecoveryStore());
+	const boardZeroProgressRetryRef = useRef(new BoardZeroProgressRetryGuard());
 	// Crash-durable record of artifacts created per conversation. A retried creating tool (after a
 	// crash, reload, or lost tool response) is answered with the recorded ids instead of a duplicate.
 	const createdArtifactJournalRef = useRef(new CreatedArtifactJournal());
-	const boardRecoveryScopeByRequestRef = useRef<Map<string, string>>(new Map());
+	const boardRecoveryScopeByRequestRef = useRef<
+		Map<
+			string,
+			{
+				key: string;
+				baselineFingerprint?: FlowScriptBaselineFingerprint;
+			}
+		>
+	>(new Map());
 	const requestOwnershipIsActive = useCallback(
 		(requestId: string) =>
 			hasActiveFrontendRequestOwnership(
@@ -1362,9 +1373,77 @@ export function GlobalToolBridge() {
 					});
 					showConversation();
 					referenceApp(appId);
+					const snapshot = await captureInlineAppPageSnapshots(
+						appId,
+						pageEvent.id,
+					);
+					assertRequestActive(request, "app page screenshot capture");
+					const uploadedSnapshots = (
+						await Promise.all(
+							snapshot.images.map(async (image, index) => {
+								const extension =
+									image.mediaType === "image/webp"
+										? "webp"
+										: image.mediaType === "image/jpeg"
+											? "jpg"
+											: "png";
+								const file = new File(
+									[image.blob],
+									`flowpilot-page-${index + 1}.${extension}`,
+									{ type: image.mediaType },
+								);
+								try {
+									const temporaryFile = backend.helperState.fileToTemporaryFile
+										? await backend.helperState.fileToTemporaryFile(
+												file,
+												false,
+												undefined,
+												"remote",
+											)
+										: {
+												url: await backend.helperState.fileToUrl(
+													file,
+													false,
+													undefined,
+													"remote",
+												),
+											};
+									if (!/^https?:\/\//i.test(temporaryFile.url)) {
+										throw new Error(
+											"Temporary upload did not return a remotely readable URL.",
+										);
+									}
+									return {
+										url: temporaryFile.url,
+										media_type: image.mediaType,
+									};
+								} catch (error) {
+									console.warn(
+										"[global-tool-bridge] failed to upload app page capture",
+										error,
+									);
+									return null;
+								}
+							}),
+						)
+					).filter((image): image is { url: string; media_type: string } =>
+						Boolean(image),
+					);
+					assertRequestActive(request, "app page screenshot upload");
+					const screenshotCount = uploadedSnapshots.length;
+					const screenshotComplete =
+						snapshot.complete && screenshotCount === snapshot.images.length;
 					return {
 						status: "ok",
-						message: `Embedded the page '${pageEvent.name}' inline — the user can now use the app's UI directly in the chat.`,
+						message:
+							screenshotCount > 0
+								? `Embedded the page '${pageEvent.name}' inline and attached ${screenshotCount} visual capture${screenshotCount === 1 ? "" : "s"} of its rendered content for inspection.`
+								: `Embedded the page '${pageEvent.name}' inline, but its rendered content could not be captured. Do not claim to have read the page visually.`,
+						screenshot_count: screenshotCount,
+						screenshot_complete: screenshotComplete,
+						...(screenshotCount > 0
+							? { _flowpilot_image_urls: uploadedSnapshots }
+							: {}),
 					};
 				}
 				case "call_app_event": {
@@ -2091,10 +2170,9 @@ export function GlobalToolBridge() {
 						});
 					let boardId = liveSurface?.boardId ?? boardIdArg;
 					if (boardId) {
-						boardRecoveryScopeByRequestRef.current.set(
-							request.requestId,
-							boardEditRecoveryKey(appId, boardId),
-						);
+						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
+							key: boardEditRecoveryKey(appId, boardId),
+						});
 					}
 					// Explain/readback waits too, otherwise it can observe the pre-commit board while
 					// a mutation run for the same board still owns the authoritative snapshot.
@@ -2185,13 +2263,26 @@ export function GlobalToolBridge() {
 							assertRequestActive(request, "board-scoped serialization");
 						}
 						const boardRecoveryKey = boardEditRecoveryKey(appId, boardId);
-						boardRecoveryScopeByRequestRef.current.set(
-							request.requestId,
-							boardRecoveryKey,
-						);
-						const retainedCandidateAtStart =
-							boardRecoveryRef.current.get(boardRecoveryKey);
-
+						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
+							key: boardRecoveryKey,
+						});
+						const zeroProgressOwnerId =
+							ownerMessageId ?? parentRequestId(request) ?? request.requestId;
+						if (
+							!readOnly &&
+							!boardZeroProgressRetryRef.current.canStart(
+								zeroProgressOwnerId,
+								boardRecoveryKey,
+							)
+						) {
+							return {
+								status: "zero_progress_retry_exhausted",
+								code: "FLOWPILOT_BOARD_ZERO_PROGRESS_RETRY_EXHAUSTED",
+								flowscript_status: "no_flowscript",
+								message:
+									"The board specialist already made the initial attempt and one materially different retry in this assistant turn without retaining any FlowScript source. A third equivalent run was not dispatched. Report the failure honestly instead of rewording the same request again.",
+							};
+						}
 						flowPilotDebugLog(
 							"[global-tool-bridge] flowpilot_board: loading board",
 							{
@@ -2218,6 +2309,19 @@ export function GlobalToolBridge() {
 								),
 							),
 						]);
+						const baselineFingerprint =
+							flowScriptSnapshotFingerprint(baselineFlowScript);
+						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
+							key: boardRecoveryKey,
+							baselineFingerprint,
+						});
+						const retainedCandidateAtStart = boardRecoveryRef.current.get(
+							boardRecoveryKey,
+							baselineFingerprint,
+						);
+						const retainedReferenceAtStart = retainedCandidateAtStart
+							? undefined
+							: boardRecoveryRef.current.getReference(boardRecoveryKey);
 
 						// Entry nodes already on the board before this run — so we can report which
 						// Simple/Generic/Chat entries the copilot ADDED. The outer assistant then
@@ -2328,6 +2432,7 @@ export function GlobalToolBridge() {
 											boardRecoveryRef.current.set(
 												boardRecoveryKey,
 												recoverable,
+												baselineFingerprint,
 											);
 										}
 										// Keep rejected drafts inspectable in the nested process log even
@@ -2405,6 +2510,8 @@ export function GlobalToolBridge() {
 						let staleSnapshotBlocked = false;
 						let persistedReadbackFailed = false;
 						let persistedReadbackVerified = false;
+						let appliedSourceCorrections = 0;
+						let canonicalSourceCorrected = false;
 						// Attached run/log context (e.g. the user inspecting a failed run) lets the board
 						// copilot pull the run's logs via its query tools.
 						const surfaceRunContext = liveSurface?.runContext
@@ -2421,7 +2528,11 @@ export function GlobalToolBridge() {
 							? retainedFlowScriptRecoveryInstruction(
 									retainedCandidateAtStart.source,
 								)
-							: "";
+							: retainedReferenceAtStart
+								? retainedFlowScriptReferenceInstruction(
+										retainedReferenceAtStart.source,
+									)
+								: "";
 						const boardInstruction =
 							(readOnly
 								? `${instruction}
@@ -2430,6 +2541,8 @@ Answer the user's question about this board clearly and concisely, grounded in i
 								: `${instruction}
 
 Execute the change NOW in this run: draft the complete FlowScript workspace for this request and submit it via your edit tools. Do not stop after analysis and do not merely describe a plan — the run only counts as successful once the complete workspace validates and returns status queued. A partial foundation or a submitted/failed preview is not success.
+
+Create an early retained full-shape FlowScript draft before exhaustive discovery: after one focused declaration batch, submit a draft that preserves the complete requested scope and its end-to-end structure, even when validation diagnostics are still expected. Do not chase every omitted or unmatched declaration before that first write, and perform at most six ancillary database/schema/UI/storage inspection calls before it. This retained diagnostic checkpoint is not success; use its compiler and acceptance diagnostics for narrow follow-up lookups, repair the complete draft, then check and commit it until the workspace is queued.
 
 Completion contract: build complete helper logic first and add the Event entry last. The Event must connect to runnable logic; every helper needs body nodes plus an observable return or side effect; consume accumulators/outputs instead of discarding them; trace execution and data connections end-to-end before submitting. Use eventsSimple() for execution-only/quick-action/scheduled logic, eventsGeneric(payload: Struct, fieldName: string, ...) for typed form/request pins, or eventsChat(...) for chat context. Cron is app Event setup on eventsSimple(), never a catalog node. This board run builds the workflow; the outer assistant attaches its Event interface after success.`) +
 							recoveryContinuation;
@@ -2560,7 +2673,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 								const recoverable =
 									selectBestRecoverableFlowScriptCandidate(workspaceCandidates);
 								if (recoverable) {
-									boardRecoveryRef.current.set(boardRecoveryKey, recoverable);
+									boardRecoveryRef.current.set(
+										boardRecoveryKey,
+										recoverable,
+										baselineFingerprint,
+									);
 								}
 							}
 							source = selectedWorkspace?.source;
@@ -2709,6 +2826,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 											{ allowDeletions, suppressBlockedToast: true },
 										);
 										appliedCommands = applyResult?.commands?.length ?? 0;
+										appliedSourceCorrections =
+											applyResult?.corrections?.length ?? 0;
 										diagnostics = applyResult?.diagnostics ?? [];
 									} else {
 										assertRequestActive(request, "detached FlowScript apply");
@@ -2722,12 +2841,21 @@ Completion contract: build complete helper logic first and add the Event entry l
 												allowDeletions,
 											);
 										appliedCommands = applyResult.commands?.length ?? 0;
+										appliedSourceCorrections =
+											applyResult.corrections?.length ?? 0;
 										diagnostics = applyResult.diagnostics ?? [];
 									}
 									blockedDeletion =
 										diagnostics[0]?.startsWith(DELETION_DIAGNOSTIC_PREFIX) ??
 										false;
-									if (appliedCommands > 0 && !blockedDeletion) {
+									const correctionOnlySucceeded =
+										appliedCommands === 0 &&
+										appliedSourceCorrections > 0 &&
+										diagnostics.length === 0;
+									if (
+										(appliedCommands > 0 || correctionOnlySucceeded) &&
+										!blockedDeletion
+									) {
 										const persistedFlowScript =
 											await backend.boardState.getFlowScript(
 												appId,
@@ -2735,11 +2863,16 @@ Completion contract: build complete helper logic first and add the Event entry l
 												undefined,
 												true,
 											);
-										const readback = assessFlowScriptReadback({
-											before: baselineFlowScript,
-											expected: flowscript,
-											actual: persistedFlowScript,
-										});
+										const readback = correctionOnlySucceeded
+											? assessFlowScriptCorrectionReadback({
+													expected: flowscript,
+													actual: persistedFlowScript,
+												})
+											: assessFlowScriptReadback({
+													before: baselineFlowScript,
+													expected: flowscript,
+													actual: persistedFlowScript,
+												});
 										if (!readback.ok) {
 											persistedReadbackFailed = true;
 											diagnostics = [
@@ -2748,6 +2881,23 @@ Completion contract: build complete helper logic first and add the Event entry l
 											];
 										} else {
 											persistedReadbackVerified = true;
+											if (appliedSourceCorrections > 0 && selectedWorkspace) {
+												const canonicalWorkspace = {
+													...selectedWorkspace,
+													source: persistedFlowScript,
+												};
+												selectedWorkspace = canonicalWorkspace;
+												source = persistedFlowScript;
+												workspaceCandidates = [canonicalWorkspace];
+												partialWorkingSlice =
+													isPartialFlowScriptWorkspace(canonicalWorkspace);
+												boardRecoveryRef.current.set(
+													boardRecoveryKey,
+													canonicalWorkspace,
+													flowScriptSnapshotFingerprint(persistedFlowScript),
+												);
+												canonicalSourceCorrected = true;
+											}
 										}
 									}
 									return applyLive !== null;
@@ -2762,6 +2912,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										type: "approval",
 										request,
 										override: {
+											destructive: true,
 											title: "Approve deletion",
 											description: `${
 												diagnostic.length > 200
@@ -2801,7 +2952,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										requestId: nestedRunRequestId,
 										parentRequestId: request.requestId,
 										disposition:
-											appliedCommands > 0 &&
+											(appliedCommands > 0 || canonicalSourceCorrected) &&
 											!blockedDeletion &&
 											!persistedReadbackFailed
 												? "applied"
@@ -2891,9 +3042,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 							flushSubRun();
 							const retainedCandidate =
 								selectBestRecoverableFlowScriptCandidate(workspaceCandidates) ??
-								boardRecoveryRef.current.get(boardRecoveryKey);
-							const errorMessage =
-								error instanceof Error ? error.message : String(error);
+								boardRecoveryRef.current.get(
+									boardRecoveryKey,
+									baselineFingerprint,
+								);
+							const errorMessage = getErrorMessage(
+								error,
+								"The queued board change failed without a diagnostic.",
+							);
 							const interruptedResult = boardEditInterruptionResult({
 								status: isRequestExpired(request) ? "timeout" : "error",
 								code: isRequestExpired(request)
@@ -2902,6 +3058,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 								message: errorMessage,
 								candidate: retainedCandidate,
 							});
+							if (!readOnly) {
+								boardZeroProgressRetryRef.current.recordRunOutcome(
+									zeroProgressOwnerId,
+									boardRecoveryKey,
+									request.requestId,
+									Boolean(retainedCandidate),
+								);
+							}
 							if (!nestedRunSettled) {
 								recordNestedDebug(
 									request,
@@ -2922,6 +3086,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 						}
 
 						const noFlowScript = !source && !hadReturnedCommands;
+						if (!readOnly) {
+							boardZeroProgressRetryRef.current.recordRunOutcome(
+								zeroProgressOwnerId,
+								boardRecoveryKey,
+								request.requestId,
+								!noFlowScript,
+							);
+						}
 						const unvalidatedWorkspace =
 							Boolean(source) &&
 							workspaceStatus !== "queued" &&
@@ -2960,7 +3132,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 												? `Not applied — ${diagnostics[0]?.slice(0, 120) ?? "apply failed"}`
 												: partialWorkingSlice
 													? `${appliedCommands} command${appliedCommands === 1 ? "" : "s"} applied as an incomplete testable slice`
-													: `${appliedCommands} command${appliedCommands === 1 ? "" : "s"} applied${blockedDeletion ? " (deletions blocked)" : deletionApproved ? " (deletions approved)" : ""}`,
+													: canonicalSourceCorrected && appliedCommands === 0
+														? "Canonical FlowScript anchors repaired"
+														: `${appliedCommands} command${appliedCommands === 1 ? "" : "s"} applied${blockedDeletion ? " (deletions blocked)" : deletionApproved ? " (deletions approved)" : ""}`,
 								status:
 									workspaceStatus === "validation_errors" || applyFailed
 										? "failed"
@@ -2985,6 +3159,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						const verifiedBoardResult =
 							!applyFailed &&
 							(workspaceStatus === "no_changes" ||
+								(canonicalSourceCorrected && persistedReadbackVerified) ||
 								(appliedCommands > 0 &&
 									(persistedReadbackVerified ||
 										(!source && appliedViaLive === true))));
@@ -3081,7 +3256,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							...(noFlowScript
 								? {
 										flowscript_status: "no_flowscript",
-										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board once with a more explicit, step-by-step instruction, or tell the user honestly that the edit failed.",
+										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most once, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, then immediately retain a full-shape draft and repair it from diagnostics. If an equivalent zero-progress result already occurred, do not retry by merely rewording or shortening the instruction; stop and tell the user honestly that the edit failed.",
 									}
 								: {}),
 							...(workspaceStatus === "validation_errors"
@@ -3157,7 +3332,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 							const recoverable =
 								selectBestRecoverableFlowScriptCandidate(workspaceCandidates);
 							if (recoverable) {
-								boardRecoveryRef.current.set(boardRecoveryKey, recoverable);
+								boardRecoveryRef.current.set(
+									boardRecoveryKey,
+									recoverable,
+									baselineFingerprint,
+								);
 							}
 						}
 						recordNestedDebug(
@@ -3594,7 +3773,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 						});
 					}
 
-					// Edit mode: stage for the user's inline review — NEVER auto-applied.
+					// Edit mode: stage for the user's inline review. The tool never applies this
+					// itself; only the review card does, either on a click or via auto mode.
 					let staged = false;
 					if (runIsLive() && widgetSurface) {
 						useGlobalChatStore.getState().setPendingComponents({
@@ -3896,6 +4076,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 			backend.appState,
 			backend.boardState,
 			backend.eventState,
+			backend.helperState.fileToTemporaryFile,
+			backend.helperState.fileToUrl,
 			backend.userState,
 			backend.pageState,
 			backend.widgetState,
@@ -3968,7 +4150,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 				const sessionKey =
 					approval?.sessionKey ||
 					`${request.toolName}:${approval?.kind ?? "none"}`;
+				// Read through getState() rather than a selector so `execute` keeps a stable
+				// identity. Auto mode is a frontend waiver only: the approval kind sent by the
+				// backend is untouched, so ordered execution of mutating tools still holds.
 				const needsApproval =
+					!useGlobalChatStore.getState().autoMode &&
 					(approval?.kind === "mutating" || approval?.kind === "execute") &&
 					!shouldSkipUnavailableCreateTableApproval(
 						request.toolName,
@@ -3997,7 +4183,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 				return {
 					requestId: request.requestId,
 					approved: true,
-					error: error instanceof Error ? error.message : String(error),
+					error: getErrorMessage(error, "Frontend tool execution failed."),
 				};
 			}
 		},
@@ -4077,8 +4263,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 						const recoveryScope = boardRecoveryScopeByRequestRef.current.get(
 							request.requestId,
 						);
-						const retainedCandidate = recoveryScope
-							? boardRecoveryRef.current.get(recoveryScope)
+						const retainedCandidate = recoveryScope?.baselineFingerprint
+							? boardRecoveryRef.current.get(
+									recoveryScope.key,
+									recoveryScope.baselineFingerprint,
+								)
 							: undefined;
 						const timeoutResult = boardEditInterruptionResult({
 							status: "timeout",
@@ -4086,6 +4275,22 @@ Completion contract: build complete helper logic first and add the Event entry l
 							message: reason,
 							candidate: retainedCandidate,
 						});
+						if (
+							request.toolName === "flowpilot_board" &&
+							argString(request.arguments, "mode") !== "explain" &&
+							recoveryScope
+						) {
+							const ownerId =
+								ownerMessageIdForRequest(request) ??
+								parentRequestId(request) ??
+								request.requestId;
+							boardZeroProgressRetryRef.current.recordRunOutcome(
+								ownerId,
+								recoveryScope.key,
+								request.requestId,
+								Boolean(retainedCandidate),
+							);
+						}
 						cancelRequestDialogs(request.requestId, reason);
 						if (
 							(request.toolName === "flowpilot_board" ||

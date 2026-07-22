@@ -698,7 +698,7 @@ export function UsageStats({
 				    (and its backdrop) above them so the stats aren't hidden behind the panel. */}
 				<SheetContent
 					side="right"
-					className="z-10000 w-md sm:w-lg lg:w-xl sm:max-w-xl"
+					className="z-10000 w-full sm:w-lg lg:w-xl sm:max-w-xl"
 					overlayClassName="z-10000"
 				>
 					<SheetHeader className="px-2 shrink-0">

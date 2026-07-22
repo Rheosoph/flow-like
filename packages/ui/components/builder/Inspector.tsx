@@ -9,6 +9,7 @@ import {
 	useState,
 } from "react";
 import { cn } from "../../lib";
+import { normalizeStyleUpdate } from "../a2ui/style-updates";
 import {
 	NIVO_CHART_DEFAULTS,
 	NIVO_SAMPLE_DATA,
@@ -21,13 +22,18 @@ import {
 } from "../a2ui/media-source";
 import type {
 	BoundValue,
+	BreakpointStyle,
 	ChartAxis,
 	ChartSeries,
 	ChartType,
 	Overflow,
 	Position,
+	ResponsiveOverrides,
 	SelectOption,
+	Shadow,
+	Spacing,
 	Style,
+	StyleValue,
 	SurfaceComponent,
 	TableColumn,
 } from "../a2ui/types";
@@ -101,6 +107,74 @@ function getLiteralAssetPath(value: unknown): string | undefined {
 		return String(value.literalString);
 	}
 	return undefined;
+}
+
+function getStyleValue(value: StyleValue | undefined): string {
+	if (!value) return "";
+	return typeof value === "string" ? value : value.value;
+}
+
+function getSpacingValue(spacing: Spacing | undefined): string {
+	if (!spacing) return "";
+	if ("value" in spacing) return spacing.value ?? "";
+	if (!spacing.top && !spacing.right && !spacing.bottom && !spacing.left) {
+		return "";
+	}
+	return [spacing.top, spacing.right, spacing.bottom, spacing.left]
+		.map((value) => value || "0")
+		.join(" ");
+}
+
+function getSpacingEdges(spacing: Spacing | undefined): {
+	top?: string;
+	right?: string;
+	bottom?: string;
+	left?: string;
+} {
+	if (!spacing) return {};
+	if (!("value" in spacing)) return spacing;
+	const parts = (spacing.value ?? "").trim().split(/\s+/).filter(Boolean);
+	if (parts.length === 0) return {};
+	const [top, right = top, bottom = top, left = right] = parts;
+	return { top, right, bottom, left };
+}
+
+function withSpacingSide(
+	spacing: Spacing | undefined,
+	side: "top" | "right" | "bottom" | "left",
+	value: string,
+): Spacing {
+	return { ...getSpacingEdges(spacing), [side]: value || undefined };
+}
+
+function spacingFromShorthand(value: string): Spacing | undefined {
+	if (!value.trim()) return undefined;
+	return getSpacingEdges({ value });
+}
+
+function getPositionType(
+	position: Position | undefined,
+): NonNullable<Position["type"]> {
+	return position?.type ?? position?.positionType ?? "relative";
+}
+
+function withPositionType(
+	position: Position | undefined,
+	positionType: NonNullable<Position["type"]>,
+): Position {
+	return {
+		top: position?.top,
+		right: position?.right,
+		bottom: position?.bottom,
+		left: position?.left,
+		type: positionType,
+	};
+}
+
+function withoutLegacyBoxShadow(shadow: Shadow | undefined): Shadow {
+	if (!shadow) return {};
+	const { boxShadows: _boxShadows, ...canonicalShadow } = shadow;
+	return canonicalShadow;
 }
 
 export interface InspectorProps {
@@ -3417,18 +3491,76 @@ interface StyleEditorProps {
 
 function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 	const style = component.style || {};
+	const [responsiveBreakpoint, setResponsiveBreakpoint] =
+		useState<keyof ResponsiveOverrides>("md");
 
 	const updateStyle = useCallback(
 		<K extends keyof Style>(key: K, value: Style[K]) => {
 			onUpdate({
-				style: {
+				style: normalizeStyleUpdate({
 					...style,
 					[key]: value,
-				},
+				}),
 			});
 		},
 		[style, onUpdate],
 	);
+
+	const updateBreakpointStyle = useCallback(
+		<K extends keyof BreakpointStyle>(key: K, value: BreakpointStyle[K]) => {
+			const responsive = style.responsiveOverrides ?? style.responsive ?? {};
+			updateStyle("responsiveOverrides", {
+				...responsive,
+				[responsiveBreakpoint]: {
+					...responsive[responsiveBreakpoint],
+					[key]: value,
+				},
+			});
+		},
+		[
+			responsiveBreakpoint,
+			style.responsive,
+			style.responsiveOverrides,
+			updateStyle,
+		],
+	);
+
+	const breakpointStyle =
+		(style.responsiveOverrides ?? style.responsive)?.[responsiveBreakpoint] ??
+		{};
+	const backgroundMode = !style.background
+		? "none"
+		: "color" in style.background
+			? "color"
+			: "gradient" in style.background
+				? "gradient"
+				: "image" in style.background
+					? "image"
+					: "blur";
+	const gradient =
+		style.background && "gradient" in style.background
+			? style.background.gradient
+			: undefined;
+	const gradientType = gradient?.type ?? gradient?.gradientType ?? "linear";
+	const gradientStops = gradient?.stops
+		? gradient.stops.map((stop) => ({
+				...stop,
+				position:
+					gradient.type === undefined &&
+					stop.position !== undefined &&
+					stop.position >= 0 &&
+					stop.position <= 1
+						? stop.position * 100
+						: stop.position,
+			}))
+		: [
+				{ color: "#000000", position: 0 },
+				{ color: "#ffffff", position: 100 },
+			];
+	const backgroundImage =
+		style.background && "image" in style.background
+			? style.background.image
+			: undefined;
 
 	return (
 		<div className="space-y-4">
@@ -3439,110 +3571,37 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 					<ChevronDown className="h-4 w-4" />
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
-					<div className="space-y-1">
-						<Label className="text-xs">Margin</Label>
-						<div className="grid grid-cols-4 gap-1">
-							<Input
-								value={style.margin?.top || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("margin", {
-										...style.margin,
-										top: e.target.value,
-									})
-								}
-								placeholder="T"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.margin?.right || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("margin", {
-										...style.margin,
-										right: e.target.value,
-									})
-								}
-								placeholder="R"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.margin?.bottom || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("margin", {
-										...style.margin,
-										bottom: e.target.value,
-									})
-								}
-								placeholder="B"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.margin?.left || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("margin", {
-										...style.margin,
-										left: e.target.value,
-									})
-								}
-								placeholder="L"
-								className="h-7 text-xs text-center"
-							/>
-						</div>
-						<p className="text-[10px] text-muted-foreground">
-							Top, Right, Bottom, Left (e.g., 8px, 1rem, auto)
-						</p>
-					</div>
-					<div className="space-y-1">
-						<Label className="text-xs">Padding</Label>
-						<div className="grid grid-cols-4 gap-1">
-							<Input
-								value={style.padding?.top || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("padding", {
-										...style.padding,
-										top: e.target.value,
-									})
-								}
-								placeholder="T"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.padding?.right || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("padding", {
-										...style.padding,
-										right: e.target.value,
-									})
-								}
-								placeholder="R"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.padding?.bottom || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("padding", {
-										...style.padding,
-										bottom: e.target.value,
-									})
-								}
-								placeholder="B"
-								className="h-7 text-xs text-center"
-							/>
-							<Input
-								value={style.padding?.left || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("padding", {
-										...style.padding,
-										left: e.target.value,
-									})
-								}
-								placeholder="L"
-								className="h-7 text-xs text-center"
-							/>
-						</div>
-						<p className="text-[10px] text-muted-foreground">
-							Top, Right, Bottom, Left (e.g., 8px, 1rem)
-						</p>
-					</div>
+					{(["margin", "padding"] as const).map((property) => {
+						const edges = getSpacingEdges(style[property]);
+						return (
+							<div className="space-y-1" key={property}>
+								<Label className="text-xs capitalize">{property}</Label>
+								<div className="grid grid-cols-4 gap-1">
+									{(["top", "right", "bottom", "left"] as const).map((side) => (
+										<Input
+											key={side}
+											value={edges[side] ?? ""}
+											onChange={(e) =>
+												updateStyle(
+													property,
+													withSpacingSide(
+														style[property],
+														side,
+														e.target.value,
+													),
+												)
+											}
+											placeholder={side[0]?.toUpperCase()}
+											className="h-7 text-xs text-center"
+										/>
+									))}
+								</div>
+								<p className="text-[10px] text-muted-foreground">
+									Top, Right, Bottom, Left
+								</p>
+							</div>
+						);
+					})}
 				</CollapsibleContent>
 			</Collapsible>
 
@@ -3557,7 +3616,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Width</Label>
 							<Input
-								value={style.width || ""}
+								value={getStyleValue(style.width)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("width", e.target.value || undefined)
 								}
@@ -3568,7 +3627,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Height</Label>
 							<Input
-								value={style.height || ""}
+								value={getStyleValue(style.height)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("height", e.target.value || undefined)
 								}
@@ -3579,7 +3638,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Min Width</Label>
 							<Input
-								value={style.minWidth || ""}
+								value={getStyleValue(style.minWidth)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("minWidth", e.target.value || undefined)
 								}
@@ -3590,7 +3649,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Min Height</Label>
 							<Input
-								value={style.minHeight || ""}
+								value={getStyleValue(style.minHeight)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("minHeight", e.target.value || undefined)
 								}
@@ -3601,7 +3660,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Max Width</Label>
 							<Input
-								value={style.maxWidth || ""}
+								value={getStyleValue(style.maxWidth)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("maxWidth", e.target.value || undefined)
 								}
@@ -3612,7 +3671,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 						<div className="space-y-1">
 							<Label className="text-xs">Max Height</Label>
 							<Input
-								value={style.maxHeight || ""}
+								value={getStyleValue(style.maxHeight)}
 								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 									updateStyle("maxHeight", e.target.value || undefined)
 								}
@@ -3653,12 +3712,15 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 					<div className="space-y-1">
 						<Label className="text-xs">Type</Label>
 						<Select
-							value={style.position?.type || "relative"}
+							value={getPositionType(style.position)}
 							onValueChange={(v) =>
-								updateStyle("position", {
-									...style.position,
-									type: v as Position["type"],
-								})
+								updateStyle(
+									"position",
+									withPositionType(
+										style.position,
+										v as NonNullable<Position["type"]>,
+									),
+								)
 							}
 						>
 							<SelectTrigger className="h-8 text-sm">
@@ -3672,7 +3734,7 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 							</SelectContent>
 						</Select>
 					</div>
-					{style.position?.type && style.position.type !== "relative" && (
+					{style.position && getPositionType(style.position) !== "relative" && (
 						<div className="grid grid-cols-2 gap-2">
 							<div className="space-y-1">
 								<Label className="text-xs">Top</Label>
@@ -3680,7 +3742,8 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 									value={style.position?.top || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 										updateStyle("position", {
-											...style.position!,
+											...(style.position ?? {}),
+											type: getPositionType(style.position),
 											top: e.target.value,
 										})
 									}
@@ -3694,7 +3757,8 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 									value={style.position?.right || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 										updateStyle("position", {
-											...style.position!,
+											...(style.position ?? {}),
+											type: getPositionType(style.position),
 											right: e.target.value,
 										})
 									}
@@ -3708,7 +3772,8 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 									value={style.position?.bottom || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 										updateStyle("position", {
-											...style.position!,
+											...(style.position ?? {}),
+											type: getPositionType(style.position),
 											bottom: e.target.value,
 										})
 									}
@@ -3722,7 +3787,8 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 									value={style.position?.left || ""}
 									onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
 										updateStyle("position", {
-											...style.position!,
+											...(style.position ?? {}),
+											type: getPositionType(style.position),
 											left: e.target.value,
 										})
 									}
@@ -3743,75 +3809,338 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
 					<div className="space-y-1">
-						<Label className="text-xs">Color</Label>
-						<div className="flex gap-2">
-							<Input
-								type="color"
-								value={
-									style.background && "color" in style.background
-										? style.background.color
-										: "#ffffff"
+						<Label className="text-xs">Type</Label>
+						<Select
+							value={backgroundMode}
+							onValueChange={(value) => {
+								switch (value) {
+									case "color":
+										updateStyle("background", { color: "#ffffff" });
+										break;
+									case "gradient":
+										updateStyle("background", {
+											gradient: {
+												type: "linear",
+												angle: 180,
+												stops: gradientStops,
+											},
+										});
+										break;
+									case "image":
+										updateStyle("background", {
+											image: {
+												url: { literalString: "" },
+												size: "cover",
+												position: "center",
+												repeat: "no-repeat",
+											},
+										});
+										break;
+									case "blur":
+										updateStyle("background", { blur: "4px" });
+										break;
+									default:
+										updateStyle("background", undefined);
 								}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("background", { color: e.target.value })
-								}
-								className="h-8 w-12 p-1"
-							/>
+							}}
+						>
+							<SelectTrigger className="h-8 text-sm">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="none">None</SelectItem>
+								<SelectItem value="color">Color</SelectItem>
+								<SelectItem value="gradient">Gradient</SelectItem>
+								<SelectItem value="image">Image</SelectItem>
+								<SelectItem value="blur">Backdrop blur</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
+
+					{backgroundMode === "color" && (
+						<div className="space-y-1">
+							<Label className="text-xs">Color</Label>
 							<Input
 								value={
 									style.background && "color" in style.background
 										? style.background.color
 										: ""
 								}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+								onChange={(e) =>
 									updateStyle("background", { color: e.target.value })
 								}
 								placeholder="#ffffff or transparent"
-								className="h-8 text-sm flex-1"
+								className="h-8 text-sm"
 							/>
 						</div>
-					</div>
-					<div className="space-y-1">
-						<Label className="text-xs">Image URL</Label>
-						<Input
-							value={
-								style.background &&
-								"image" in style.background &&
-								style.background.image?.url
-									? "literalString" in style.background.image.url
-										? style.background.image.url.literalString
+					)}
+
+					{backgroundMode === "gradient" && (
+						<div className="space-y-3">
+							<div className="grid grid-cols-2 gap-2">
+								<div className="space-y-1">
+									<Label className="text-xs">Gradient type</Label>
+									<Select
+										value={gradientType}
+										onValueChange={(value) =>
+											updateStyle("background", {
+												gradient: {
+													type: value as "linear" | "radial" | "conic",
+													angle: gradient?.angle,
+													direction: gradient?.direction,
+													stops: gradientStops,
+												},
+											})
+										}
+									>
+										<SelectTrigger className="h-8 text-sm">
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value="linear">Linear</SelectItem>
+											<SelectItem value="radial">Radial</SelectItem>
+											<SelectItem value="conic">Conic</SelectItem>
+										</SelectContent>
+									</Select>
+								</div>
+								<div className="space-y-1">
+									<Label className="text-xs">Direction</Label>
+									<Input
+										value={
+											gradient?.direction ??
+											(gradient?.angle === undefined
+												? ""
+												: `${gradient.angle}deg`)
+										}
+										onChange={(e) =>
+											updateStyle("background", {
+												gradient: {
+													type: gradientType,
+													angle: undefined,
+													direction: e.target.value || undefined,
+													stops: gradientStops,
+												},
+											})
+										}
+										placeholder="to right or 45deg"
+										className="h-8 text-sm"
+									/>
+								</div>
+							</div>
+							{gradientStops.map((stop, index) => (
+								<div key={`${index}-${stop.position}`} className="flex gap-2">
+									<Input
+										value={stop.color}
+										onChange={(e) => {
+											const stops = gradientStops.map((item, itemIndex) =>
+												itemIndex === index
+													? { ...item, color: e.target.value }
+													: item,
+											);
+											updateStyle("background", {
+												gradient: {
+													type: gradientType,
+													angle: gradient?.angle,
+													direction: gradient?.direction,
+													stops,
+												},
+											});
+										}}
+										placeholder="#000000"
+										className="h-8 text-sm flex-1"
+									/>
+									<Input
+										type="number"
+										min="0"
+										max="100"
+										step="1"
+										value={stop.position}
+										onChange={(e) => {
+											const stops = gradientStops.map((item, itemIndex) =>
+												itemIndex === index
+													? { ...item, position: Number(e.target.value) }
+													: item,
+											);
+											updateStyle("background", {
+												gradient: {
+													type: gradientType,
+													angle: gradient?.angle,
+													direction: gradient?.direction,
+													stops,
+												},
+											});
+										}}
+										className="h-8 text-sm w-20"
+									/>
+									<Button
+										type="button"
+										variant="ghost"
+										size="icon"
+										className="h-8 w-8"
+										disabled={gradientStops.length <= 2}
+										onClick={() =>
+											updateStyle("background", {
+												gradient: {
+													type: gradientType,
+													angle: gradient?.angle,
+													direction: gradient?.direction,
+													stops: gradientStops.filter(
+														(_, itemIndex) => itemIndex !== index,
+													),
+												},
+											})
+										}
+									>
+										<Trash2 className="h-3.5 w-3.5" />
+									</Button>
+								</div>
+							))}
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="h-7 text-xs"
+								onClick={() =>
+									updateStyle("background", {
+										gradient: {
+											type: gradientType,
+											angle: gradient?.angle,
+											direction: gradient?.direction,
+											stops: [
+												...gradientStops,
+												{ color: "#ffffff", position: 100 },
+											],
+										},
+									})
+								}
+							>
+								<Plus className="mr-1 h-3.5 w-3.5" />
+								Add stop
+							</Button>
+						</div>
+					)}
+
+					{backgroundMode === "image" && backgroundImage && (
+						<div className="space-y-3">
+							<div className="space-y-1">
+								<Label className="text-xs">URL source</Label>
+								<Select
+									value={"path" in backgroundImage.url ? "path" : "literal"}
+									onValueChange={(value) =>
+										updateStyle("background", {
+											image: {
+												...backgroundImage,
+												url:
+													value === "path"
+														? { path: "", defaultValue: "" }
+														: { literalString: "" },
+											},
+										})
+									}
+								>
+									<SelectTrigger className="h-8 text-sm">
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										<SelectItem value="literal">Literal URL</SelectItem>
+										<SelectItem value="path">Data path</SelectItem>
+									</SelectContent>
+								</Select>
+							</div>
+							<div className="space-y-1">
+								<Label className="text-xs">
+									{"path" in backgroundImage.url ? "Data path" : "Image URL"}
+								</Label>
+								<Input
+									value={
+										"path" in backgroundImage.url
+											? backgroundImage.url.path
+											: "literalString" in backgroundImage.url
+												? backgroundImage.url.literalString
+												: ""
+									}
+									onChange={(e) =>
+										updateStyle("background", {
+											image: {
+												...backgroundImage,
+												url:
+													"path" in backgroundImage.url
+														? { ...backgroundImage.url, path: e.target.value }
+														: { literalString: e.target.value },
+											},
+										})
+									}
+									placeholder={
+										"path" in backgroundImage.url
+											? "/theme/heroImage"
+											: "/path/to/image.jpg"
+									}
+									className="h-8 text-sm"
+								/>
+							</div>
+							{"path" in backgroundImage.url && (
+								<div className="space-y-1">
+									<Label className="text-xs">Fallback URL</Label>
+									<Input
+										value={
+											typeof backgroundImage.url.defaultValue === "string"
+												? backgroundImage.url.defaultValue
+												: ""
+										}
+										onChange={(e) =>
+											updateStyle("background", {
+												image: {
+													...backgroundImage,
+													url: {
+														...backgroundImage.url,
+														defaultValue: e.target.value,
+													},
+												},
+											})
+										}
+										className="h-8 text-sm"
+									/>
+								</div>
+							)}
+							<div className="grid grid-cols-3 gap-2">
+								{(["size", "position", "repeat"] as const).map((field) => (
+									<div className="space-y-1" key={field}>
+										<Label className="text-xs capitalize">{field}</Label>
+										<Input
+											value={backgroundImage[field] ?? ""}
+											onChange={(e) =>
+												updateStyle("background", {
+													image: {
+														...backgroundImage,
+														[field]: e.target.value || undefined,
+													},
+												})
+											}
+											className="h-8 text-xs"
+										/>
+									</div>
+								))}
+							</div>
+						</div>
+					)}
+
+					{backgroundMode === "blur" && (
+						<div className="space-y-1">
+							<Label className="text-xs">Backdrop Blur</Label>
+							<Input
+								value={
+									style.background && "blur" in style.background
+										? style.background.blur
 										: ""
-									: ""
-							}
-							onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-								updateStyle("background", {
-									image: {
-										url: { literalString: e.target.value },
-										size: "cover",
-										position: "center",
-										repeat: "no-repeat",
-									},
-								})
-							}
-							placeholder="/path/to/image.jpg"
-							className="h-8 text-sm"
-						/>
-					</div>
-					<div className="space-y-1">
-						<Label className="text-xs">Backdrop Blur</Label>
-						<Input
-							value={
-								style.background && "blur" in style.background
-									? style.background.blur
-									: ""
-							}
-							onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-								updateStyle("background", { blur: e.target.value })
-							}
-							placeholder="4px"
-							className="h-8 text-sm"
-						/>
-					</div>
+								}
+								onChange={(e) =>
+									updateStyle("background", { blur: e.target.value })
+								}
+								placeholder="4px"
+								className="h-8 text-sm"
+							/>
+						</div>
+					)}
 					<div className="space-y-1">
 						<Label className="text-xs">Opacity</Label>
 						<Input
@@ -3910,56 +4239,56 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 				</CollapsibleTrigger>
 				<CollapsibleContent className="pt-2 space-y-3">
 					<div className="grid grid-cols-2 gap-2">
-						<div className="space-y-1">
-							<Label className="text-xs">X Offset</Label>
-							<Input
-								value={style.shadow?.x || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("shadow", { ...style.shadow, x: e.target.value })
-								}
-								placeholder="0"
-								className="h-8 text-sm"
-							/>
-						</div>
-						<div className="space-y-1">
-							<Label className="text-xs">Y Offset</Label>
-							<Input
-								value={style.shadow?.y || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("shadow", { ...style.shadow, y: e.target.value })
-								}
-								placeholder="2px"
-								className="h-8 text-sm"
-							/>
-						</div>
-						<div className="space-y-1">
-							<Label className="text-xs">Blur</Label>
-							<Input
-								value={style.shadow?.blur || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("shadow", {
-										...style.shadow,
-										blur: e.target.value,
-									})
-								}
-								placeholder="4px"
-								className="h-8 text-sm"
-							/>
-						</div>
-						<div className="space-y-1">
-							<Label className="text-xs">Color</Label>
-							<Input
-								value={style.shadow?.color || ""}
-								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-									updateStyle("shadow", {
-										...style.shadow,
-										color: e.target.value,
-									})
-								}
-								placeholder="rgba(0,0,0,0.1)"
-								className="h-8 text-sm"
-							/>
-						</div>
+						{(
+							[
+								["x", "X offset", "0"],
+								["y", "Y offset", "2px"],
+								["blur", "Blur", "4px"],
+								["spread", "Spread", "0"],
+								["color", "Color", "rgba(0,0,0,0.1)"],
+							] as const
+						).map(([field, label, placeholder]) => (
+							<div className="space-y-1" key={field}>
+								<Label className="text-xs">{label}</Label>
+								<Input
+									value={style.shadow?.[field] ?? ""}
+									onChange={(e) =>
+										updateStyle("shadow", {
+											...withoutLegacyBoxShadow(style.shadow),
+											[field]: e.target.value || undefined,
+										})
+									}
+									placeholder={placeholder}
+									className="h-8 text-sm"
+								/>
+							</div>
+						))}
+					</div>
+					<div className="flex items-center justify-between">
+						<Label className="text-xs">Inset</Label>
+						<Switch
+							checked={style.shadow?.inset ?? false}
+							onCheckedChange={(checked) =>
+								updateStyle("shadow", {
+									...withoutLegacyBoxShadow(style.shadow),
+									inset: checked || undefined,
+								})
+							}
+						/>
+					</div>
+					<div className="space-y-1">
+						<Label className="text-xs">Text Shadow</Label>
+						<Input
+							value={style.shadow?.textShadow || ""}
+							onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+								updateStyle("shadow", {
+									...withoutLegacyBoxShadow(style.shadow),
+									textShadow: e.target.value || undefined,
+								})
+							}
+							placeholder="0 1px 2px rgba(0,0,0,0.2)"
+							className="h-8 text-sm"
+						/>
 					</div>
 				</CollapsibleContent>
 			</Collapsible>
@@ -4015,6 +4344,176 @@ function StyleEditor({ component, onUpdate }: StyleEditorProps) {
 								className="h-8 text-sm"
 							/>
 						</div>
+						<div className="space-y-1">
+							<Label className="text-xs">Skew</Label>
+							<Input
+								value={style.transform?.skew || ""}
+								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+									updateStyle("transform", {
+										...style.transform,
+										skew: e.target.value,
+									})
+								}
+								placeholder="10deg, 5deg"
+								className="h-8 text-sm"
+							/>
+						</div>
+						<div className="space-y-1">
+							<Label className="text-xs">Origin</Label>
+							<Input
+								value={style.transform?.transformOrigin || ""}
+								onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+									updateStyle("transform", {
+										...style.transform,
+										transformOrigin: e.target.value,
+									})
+								}
+								placeholder="center"
+								className="h-8 text-sm"
+							/>
+						</div>
+					</div>
+				</CollapsibleContent>
+			</Collapsible>
+
+			{/* Responsive overrides */}
+			<Collapsible>
+				<CollapsibleTrigger className="flex w-full items-center justify-between py-2 text-sm font-medium">
+					<span>Responsive</span>
+					<ChevronDown className="h-4 w-4" />
+				</CollapsibleTrigger>
+				<CollapsibleContent className="pt-2 space-y-3">
+					<div className="space-y-1">
+						<Label className="text-xs">Breakpoint</Label>
+						<Select
+							value={responsiveBreakpoint}
+							onValueChange={(value) =>
+								setResponsiveBreakpoint(value as keyof ResponsiveOverrides)
+							}
+						>
+							<SelectTrigger className="h-8 text-sm">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value="sm">sm · 640px</SelectItem>
+								<SelectItem value="md">md · 768px</SelectItem>
+								<SelectItem value="lg">lg · 1024px</SelectItem>
+								<SelectItem value="xl">xl · 1280px</SelectItem>
+								<SelectItem value="xxl">2xl · 1536px</SelectItem>
+							</SelectContent>
+						</Select>
+					</div>
+					<div className="space-y-1">
+						<Label className="text-xs">Tailwind classes</Label>
+						<Input
+							value={breakpointStyle.className ?? ""}
+							onChange={(e) =>
+								updateBreakpointStyle("className", e.target.value || undefined)
+							}
+							className="h-8 text-sm"
+						/>
+					</div>
+					<div className="grid grid-cols-2 gap-2">
+						{(
+							[
+								["display", "Display", "flex"],
+								["flexDirection", "Flex direction", "row"],
+								["justifyContent", "Justify", "center"],
+								["alignItems", "Align", "center"],
+								["gap", "Gap", "16px"],
+								["fontSize", "Font size", "1rem"],
+								["textAlign", "Text align", "center"],
+							] as const
+						).map(([field, label, placeholder]) => (
+							<div className="space-y-1" key={field}>
+								<Label className="text-xs">{label}</Label>
+								<Input
+									value={String(breakpointStyle[field] ?? "")}
+									onChange={(e) =>
+										updateBreakpointStyle(field, e.target.value || undefined)
+									}
+									placeholder={placeholder}
+									className="h-8 text-xs"
+								/>
+							</div>
+						))}
+						{(
+							[
+								["width", "Width", "100%"],
+								["height", "Height", "auto"],
+							] as const
+						).map(([field, label, placeholder]) => (
+							<div className="space-y-1" key={field}>
+								<Label className="text-xs">{label}</Label>
+								<Input
+									value={getStyleValue(breakpointStyle[field])}
+									onChange={(e) =>
+										updateBreakpointStyle(field, e.target.value || undefined)
+									}
+									placeholder={placeholder}
+									className="h-8 text-xs"
+								/>
+							</div>
+						))}
+						{(
+							[
+								["padding", "Padding"],
+								["margin", "Margin"],
+							] as const
+						).map(([field, label]) => (
+							<div className="space-y-1" key={field}>
+								<Label className="text-xs">{label}</Label>
+								<Input
+									value={getSpacingValue(breakpointStyle[field])}
+									onChange={(e) =>
+										updateBreakpointStyle(
+											field,
+											spacingFromShorthand(e.target.value),
+										)
+									}
+									placeholder="8px 16px"
+									className="h-8 text-xs"
+								/>
+							</div>
+						))}
+						<div className="space-y-1">
+							<Label className="text-xs">Grid columns</Label>
+							<Input
+								type="number"
+								min="1"
+								value={breakpointStyle.gridCols ?? ""}
+								onChange={(e) =>
+									updateBreakpointStyle(
+										"gridCols",
+										e.target.value ? Number(e.target.value) : undefined,
+									)
+								}
+								className="h-8 text-xs"
+							/>
+						</div>
+						<div className="space-y-1">
+							<Label className="text-xs">Order</Label>
+							<Input
+								type="number"
+								value={breakpointStyle.order ?? ""}
+								onChange={(e) =>
+									updateBreakpointStyle(
+										"order",
+										e.target.value ? Number(e.target.value) : undefined,
+									)
+								}
+								className="h-8 text-xs"
+							/>
+						</div>
+					</div>
+					<div className="flex items-center justify-between">
+						<Label className="text-xs">Hidden at this breakpoint</Label>
+						<Switch
+							checked={breakpointStyle.hidden ?? false}
+							onCheckedChange={(checked) =>
+								updateBreakpointStyle("hidden", checked || undefined)
+							}
+						/>
 					</div>
 				</CollapsibleContent>
 			</Collapsible>

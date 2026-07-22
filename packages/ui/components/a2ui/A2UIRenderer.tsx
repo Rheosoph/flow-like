@@ -1,9 +1,9 @@
 "use client";
 
 import { useCallback, useId, useMemo } from "react";
-import { createSanitizedStyleProps, safeScopedCss } from "../../lib/css-utils";
 import type { BoardVersion } from "../../lib/schema/flow/board-version";
 import { cn } from "../../lib/utils";
+import { ScopedCustomCss } from "../scoped-custom-css";
 import { ActionProvider } from "./ActionHandler";
 import { type ComponentProps, getComponentRenderer } from "./ComponentRegistry";
 import { DataProvider, DataScopeProvider, useData } from "./DataContext";
@@ -14,6 +14,7 @@ import type {
 	BoundValue,
 	DataEntry,
 	DataScope,
+	Style,
 	Surface,
 	SurfaceComponent,
 } from "./types";
@@ -31,6 +32,29 @@ function resolveHidden(
 	if (hidden === undefined) return false;
 	const value = resolve(hidden as BoundValue, false);
 	return value === true || value === "true";
+}
+
+function resolveStyleBindings(
+	style: Style | undefined,
+	resolve: (boundValue: BoundValue, defaultValue?: unknown) => unknown,
+): Style | undefined {
+	if (!style?.background || !("image" in style.background)) return style;
+
+	const resolvedUrl = resolve(style.background.image.url, "");
+	return {
+		...style,
+		background: {
+			image: {
+				...style.background.image,
+				url: {
+					literalString:
+						typeof resolvedUrl === "string"
+							? resolvedUrl
+							: String(resolvedUrl ?? ""),
+				},
+			},
+		},
+	};
 }
 
 interface A2UIComponentNodeProps {
@@ -58,6 +82,7 @@ function A2UIComponentNode({
 	const { resolve } = useData();
 	const { component, style } = surfaceComponent;
 	if (!component || resolveHidden(component.hidden, resolve)) return null;
+	const resolvedStyle = resolveStyleBindings(style ?? component.style, resolve);
 
 	const Renderer = getComponentRenderer(component.type);
 	if (!Renderer) {
@@ -71,7 +96,7 @@ function A2UIComponentNode({
 		surfaceId,
 		appId,
 		boardId,
-		style: style ?? component.style,
+		style: resolvedStyle,
 		onAction: handleAction,
 		renderChild: (childId, childScope) =>
 			renderScopedComponent(childId, childScope),
@@ -207,16 +232,10 @@ export function A2UIRenderer({
 					openDialog={openDialog}
 					closeDialog={closeDialog}
 				>
-					{customCss && (
-						<style
-							{...createSanitizedStyleProps(
-								safeScopedCss(
-									customCss,
-									`[data-surface-canvas-id="${canvasId}"]`,
-								),
-							)}
-						/>
-					)}
+					<ScopedCustomCss
+						css={customCss}
+						scopeSelector={`[data-surface-canvas-id="${canvasId}"]`}
+					/>
 					<div
 						className={cn(backgroundClass, className)}
 						data-surface-canvas-id={canvasId}

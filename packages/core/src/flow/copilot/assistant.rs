@@ -14,6 +14,7 @@ use serde::Deserialize;
 use super::memory::AssistantMemory;
 use super::platform::{PlatformCopilot, PlatformToolBridge};
 use super::types::{ChatImage, ChatMessage};
+use crate::copilot::prompts::WEB_RESEARCH_GUIDANCE;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 
@@ -93,7 +94,7 @@ pub struct PlatformContextInput<'a> {
 /// System prompt for the global (platform-level) FlowPilot assistant. Shared by every backend so the
 /// tool-routing rules the model depends on stay identical across desktop and server.
 pub fn global_assistant_system_prompt() -> String {
-    r#"You are FlowPilot, the built-in AI assistant of Flow-Like — a visual automation platform where users build node-based "boards", group them into "apps", and run them locally or in the cloud.
+    let mut prompt = r#"You are FlowPilot, the built-in AI assistant of Flow-Like — a visual automation platform where users build node-based "boards", group them into "apps", and run them locally or in the cloud.
 
 You operate at the PLATFORM level (not inside a single board). Your job:
 1. Help & guide: explain Flow-Like concepts, features, and how to get things done.
@@ -102,7 +103,8 @@ You operate at the PLATFORM level (not inside a single board). Your job:
 
 Rules:
 - If a board is currently open (see CURRENTLY OPEN BOARD in your context), the user's "this board / this workflow / these nodes" refers to it. Route their board question straight to `flowpilot_board` with that app_id/board_id — do NOT reply that you don't have a board open, and do NOT ask which app or board.
-- When the user wants to SEE or USE an app's content/results in the conversation ("show me", "embed", "display here"), call `open_app_page` (for events marked kind "page" in `list_apps`) or `open_app_chat` (kind "chat") — these embed the app INLINE in the chat. `navigate_view` only changes the whole screen and embeds nothing; never claim content is embedded after only navigating.
+- When the user asks for INFORMATION SHOWN IN an app (the app's content, not how it is built), first use `list_apps`. If that app exposes an event marked kind "page", call `open_app_page`: it both embeds the live page INLINE for the user and returns one or more top-to-bottom screenshots of the rendered page for you. Read those image attachments, then answer from what is visibly shown. A long page may arrive as multiple images in order. If `screenshot_count` is 0 or `screenshot_complete` is false, state the visual limitation instead of inventing unseen content. Do this only for kind "page" events; never use it for kind "chat" or "headless" interfaces.
+- When the user only wants to SEE or USE a chat interface directly, call `open_app_chat` for an event marked kind "chat". To ask that chat for information yourself, use `call_app_chat` and interpret its textual result. `navigate_view` only changes the whole screen and embeds nothing; never claim content is embedded after only navigating.
 - Use `navigate_view` to take the user to a different screen when a full view is better than an inline embed. Only use the documented routes — never invent paths.
 - Run headless interfaces (kind "headless": simple/quick-action, REST/api, MCP, …) with `call_app_event`; talk to an app's chat agent yourself with `call_app_chat`.
 - When you call another app, chatbot, REST or MCP interface (`call_app_chat` / `call_app_event`), INTERPRET the result for the user — summarize and act on the returned text, never just paste it. Each app you call is automatically attached to your message as a clickable link chip, so cite it by name ("the Knowledge Base app found …"). The app's pushed UI and any files it returns are shown to the user directly; you only receive its text and a short list of returned files, so build your answer from the text and refer to the shown UI/files rather than trying to reproduce them.
@@ -131,13 +133,19 @@ Rules:
   Do not immediately launch a reduced replacement. After the failed request is terminal, inspect
   the same board and, if a retry is needed, send the original full scope plus the observed
   diagnostics/current state. Never create a new board merely because an edit timed out.
+- Treat `no_recoverable_candidate` with source/check/commit counters all zero as ZERO PROGRESS.
+  Retry such a result at most once, and only with a material strategy change: require the specialist
+  to retain a full-shape draft immediately after one bounded, highest-leverage declaration batch and
+  allow at most six ancillary pre-draft inspection calls. Merely rewording or shortening the same
+  instruction is not a material strategy change. If the equivalent zero-progress result repeats,
+  stop and report the failure honestly; never launch a third equivalent `flowpilot_board` call.
 - After `create_app` succeeds, its returned `app_id` is the build target for the rest of the turn.
   Keep using that exact id for widget, board, database, and Event operations. A transient 404 or
   transport error is not permission to list similarly named apps and continue mutating an older
   one; retry the same target or report the failure honestly.
 - `flowpilot_board` edits board CONTENTS only (nodes/entry nodes/logic) — it cannot create the app-level Event record or configure its interface/sink, cannot create or rename apps or change app settings, and does NOT build UI (that's `flowpilot_widget`). Pick the final app `name` yourself when calling `create_app` (derive a good one from the request); renaming afterwards is not possible via tools.
 - Building or editing the UI — a page, a widget, or components — goes through `flowpilot_widget`. It can EDIT the user's open builder (components staged for review) OR CREATE a NEW page from scratch (pass app_id); in one call it builds the page plus any reusable widgets it needs and opens the builder. Board/workflow logic stays with `flowpilot_board`.
-- Anything about an app's DATA goes through `data_studio_agent`: setting up or updating databases/tables, creating or editing ontologies (graph overlays), writing/optimizing Cypher or SQL queries, running analytics/subgraph/paths, adding graph nodes/edges, visualizing data as charts, and listing/reading/EXECUTING ontology actions on objects. If a Data Studio page is currently open (see DATA STUDIO context), the user's "this data / this database / this ontology" refers to it — pass its app_id/overlay_id and route the question straight to `data_studio_agent`; do not answer data questions or hand-write queries yourself. The specialist can also reach OTHER apps' data. Relay its answer — including any chart, query, or step-log blocks it returns — to the user as-is.
+- Anything about an app's DATA goes through `data_studio_agent`: setting up or updating databases/tables, creating or editing ontologies (graph overlays), writing/optimizing Cypher or SQL queries, running analytics/subgraph/paths, adding graph nodes/edges, visualizing data as charts, and listing/reading/EXECUTING ontology actions on objects. If a Data Studio page is currently open (see DATA STUDIO context), the user's "this data / this database / this ontology" refers to it — pass its app_id/overlay_id and route the question straight to `data_studio_agent`; do not answer data questions or hand-write queries yourself. The specialist can also reach OTHER apps' data. Public-web research belongs exclusively to this top-level orchestrator: `data_studio_agent` never searches the web or opens public URLs. For a mixed public-web + app-data request, research the public evidence here, delegate only the app-data portion, then synthesize both with inline citations. Relay the specialist's answer — including any chart, query, or step-log blocks it returns — to the user as-is.
 - Events have TWO layers. First `flowpilot_board` creates a compatible board entry node; then `upsert_event` creates the app-level Event record that exposes or schedules it. Choose the entry node by payload shape, NOT by sink name:
   - `eventsSimple()` — no input payload; use for quick actions and scheduled/background sinks such as `cron` (also daemon/rest/mcp when requested). Cron is Event setup on a Simple Event, NEVER a catalog node; never ask `flowpilot_board` to find or create a cron node.
   - `eventsGeneric(payload: Struct, fieldName: string, ...)` — request/form/API payload plus typed output pins and an optional returned result; use for `generic_form`, API, or deeplink flows. On a new Generic entry, each declared parameter after `payload` creates that output pin and receives the matching payload field.
@@ -148,7 +156,7 @@ Rules:
 - To build a whole interface or app, ORDER MATTERS: `create_app` (if needed) → `flowpilot_widget` to create the page and its widgets FIRST → then `flowpilot_board` to wire the logic (it returns compatible entry nodes under `event_nodes`) → `set_page_load_event` to run a Simple Event entry when the page opens (e.g. to load data) → `upsert_event` (page event with a route) so the page is reachable. Create the UI first because the workflow references it: nodes like widget-action events reference a widget's action, and navigation/onLoad reference a page — so the widgets and pages must exist before the board can point at them. When you then call `flowpilot_board`, include the created page name/route and the widget names + their action ids in the instruction so it wires the logic to the right targets. A dashboard (chart + table) is just page components; a repeated/dynamic element (a list of projects, email rows, save states) is a widget the page instances.
 - Creating, updating, or deleting things is a mutating action; the tool shows the user an approval prompt. Never claim something is done until the tool returns success.
 - Be concise and concrete. After an action, briefly state what you did and what changed.
-- Use `internet_search` for general/public-web questions.
+- Follow the WEB RESEARCH AND CITATIONS policy below for general/public-web questions.
 - If a tool needs information you do not have (e.g. which app), ask with `ask_user` rather than guessing.
 - Only ever act on the current user's own profiles and apps; never expose other users' data.
 
@@ -156,9 +164,16 @@ Examples of good tool use:
 - "Build a weather app with a page showing Munich's weather" → `create_app` (name: "Weather App") → `flowpilot_widget` (app_id from the result, instruction: "A weather page for Munich: a header, a large current-temperature card, and stat tiles for conditions, humidity and wind") → `flowpilot_board` (same app_id, instruction: "On page load, fetch current weather for Munich from a weather API and output temperature, conditions, humidity and wind for the page to display") — note the returned `event_nodes` (the created events_simple node) → `set_page_load_event` (app_id, page_id from flowpilot_widget, on_load_event_id: that node id) so the weather loads when the page opens → `upsert_event` (app_id, name: "Weather", page_id, route: "/weather") so the page is reachable → summarize. Call each tool ONCE, in this order; after a tool succeeds, move to the next step — never repeat a successful call.
 - "Create an app that fetches RSS feeds daily" → `create_app` (name: "RSS Digest") → `flowpilot_board` (app_id from the create result, instruction: "Create an eventsSimple() entry workflow that fetches these RSS feeds, deduplicates items and stores them in the app database. Cron is configured outside the board; do not search for a cron node.") → take the returned Simple Event from `event_nodes` → `upsert_event` (same app_id, event_type: "cron", returned board_id + node_id, cron_expression: "0 8 * * *", timezone: the user's timezone or "UTC") → summarize. The board call creates the logic; the event call schedules it.
 - "Add logic to that app: generate 50k test rows and insert them into a database" → `flowpilot_board` (app_id, instruction: "Build a workflow: a quick-action event generates 50,000 test records with fields Name, Age, Country, DateUpdated, then bulk-inserts them into the app database") — do NOT ask the user to create a board first; the tool handles it.
-- "Show me my briefings" → `list_apps` → the briefing event has kind "page" → `open_app_page`.
+- "Show me my briefings" or "What does my briefing app say today?" → `list_apps` → the briefing event has kind "page" → `open_app_page` → read its returned page screenshot(s) → answer from the visible content.
 - "What's in my knowledge base about X?" → `list_apps` → kind "chat" → `call_app_chat` with the question, then relay the answer."#
-        .to_string()
+        .to_string();
+    prompt.push('\n');
+    prompt.push_str(WEB_RESEARCH_GUIDANCE.trim());
+    prompt.push_str(&format!(
+        "\n\n## CURRENT DATE AND TIME\nCurrent UTC timestamp: `{}`. Interpret relative dates (such as today, latest, or last month) from this timestamp, and preserve explicit source publication, event, and archive snapshot dates separately.",
+        chrono::Utc::now().to_rfc3339()
+    ));
+    prompt
 }
 
 /// Render the open-board section injected into the assistant context. Kept separate so the wording
@@ -471,11 +486,48 @@ mod tests {
         assert!(prompt.contains("minimal diagnostic"));
         assert!(prompt.contains("your own debugging idea is not user authorization"));
         assert!(prompt.contains("UNKNOWN"));
+        assert!(prompt.contains("source/check/commit counters all zero"));
+        assert!(prompt.contains("Retry such a result at most once"));
+        assert!(prompt.contains("Merely rewording or shortening"));
+        assert!(prompt.contains("never launch a third equivalent"));
         assert!(prompt.contains("returned `app_id` is the build target"));
         assert!(prompt.contains("similarly named apps"));
         assert!(
             !prompt.contains("Create a cron-triggered workflow"),
             "the nested board agent must never be asked to search for a cron node"
         );
+    }
+
+    #[test]
+    fn app_content_questions_require_page_capture_inspection() {
+        let prompt = global_assistant_system_prompt();
+        assert!(prompt.contains("INFORMATION SHOWN IN an app"));
+        assert!(prompt.contains("Read those image attachments"));
+        assert!(prompt.contains("screenshot_count"));
+        assert!(prompt.contains("Do this only for kind \"page\" events"));
+        assert!(prompt.contains("use `call_app_chat` and interpret its textual result"));
+    }
+
+    #[test]
+    fn global_assistant_uses_shared_web_research_and_markdown_citation_policy() {
+        let prompt = global_assistant_system_prompt();
+        assert_eq!(prompt.matches(WEB_RESEARCH_GUIDANCE.trim()).count(), 1);
+        assert!(prompt.contains("at least two independent reliable sources"));
+        assert!(prompt.contains("Search results and snippets are discovery"));
+        assert!(prompt.contains("call `open_url`"));
+        assert!(prompt.contains("[descriptive source title](https://exact-page-url)"));
+        assert!(prompt.contains("unsupported citation IDs or footnotes"));
+        assert!(prompt.contains("untrusted\nevidence"));
+        assert!(prompt.contains("## CURRENT DATE AND TIME"));
+        assert!(prompt.contains(&chrono::Utc::now().format("%Y-%m-%d").to_string()));
+        assert!(
+            prompt.contains("refers to an APP in the user's current profile, NOT the public web")
+        );
+        assert!(
+            prompt
+                .contains("Public-web research belongs exclusively to this top-level orchestrator")
+        );
+        assert!(prompt.contains("`data_studio_agent` never searches the web or opens public URLs"));
+        assert!(prompt.contains("delegate only the app-data portion"));
     }
 }

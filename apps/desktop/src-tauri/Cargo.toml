@@ -104,9 +104,9 @@ rayon = "1.11.0"
 tauri-plugin-remote-push = { git = "https://github.com/Rheosoph/tauri-plugin-remote-push.git", branch = "main" }
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
-tauri-plugin-single-instance = { version = "2.3.7", features = ["deep-link"] }
+tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
 tauri-plugin-window-state = "2.4.1"
-tauri-plugin-updater = "2.9.0"
+tauri-plugin-updater = "2.10.1"
 xcap = "0.8.1"
 arboard = "3.6.1"
 enigo = "0.6.1"

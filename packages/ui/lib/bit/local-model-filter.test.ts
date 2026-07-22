@@ -1,7 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import type { IBit } from "../schema";
-import { filterHostableLlmModels, isLocalLlmModel } from "./local-model-filter";
-
+import {
+	filterHostableLlmModels,
+	getLlmModelTier,
+	isFreeLlmModel,
+	isLocalLlmModel,
+} from "./local-model-filter";
 function bit(providerName?: string): IBit {
 	return {
 		id: providerName ?? "no-provider",
@@ -45,3 +49,24 @@ describe("filterHostableLlmModels", () => {
 		]);
 	});
 });
+
+describe("hosted model tiers", () => {
+	test("normalizes and identifies the free tier", () => {
+		const freeModel = bit("Hosted");
+		freeModel.parameters.provider.params = { tier: " free " };
+
+		expect(getLlmModelTier(freeModel)).toBe("FREE");
+		expect(isFreeLlmModel(freeModel)).toBe(true);
+	});
+
+	test("does not treat an unspecified or paid tier as free", () => {
+		const unspecified = bit("Hosted");
+		const paid = bit("Hosted");
+		paid.parameters.provider.params = { tier: "PRO" };
+
+		expect(getLlmModelTier(unspecified)).toBeUndefined();
+		expect(isFreeLlmModel(unspecified)).toBe(false);
+		expect(isFreeLlmModel(paid)).toBe(false);
+	});
+});
+

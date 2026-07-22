@@ -783,9 +783,9 @@ impl<'a> Lowering<'a> {
                 .unwrap_or_default();
             let body = self.walk_entry_body(entry);
             events.push(EventBlock {
-                name: event_name(entry),
+                name: event_type_name(entry),
                 node_type: entry.name.clone(),
-                event_name: None,
+                event_name: event_alias(entry),
                 params,
                 body,
                 anchor: Some(entry.id.clone()),
@@ -879,9 +879,9 @@ impl<'a> Lowering<'a> {
                     .unwrap_or_default();
                 let body = self.walk_entry_body(entry);
                 block.stmts.push(Stmt::Handler(EventBlock {
-                    name: event_name(entry),
+                    name: event_type_name(entry),
                     node_type: entry.name.clone(),
-                    event_name: None,
+                    event_name: event_alias(entry),
                     params,
                     body,
                     anchor: Some(entry.id.clone()),
@@ -1868,11 +1868,21 @@ fn entry_order(node: &Node) -> (i64, i64) {
         .unwrap_or((i64::MAX, i64::MAX))
 }
 
-fn event_name(node: &Node) -> String {
-    let source = if !node.friendly_name.trim().is_empty() {
-        &node.friendly_name
-    } else {
-        &node.name
-    };
-    util::to_camel_case(source)
+/// Canonical FlowScript selector for an event entry's exact catalog type. Keeping the type in the
+/// first header slot means reparsing rendered FlowScript can still recreate the same entry when
+/// its identity anchor has gone stale.
+fn event_type_name(node: &Node) -> String {
+    util::to_camel_case(&node.name)
+}
+
+/// Optional human-facing name for one event entry. The renderer places this after the catalog
+/// selector (`eventsSimple dashboardLoad()`), keeping identity and presentation independent.
+fn event_alias(node: &Node) -> Option<String> {
+    let friendly_name = node.friendly_name.trim();
+    if friendly_name.is_empty() {
+        return None;
+    }
+
+    let alias = util::to_camel_case(friendly_name);
+    (alias != event_type_name(node)).then_some(alias)
 }

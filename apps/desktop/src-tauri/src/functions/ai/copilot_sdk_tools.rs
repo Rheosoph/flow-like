@@ -7,14 +7,16 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex},
+    sync::{
+        Arc, LazyLock, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use super::frontend_tool_bridge::{FrontendToolApproval, FrontendToolBridge};
-use super::internet_search::run_internet_search;
 pub use copilot_sdk::ToolHandler;
-use copilot_sdk::{Tool, ToolResultObject};
+use copilot_sdk::{Tool, ToolBinaryResult, ToolResultObject};
 use flow_like::copilot::FlowIrCommitToken;
 use flow_like::flow::ast::{
     RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
@@ -22,11 +24,18 @@ use flow_like::flow::ast::{
 };
 use flow_like::flow::board::Board;
 use flow_like::flow::copilot::memory::AssistantMemory;
-use flow_like::flow::copilot::platform::run_memory_tool;
+use flow_like::flow::copilot::platform::{
+    PlatformToolImageUrl, run_internet_search, run_memory_tool, take_platform_tool_image_urls,
+};
+use flow_like::flow::copilot::public_web::{
+    OpenUrlSessionBudget, WebResearchSession, run_archive_lookup_for_session,
+    run_open_url_for_session,
+};
 use flow_like::flow::copilot::tool_spec::{
-    INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec,
-    data_studio_tool_specs, find_global_tool_spec, global_assistant_tool_specs,
-    missing_required_args, resolve_tool_approval, runtime_execution_tool_specs,
+    ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL,
+    OPEN_URL_TOOL, PlatformToolSpec, data_studio_tool_specs, find_global_tool_spec,
+    global_assistant_tool_specs, missing_required_args, resolve_tool_approval,
+    runtime_execution_tool_specs,
 };
 #[cfg(test)]
 use flow_like::flow::copilot::typed_ir_schema_hint;
@@ -705,30 +714,42 @@ pub fn create_runtime_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandle
     tools.extend(
         runtime_execution_tool_specs()
             .iter()
-            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None)),
+            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
     );
-    for name in [INTERNET_SEARCH_TOOL, "ask_user"] {
+    for name in SPECIALIST_SHARED_GLOBAL_TOOL_NAMES {
         if let Some(spec) = find_global_tool_spec(name) {
-            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None));
+            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
         }
     }
     tools
 }
 
+/// Global-spec tools that are safe to reuse inside nested board/frontend specialists. Public-web
+/// tools are intentionally absent; only the top-level orchestrator receives those.
+const SPECIALIST_SHARED_GLOBAL_TOOL_NAMES: [&str; 1] = ["ask_user"];
+
 /// Adapt one shared platform tool spec to the Copilot SDK tool type.
 ///
 /// Execution funnels through the frontend bridge with the spec's approval + timeout, except the
-/// host-local tools: `internet_search` runs in-process and the `_memory_*` tools run against the
-/// profile's `AssistantMemory`.
+/// host-local tools: `internet_search` runs in-process, `open_url` and `archive_lookup` use the
+/// shared safe public-web readers, and the `_memory_*` tools run against the profile's
+/// `AssistantMemory`.
 pub fn sdk_tool_from_spec(
     spec: &PlatformToolSpec,
     bridge: FrontendToolBridge,
     memory: Option<Arc<AssistantMemory>>,
+    web_research_session: Option<Arc<WebResearchSession>>,
 ) -> (Tool, ToolHandler) {
     let tool = Tool::new(spec.name)
         .description(spec.description)
         .schema((spec.schema)());
     let spec = *spec;
+    let open_url_budget =
+        (spec.name == OPEN_URL_TOOL).then(|| Arc::new(Mutex::new(OpenUrlSessionBudget::default())));
+    let search_call_budget =
+        (spec.name == INTERNET_SEARCH_TOOL).then(|| Arc::new(AtomicUsize::new(0)));
+    let archive_call_budget =
+        (spec.name == ARCHIVE_LOOKUP_TOOL).then(|| Arc::new(AtomicUsize::new(0)));
     let handler: ToolHandler = Arc::new(move |_name, args| {
         if let Some(error) = missing_required_args(&spec, args) {
             return ToolResultObject::text(
@@ -736,23 +757,113 @@ pub fn sdk_tool_from_spec(
             );
         }
         match spec.name {
-            INTERNET_SEARCH_TOOL => ToolResultObject::text(
-                serde_json::to_string_pretty(&run_blocking_tool(|| run_internet_search(args)))
-                    .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
-            ),
-            MEMORY_STORE_TOOL | MEMORY_SEARCH_TOOL => ToolResultObject::text(block_on_tool(
-                run_memory_tool(spec.name, args, memory.as_deref()),
-            )),
-            _ => frontend_tool_result_with_timeout(
-                &bridge,
-                spec.name,
-                args.clone(),
-                approval_from_spec(&spec, args),
-                Duration::from_secs(spec.timeout_secs),
-            ),
+            INTERNET_SEARCH_TOOL => {
+                let session = web_research_session
+                    .as_ref()
+                    .expect("internet_search handler has a provenance session");
+                if let Some(error) = session.public_web_phase_error(INTERNET_SEARCH_TOOL) {
+                    return ToolResultObject::text(error.to_string());
+                }
+                let budget = search_call_budget
+                    .as_ref()
+                    .expect("internet_search handler has a session budget");
+                if !reserve_local_web_call(budget, 12) {
+                    return ToolResultObject::text(local_web_call_budget_error(
+                        INTERNET_SEARCH_TOOL,
+                        "search_session_call_budget_exceeded",
+                        "This assistant run reached its search-query budget. Synthesize the strongest verified evidence already collected and disclose remaining gaps.",
+                    ));
+                }
+                let mut result = block_on_tool(run_internet_search(args));
+                session.register_and_decorate_tool_result(INTERNET_SEARCH_TOOL, &mut result);
+                ToolResultObject::text(result.to_string())
+            }
+            OPEN_URL_TOOL => {
+                let session = web_research_session
+                    .as_ref()
+                    .expect("open_url handler has a provenance session");
+                if let Some(error) = session.public_web_phase_error(OPEN_URL_TOOL) {
+                    return ToolResultObject::text(error.to_string());
+                }
+                let prepared = open_url_budget
+                    .as_ref()
+                    .expect("open_url handler has a session budget")
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .prepare_unbatched_call(args.clone());
+                match prepared {
+                    Ok(arguments) => {
+                        let mut result =
+                            block_on_tool(run_open_url_for_session(&arguments, session));
+                        session.register_and_decorate_tool_result(OPEN_URL_TOOL, &mut result);
+                        ToolResultObject::text(result.to_string())
+                    }
+                    Err(output) => ToolResultObject::text(output),
+                }
+            }
+            ARCHIVE_LOOKUP_TOOL => {
+                let session = web_research_session
+                    .as_ref()
+                    .expect("archive_lookup handler has a provenance session");
+                if let Some(error) = session.public_web_phase_error(ARCHIVE_LOOKUP_TOOL) {
+                    return ToolResultObject::text(error.to_string());
+                }
+                let budget = archive_call_budget
+                    .as_ref()
+                    .expect("archive_lookup handler has a session budget");
+                if !reserve_local_web_call(budget, 4) {
+                    return ToolResultObject::text(local_web_call_budget_error(
+                        ARCHIVE_LOOKUP_TOOL,
+                        "archive_session_call_budget_exceeded",
+                        "This assistant run reached its archive-lookup budget. Use the captures already found or disclose that the historical record remains incomplete.",
+                    ));
+                }
+                let mut result = block_on_tool(run_archive_lookup_for_session(args, session));
+                session.register_and_decorate_tool_result(ARCHIVE_LOOKUP_TOOL, &mut result);
+                ToolResultObject::text(result.to_string())
+            }
+            MEMORY_STORE_TOOL | MEMORY_SEARCH_TOOL => {
+                let result = block_on_tool(run_memory_tool(spec.name, args, memory.as_deref()));
+                if let Some(session) = &web_research_session {
+                    session.close_public_web_phase();
+                }
+                ToolResultObject::text(result)
+            }
+            _ => {
+                let result = frontend_tool_result_with_timeout(
+                    &bridge,
+                    spec.name,
+                    args.clone(),
+                    approval_from_spec(&spec, args),
+                    Duration::from_secs(spec.timeout_secs),
+                );
+                if let Some(session) = &web_research_session {
+                    session.close_public_web_phase();
+                }
+                result
+            }
         }
     });
     (tool, handler)
+}
+
+fn reserve_local_web_call(counter: &AtomicUsize, limit: usize) -> bool {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+            (calls < limit).then_some(calls + 1)
+        })
+        .is_ok()
+}
+
+fn local_web_call_budget_error(tool: &str, code: &str, message: &str) -> String {
+    json!({
+        "status": "error",
+        "tool": tool,
+        "code": code,
+        "retryable": false,
+        "error": message,
+    })
+    .to_string()
 }
 
 pub fn approval_from_spec(spec: &PlatformToolSpec, args: &Value) -> FrontendToolApproval {
@@ -798,28 +909,38 @@ fn run_blocking_tool<T>(f: impl FnOnce() -> T) -> T {
 pub fn create_global_assistant_tools(
     bridge: FrontendToolBridge,
     memory: Option<Arc<AssistantMemory>>,
+    user_prompt: &str,
 ) -> Vec<(Tool, ToolHandler)> {
+    let web_research_session = Arc::new(WebResearchSession::new(user_prompt));
     global_assistant_tool_specs(memory.is_some())
         .iter()
-        .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), memory.clone()))
+        .map(|spec| {
+            sdk_tool_from_spec(
+                spec,
+                bridge.clone(),
+                memory.clone(),
+                Some(web_research_session.clone()),
+            )
+        })
         .collect()
 }
 
 /// Tool set for the nested Data Studio specialist. It reuses the shipped `database_tool` (table/DB
-/// setup) and the cross-app discovery tools (`list_apps`/`describe_app_interface`), then adds the
-/// graph/ontology/action tools generated from the shared Data Studio specs — so every backend
-/// (Bits/rig, GitHub Copilot, Codex, Claude Code) advertises the same data tools. Every call routes
-/// through the frontend bridge to `backend.graphState` / `backend.dbState`.
+/// setup) and cross-app discovery tools (`list_apps`/`describe_app_interface`), then adds the
+/// graph/ontology/action tools generated from the shared Data Studio specs. Public-web research is
+/// intentionally available only to the top-level FlowPilot orchestrator.
+const DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES: [&str; 2] = ["list_apps", "describe_app_interface"];
+
 pub fn create_data_studio_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
     let mut tools = vec![create_database_tool(bridge.clone())];
     tools.extend(
         data_studio_tool_specs()
             .iter()
-            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None)),
+            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
     );
-    for name in ["list_apps", "describe_app_interface"] {
+    for name in DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES {
         if let Some(spec) = find_global_tool_spec(name) {
-            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None));
+            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
         }
     }
     tools
@@ -841,11 +962,105 @@ fn frontend_tool_result_with_timeout(
     approval: FrontendToolApproval,
     timeout: Duration,
 ) -> ToolResultObject {
-    let result = run_blocking_tool(|| bridge.call_with_timeout(tool_name, args, approval, timeout));
-    ToolResultObject::text(
+    let mut result =
+        run_blocking_tool(|| bridge.call_with_timeout(tool_name, args, approval, timeout));
+    let image_urls = take_platform_tool_image_urls(&mut result);
+    let expected_image_count = image_urls.len();
+    let images = download_platform_tool_images(image_urls);
+    if expected_image_count > 0 {
+        if let Some(object) = result.as_object_mut() {
+            object.insert("screenshot_count".to_string(), json!(images.len()));
+            let was_complete = object
+                .get("screenshot_complete")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            object.insert(
+                "screenshot_complete".to_string(),
+                json!(was_complete && images.len() == expected_image_count),
+            );
+            if images.is_empty() {
+                object.insert(
+                    "message".to_string(),
+                    json!("The page was embedded inline, but its temporary visual captures could not be loaded by this agent. Do not claim to have read the page visually."),
+                );
+            }
+        }
+    }
+    let mut output = ToolResultObject::text(
         serde_json::to_string_pretty(&result)
             .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
-    )
+    );
+    if !images.is_empty() {
+        output.binary_results_for_llm = Some(images);
+    }
+    output
+}
+
+const MAX_PLATFORM_TOOL_IMAGE_BYTES: u64 = 35 * 1024 * 1024;
+static PLATFORM_TOOL_IMAGE_CLIENT: LazyLock<Result<reqwest::blocking::Client, reqwest::Error>> =
+    LazyLock::new(|| {
+        reqwest::blocking::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(60))
+            .build()
+    });
+
+/// Copilot SDK/MCP image blocks require inline bytes. Resolve temporary URLs only at this final
+/// provider boundary so screenshots never travel as base64 through the frontend bridge or backend.
+fn download_platform_tool_images(images: Vec<PlatformToolImageUrl>) -> Vec<ToolBinaryResult> {
+    use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let client = match &*PLATFORM_TOOL_IMAGE_CLIENT {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "failed to initialize temporary capture download client");
+            return Vec::new();
+        }
+    };
+    images
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, image)| {
+            let response = match client.get(&image.url).send() {
+                Ok(response) => response,
+                Err(error) => {
+                    tracing::warn!(%error, "failed to download temporary app page capture");
+                    return None;
+                }
+            };
+            if !response.status().is_success()
+                || response
+                    .content_length()
+                    .is_some_and(|length| length > MAX_PLATFORM_TOOL_IMAGE_BYTES)
+            {
+                tracing::warn!(
+                    status = %response.status(),
+                    "temporary app page capture was unavailable or too large"
+                );
+                return None;
+            }
+            let bytes = match response.bytes() {
+                Ok(bytes) if bytes.len() as u64 <= MAX_PLATFORM_TOOL_IMAGE_BYTES => bytes,
+                Ok(_) => {
+                    tracing::warn!("temporary app page capture exceeded the size limit");
+                    return None;
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "failed to read temporary app page capture");
+                    return None;
+                }
+            };
+            Some(ToolBinaryResult {
+                data: STANDARD.encode(bytes),
+                mime_type: image.media_type,
+                result_type: "image".to_string(),
+                description: Some(format!(
+                    "Rendered app page capture {} (top to bottom)",
+                    index + 1
+                )),
+            })
+        })
+        .collect()
 }
 
 fn arg_string(args: &Value, snake: &str, camel: &str) -> String {
@@ -3375,6 +3590,7 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
 /// Required props per component type
 fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
     match component_type {
+        "overlay" => &["baseComponentId", "overlays"],
         "text" => &["content"],
         "image" => &["src"],
         "icon" => &["name"],
@@ -3395,16 +3611,34 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
         "dateTimeInput" => &["value"],
         "fileInput" => &["value"],
         "imageInput" => &["value"],
+        "voiceInput" => &["value"],
         "link" => &["href"],
         "modal" => &["open"],
-        "tabs" => &["value"],
+        "tabs" => &["value", "tabs"],
+        "accordion" => &["items"],
+        "drawer" => &["open"],
+        "tooltip" => &["content"],
+        "popover" => &["contentComponentId"],
+        "table" => &["columns", "data"],
+        "tableRow" => &["cells"],
+        "tableCell" => &["content"],
         "canvas2d" => &["width", "height"],
         "sprite" => &["src", "x", "y"],
         "shape" => &["shapeType", "x", "y"],
         "scene3d" => &["width", "height"],
         "model3d" => &["src"],
+        "dialogue" => &["text"],
+        "characterPortrait" => &["image"],
+        "choiceMenu" => &["choices"],
+        "inventoryGrid" => &["items"],
+        "healthBar" => &["value", "maxValue"],
+        "miniMap" => &["width", "height"],
         "aspectRatio" => &["ratio"],
-        "boundingBoxOverlay" => &["src"],
+        "nivoChart" => &["chartType"],
+        "boundingBoxOverlay" => &["src", "boxes"],
+        "imageLabeler" => &["src", "labels"],
+        "imageHotspot" => &["src", "hotspots"],
+        "widgetInstance" => &["instanceId", "widgetId"],
         "calendar" => &["events"],
         "gantt" => &["tasks"],
         _ => &[],
@@ -3746,6 +3980,7 @@ fn is_known_style_prop(key: &str) -> bool {
             | "position"
             | "transform"
             | "overflow"
+            | "responsive"
             | "responsiveOverrides"
             | "margin"
             | "padding"
@@ -4099,6 +4334,39 @@ mod tests {
     };
     use flow_like::flow_like_storage::Path;
     use std::time::SystemTime;
+
+    #[test]
+    fn data_studio_surface_excludes_global_public_web_research() {
+        let specialist_name_sets = [
+            SPECIALIST_SHARED_GLOBAL_TOOL_NAMES.as_slice(),
+            DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.as_slice(),
+        ];
+        for global_only_tool in [INTERNET_SEARCH_TOOL, OPEN_URL_TOOL, ARCHIVE_LOOKUP_TOOL] {
+            for names in specialist_name_sets {
+                assert!(!names.contains(&global_only_tool));
+            }
+        }
+
+        let mut direct_specialist_tools =
+            create_board_tools(None, None, None, None, None, None, None);
+        direct_specialist_tools.extend(create_frontend_tools(None));
+        for (tool, _) in direct_specialist_tools {
+            assert_ne!(tool.name, INTERNET_SEARCH_TOOL);
+            assert_ne!(tool.name, OPEN_URL_TOOL);
+            assert_ne!(tool.name, ARCHIVE_LOOKUP_TOOL);
+        }
+        assert!(DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.contains(&"list_apps"));
+        assert!(DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES.contains(&"describe_app_interface"));
+    }
+
+    #[test]
+    fn local_web_call_budget_is_atomic_and_bounded() {
+        let calls = AtomicUsize::new(0);
+        assert!(reserve_local_web_call(&calls, 2));
+        assert!(reserve_local_web_call(&calls, 2));
+        assert!(!reserve_local_web_call(&calls, 2));
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    }
 
     fn empty_board(id: &str) -> Board {
         Board {

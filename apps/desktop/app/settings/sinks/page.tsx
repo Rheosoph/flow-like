@@ -446,7 +446,11 @@ function SinkRow({
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Link href={boardHref}>
-									<Button variant="ghost" size="icon" className="h-8 w-8">
+									<Button
+										variant="ghost"
+										size="icon"
+										className="h-9 w-9 md:h-8 md:w-8"
+									>
 										<Workflow className="h-4 w-4" />
 									</Button>
 								</Link>
@@ -457,7 +461,11 @@ function SinkRow({
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Link href={eventHref}>
-								<Button variant="ghost" size="icon" className="h-8 w-8">
+								<Button
+									variant="ghost"
+									size="icon"
+									className="h-9 w-9 md:h-8 md:w-8"
+								>
 									<ExternalLink className="h-4 w-4" />
 								</Button>
 							</Link>
@@ -469,7 +477,7 @@ function SinkRow({
 							<Button
 								variant="ghost"
 								size="icon"
-								className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+								className="h-9 w-9 md:h-8 md:w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
 								onClick={onDelete}
 							>
 								<Trash2 className="h-4 w-4" />

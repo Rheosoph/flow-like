@@ -36,6 +36,8 @@ export interface CopilotMessage {
 export interface FlowScriptApplyResultLike {
 	commands?: unknown[];
 	board_commands?: BoardCommand[];
+	/** Non-blocking source repairs that require a canonical FlowScript readback. */
+	corrections?: string[];
 	diagnostics?: string[];
 	final_board_node_count?: number;
 }

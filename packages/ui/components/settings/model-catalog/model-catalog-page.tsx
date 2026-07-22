@@ -673,7 +673,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 								<Button
 									variant="ghost"
 									size="icon"
-									className={`h-8 w-8 rounded-full ${
+									className={`h-9 w-9 rounded-full md:h-8 md:w-8 ${
 										viewMode === "list"
 											? "text-foreground/80 bg-muted/40"
 											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
@@ -699,7 +699,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 								<Button
 									variant={filtersExpanded ? "secondary" : "ghost"}
 									size="icon"
-									className={`h-8 w-8 rounded-full relative ${
+									className={`h-9 w-9 rounded-full relative md:h-8 md:w-8 ${
 										filtersExpanded
 											? "text-primary bg-primary/10"
 											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"

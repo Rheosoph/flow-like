@@ -54,6 +54,32 @@ describe("FlowScript workspace candidate selection", () => {
 		).toBe(true);
 	});
 
+	test("profiles legacy and canonical Event headers identically", () => {
+		const withHeader = (header: string) => `function buildPayload() {
+  domainLookup()
+}
+
+${header} {
+  buildPayload()
+}`;
+		const legacy = profileFlowScriptCandidate(
+			withHeader("eventsGeneric(payload: Struct)"),
+		);
+		const canonical = profileFlowScriptCandidate(
+			withHeader("eventsGeneric wikiExplorerLoad(payload: Struct)"),
+		);
+
+		expect(canonical).toEqual(legacy);
+		expect(canonical).toMatchObject({
+			eventEntries: 1,
+			callSites: 2,
+			callNames: ["buildpayload", "domainlookup"],
+			eventsCallingHelpers: 1,
+			helperDomainCallSites: 1,
+		});
+		expect(canonical.callNames).not.toContain("wikiexplorerload");
+	});
+
 	test("retains every candidate when transport batches several frames", () => {
 		const chunk = [
 			"before",

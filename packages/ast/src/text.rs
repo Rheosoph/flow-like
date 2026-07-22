@@ -54,6 +54,11 @@ pub fn quote_string(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
+            // Emitted as escapes so every escape the lexer accepts is one the renderer can
+            // produce; a raw 0x08/0x0C in rendered source is invisible in an editor. `'` is
+            // deliberately NOT escaped — the fixtures carry many bare apostrophes.
+            '\u{8}' => out.push_str("\\b"),
+            '\u{c}' => out.push_str("\\f"),
             _ => out.push(ch),
         }
     }

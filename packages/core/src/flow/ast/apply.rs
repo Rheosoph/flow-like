@@ -46,6 +46,11 @@ const DEFAULT_OUTPUT_PIN_ALIASES: &[&str] = &["result", "value", "output", "out"
 pub struct ApplyFlowScriptResult {
     pub commands: Vec<GenericCommand>,
     pub board_commands: Vec<BoardCommand>,
+    /// Non-blocking deterministic source repairs (for example a stale anchor rebound to the one
+    /// compatible live entry). Clients should reload canonical FlowScript when this is non-empty,
+    /// even if the repaired document required no board mutation.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub corrections: Vec<String>,
     pub diagnostics: Vec<String>,
 }
 
@@ -178,6 +183,8 @@ pub async fn apply_flowscript_to_board(
         None => super::reconcile_text_with_catalog(board, flowscript, &catalog_metadata),
     };
 
+    let corrections = std::mem::take(&mut reconcile.corrections);
+
     // FlowScript is a program, not a bag of best-effort mutations. Every reconcile diagnostic means
     // some requested call, pin, connection, execution edge or boundary could not be represented.
     // Applying the remaining setup commands is how empty function layers and disconnected nodes were
@@ -186,6 +193,7 @@ pub async fn apply_flowscript_to_board(
         return Ok(ApplyFlowScriptResult {
             commands: Vec::new(),
             board_commands: reconcile.commands,
+            corrections,
             diagnostics: reconcile.diagnostics,
         });
     }
@@ -198,19 +206,22 @@ pub async fn apply_flowscript_to_board(
             return Ok(ApplyFlowScriptResult {
                 commands: Vec::new(),
                 board_commands: reconcile.commands,
+                corrections,
                 diagnostics,
             });
         }
     }
 
-    apply_board_commands_to_board(
+    let mut applied = apply_board_commands_to_board(
         board,
         reconcile.commands,
         catalog_nodes,
         state,
         current_layer,
     )
-    .await
+    .await?;
+    applied.corrections = corrections;
+    Ok(applied)
 }
 
 /// Apply an exact, already-validated [`BoardCommand`] batch without reconciling FlowScript again.
@@ -245,6 +256,7 @@ pub async fn apply_board_commands_to_board(
             return Ok(ApplyFlowScriptResult {
                 commands: Vec::new(),
                 board_commands,
+                corrections: Vec::new(),
                 diagnostics: vec!["FlowScript apply failed and was rolled back".to_string()],
             });
         }
@@ -269,6 +281,7 @@ pub async fn apply_board_commands_to_board(
     Ok(ApplyFlowScriptResult {
         commands: applied_commands,
         board_commands,
+        corrections: Vec::new(),
         diagnostics: Vec::new(),
     })
 }

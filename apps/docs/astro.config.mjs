@@ -121,6 +121,10 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 							items: [
 								{ label: "Overview", slug: "studio/overview" },
 								{ label: "FlowPilot AI", slug: "studio/flowpilot" },
+								{
+									label: "Claude Code & Codex Setup",
+									slug: "studio/flowpilot-external-agents",
+								},
 								{ label: "Working with Nodes", slug: "studio/nodes" },
 								{ label: "Connecting Pins", slug: "studio/connecting" },
 								{ label: "Layers & Organization", slug: "studio/layers" },

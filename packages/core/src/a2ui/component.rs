@@ -23,6 +23,13 @@ pub struct PathBinding {
     pub default_value: Option<PathDefault>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectOption {
+    pub value: String,
+    pub label: String,
+}
+
 /// Represents a value that can be either a literal or a data path binding
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", untagged)]
@@ -40,6 +47,14 @@ pub enum BoundValue {
     LiteralBool {
         #[serde(rename = "literalBool")]
         value: bool,
+    },
+    LiteralOptions {
+        #[serde(rename = "literalOptions")]
+        value: Vec<SelectOption>,
+    },
+    LiteralJson {
+        #[serde(rename = "literalJson")]
+        value: String,
     },
 }
 
@@ -101,6 +116,8 @@ impl BoundValue {
                 serde_json::Number::from_f64(*value).unwrap_or(serde_json::Number::from(0)),
             ),
             Self::LiteralBool { value } => Value::Bool(*value),
+            Self::LiteralOptions { value } => serde_json::to_value(value).unwrap_or(Value::Null),
+            Self::LiteralJson { value } => serde_json::from_str(value).unwrap_or(Value::Null),
             Self::PathBinding(pb) => Value::String(pb.path.clone()),
         }
     }
@@ -114,9 +131,25 @@ impl From<&proto::BoundValue> for BoundValue {
             }
             Some(proto::bound_value::Value::LiteralNumber(n)) => Self::LiteralNumber { value: *n },
             Some(proto::bound_value::Value::LiteralBool(b)) => Self::LiteralBool { value: *b },
+            Some(proto::bound_value::Value::LiteralOptions(options)) => Self::LiteralOptions {
+                value: options
+                    .options
+                    .iter()
+                    .map(|option| SelectOption {
+                        value: option.value.clone(),
+                        label: option.label.clone(),
+                    })
+                    .collect(),
+            },
+            Some(proto::bound_value::Value::LiteralJson(value)) => Self::LiteralJson {
+                value: value.clone(),
+            },
             Some(proto::bound_value::Value::Path(p)) => Self::PathBinding(PathBinding {
                 path: p.clone(),
-                default_value: None,
+                default_value: proto
+                    .default_value
+                    .as_deref()
+                    .and_then(|value| serde_json::from_slice(value).ok()),
             }),
             None => Self::LiteralString {
                 value: String::new(),
@@ -131,9 +164,23 @@ impl From<proto::BoundValue> for BoundValue {
             Some(proto::bound_value::Value::LiteralString(s)) => Self::LiteralString { value: s },
             Some(proto::bound_value::Value::LiteralNumber(n)) => Self::LiteralNumber { value: n },
             Some(proto::bound_value::Value::LiteralBool(b)) => Self::LiteralBool { value: b },
+            Some(proto::bound_value::Value::LiteralOptions(options)) => Self::LiteralOptions {
+                value: options
+                    .options
+                    .into_iter()
+                    .map(|option| SelectOption {
+                        value: option.value,
+                        label: option.label,
+                    })
+                    .collect(),
+            },
+            Some(proto::bound_value::Value::LiteralJson(value)) => Self::LiteralJson { value },
             Some(proto::bound_value::Value::Path(p)) => Self::PathBinding(PathBinding {
                 path: p,
-                default_value: None,
+                default_value: proto
+                    .default_value
+                    .as_deref()
+                    .and_then(|value| serde_json::from_slice(value).ok()),
             }),
             None => Self::LiteralString {
                 value: String::new(),
@@ -144,17 +191,40 @@ impl From<proto::BoundValue> for BoundValue {
 
 impl From<BoundValue> for proto::BoundValue {
     fn from(value: BoundValue) -> Self {
+        let (value, default_value) = match value {
+            BoundValue::LiteralString { value } => {
+                (proto::bound_value::Value::LiteralString(value), None)
+            }
+            BoundValue::LiteralNumber { value } => {
+                (proto::bound_value::Value::LiteralNumber(value), None)
+            }
+            BoundValue::LiteralBool { value } => {
+                (proto::bound_value::Value::LiteralBool(value), None)
+            }
+            BoundValue::LiteralOptions { value } => (
+                proto::bound_value::Value::LiteralOptions(proto::SelectOptions {
+                    options: value
+                        .into_iter()
+                        .map(|option| proto::SelectOption {
+                            value: option.value,
+                            label: option.label,
+                        })
+                        .collect(),
+                }),
+                None,
+            ),
+            BoundValue::LiteralJson { value } => {
+                (proto::bound_value::Value::LiteralJson(value), None)
+            }
+            BoundValue::PathBinding(pb) => (
+                proto::bound_value::Value::Path(pb.path),
+                pb.default_value
+                    .and_then(|value| serde_json::to_vec(&value).ok()),
+            ),
+        };
         proto::BoundValue {
-            value: Some(match value {
-                BoundValue::LiteralString { value } => {
-                    proto::bound_value::Value::LiteralString(value)
-                }
-                BoundValue::LiteralNumber { value } => {
-                    proto::bound_value::Value::LiteralNumber(value)
-                }
-                BoundValue::LiteralBool { value } => proto::bound_value::Value::LiteralBool(value),
-                BoundValue::PathBinding(pb) => proto::bound_value::Value::Path(pb.path),
-            }),
+            value: Some(value),
+            default_value,
         }
     }
 }
@@ -223,8 +293,19 @@ impl From<Action> for proto::Action {
 pub enum Children {
     ExplicitList(Vec<String>),
     Template {
-        data_binding: String,
-        component_id: String,
+        #[serde(rename = "dataPath", alias = "data_path")]
+        #[schemars(rename = "dataPath")]
+        data_path: String,
+        #[serde(rename = "templateComponentId", alias = "template_component_id")]
+        #[schemars(rename = "templateComponentId")]
+        template_component_id: String,
+        #[serde(
+            rename = "itemIdPath",
+            alias = "item_id_path",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[schemars(rename = "itemIdPath")]
         item_id_path: Option<String>,
     },
 }
@@ -234,10 +315,13 @@ impl Children {
         Self::ExplicitList(ids)
     }
 
-    pub fn template(data_binding: impl Into<String>, component_id: impl Into<String>) -> Self {
+    pub fn template(
+        data_path: impl Into<String>,
+        template_component_id: impl Into<String>,
+    ) -> Self {
         Self::Template {
-            data_binding: data_binding.into(),
-            component_id: component_id.into(),
+            data_path: data_path.into(),
+            template_component_id: template_component_id.into(),
             item_id_path: None,
         }
     }
@@ -263,8 +347,8 @@ impl From<&proto::Children> for Children {
                 Self::ExplicitList(list.component_ids.clone())
             }
             Some(proto::children::ChildrenType::Template(t)) => Self::Template {
-                data_binding: t.data_binding.clone(),
-                component_id: t.component_id.clone(),
+                data_path: t.data_binding.clone(),
+                template_component_id: t.component_id.clone(),
                 item_id_path: t.item_id_path.clone(),
             },
             None => Self::ExplicitList(Vec::new()),
@@ -282,15 +366,60 @@ impl From<Children> for proto::Children {
                     })
                 }
                 Children::Template {
-                    data_binding,
-                    component_id,
+                    data_path,
+                    template_component_id,
                     item_id_path,
                 } => proto::children::ChildrenType::Template(proto::Template {
-                    data_binding,
-                    component_id,
+                    data_binding: data_path,
+                    component_id: template_component_id,
                     item_id_path,
                 }),
             }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn children_template_uses_frontend_json_names() {
+        let value = serde_json::to_value(Children::template("/items", "item-card"))
+            .expect("children should serialize");
+        assert_eq!(value["template"]["dataPath"], "/items");
+        assert_eq!(value["template"]["templateComponentId"], "item-card");
+    }
+
+    #[test]
+    fn extended_bound_values_round_trip_through_proto() {
+        let values = [
+            BoundValue::LiteralOptions {
+                value: vec![SelectOption {
+                    value: "one".into(),
+                    label: "One".into(),
+                }],
+            },
+            BoundValue::LiteralJson {
+                value: r#"{"enabled":true}"#.into(),
+            },
+            BoundValue::path_with_default("/theme/image", PathDefault::String("fallback".into())),
+        ];
+
+        for value in values {
+            let restored = BoundValue::from(proto::BoundValue::from(value));
+            match restored {
+                BoundValue::LiteralOptions { value } => assert_eq!(value[0].label, "One"),
+                BoundValue::LiteralJson { value } => assert!(value.contains("enabled")),
+                BoundValue::PathBinding(binding) => {
+                    assert_eq!(binding.path, "/theme/image");
+                    assert!(matches!(
+                        binding.default_value,
+                        Some(PathDefault::String(value)) if value == "fallback"
+                    ));
+                }
+                _ => panic!("unexpected bound value variant"),
+            }
         }
     }
 }

@@ -8,7 +8,13 @@ import {
 	COMPONENT_BASE_PROPS,
 	COMPONENT_PROPS,
 } from "../a2ui/component-prop-manifest";
-import { BASE_PROPS, KNOWN_PROPS } from "./validateComponents";
+import type { SurfaceComponent } from "../a2ui/types";
+import {
+	BASE_PROPS,
+	KNOWN_PROPS,
+	validateCanvasSettings,
+	validateComponents,
+} from "./validateComponents";
 
 /** The only props the validator may accept beyond the types.ts interfaces. */
 const ALLOWED_RUNTIME_ONLY_PROPS: Record<string, readonly string[]> = {
@@ -79,5 +85,76 @@ describe("BASE_PROPS drift protection", () => {
 			["type", ...COMPONENT_BASE_PROPS].sort(),
 		);
 		expect(BASE_PROPS.has("hidden")).toBe(true);
+	});
+});
+
+describe("AI component contract repair", () => {
+	test("preserves large custom CSS without truncating a rule", () => {
+		const customCss = `${".large{color:red}".repeat(800)}.final{display:grid}`;
+		expect(customCss.length).toBeGreaterThan(12_000);
+
+		const settings = validateCanvasSettings({ customCss });
+
+		expect(settings?.customCss).toBe(customCss);
+		expect(settings?.customCss).toEndWith(".final{display:grid}");
+	});
+
+	test("normalizes compatibility style fields before components reach persistence", () => {
+		const input = [
+			{
+				id: "root",
+				style: {
+					background: {
+						gradient: {
+							gradientType: "linear",
+							direction: "90deg",
+							stops: [
+								{ color: "red", position: 0 },
+								{ color: "blue", position: 1 },
+							],
+						},
+					},
+					padding: { value: "4px 8px" },
+				},
+				component: { type: "column" },
+			},
+		] as unknown as SurfaceComponent[];
+
+		const result = validateComponents(input);
+		expect(result.components[0]?.style).toMatchObject({
+			background: {
+				gradient: {
+					type: "linear",
+					angle: 90,
+					stops: [
+						{ color: "red", position: 0 },
+						{ color: "blue", position: 100 },
+					],
+				},
+			},
+			padding: { top: "4px", right: "8px", bottom: "4px", left: "8px" },
+		});
+	});
+
+	test("injects safe structured defaults and skips missing reference props", () => {
+		const result = validateComponents([
+			{
+				id: "tabs",
+				component: { type: "tabs", value: { literalString: "first" } },
+			},
+			{
+				id: "popover",
+				component: { type: "popover" },
+			},
+		] as unknown as SurfaceComponent[]);
+
+		expect(result.components).toHaveLength(1);
+		expect(result.components[0]?.component).toMatchObject({
+			type: "tabs",
+			tabs: [],
+		});
+		expect(
+			result.warnings.some((warning) => warning.includes("contentComponentId")),
+		).toBe(true);
 	});
 });

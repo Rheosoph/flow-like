@@ -638,7 +638,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 									<CardDescription className="mt-1">
 										{meta?.description || manifest.description}
 									</CardDescription>
-									<div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+									<div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-sm text-muted-foreground">
 										<span className="flex items-center gap-1">
 											<Tag className="h-4 w-4" />v{latestVersion}
 										</span>

@@ -1,263 +1,74 @@
-# BoundValue & Data Binding Guide
+# BoundValue and data binding
 
-This guide explains how to use the BoundValue format and data binding in A2UI components.
+A2UI wraps component prop values so the same prop can be static or resolved from surface data. Structural and raw schema fields are the exceptions listed in `SKILL.md` and the component reference.
 
----
+Contents: [literal values](#literal-values), [data paths](#data-paths), [initial data](#initial-datamodel), [forms](#two-way-form-binding), [structured data](#static-structured-data), [repeated children](#repeated-children-and-scoped-paths), and [conditional visibility](#conditional-visibility).
 
-## BoundValue Basics
+## Literal values
 
-**Every component property value MUST be wrapped in a BoundValue object.** This enables both static values and dynamic data binding.
+### String
 
-### Static Values
-
-#### String
 ```json
-{ "literalString": "Hello World" }
+{ "literalString": "Hello world" }
 ```
 
-#### Number
+### Number
+
 ```json
 { "literalNumber": 42 }
 ```
 
-#### Boolean
+### Boolean
+
 ```json
 { "literalBool": true }
 ```
 
-#### Options Array (for select, radioGroup)
+### Select and radio options
+
+Use `literalOptions` only for `{value, label}` option arrays:
+
 ```json
 {
   "literalOptions": [
-    { "value": "opt1", "label": "Option 1" },
-    { "value": "opt2", "label": "Option 2" },
-    { "value": "opt3", "label": "Option 3" }
+    { "value": "draft", "label": "Draft" },
+    { "value": "published", "label": "Published" }
   ]
 }
 ```
 
----
+### JSON arrays and objects
 
-## Data Binding
+Use `literalJson` for structured component props such as table rows/columns, chart data/config, map data, calendar events, Gantt tasks, 3D vectors, or image boxes. The value is a JSON-encoded string.
 
-Data binding allows components to display dynamic values from a data source.
-
-### Basic Binding
 ```json
 {
-  "path": "$.user.name",
+  "literalJson": "[{\"id\":\"a\",\"value\":42}]"
+}
+```
+
+Do not use `literalOptions` for arbitrary objects or arrays of strings.
+
+## Data paths
+
+Bind a prop to the surface data model with `path`:
+
+```json
+{
+  "path": "$.user.displayName",
   "defaultValue": "Guest"
 }
 ```
 
-- `path`: JSONPath expression to the data field
-- `defaultValue`: Fallback value if path doesn't resolve
+- Start main-surface paths with `$.`.
+- Use dot-separated object keys: `$.user.email`.
+- Use numeric array indices: `$.items[0].name` or `$.items.0.name`.
+- The runtime supports direct path lookup, not general JSONPath evaluation. Do not use wildcards, filters, slices, recursive descent, or expressions.
+- Add `defaultValue` when a missing path would otherwise leave an incomplete UI.
 
-### JSONPath Syntax
+## Initial dataModel
 
-| Pattern | Description | Example |
-|---------|-------------|---------|
-| `$.field` | Root level field | `$.title` |
-| `$.nested.field` | Nested field | `$.user.email` |
-| `$.array[0]` | Array index | `$.items[0]` |
-| `$.array[*].field` | All items in array | `$.users[*].name` |
-
-### Common Binding Patterns
-
-#### User Profile Data
-```json
-{
-  "id": "user-name",
-  "component": {
-    "type": "text",
-    "content": { "path": "$.user.displayName", "defaultValue": "Anonymous" }
-  }
-}
-```
-
-#### Image from Data
-```json
-{
-  "id": "profile-pic",
-  "component": {
-    "type": "avatar",
-    "src": { "path": "$.user.avatarUrl" },
-    "fallback": { "path": "$.user.initials", "defaultValue": "?" }
-  }
-}
-```
-
-#### List Data in Table
-```json
-{
-  "id": "data-table",
-  "component": {
-    "type": "table",
-    "columns": {
-      "literalOptions": [
-        { "id": "name", "header": "Name", "accessor": "name" },
-        { "id": "email", "header": "Email", "accessor": "email" }
-      ]
-    },
-    "data": { "path": "$.users" }
-  }
-}
-```
-
-#### Conditional Display (via binding)
-```json
-{
-  "id": "premium-badge",
-  "component": {
-    "type": "badge",
-    "content": { "literalString": "Premium" }
-  },
-  "style": {
-    "className": "{{ $.user.isPremium ? 'block' : 'hidden' }}"
-  }
-}
-```
-
----
-
-## Form Input Binding
-
-Form inputs require a `value` binding for two-way data flow.
-
-### Text Field
-```json
-{
-  "id": "email-input",
-  "component": {
-    "type": "textField",
-    "value": { "path": "$.form.email", "defaultValue": "" },
-    "label": { "literalString": "Email Address" },
-    "placeholder": { "literalString": "you@example.com" }
-  }
-}
-```
-
-### Select Dropdown
-```json
-{
-  "id": "country-select",
-  "component": {
-    "type": "select",
-    "value": { "path": "$.form.country", "defaultValue": "" },
-    "options": { "path": "$.countries" },
-    "label": { "literalString": "Country" }
-  }
-}
-```
-
-### Checkbox
-```json
-{
-  "id": "terms-checkbox",
-  "component": {
-    "type": "checkbox",
-    "checked": { "path": "$.form.acceptedTerms", "defaultValue": false },
-    "label": { "literalString": "I accept the terms and conditions" }
-  }
-}
-```
-
----
-
-## Chart Data Binding
-
-### Nivo Bar Chart
-```json
-{
-  "id": "sales-chart",
-  "component": {
-    "type": "nivoChart",
-    "chartType": { "literalString": "bar" },
-    "data": { "path": "$.salesData" },
-    "indexBy": { "literalString": "month" },
-    "keys": { "literalOptions": [
-      { "value": "revenue", "label": "Revenue" },
-      { "value": "profit", "label": "Profit" }
-    ]}
-  }
-}
-```
-
-**Expected data format:**
-```json
-{
-  "salesData": [
-    { "month": "Jan", "revenue": 100, "profit": 20 },
-    { "month": "Feb", "revenue": 150, "profit": 35 }
-  ]
-}
-```
-
-### Nivo Pie Chart
-```json
-{
-  "id": "category-pie",
-  "component": {
-    "type": "nivoChart",
-    "chartType": { "literalString": "pie" },
-    "data": { "path": "$.categoryBreakdown" }
-  }
-}
-```
-
-**Expected data format:**
-```json
-{
-  "categoryBreakdown": [
-    { "id": "electronics", "label": "Electronics", "value": 45 },
-    { "id": "clothing", "label": "Clothing", "value": 30 },
-    { "id": "food", "label": "Food", "value": 25 }
-  ]
-}
-```
-
----
-
-## Complex Nested Structures
-
-### Array of Objects
-```json
-{
-  "path": "$.orders[*]",
-  "defaultValue": []
-}
-```
-
-### Deep Nesting
-```json
-{
-  "path": "$.company.departments[0].employees[*].name"
-}
-```
-
-### With Filters (when supported)
-```json
-{
-  "path": "$.products[?(@.inStock == true)]"
-}
-```
-
----
-
-## Best Practices
-
-1. **Always provide defaultValue** for paths that might not exist
-2. **Use descriptive paths** - prefer `$.user.firstName` over `$.u.fn`
-3. **Keep paths shallow** when possible for performance
-4. **Use literalOptions** for static lists, `path` for dynamic lists
-5. **Test bindings** with sample data before deployment
-6. **Initialize bindings in dataModel** so generated UIs render sensible content before live data arrives
-
----
-
-## dataModel Section
-
-When using `path` bindings, always include a `dataModel` array at the top level to provide initial values:
+When using main-surface `$.` paths, provide matching initial values:
 
 ```json
 {
@@ -280,51 +91,150 @@ When using `path` bindings, always include a `dataModel` array at the top level 
   ],
   "dataModel": [
     { "path": "$.user.name", "value": "Jane Doe" },
-    { "path": "$.items", "value": [
-      { "id": 1, "name": "Item A" },
-      { "id": 2, "name": "Item B" }
-    ]},
-    { "path": "$.settings.darkMode", "value": true }
+    {
+      "path": "$.items",
+      "value": [
+        { "id": "a", "name": "Item A" },
+        { "id": "b", "name": "Item B" }
+      ]
+    }
   ]
 }
 ```
 
-Rules:
+Each `dataModel` entry has a raw `path` and raw JSON `value`. Initialize a whole object at `$.user` or individual leaves such as `$.user.name`; do not do both for the same data unless intentional.
 
-- Each entry has `path` (JSONPath starting with `$`) and `value` (any JSON value).
-- Paths should correspond to the `path` values used in BoundValue bindings.
-- Provide useful defaults so the UI renders correctly on first load.
-- Nested objects can be set as one entry (`$.user` with an object value) or as individual paths (`$.user.name`, `$.user.email`).
+## Two-way form binding
 
----
-
-## Mixing Static and Dynamic
-
-You can use static values for labels and dynamic values for content:
+Input components write back when their value prop is a `path` binding.
 
 ```json
 {
-  "id": "welcome-message",
+  "id": "email-input",
+  "eventRelevant": true,
   "component": {
-    "type": "row",
-    "gap": { "literalString": "0.5rem" },
-    "children": { "explicitList": ["welcome-label", "user-name"] }
-  }
-},
-{
-  "id": "welcome-label",
-  "component": {
-    "type": "text",
-    "content": { "literalString": "Welcome," },
-    "weight": { "literalString": "normal" }
-  }
-},
-{
-  "id": "user-name",
-  "component": {
-    "type": "text",
-    "content": { "path": "$.user.name", "defaultValue": "Guest" },
-    "weight": { "literalString": "bold" }
+    "type": "textField",
+    "value": { "path": "$.form.email", "defaultValue": "" },
+    "label": { "literalString": "Email" },
+    "placeholder": { "literalString": "you@example.com" },
+    "inputType": { "literalString": "email" },
+    "required": { "literalBool": true }
   }
 }
 ```
+
+Use the writable prop for each control:
+
+- `textField`, `select`, `slider`, `dateTimeInput`, `fileInput`, `imageInput`, and `voiceInput`: `value`
+- `checkbox` and `switch`: `checked`
+- `radioGroup` and `tabs`: `value`
+- `modal` and `drawer`: `open`
+
+Use `eventRelevant: true` on the outer wrapper when a workflow action should include that element in the input-value collection.
+
+## Static structured data
+
+### Table
+
+```json
+{
+  "id": "users-table",
+  "component": {
+    "type": "table",
+    "columns": {
+      "literalJson": "[{\"id\":\"name\",\"header\":{\"literalString\":\"Name\"},\"accessor\":{\"literalString\":\"name\"}},{\"id\":\"email\",\"header\":{\"literalString\":\"Email\"},\"accessor\":{\"literalString\":\"email\"}}]"
+    },
+    "data": {
+      "literalJson": "[{\"name\":\"Jane\",\"email\":\"jane@example.com\"}]"
+    },
+    "sortable": { "literalBool": true }
+  }
+}
+```
+
+### Nivo bar chart
+
+```json
+{
+  "id": "sales-chart",
+  "component": {
+    "type": "nivoChart",
+    "chartType": { "literalString": "bar" },
+    "data": {
+      "literalJson": "[{\"month\":\"Jan\",\"revenue\":100,\"profit\":20},{\"month\":\"Feb\",\"revenue\":150,\"profit\":35}]"
+    },
+    "indexBy": { "literalString": "month" },
+    "keys": { "literalJson": "[\"revenue\",\"profit\"]" },
+    "height": { "literalString": "320px" }
+  }
+}
+```
+
+For dynamic table/chart data, replace `literalJson` with a `path` and initialize that path in `dataModel`.
+
+## Repeated children and scoped paths
+
+A template repeats one existing component definition for every item in an array:
+
+```json
+{
+  "id": "project-grid",
+  "component": {
+    "type": "grid",
+    "children": {
+      "template": {
+        "dataPath": "$.projects",
+        "itemIdPath": "id",
+        "templateComponentId": "project-card-template"
+      }
+    }
+  }
+}
+```
+
+Inside the template component and its descendants:
+
+- `$item` resolves to the current item.
+- `$item.name` resolves a field on the current item.
+- `$index` is replaced with the current numeric index.
+- A writable `$item.field` path writes back to the corresponding item under the template's `dataPath`.
+- `itemIdPath` is relative to the current item, for example `id` or `metadata.id`.
+
+```json
+{
+  "id": "project-title",
+  "component": {
+    "type": "text",
+    "content": { "path": "$item.name", "defaultValue": "Untitled project" }
+  }
+}
+```
+
+## Conditional visibility
+
+Bind `hidden` to a boolean path. Do not put template expressions in `style.className`; class names are plain strings.
+
+```json
+{
+  "id": "premium-badge",
+  "component": {
+    "type": "badge",
+    "content": { "literalString": "Premium" },
+    "hidden": { "path": "$.user.hidePremiumBadge", "defaultValue": true }
+  }
+}
+```
+
+## Actions and live values
+
+Never copy a bound form value into `actions[].context`. Action context is static identity/routing data. At runtime, the handler reads current input values from the surface; a configured workflow can also fetch the target elements directly.
+
+## Checklist
+
+- Use the wrapper that matches the value type.
+- Use `literalJson` for arbitrary arrays/objects and `literalOptions` only for `{value,label}` options.
+- Keep data paths simple and direct.
+- Initialize every important main-surface path or supply a useful fallback.
+- Use `$item` / `$index` only inside a repeated template scope.
+- Put `eventRelevant` on the outer surface-component wrapper.
+- Keep raw and structural fields unwrapped exactly as documented in `SKILL.md`.

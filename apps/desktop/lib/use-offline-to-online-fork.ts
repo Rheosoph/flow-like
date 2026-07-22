@@ -1,16 +1,17 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
 import {
-	IAppVisibility,
-	IVersionType,
 	type IApp,
+	IAppVisibility,
 	type IBoard,
 	type IEvent,
 	type IMetadata,
 	type IPage,
+	IVersionType,
 	type IWidget,
 	type PageListItem,
+	normalizePageForPersistence,
+	normalizeWidgetForPersistence,
 	useBackend,
 	useInvalidateInvoke,
 } from "@flow-like/flow-like-ui";
@@ -22,6 +23,7 @@ import type {
 	IForkBundleSummary,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
 import type { IProfileApp } from "@flow-like/flow-like-ui/lib/schema/profile/profile";
+import { invoke } from "@tauri-apps/api/core";
 import { useRouter } from "next/navigation";
 import { useCallback, useState } from "react";
 import { toast } from "sonner";
@@ -170,7 +172,9 @@ export function useOfflineToOnlineFork() {
 					sourceAppId,
 					LANGUAGE,
 				);
-				const pageList = uniquePages(await backend.pageState.getPages(sourceAppId));
+				const pageList = uniquePages(
+					await backend.pageState.getPages(sourceAppId),
+				);
 
 				const contentUpload = await invoke<UploadLocalAppContentResponse>(
 					"upload_local_app_content_bundle",
@@ -205,7 +209,7 @@ export function useOfflineToOnlineFork() {
 							.catch(() => undefined);
 					}
 					preparedWidgets.push({
-						widget: stripForkSecrets(widget),
+						widget: normalizeWidgetForPersistence(stripForkSecrets(widget)),
 						metadata: metadata ? stripForkSecrets(metadata) : undefined,
 					});
 				}
@@ -213,11 +217,13 @@ export function useOfflineToOnlineFork() {
 				const preparedPages: IPage[] = [];
 				for (const page of pageList) {
 					preparedPages.push(
-						stripForkSecrets(
-							await backend.pageState.getPage(
-								sourceAppId,
-								page.pageId,
-								page.boardId,
+						normalizePageForPersistence(
+							stripForkSecrets(
+								await backend.pageState.getPage(
+									sourceAppId,
+									page.pageId,
+									page.boardId,
+								),
 							),
 						),
 					);

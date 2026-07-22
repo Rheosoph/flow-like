@@ -20,6 +20,18 @@ export function isLocalLlmModel(bit: IBit): boolean {
 	);
 }
 
+/** Return the normalized access tier declared by a hosted LLM/VLM bit. */
+export function getLlmModelTier(bit: IBit): string | undefined {
+	const tier = bit.parameters?.provider?.params?.tier;
+	return typeof tier === "string" && tier.trim()
+		? tier.trim().toUpperCase()
+		: undefined;
+}
+
+export function isFreeLlmModel(bit: IBit): boolean {
+	return getLlmModelTier(bit) === "FREE";
+}
+
 /**
  * Drop models that require a local llama.cpp runtime when the current host
  * cannot host one. On capable hosts the list is returned unchanged.

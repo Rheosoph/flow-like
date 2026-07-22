@@ -439,6 +439,88 @@ export function boardEditRecoveryKey(appId: string, boardId: string) {
 }
 
 /**
+ * Deterministic owner+board guard for the zero-progress retry policy.
+ *
+ * A board specialist that returns no source, checks, or commit may be retried once with a
+ * materially different strategy. A third run in the same assistant turn cannot add evidence and
+ * used to burn another full nested deadline, so the frontend refuses it before dispatch.
+ */
+export class BoardZeroProgressRetryGuard {
+	private readonly failures = new Map<string, number>();
+	private readonly recordedRuns = new Map<string, true>();
+
+	constructor(
+		private readonly maxRuns = 2,
+		private readonly maxEntries = 512,
+	) {}
+
+	private key(ownerId: string, boardKey: string) {
+		return `${ownerId}\u0000${boardKey}`;
+	}
+
+	private runKey(ownerId: string, boardKey: string, requestId: string) {
+		return `${this.key(ownerId, boardKey)}\u0000${requestId}`;
+	}
+
+	canStart(ownerId: string, boardKey: string): boolean {
+		return (this.failures.get(this.key(ownerId, boardKey)) ?? 0) < this.maxRuns;
+	}
+
+	recordZeroProgress(ownerId: string, boardKey: string): number {
+		const key = this.key(ownerId, boardKey);
+		const failures = (this.failures.get(key) ?? 0) + 1;
+		// Refresh insertion order so the bounded map retains the most recently active owners.
+		this.failures.delete(key);
+		this.failures.set(key, failures);
+		while (this.failures.size > this.maxEntries) {
+			const oldest = this.failures.keys().next().value;
+			if (typeof oldest !== "string") break;
+			this.failures.delete(oldest);
+		}
+		return failures;
+	}
+
+	/**
+	 * Record one dispatched board run exactly once, even when a frontend deadline wins a race and
+	 * the cancelled nested execution later reaches its own catch path.
+	 */
+	recordRunOutcome(
+		ownerId: string,
+		boardKey: string,
+		requestId: string,
+		madeRecoverableProgress: boolean,
+	): number {
+		const runKey = this.runKey(ownerId, boardKey, requestId);
+		if (this.recordedRuns.has(runKey)) {
+			// A deadline can report zero progress just before the cancelled execution exposes a
+			// recoverable retained draft. Permit that monotonic upgrade, but never count a duplicate
+			// zero-progress notification twice.
+			if (madeRecoverableProgress) {
+				this.clear(ownerId, boardKey);
+				return 0;
+			}
+			return this.failures.get(this.key(ownerId, boardKey)) ?? 0;
+		}
+		this.recordedRuns.set(runKey, true);
+		while (this.recordedRuns.size > this.maxEntries) {
+			const oldest = this.recordedRuns.keys().next().value;
+			if (typeof oldest !== "string") break;
+			this.recordedRuns.delete(oldest);
+		}
+
+		if (madeRecoverableProgress) {
+			this.clear(ownerId, boardKey);
+			return 0;
+		}
+		return this.recordZeroProgress(ownerId, boardKey);
+	}
+
+	clear(ownerId: string, boardKey: string): void {
+		this.failures.delete(this.key(ownerId, boardKey));
+	}
+}
+
+/**
  * Build the host-owned recovery instruction for a nested board specialist.
  *
  * The delegated platform model can lose a long tool response and then mistakenly request a tiny
@@ -462,8 +544,36 @@ ${retained}
 \`\`\``;
 }
 
+/**
+ * Keep a useful draft from an older board revision available as semantic reference without
+ * presenting its stale identity anchors as applicable to the live board.
+ */
+export function retainedFlowScriptReferenceInstruction(source: string) {
+	const retained = source.trim();
+	if (!retained) return "";
+	return `
+
+HOST STALE RECOVERY REFERENCE:
+- The retained document below belongs to an older or unknown board revision. It is reference-only, not the active production workspace.
+- The current board FlowScript is authoritative. Start from that current source and a fresh draft id.
+- Preserve still-requested behavior where it remains applicable, but do NOT copy or preserve any \`//@n:\`, \`//@v:\`, or \`//@l:\` anchors from this reference.
+- Never patch, check, commit, or apply the older retained revision directly.
+
+REFERENCE FROM AN EARLIER BOARD REVISION:
+\`\`\`flowscript
+${retained}
+\`\`\``;
+}
+
+declare const flowScriptBaselineFingerprintBrand: unique symbol;
+export type FlowScriptBaselineFingerprint = string & {
+	readonly [flowScriptBaselineFingerprintBrand]: true;
+};
+
 interface BoardEditRecoveryEntry {
 	candidate: FlowScriptWorkspaceCandidate;
+	/** Fingerprint of the canonical board FlowScript this candidate was authored against. */
+	baselineFingerprint?: FlowScriptBaselineFingerprint;
 	retainedAtMs: number;
 }
 
@@ -474,10 +584,11 @@ export interface BoardEditRecoveryStorage {
 }
 
 interface PersistedBoardEditRecovery {
-	version: 1;
+	version: 1 | 2;
 	entries: Array<{
 		key: string;
 		candidate: FlowScriptWorkspaceCandidate;
+		baselineFingerprint?: string;
 		retainedAtMs: number;
 	}>;
 }
@@ -485,6 +596,15 @@ interface PersistedBoardEditRecovery {
 const BOARD_EDIT_RECOVERY_STORAGE_KEY = "flowpilot.board-edit-recovery.v1";
 const MAX_RECOVERY_SOURCE_CHARS = 256 * 1024;
 const MAX_RECOVERY_STORAGE_CHARS = 2 * 1024 * 1024;
+const BASELINE_FINGERPRINT_PATTERN = /^flowscript-fnv1a64:[0-9a-f]{16}$/;
+
+function persistedBaselineFingerprint(
+	value: unknown,
+): FlowScriptBaselineFingerprint | undefined {
+	return typeof value === "string" && BASELINE_FINGERPRINT_PATTERN.test(value)
+		? (value as FlowScriptBaselineFingerprint)
+		: undefined;
+}
 
 function browserBoardEditRecoveryStorage(): BoardEditRecoveryStorage | null {
 	if (typeof window === "undefined") return null;
@@ -547,7 +667,10 @@ export class BoardEditRecoveryStore {
 			const raw = this.storage.getItem(this.storageKey);
 			if (!raw) return;
 			const parsed = JSON.parse(raw) as Partial<PersistedBoardEditRecovery>;
-			if (parsed.version !== 1 || !Array.isArray(parsed.entries)) {
+			if (
+				(parsed.version !== 1 && parsed.version !== 2) ||
+				!Array.isArray(parsed.entries)
+			) {
 				this.storage.removeItem(this.storageKey);
 				return;
 			}
@@ -572,6 +695,12 @@ export class BoardEditRecoveryStore {
 				if (!existing || existing.retainedAtMs <= entry.retainedAtMs) {
 					const recovered = {
 						candidate: safe,
+						// Version 1 had no revision binding. Even if an unexpected field is
+						// present, keep that legacy source reference-only.
+						baselineFingerprint:
+							parsed.version === 2
+								? persistedBaselineFingerprint(entry.baselineFingerprint)
+								: undefined,
 						retainedAtMs: entry.retainedAtMs,
 					};
 					this.entries.set(entry.key, recovered);
@@ -615,17 +744,24 @@ export class BoardEditRecoveryStore {
 				.map(([key, entry]) => {
 					const candidate = persistedCandidate(entry.candidate);
 					return candidate
-						? { key, candidate, retainedAtMs: entry.retainedAtMs }
+						? {
+								key,
+								candidate,
+								...(entry.baselineFingerprint
+									? { baselineFingerprint: entry.baselineFingerprint }
+									: {}),
+								retainedAtMs: entry.retainedAtMs,
+							}
 						: undefined;
 				})
 				.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
-			let serialized = JSON.stringify({ version: 1, entries });
+			let serialized = JSON.stringify({ version: 2, entries });
 			while (
 				entries.length > 0 &&
 				serialized.length > MAX_RECOVERY_STORAGE_CHARS
 			) {
 				entries = entries.slice(1);
-				serialized = JSON.stringify({ version: 1, entries });
+				serialized = JSON.stringify({ version: 2, entries });
 			}
 			if (entries.length === 0) {
 				this.storage.removeItem(this.storageKey);
@@ -637,45 +773,84 @@ export class BoardEditRecoveryStore {
 		}
 	}
 
-	get(key: string): FlowScriptWorkspaceCandidate | undefined {
-		const entry = this.entries.get(key) ?? this.durableEntries.get(key);
+	private liveEntry(
+		entries: Map<string, BoardEditRecoveryEntry>,
+		key: string,
+	): BoardEditRecoveryEntry | undefined {
+		const entry = entries.get(key);
 		if (!entry) return undefined;
-		if (this.now() - entry.retainedAtMs >= this.ttlMs) {
-			this.entries.delete(key);
-			this.durableEntries.delete(key);
-			this.persist();
-			return undefined;
-		}
-		return entry.candidate;
+		if (this.now() - entry.retainedAtMs < this.ttlMs) return entry;
+		entries.delete(key);
+		this.persist();
+		return undefined;
 	}
 
-	set(key: string, candidate: FlowScriptWorkspaceCandidate) {
+	/** Return only a candidate authored against this exact canonical board snapshot. */
+	get(
+		key: string,
+		baselineFingerprint: FlowScriptBaselineFingerprint,
+	): FlowScriptWorkspaceCandidate | undefined {
+		const memory = this.liveEntry(this.entries, key);
+		if (memory?.baselineFingerprint === baselineFingerprint) {
+			return memory.candidate;
+		}
+		const durable = this.liveEntry(this.durableEntries, key);
+		return durable?.baselineFingerprint === baselineFingerprint
+			? durable.candidate
+			: undefined;
+	}
+
+	/**
+	 * Return the latest source regardless of revision for reference-only recovery prompts. Callers
+	 * must never put this candidate into the active workspace or repair-candidate ranking.
+	 */
+	getReference(key: string): FlowScriptWorkspaceCandidate | undefined {
+		return (
+			this.liveEntry(this.entries, key)?.candidate ??
+			this.liveEntry(this.durableEntries, key)?.candidate
+		);
+	}
+
+	set(
+		key: string,
+		candidate: FlowScriptWorkspaceCandidate,
+		baselineFingerprint: FlowScriptBaselineFingerprint,
+	) {
 		if (!candidate.source.trim()) return;
 		let changed = this.removeExpired();
-		const existing = this.get(key);
+		const existingEntry = this.entries.get(key);
+		const existing = existingEntry?.candidate;
 		const replaceMemory =
 			!existing ||
+			existingEntry?.baselineFingerprint !== baselineFingerprint ||
 			selectBestRecoverableFlowScriptCandidate([existing, candidate]) ===
 				candidate;
 		const now = this.now();
 		if (replaceMemory) {
 			// Refresh insertion order so bounded eviction removes the least recently retained entry.
 			this.entries.delete(key);
-			this.entries.set(key, { candidate, retainedAtMs: now });
+			this.entries.set(key, {
+				candidate,
+				baselineFingerprint,
+				retainedAtMs: now,
+			});
 			changed = true;
 		}
 
 		const safe = persistedCandidate(candidate);
 		if (safe) {
-			const existingDurable = this.durableEntries.get(key)?.candidate;
+			const existingDurableEntry = this.durableEntries.get(key);
+			const existingDurable = existingDurableEntry?.candidate;
 			const replaceDurable =
 				!existingDurable ||
+				existingDurableEntry?.baselineFingerprint !== baselineFingerprint ||
 				selectBestRecoverableFlowScriptCandidate([existingDurable, safe]) ===
 					safe;
 			if (replaceDurable) {
 				this.durableEntries.delete(key);
 				this.durableEntries.set(key, {
 					candidate: safe,
+					baselineFingerprint,
 					retainedAtMs: now,
 				});
 				changed = true;
@@ -1324,6 +1499,21 @@ export function normalizeFlowScriptSnapshot(source: string) {
 		.trim();
 }
 
+/** Fingerprint the same canonicalized FlowScript representation used by snapshot drift checks. */
+export function flowScriptSnapshotFingerprint(
+	source: string,
+): FlowScriptBaselineFingerprint {
+	let hash = 0xcbf29ce484222325n;
+	const prime = 0x100000001b3n;
+	for (const byte of new TextEncoder().encode(
+		normalizeFlowScriptSnapshot(source),
+	)) {
+		hash ^= BigInt(byte);
+		hash = BigInt.asUintN(64, hash * prime);
+	}
+	return `flowscript-fnv1a64:${hash.toString(16).padStart(16, "0")}` as FlowScriptBaselineFingerprint;
+}
+
 export function flowScriptSnapshotChanged(before: string, current: string) {
 	return (
 		normalizeFlowScriptSnapshot(before) !== normalizeFlowScriptSnapshot(current)
@@ -1336,23 +1526,12 @@ export interface FlowScriptReadbackAssessment {
 	message?: string;
 }
 
-/** Verify persisted board state, not merely the reconcile command count returned by apply. */
-export function assessFlowScriptReadback(options: {
-	before: string;
-	expected: string;
-	actual: string;
-}): FlowScriptReadbackAssessment {
-	if (!flowScriptSnapshotChanged(options.before, options.actual)) {
-		return {
-			ok: false,
-			code: "not_persisted",
-			message:
-				"FlowScript apply returned commands, but the persisted board FlowScript did not change.",
-		};
-	}
-
-	const expected = profileFlowScriptCandidate(options.expected);
-	const actual = profileFlowScriptCandidate(options.actual);
+function assessFlowScriptReadbackScope(
+	expectedSource: string,
+	actualSource: string,
+): FlowScriptReadbackAssessment {
+	const expected = profileFlowScriptCandidate(expectedSource);
+	const actual = profileFlowScriptCandidate(actualSource);
 	const regression = detectFlowScriptCandidateRegression(expected, actual);
 	if (regression) {
 		return {
@@ -1388,4 +1567,41 @@ export function assessFlowScriptReadback(options: {
 	}
 
 	return { ok: true };
+}
+
+/** Verify persisted board state, not merely the reconcile command count returned by apply. */
+export function assessFlowScriptReadback(options: {
+	before: string;
+	expected: string;
+	actual: string;
+}): FlowScriptReadbackAssessment {
+	if (!flowScriptSnapshotChanged(options.before, options.actual)) {
+		return {
+			ok: false,
+			code: "not_persisted",
+			message:
+				"FlowScript apply returned commands, but the persisted board FlowScript did not change.",
+		};
+	}
+
+	return assessFlowScriptReadbackScope(options.expected, options.actual);
+}
+
+/**
+ * Verify a correction-only apply against canonical source. Source repairs do not mutate the board,
+ * so an unchanged board snapshot is expected; it must still retain all requested workflow scope.
+ */
+export function assessFlowScriptCorrectionReadback(options: {
+	expected: string;
+	actual: string;
+}): FlowScriptReadbackAssessment {
+	if (!flowScriptSnapshotChanged(options.expected, options.actual)) {
+		return {
+			ok: false,
+			code: "not_persisted",
+			message:
+				"FlowScript apply returned source corrections, but canonical readback did not replace the submitted source.",
+		};
+	}
+	return assessFlowScriptReadbackScope(options.expected, options.actual);
 }

@@ -1,4 +1,4 @@
-// A2UI Type Definitions - matches Rust proto types
+// A2UI runtime JSON definitions. Deprecated fields keep older Rust payloads readable.
 
 export interface SelectOption {
 	value: string;
@@ -44,17 +44,19 @@ export interface Style {
 	transform?: Transform;
 	overflow?: Overflow;
 	responsiveOverrides?: ResponsiveOverrides;
+	/** @deprecated Rust emitted this name before the JSON contract was aligned. */
+	responsive?: ResponsiveOverrides;
 	// Spacing
 	margin?: Spacing;
 	padding?: Spacing;
 	gap?: string;
 	// Sizing
-	width?: string;
-	height?: string;
-	minWidth?: string;
-	minHeight?: string;
-	maxWidth?: string;
-	maxHeight?: string;
+	width?: StyleValue;
+	height?: StyleValue;
+	minWidth?: StyleValue;
+	minHeight?: StyleValue;
+	maxWidth?: StyleValue;
+	maxHeight?: StyleValue;
 	// Flex item properties
 	flex?: string;
 	flexGrow?: number;
@@ -110,12 +112,25 @@ export interface Style {
 	aspectRatio?: string;
 }
 
-export interface Spacing {
-	top?: string;
-	right?: string;
-	bottom?: string;
-	left?: string;
-}
+/** CSS length/value. The object form is accepted for legacy Rust payloads. */
+export type StyleValue = string | { value: string };
+
+export type Spacing =
+	| {
+			top?: string;
+			right?: string;
+			bottom?: string;
+			left?: string;
+			value?: undefined;
+	  }
+	| {
+			/** @deprecated Rust emitted CSS shorthand in this wrapper. */
+			value: string;
+			top?: undefined;
+			right?: undefined;
+			bottom?: undefined;
+			left?: undefined;
+	  };
 
 export type Background =
 	| { color: string }
@@ -123,14 +138,29 @@ export type Background =
 	| { image: BackgroundImage }
 	| { blur: string };
 
-export interface Gradient {
-	type: "linear" | "radial" | "conic";
-	angle?: number;
-	stops: GradientStop[];
-}
+export type GradientType = "linear" | "radial" | "conic";
+
+export type Gradient =
+	| {
+			type: GradientType;
+			angle?: number;
+			direction?: string;
+			stops: GradientStop[];
+			/** @deprecated Rust emitted this name before the JSON contract was aligned. */
+			gradientType?: GradientType;
+	  }
+	| {
+			/** @deprecated Rust compatibility shape. Use `type`. */
+			gradientType: GradientType;
+			type?: undefined;
+			angle?: number;
+			direction?: string;
+			stops: GradientStop[];
+	  };
 
 export interface GradientStop {
 	color: string;
+	/** Percentage (0-100). Legacy Rust payloads may contain a 0-1 fraction. */
 	position?: number;
 }
 
@@ -155,21 +185,39 @@ export interface Shadow {
 	spread?: string;
 	color?: string;
 	inset?: boolean;
+	/** @deprecated Rust compatibility shape. */
+	boxShadows?: string[];
+	/** Supported as an optional richer shadow effect. */
+	textShadow?: string;
 }
 
-export interface Position {
+export type PositionType = "absolute" | "relative" | "fixed" | "sticky";
+
+interface PositionOffsets {
 	top?: string;
 	right?: string;
 	bottom?: string;
 	left?: string;
-	type: "absolute" | "relative" | "fixed" | "sticky";
 }
+
+export type Position =
+	| (PositionOffsets & {
+			type: PositionType;
+			/** @deprecated Rust compatibility field. */
+			positionType?: PositionType;
+	  })
+	| (PositionOffsets & {
+			/** @deprecated Rust compatibility shape. Use `type`. */
+			positionType: PositionType;
+			type?: undefined;
+	  });
 
 export interface Transform {
 	translate?: string;
 	rotate?: number;
 	scale?: string;
 	transformOrigin?: string;
+	skew?: string;
 }
 
 export type Overflow = "visible" | "hidden" | "scroll" | "auto";
@@ -184,14 +232,20 @@ export interface ResponsiveOverrides {
 
 export interface BreakpointStyle {
 	className?: string;
+	display?: string;
+	flexDirection?: string;
+	justifyContent?: string;
+	alignItems?: string;
+	gap?: string;
+	gridCols?: number;
+	width?: StyleValue;
+	height?: StyleValue;
+	padding?: Spacing;
+	margin?: Spacing;
 	hidden?: boolean;
-}
-
-export interface Spacing {
-	top?: string;
-	right?: string;
-	bottom?: string;
-	left?: string;
+	fontSize?: string;
+	textAlign?: string;
+	order?: number;
 }
 
 export interface Size {

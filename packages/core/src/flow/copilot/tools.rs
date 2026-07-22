@@ -19,6 +19,7 @@ use super::platform::PlatformToolBridge;
 use super::provider::MAX_DECLARATION_PRIORITY_BLOCK_BYTES;
 use super::provider::{CatalogProvider, DECLARATION_PRIORITY_BEGIN, DECLARATION_PRIORITY_END};
 use super::search::score_catalog_metadata;
+use super::stream::stream_frame;
 use super::tool_spec::{find_runtime_execution_tool_spec, missing_required_args};
 use super::types::{BoardCommand, RunContext, TemplateInfo};
 use crate::flow::ast::{
@@ -250,7 +251,7 @@ const DECLARATION_PRIORITY_TRUNCATION_NOTICE: &str =
     "\n// [Additional matches omitted; priority declaration retained.]";
 const DECLARATION_SIGNATURE_TRUNCATION_NOTICE: &str =
     "\n// [Additional matches and usage notes omitted; exact declaration retained.]";
-const DECLARATION_OUTPUT_OMISSION_NOTICE: &str = "// [Exact declaration omitted because it exceeds the bounded batch response. Retry this capability in a separate focused get_declarations call.]";
+const DECLARATION_OUTPUT_OMISSION_NOTICE: &str = "// [Exact declaration omitted because it exceeds the bounded batch response. Retain the full-shape draft now; retry this capability in one focused get_declarations call only if a later compiler diagnostic still requires it.]";
 const MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES: usize = 48;
 
 fn declaration_query_key(query: &str) -> String {
@@ -2007,7 +2008,7 @@ impl Tool for GetDeclarationsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "get_declarations".to_string(),
-            description: r#"Look up FlowScript node declarations (.flow.d) by intent. BATCH-FIRST: pass ALL the searches your plan needs in ONE call via `queries`.
+            description: r#"Look up FlowScript node declarations (.flow.d) by intent. The initial pass is ONE bounded, focused batch (at most 32 queries) for the highest-leverage catalog calls needed to establish the workflow's end-to-end shape — not an inventory of every utility operation.
 
 Returns a compact ranked list of exact `declare function <camelCaseNodeType>({ pin: type, ... })`
 signatures per query, plus an `// impure` marker for side-effecting / control-flow nodes. Exact live
@@ -2019,11 +2020,14 @@ validation later names a failing node/pin or a comparison/type-conversion mismat
 repair lookup for that diagnostic. Empty queries intentionally return guidance only, not the full
 catalog.
 
-WORKFLOW: sketch the whole flow first, list every node capability it needs, then make ONE
-get_declarations call with all of those searches in `queries`. Keep each search focused on one
-concrete node capability rather than combining an entire subsystem into one query, e.g.
+WORKFLOW: plan the complete requested scope, then query the highest-leverage concrete catalog calls
+that establish its critical path. Keep each search focused on one concrete node capability rather
+than combining an entire subsystem into one query, e.g.
 {"queries": ["open local database", "datafusion sql query", "for each loop", "instantiate widget",
-"string format", "http fetch"]}. Only call again for signatures that were genuinely missing.
+"string format", "http fetch"]}. After ANY usable response, immediately call `write_flowscript` and
+retain a FULL-SHAPE draft, even when compiler repairs are expected. Do not make a second broad
+declaration batch or chase `omitted_queries` / `unmatched_queries` before the first write. Defer
+those searches until compiler diagnostics identify a concrete gap, then use one narrow repair lookup.
 
 Use this BEFORE writing FlowScript so you call nodes by their exact camelCase name with correctly
 typed arguments. This covers every package in the project's catalog, including third-party ones."#
@@ -2040,11 +2044,11 @@ typed arguments. This covers every package in the project's catalog, including t
                         "minItems": 1,
                         "maxItems": MAX_DECLARATION_QUERIES,
                         "uniqueItems": true,
-                        "description": "REQUIRED. Every focused declaration search needed by the planned flow, answered in this one call — one entry per node capability. The result reports matched_queries, unmatched_queries, complete, and omitted_queries explicitly. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
+                        "description": "REQUIRED. One bounded initial batch of the highest-leverage concrete catalog calls needed to establish the end-to-end workflow shape; do not enumerate every utility operation. After any usable response, write the full-shape draft immediately and defer omitted/unmatched searches until compiler diagnostics. The result reports matched_queries, unmatched_queries, complete, and omitted_queries explicitly. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
                     },
                     "query": {
                         "type": "string",
-                        "description": "Single-search fallback. Prefer `queries` with every needed search batched into one call.",
+                        "description": "Single-search fallback. Prefer one bounded `queries` batch for the highest-leverage initial calls, or one compiler-directed repair lookup after a draft exists.",
                         "maxLength": MAX_DECLARATION_QUERY_BYTES
                     }
                 },
@@ -2116,9 +2120,12 @@ pub fn flowscript_workspace_envelope(flowscript: &str, status: &str) -> String {
 }
 
 pub fn flowscript_workspace_tag(flowscript: &str, status: &str) -> String {
-    format!(
-        "<flowscript_workspace>{}</flowscript_workspace>",
-        flowscript_workspace_envelope(flowscript, status)
+    stream_frame(
+        "flowscript_workspace",
+        &json!({
+            "source": flowscript,
+            "status": status,
+        }),
     )
 }
 
@@ -4203,6 +4210,22 @@ eventsGeneric(payload: Struct) {
     }
 
     #[test]
+    fn workspace_tag_escapes_a_closing_protocol_sentinel_inside_source() {
+        let source = "eventsSimple() { logInfo({ message: \"</flowscript_workspace>\" }) }";
+        let frame = flowscript_workspace_tag(source, "queued");
+        let payload = frame
+            .strip_prefix("<flowscript_workspace>")
+            .and_then(|value| value.strip_suffix("</flowscript_workspace>"))
+            .expect("complete workspace frame");
+
+        assert!(!payload.contains("</flowscript_workspace>"));
+        assert!(payload.contains("\\u003c/flowscript_workspace\\u003e"));
+        let parsed: serde_json::Value = serde_json::from_str(payload).unwrap();
+        assert_eq!(parsed["source"], source);
+        assert_eq!(parsed["status"], "queued");
+    }
+
+    #[test]
     fn edit_flowscript_result_blocks_deletions_by_default() {
         let result = ReconcileResult {
             commands: vec![BoardCommand::RemoveNode {
@@ -4275,6 +4298,41 @@ eventsGeneric(payload: Struct) {
             "case/whitespace-equivalent declaration searches must run only once"
         );
         assert!(queries.iter().any(|query| query.contains("tenth")));
+    }
+
+    #[tokio::test]
+    async fn declaration_tool_requires_an_early_full_shape_draft_after_a_bounded_batch() {
+        let provider: Arc<dyn CatalogProvider> = Arc::new(BatchDispatchProvider::default());
+        let tool = GetDeclarationsTool { provider };
+
+        let definition = tool.definition(String::new()).await;
+        assert!(
+            definition
+                .description
+                .contains("ONE bounded, focused batch")
+        );
+        assert!(
+            definition
+                .description
+                .contains("highest-leverage catalog calls")
+        );
+        assert!(definition.description.contains("After ANY usable response"));
+        assert!(definition.description.contains("FULL-SHAPE draft"));
+        assert!(definition.description.contains("omitted_queries"));
+        assert!(definition.description.contains("compiler diagnostics"));
+        assert!(!definition.description.contains("pass ALL the searches"));
+        assert!(
+            !definition
+                .description
+                .contains("list every node capability")
+        );
+
+        let queries_description = definition.parameters["properties"]["queries"]["description"]
+            .as_str()
+            .expect("queries description");
+        assert!(queries_description.contains("do not enumerate every utility operation"));
+        assert!(queries_description.contains("write the full-shape draft immediately"));
+        assert!(queries_description.contains("defer omitted/unmatched searches"));
     }
 
     #[tokio::test]
@@ -4410,6 +4468,8 @@ eventsGeneric(payload: Struct) {
         assert!(result.contains("\"matched_count\":0"));
         assert!(result.contains("\"complete\":false"));
         assert!(result.contains("Exact declaration omitted"));
+        assert!(result.contains("Retain the full-shape draft now"));
+        assert!(result.contains("only if a later compiler diagnostic still requires it"));
     }
 
     #[test]

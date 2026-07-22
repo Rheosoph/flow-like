@@ -2,11 +2,13 @@
 
 This guide covers Tailwind CSS usage, shadcn/ui theming, and responsive design patterns for A2UI components.
 
+Contents: [theme variables](#theme-variables-required), [component styles](#component-style-property), [responsive design](#responsive-design), [mobile checklist](#mobile-ready-ui-checklist), [layout utilities](#flexbox-utilities), and [custom CSS](#custom-css-injection).
+
 ---
 
-## Theme Variables (Preferred)
+## Theme Variables (Required)
 
-A2UI uses shadcn/ui theme variables for consistent theming. **Prefer theme tokens over hardcoded colors** for dark/light mode support. However, hardcoded colors (e.g., `bg-red-500`, `text-blue-600`) are allowed if the user explicitly requests specific colors.
+A2UI uses shadcn/ui theme variables for consistent light/dark theming. Use semantic theme tokens instead of fixed palette colors.
 
 ### Background Colors
 
@@ -41,9 +43,9 @@ A2UI uses shadcn/ui theme variables for consistent theming. **Prefer theme token
 | `border-input` | Input field borders |
 | `ring-ring` | Focus rings |
 
-### ⚠️ Avoid Unless Requested
+### Avoid Fixed Palette Colors
 
-These break dark/light mode theming. Only use if the user explicitly requests specific colors:
+These break light/dark theme adaptation:
 
 ```
 bg-white, bg-black, bg-gray-*, bg-slate-*, bg-red-*, bg-blue-*, etc.
@@ -51,7 +53,7 @@ text-white, text-black, text-gray-*, text-slate-*, text-red-*, etc.
 border-gray-*, border-slate-*, etc.
 ```
 
-**Example:** If user says "make the button red", use `bg-red-500`. If they just say "primary button", use `bg-primary`.
+Express intent with semantic tokens: use `bg-destructive` for a destructive red action, `bg-primary` for a primary action, and `text-destructive` for error text.
 
 ---
 
@@ -59,7 +61,7 @@ border-gray-*, border-slate-*, etc.
 
 Every component has a `style` property with `className`:
 
-```json
+```jsonc
 {
   "id": "my-component",
   "style": {
@@ -68,6 +70,68 @@ Every component has a `style` property with `className`:
   "component": { ... }
 }
 ```
+
+Prefer `className` for ordinary layout and appearance. The raw `style` object also supports structured values when Tailwind is not appropriate:
+
+```json
+{
+  "style": {
+    "background": {
+      "gradient": {
+        "type": "linear",
+        "angle": 135,
+        "stops": [
+          { "color": "hsl(var(--primary))", "position": 0 },
+          { "color": "hsl(var(--accent))", "position": 100 }
+        ]
+      }
+    },
+    "border": {
+      "width": "1px",
+      "style": "solid",
+      "color": "hsl(var(--border))",
+      "radius": "0.75rem"
+    },
+    "shadow": {
+      "x": "0",
+      "y": "8px",
+      "blur": "24px",
+      "spread": "0",
+      "color": "hsl(var(--foreground) / 0.08)",
+      "inset": false
+    },
+    "padding": {
+      "top": "1rem",
+      "right": "1rem",
+      "bottom": "1rem",
+      "left": "1rem"
+    },
+    "width": "100%",
+    "position": {
+      "type": "relative"
+    },
+    "overflow": "hidden"
+  }
+}
+```
+
+Other supported raw style fields include `margin`, `gap`, min/max sizing, flex/grid item placement, typography, visibility, opacity, cursor, stacking, transition, animation, display, outline, filters, `aspectRatio`, and transforms (`translate`, numeric `rotate`, `scale`, `skew`, `transformOrigin`).
+
+For structured breakpoint overrides, use `responsiveOverrides`:
+
+```json
+{
+  "style": {
+    "className": "p-3",
+    "responsiveOverrides": {
+      "md": { "className": "p-5", "gridCols": 2 },
+      "lg": { "className": "p-6", "gridCols": 3 }
+    }
+  }
+}
+```
+
+Supported keys are `sm`, `md`, `lg`, `xl`, and `xxl`. Tailwind classes remain the preferred responsive mechanism.
 
 ---
 
@@ -196,7 +260,7 @@ A2UI follows mobile-first design. Base styles apply to mobile, then override for
 ```
 
 #### Hide/Show on Breakpoints
-```json
+```jsonc
 // Hide on mobile, show on md+
 { "className": "hidden md:block" }
 
@@ -345,7 +409,7 @@ Use these rules for every generated interface:
 ```
 
 ### Sidebar Layout
-```json
+```jsonc
 // Container
 { "className": "flex flex-col md:flex-row min-h-screen" }
 
@@ -372,7 +436,7 @@ Use these rules for every generated interface:
 | `ease-in-out` | Smooth easing |
 
 ### Hover Effects
-```json
+```jsonc
 { "className": "hover:bg-muted transition-colors" }
 { "className": "hover:shadow-md transition-shadow" }
 { "className": "hover:scale-105 transition-transform" }

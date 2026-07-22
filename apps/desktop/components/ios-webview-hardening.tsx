@@ -1,12 +1,26 @@
 "use client";
 
 import { useEffect } from "react";
+import { resolveMobileViewportHeight } from "../lib/mobile-viewport";
 import { isMobileDevice, isTauriRuntime } from "../lib/platform";
 
 const MOBILE_VIEWPORT_CONTENT =
-	"width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content";
+	"width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content";
 const MAX_SAFE_TOP_PX = 96;
 const MAX_SAFE_BOTTOM_PX = 64;
+/** Input types that never raise the soft keyboard. */
+const NON_TEXT_INPUT_TYPES = new Set([
+	"button",
+	"checkbox",
+	"color",
+	"file",
+	"hidden",
+	"image",
+	"radio",
+	"range",
+	"reset",
+	"submit",
+]);
 const POLL_MAX_RETRIES = 40;
 const POLL_INTERVAL_MS = 50;
 
@@ -139,7 +153,7 @@ function pollForInsets() {
 
 function syncViewportHeight() {
 	const vv = window.visualViewport;
-	const viewportHeight = Math.round(vv?.height ?? window.innerHeight);
+	const viewportHeight = resolveMobileViewportHeight(vv, window.innerHeight);
 	document.documentElement.style.setProperty(
 		"--fl-mobile-vvh",
 		`${viewportHeight}px`,
@@ -147,19 +161,18 @@ function syncViewportHeight() {
 }
 
 export function IOSWebviewHardening() {
+	// Native-shell concerns: viewport meta + safe-area insets. Tauri mobile only.
 	useEffect(() => {
 		if (!isTauriRuntime() || !isMobileDevice()) return;
 
 		upsertViewportMeta(MOBILE_VIEWPORT_CONTENT);
 		applySafeAreaInsets();
-		syncViewportHeight();
 		pollForInsets();
 
 		const handleOrientation = () => {
 			appliedSafeTop = 0;
 			appliedSafeBottom = 0;
 			applySafeAreaInsets();
-			syncViewportHeight();
 			pollForInsets();
 		};
 
@@ -170,7 +183,6 @@ export function IOSWebviewHardening() {
 		const onNavigation = () => {
 			requestAnimationFrame(() => {
 				applySafeAreaInsets();
-				syncViewportHeight();
 			});
 		};
 
@@ -184,19 +196,72 @@ export function IOSWebviewHardening() {
 		};
 
 		window.addEventListener("popstate", onNavigation);
-		window.visualViewport?.addEventListener("resize", syncViewportHeight);
-		window.visualViewport?.addEventListener("scroll", syncViewportHeight);
 		window.addEventListener("orientationchange", handleOrientation);
-		window.addEventListener("resize", syncViewportHeight);
 
 		return () => {
 			history.pushState = origPushState;
 			history.replaceState = origReplaceState;
 			window.removeEventListener("popstate", onNavigation);
+			window.removeEventListener("orientationchange", handleOrientation);
+		};
+	}, []);
+
+	// Soft-keyboard handling. Runs on every touch context (not just the Tauri
+	// shell) because plain mobile browsers need it too:
+	//  - --fl-mobile-vvh keeps Blink/Android shells sized to the *visual*
+	//    viewport. The WebKit desktop-app shell stays on 100dvh in global.css to
+	//    avoid combining its native focus pan with a second composer movement.
+	//  - data-fl-keyboard lets CSS reclaim space while typing (the mobile bottom
+	//    nav hides), so the chat composer is never pushed behind the keyboard.
+	useEffect(() => {
+		if (typeof window === "undefined") return;
+		const touch =
+			isMobileDevice() ||
+			window.matchMedia?.("(pointer: coarse)").matches === true;
+		if (!touch) return;
+
+		const root = document.documentElement;
+		syncViewportHeight();
+
+		const isTextEntry = (target: EventTarget | null) => {
+			const el = target as HTMLElement | null;
+			if (!el) return false;
+			if (el.isContentEditable) return true;
+			if (el.tagName === "TEXTAREA") return true;
+			if (el.tagName !== "INPUT") return false;
+			return !NON_TEXT_INPUT_TYPES.has((el as HTMLInputElement).type);
+		};
+
+		let blurTimer = 0;
+		const onFocusIn = (event: FocusEvent) => {
+			window.clearTimeout(blurTimer);
+			root.dataset.flKeyboard = isTextEntry(event.target) ? "open" : "closed";
+		};
+		// Moving between two fields fires focusout before focusin — defer the close
+		// so the bottom nav can't flash back in between them.
+		const onFocusOut = () => {
+			window.clearTimeout(blurTimer);
+			blurTimer = window.setTimeout(() => {
+				root.dataset.flKeyboard = "closed";
+			}, 120);
+		};
+
+		window.visualViewport?.addEventListener("resize", syncViewportHeight);
+		window.visualViewport?.addEventListener("scroll", syncViewportHeight);
+		window.addEventListener("resize", syncViewportHeight);
+		window.addEventListener("orientationchange", syncViewportHeight);
+		document.addEventListener("focusin", onFocusIn);
+		document.addEventListener("focusout", onFocusOut);
+
+		return () => {
+			window.clearTimeout(blurTimer);
 			window.visualViewport?.removeEventListener("resize", syncViewportHeight);
 			window.visualViewport?.removeEventListener("scroll", syncViewportHeight);
-			window.removeEventListener("orientationchange", handleOrientation);
 			window.removeEventListener("resize", syncViewportHeight);
+			window.removeEventListener("orientationchange", syncViewportHeight);
+			document.removeEventListener("focusin", onFocusIn);
+			document.removeEventListener("focusout", onFocusOut);
+			delete root.dataset.flKeyboard;
 		};
 	}, []);
 

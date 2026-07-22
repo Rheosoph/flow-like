@@ -129,9 +129,9 @@ function SettingsCardItem({ card }: Readonly<{ card: SettingsCard }>) {
 					</CardDescription>
 				</div>
 				{card.external ? (
-					<ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+					<ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100" />
 				) : (
-					<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
+					<ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100" />
 				)}
 			</CardHeader>
 		</Card>

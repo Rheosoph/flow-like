@@ -45,6 +45,10 @@ import {
 	registerFlowScriptLanguage,
 	registerFlowScriptProviders,
 } from "./flowscript-language";
+import {
+	canApplyFlowScript,
+	shouldReloadFlowScriptAfterApply,
+} from "./flowscript-panel-state";
 
 const DESTRUCTIVE_BLOCK_PREFIX = "FlowScript edit would delete ";
 
@@ -114,6 +118,7 @@ export function FlowScriptPanel({
 	const [applying, setApplying] = useState(false);
 	const [diagnostics, setDiagnostics] = useState<string[]>([]);
 	const [boardChangedBehindEdits, setBoardChangedBehindEdits] = useState(false);
+	const [refreshConfirmationOpen, setRefreshConfirmationOpen] = useState(false);
 	const [editorReady, setEditorReady] = useState(false);
 	const [destructiveMessage, setDestructiveMessage] = useState<
 		string | undefined
@@ -121,6 +126,16 @@ export function FlowScriptPanel({
 
 	const readOnly = typeof version !== "undefined";
 	const dirty = text !== baseline;
+	const applyState = {
+		readOnly,
+		dirty,
+		applying,
+		loading,
+		boardChangedBehindEdits,
+	};
+	const canApply = canApplyFlowScript(applyState);
+	const applyStateRef = useRef(applyState);
+	applyStateRef.current = applyState;
 
 	const dirtyRef = useRef(dirty);
 	dirtyRef.current = dirty;
@@ -167,8 +182,8 @@ export function FlowScriptPanel({
 	}, [load]);
 
 	// Board mutated elsewhere (canvas edits, collaborators): refresh in place unless
-	// the user has unsaved text edits — then only surface a hint. The initial value
-	// is swallowed so mount doesn't double-fetch alongside the load() effect above.
+	// the user has unsaved text edits — then pause apply and offer an explicit refresh.
+	// The initial value is swallowed so mount doesn't double-fetch alongside load().
 	const lastBoardUpdateRef = useRef<number | undefined>(undefined);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: only board updates should trigger this
 	useEffect(() => {
@@ -196,6 +211,18 @@ export function FlowScriptPanel({
 
 	const runApply = useCallback(
 		async (allowDeletions: boolean) => {
+			if (!canApplyFlowScript(applyStateRef.current)) {
+				if (applyStateRef.current.boardChangedBehindEdits) {
+					toast.warning(
+						"The board changed while you were editing. Refresh FlowScript before applying your draft.",
+					);
+				}
+				return;
+			}
+			applyStateRef.current = {
+				...applyStateRef.current,
+				applying: true,
+			};
 			setApplying(true);
 			try {
 				const result = await onApplyFlowScript(textRef.current, {
@@ -213,12 +240,22 @@ export function FlowScriptPanel({
 				}
 
 				setDiagnostics(result.diagnostics);
-				if (result.commands.length > 0) {
+				if (
+					shouldReloadFlowScriptAfterApply({
+						commandCount: result.commands.length,
+						correctionCount: result.corrections?.length ?? 0,
+						diagnosticCount: result.diagnostics.length,
+					})
+				) {
 					await load();
 				}
 			} catch {
 				// applyFlowScript already surfaced the error via toast
 			} finally {
+				applyStateRef.current = {
+					...applyStateRef.current,
+					applying: false,
+				};
 				setApplying(false);
 			}
 		},
@@ -227,7 +264,6 @@ export function FlowScriptPanel({
 
 	const applyRef = useRef<() => void>(() => {});
 	applyRef.current = () => {
-		if (readOnly || applying || !dirtyRef.current) return;
 		void runApply(false);
 	};
 
@@ -295,6 +331,14 @@ export function FlowScriptPanel({
 		toast.success("FlowScript copied to clipboard");
 	}, []);
 
+	const requestReload = useCallback(() => {
+		if (dirtyRef.current) {
+			setRefreshConfirmationOpen(true);
+			return;
+		}
+		void load();
+	}, [load]);
+
 	const editorTheme = useMemo(
 		() =>
 			resolvedTheme === "dark" ? FLOWSCRIPT_THEME_DARK : FLOWSCRIPT_THEME_LIGHT,
@@ -339,8 +383,8 @@ export function FlowScriptPanel({
 								variant="ghost"
 								size="icon"
 								className="h-7 w-7"
-								disabled={loading}
-								onClick={() => void load()}
+								disabled={loading || applying}
+								onClick={requestReload}
 							>
 								<RefreshCcwIcon className="h-3.5 w-3.5" />
 							</Button>
@@ -359,15 +403,37 @@ export function FlowScriptPanel({
 			</div>
 
 			{boardChangedBehindEdits && (
-				<button
-					type="button"
-					onClick={() => void load()}
-					className="flex items-center gap-2 border-b bg-[color-mix(in_oklch,var(--primary)_8%,transparent)] px-3 py-1.5 text-left text-xs text-muted-foreground hover:bg-[color-mix(in_oklch,var(--primary)_14%,transparent)]"
+				<div
+					role="alert"
+					className="flex flex-wrap items-center justify-between gap-2 border-b bg-[color-mix(in_oklch,var(--primary)_8%,transparent)] px-3 py-2 text-xs text-muted-foreground"
 				>
-					<RefreshCcwIcon className="h-3 w-3 shrink-0" />
-					The board changed while you were editing. Click to re-render and
-					discard your text edits.
-				</button>
+					<span className="flex min-w-0 items-center gap-2">
+						<AlertTriangleIcon className="h-3.5 w-3.5 shrink-0 text-yellow-500" />
+						The board changed while you were editing. Applying is paused until
+						you refresh from the board.
+					</span>
+					<div className="flex shrink-0 items-center gap-1.5">
+						<Button
+							variant="ghost"
+							size="sm"
+							className="h-7 px-2 text-xs"
+							onClick={() => void handleCopy()}
+						>
+							<CopyIcon className="mr-1 h-3 w-3" />
+							Copy edits
+						</Button>
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-7 px-2 text-xs"
+							disabled={loading || applying}
+							onClick={requestReload}
+						>
+							<RefreshCcwIcon className="mr-1 h-3 w-3" />
+							Refresh from board
+						</Button>
+					</div>
+				</div>
 			)}
 
 			<div className="relative min-h-0 flex-1">
@@ -449,7 +515,11 @@ export function FlowScriptPanel({
 			{!readOnly && (
 				<div className="flex shrink-0 items-center justify-between gap-2 border-t px-3 py-2">
 					<span className="text-[11px] text-muted-foreground">
-						{dirty ? "Unapplied changes — ⌘S to apply" : "In sync with board"}
+						{boardChangedBehindEdits
+							? "Board changed — refresh before applying"
+							: dirty
+								? "Unapplied changes — ⌘S to apply"
+								: "In sync with board"}
 					</span>
 					<div className="flex items-center gap-2">
 						<Button
@@ -468,7 +538,7 @@ export function FlowScriptPanel({
 						<Button
 							size="sm"
 							className="h-7"
-							disabled={!dirty || applying || loading}
+							disabled={!canApply}
 							onClick={() => void runApply(false)}
 						>
 							{applying ? (
@@ -479,6 +549,39 @@ export function FlowScriptPanel({
 					</div>
 				</div>
 			)}
+
+			<AlertDialog
+				open={refreshConfirmationOpen}
+				onOpenChange={setRefreshConfirmationOpen}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>
+							Refresh FlowScript from the board?
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							This replaces the current editor text with the latest board state.
+							Copy your edits first if you want to reapply them to the refreshed
+							script.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Keep editing</AlertDialogCancel>
+						<Button variant="outline" onClick={() => void handleCopy()}>
+							<CopyIcon className="mr-1 h-3.5 w-3.5" />
+							Copy edits
+						</Button>
+						<AlertDialogAction
+							onClick={() => {
+								setRefreshConfirmationOpen(false);
+								void load();
+							}}
+						>
+							Refresh and replace
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 
 			<AlertDialog
 				open={typeof destructiveMessage !== "undefined"}

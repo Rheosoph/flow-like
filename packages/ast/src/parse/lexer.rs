@@ -249,12 +249,22 @@ impl Lexer {
                             self.col,
                         ));
                     };
+                    // JSON's escape set plus `'`. `b`/`f` are required because a `Literal::Json`
+                    // span is re-emitted verbatim after serde_json validates it — and the lexer
+                    // runs over the whole file first, so without them a JSON default that would
+                    // round-trip byte-exactly fails to lex. `'` and `/` denote characters that
+                    // need no escape, so they normalize away, as `\uXXXX` already does.
+                    // Unknown escapes stay a HARD ERROR: passing them through would silently turn
+                    // a regex `"\d+"` into `"d+"`, which applies cleanly and fails at run time.
                     match esc {
                         '"' => value.push('"'),
+                        '\'' => value.push('\''),
                         '\\' => value.push('\\'),
                         'n' => value.push('\n'),
                         'r' => value.push('\r'),
                         't' => value.push('\t'),
+                        'b' => value.push('\u{8}'),
+                        'f' => value.push('\u{c}'),
                         '/' => value.push('/'),
                         'u' => {
                             let code = self.unicode_escape()?;
