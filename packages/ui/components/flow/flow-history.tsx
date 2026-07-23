@@ -14,18 +14,31 @@ import {
 	takeUndo,
 } from "../../lib/flow-history-stacks";
 import { toastWarning } from "../../lib/messages";
+import type { BoardEditReceiptHistoryMode } from "../../lib/flowpilot/board-edit-job-delivery";
 
 interface IStackItem extends IHistoryStacks {
 	key: string;
 }
 
+interface IHistoryDelivery {
+	key: string;
+	boardKey: string;
+	deliveryId: string;
+	createdAt: Date;
+}
+
 class UndoRedoDB extends Dexie {
 	stacks!: Dexie.Table<IStackItem, string>;
+	deliveries!: Dexie.Table<IHistoryDelivery, string>;
 
 	constructor() {
 		super("undo-redo");
 		this.version(1).stores({
 			stacks: "key",
+		});
+		this.version(2).stores({
+			stacks: "key",
+			deliveries: "key, boardKey, createdAt",
 		});
 	}
 }
@@ -54,6 +67,7 @@ const readStacks = (data: IStackItem | undefined): IHistoryStacks =>
 				undoStack: data.undoStack ?? [],
 				redoStack: data.redoStack ?? [],
 				boardStamp: data.boardStamp,
+				deliveryIds: data.deliveryIds ?? [],
 			}
 		: emptyStacks();
 
@@ -86,6 +100,44 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 		await db.transaction("rw", db.stacks, async () => {
 			const stacks = readStacks(await db.stacks.get(key));
 			await writeStacks(key, pushBatch(stacks, commands));
+		});
+	};
+
+	const pushCommandsOnce = async (
+		commands: IGenericCommand[],
+		deliveryId: string,
+		historyMode: BoardEditReceiptHistoryMode = "append",
+	) => {
+		const deliveryKey = `${key}\u001f${deliveryId}`;
+		await db.transaction("rw", db.stacks, db.deliveries, async () => {
+			if (await db.deliveries.get(deliveryKey)) return;
+			const data = await db.stacks.get(key);
+			const stacks = readStacks(data);
+			// Migrate the former stack-local marker without duplicating its history batch.
+			if (stacks.deliveryIds?.includes(deliveryId)) {
+				await db.deliveries.put({
+					key: deliveryKey,
+					boardKey: key,
+					deliveryId,
+					createdAt: new Date(),
+				});
+				return;
+			}
+			if (historyMode === "append") {
+				const next = pushBatch(stacks, commands);
+				await writeStacks(key, next);
+			} else {
+				// A rehydrated native apply may predate newer user edits. Recording its inverse batch
+				// on top would make Undo replay history out of order, so atomically invalidate the
+				// stack while retaining the exactly-once delivery marker.
+				await db.stacks.delete(key);
+			}
+			await db.deliveries.put({
+				key: deliveryKey,
+				boardKey: key,
+				deliveryId,
+				createdAt: new Date(),
+			});
 		});
 	};
 
@@ -160,6 +212,7 @@ export const useUndoRedo = (appId: string, boardId: string) => {
 	return {
 		pushCommand,
 		pushCommands,
+		pushCommandsOnce,
 		undo,
 		redo,
 		rollbackUndo,

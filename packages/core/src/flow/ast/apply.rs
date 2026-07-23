@@ -365,6 +365,9 @@ impl FlowScriptApplyPlanner {
             );
         }
         for (name, node_id) in &board.refs {
+            if crate::flow::board::is_internal_board_ref(name) {
+                continue;
+            }
             planner.register_node_aliases(&[Some(name.as_str())], node_id);
         }
 
@@ -1632,6 +1635,7 @@ mod tests {
             log_level: LogLevel::Info,
             execution_mode: ExecutionMode::Hybrid,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
             hash: None,

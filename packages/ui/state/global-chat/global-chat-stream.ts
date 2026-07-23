@@ -20,7 +20,12 @@ import {
 	type IMessage,
 	globalChatDb,
 } from "./global-chat-db";
-import { useGlobalChatStore } from "./global-chat-store";
+import {
+	type GlobalChatAgentSelection,
+	beginGlobalChatTurnSelection,
+	endGlobalChatTurnSelection,
+	useGlobalChatStore,
+} from "./global-chat-store";
 
 // The global-chat streaming engine lives here — OUTSIDE any React component — so a turn keeps
 // streaming, checkpointing, and finalizing even as the conversation morphs between the /chat page
@@ -36,18 +41,62 @@ const ACTIVE_RUN_KEY = "flow-like:global-chat:active-run";
 interface ActiveRun {
 	conversationId: string;
 	runId: string;
+	agentSelection?: GlobalChatAgentSelection;
 }
 
 /** Remember the run currently streaming, so a reload mid-response can re-attach to it. */
-export function setActiveRun(conversationId: string, runId: string) {
+export function setActiveRun(
+	conversationId: string,
+	runId: string,
+	agentSelection?: GlobalChatAgentSelection,
+) {
 	try {
 		sessionStorage.setItem(
 			ACTIVE_RUN_KEY,
-			JSON.stringify({ conversationId, runId }),
+			JSON.stringify({
+				conversationId,
+				runId,
+				...(agentSelection
+					? {
+							agentSelection: {
+								provider: agentSelection.provider,
+								selectedModelId: agentSelection.selectedModelId,
+								reasoningEffort: agentSelection.reasoningEffort,
+							},
+						}
+					: {}),
+			}),
 		);
 	} catch {
 		// resumability is best-effort
 	}
+}
+
+function readAgentSelection(
+	value: unknown,
+): GlobalChatAgentSelection | undefined {
+	if (!value || typeof value !== "object") return undefined;
+	const candidate = value as Record<string, unknown>;
+	if (
+		candidate.provider !== "bits" &&
+		candidate.provider !== "github-copilot" &&
+		candidate.provider !== "codex" &&
+		candidate.provider !== "claude-code" &&
+		candidate.provider !== "copilot"
+	) {
+		return undefined;
+	}
+	if (
+		typeof candidate.selectedModelId !== "string" ||
+		typeof candidate.reasoningEffort !== "string"
+	) {
+		return undefined;
+	}
+	return Object.freeze({
+		provider: candidate.provider,
+		selectedModelId: candidate.selectedModelId,
+		reasoningEffort: candidate.reasoningEffort,
+	});
 }
 
 export function readActiveRun(): ActiveRun | null {
@@ -59,7 +108,11 @@ export function readActiveRun(): ActiveRun | null {
 			typeof parsed?.conversationId === "string" &&
 			typeof parsed?.runId === "string"
 		) {
-			return parsed as ActiveRun;
+			return {
+				conversationId: parsed.conversationId,
+				runId: parsed.runId,
+				agentSelection: readAgentSelection(parsed.agentSelection),
+			};
 		}
 	} catch {
 		// ignore malformed pointer
@@ -67,8 +120,9 @@ export function readActiveRun(): ActiveRun | null {
 	return null;
 }
 
-export function clearActiveRun() {
+export function clearActiveRun(runId?: string) {
 	try {
+		if (runId && readActiveRun()?.runId !== runId) return;
 		sessionStorage.removeItem(ACTIVE_RUN_KEY);
 	} catch {
 		// best-effort
@@ -129,6 +183,8 @@ export async function persistGlobalChatSession(
 interface DriveOptions {
 	/** The assistant message shell being streamed into; its id MUST equal the run id. */
 	responseMessage: IMessage;
+	/** Immutable parent-turn provider/model/effort, shared with all nested specialists. */
+	agentSelection?: GlobalChatAgentSelection;
 	/** True for a resume re-attach (guards against overwriting a restored checkpoint on a miss). */
 	isResume?: boolean;
 	/** Bounded/redacted user input metadata included in the persisted debug report. */
@@ -166,6 +222,7 @@ export function tauriStart(command: string, args: Record<string, unknown>) {
  */
 export async function driveGlobalChatStream({
 	responseMessage,
+	agentSelection,
 	isResume,
 	inputPreview,
 	start,
@@ -174,11 +231,15 @@ export async function driveGlobalChatStream({
 	const acc = createStreamAccumulator();
 	let lastCheckpoint = 0;
 	let streamFailure: string | undefined;
+	const turnSelection = beginGlobalChatTurnSelection(
+		responseMessage.id,
+		agentSelection,
+	);
 	const initialState = store.getState();
 	initialState.beginDebugReport(responseMessage.id, {
-		provider: initialState.provider,
-		model: initialState.selectedModelId,
-		reasoningEffort: initialState.reasoningEffort,
+		provider: turnSelection.provider,
+		model: turnSelection.selectedModelId,
+		reasoningEffort: turnSelection.reasoningEffort,
 		inputPreview,
 	});
 	initialState.recordDebugEvent(responseMessage.id, {
@@ -412,7 +473,8 @@ export async function driveGlobalChatStream({
 		finalState.setStreamingMessage(null);
 		finalState.setStreaming(false);
 		finalState.clearDebugReport(responseMessage.id);
-		clearActiveRun();
+		clearActiveRun(responseMessage.id);
+		endGlobalChatTurnSelection(responseMessage.id);
 	}
 }
 
@@ -431,6 +493,14 @@ export function resumeGlobalChatStream() {
 	if (state.isStreaming) return;
 	const active = readActiveRun();
 	if (!active || active.conversationId !== state.activeConversationId) return;
+	const agentSelection =
+		active.agentSelection ??
+		Object.freeze({
+			provider: state.provider,
+			selectedModelId: state.selectedModelId,
+			reasoningEffort: state.reasoningEffort,
+		});
+	beginGlobalChatTurnSelection(active.runId, agentSelection);
 	// Claim the resume synchronously so a concurrently-mounted surface can't double-attach.
 	state.setStreaming(true);
 	const responseMessage = makeGlobalChatMessage(
@@ -444,6 +514,7 @@ export function resumeGlobalChatStream() {
 	state.setStreamingMessage({ ...responseMessage });
 	void driveGlobalChatStream({
 		responseMessage,
+		agentSelection,
 		isResume: true,
 		start: tauriStart("global_chat_resume", { runId: active.runId }),
 	});

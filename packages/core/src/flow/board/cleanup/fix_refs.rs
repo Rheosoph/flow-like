@@ -43,6 +43,19 @@ impl BoardCleanupLogic for FixRefsCleanup {
     where
         Self: Sized,
     {
+        // JSON/import paths can still construct legacy boards without passing through protobuf
+        // migration. Move any reserved entries across before semantic ref resolution begins.
+        let legacy_internal_keys = board
+            .refs
+            .keys()
+            .filter(|key| super::super::is_internal_board_ref(key))
+            .cloned()
+            .collect::<Vec<_>>();
+        for key in legacy_internal_keys {
+            if let Some(value) = board.refs.remove(&key) {
+                let _ = board.insert_internal_ref(key, value);
+            }
+        }
         Self {
             refs: board.refs.clone(),
             abandoned: board.refs.keys().cloned().collect(),

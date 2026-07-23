@@ -367,6 +367,7 @@ export function FlowBoard({
 	const {
 		pushCommand,
 		pushCommands,
+		pushCommandsOnce,
 		redo,
 		undo,
 		rollbackUndo,
@@ -830,6 +831,7 @@ export function FlowBoard({
 		version,
 		pushCommand,
 		pushCommands,
+		pushCommandsOnce,
 		stampHistory,
 	});
 
@@ -3119,8 +3121,11 @@ export function FlowBoard({
 		[applyFlowScript, currentLayer, catalog.data],
 	);
 	const handleApplyFlowIrCommit = useCallback(
-		(token: Parameters<typeof applyFlowIrCommit>[0]) =>
-			applyFlowIrCommit(token),
+		(
+			token: Parameters<typeof applyFlowIrCommit>[0],
+			deliveryId?: string,
+			historyMode?: Parameters<typeof applyFlowIrCommit>[2],
+		) => applyFlowIrCommit(token, deliveryId, historyMode),
 		[applyFlowIrCommit],
 	);
 

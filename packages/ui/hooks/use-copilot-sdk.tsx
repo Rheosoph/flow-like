@@ -49,6 +49,8 @@ interface UseCopilotSDKResult {
 	isConnecting: boolean;
 	/** Available Copilot models */
 	models: CopilotModel[];
+	/** Whether `models` came from a completed backend catalog request rather than the static fallback. */
+	hasLoadedModelCatalog: boolean;
 	/** Current auth status */
 	authStatus: CopilotAuthStatus | null;
 	/** Error message if any */
@@ -82,6 +84,7 @@ export function useCopilotSDK(
 	const [models, setModels] = useState<CopilotModel[]>(() =>
 		staticModelsForBackend(backend),
 	);
+	const [hasLoadedModelCatalog, setHasLoadedModelCatalog] = useState(false);
 	const [authStatus, setAuthStatus] = useState<CopilotAuthStatus | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
@@ -99,6 +102,7 @@ export function useCopilotSDK(
 
 	useEffect(() => {
 		setModels(staticModelsForBackend(backend));
+		setHasLoadedModelCatalog(false);
 		setAuthStatus(null);
 	}, [backend]);
 
@@ -151,6 +155,7 @@ export function useCopilotSDK(
 				`Stopping ${backend}`,
 			);
 			setModels(staticModelsForBackend(backend));
+			setHasLoadedModelCatalog(false);
 			setAuthStatus(null);
 		} catch (e) {
 			const errMsg = e instanceof Error ? e.message : String(e);
@@ -175,10 +180,12 @@ export function useCopilotSDK(
 				`Loading ${backend} models`,
 			);
 			setModels(result.length > 0 ? result : staticModelsForBackend(backend));
+			setHasLoadedModelCatalog(true);
 		} catch (e) {
 			const errMsg = e instanceof Error ? e.message : String(e);
 			setError(errMsg);
 			setModels(staticModelsForBackend(backend));
+			setHasLoadedModelCatalog(false);
 		}
 	}, [backend, isTauriEnv, isRunning]);
 
@@ -216,6 +223,7 @@ export function useCopilotSDK(
 				copilotBackendConnectionCoordinator.reconcile(backend, running);
 				if (!running) {
 					setModels(staticModelsForBackend(backend));
+					setHasLoadedModelCatalog(false);
 					setAuthStatus(null);
 				}
 			} catch {
@@ -241,6 +249,7 @@ export function useCopilotSDK(
 		isRunning,
 		isConnecting,
 		models,
+		hasLoadedModelCatalog,
 		authStatus,
 		error,
 		start,

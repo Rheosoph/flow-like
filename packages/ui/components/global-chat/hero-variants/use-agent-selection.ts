@@ -22,6 +22,7 @@ import {
 	isAgentBackendProvider,
 	normalizeAIProvider,
 } from "../../flowpilot/types";
+import { resolveModelSelection } from "../model-selection";
 import { useHydrateAgentSelection } from "../use-agent-persistence";
 
 export interface AgentReasoningEffortOption {
@@ -144,23 +145,24 @@ export function useAgentSelection() {
 	// transient/fallback list can't strand them on the wrong model (and, because
 	// this uses the raw setter, it never rewrites the remembered value).
 	useEffect(() => {
-		if (models.length === 0) return;
 		let remembered: string | null = null;
 		try {
 			remembered = localStorage.getItem(AGENT_MODEL_KEY);
 		} catch {}
-		if (
-			remembered &&
-			remembered !== selectedModelId &&
-			models.some((model) => model.id === remembered)
-		) {
-			setSelectedModelId(remembered);
-			return;
-		}
-		if (!models.some((model) => model.id === selectedModelId)) {
-			setSelectedModelId(models[0].id);
-		}
-	}, [models, selectedModelId, setSelectedModelId]);
+		const nextModelId = resolveModelSelection({
+			models,
+			selectedModelId,
+			rememberedModelId: remembered,
+			canReplaceInvalidSelection: !isAgent || copilotSDK.hasLoadedModelCatalog,
+		});
+		if (nextModelId !== null) setSelectedModelId(nextModelId);
+	}, [
+		models,
+		selectedModelId,
+		setSelectedModelId,
+		isAgent,
+		copilotSDK.hasLoadedModelCatalog,
+	]);
 
 	const selectedModel = models.find((model) => model.id === selectedModelId);
 	const reasoningEffortOptions = selectedModel?.supportedReasoningEfforts ?? [];

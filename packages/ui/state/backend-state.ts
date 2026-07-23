@@ -18,6 +18,7 @@ import type {
 	IApplyFlowIrCommitResponse,
 	IApplyFlowScriptResponse,
 	IBoardState,
+	ICheckFlowScriptReconcileResponse,
 	IFlowScriptDiagnostic,
 } from "./backend-state/board-state";
 import type { IDatabaseState } from "./backend-state/db-state";
@@ -88,6 +89,7 @@ export type {
 	IBoardState,
 	IApplyFlowIrCommitResponse,
 	IApplyFlowScriptResponse,
+	ICheckFlowScriptReconcileResponse,
 	IFlowScriptDiagnostic,
 	IEventState,
 	IHelperState,

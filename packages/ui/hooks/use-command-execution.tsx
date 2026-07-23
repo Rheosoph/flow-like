@@ -3,6 +3,10 @@ import { AlertTriangleIcon, XIcon } from "lucide-react";
 import { useCallback, useRef } from "react";
 import { getErrorMessage } from "../lib/error-message";
 import { boardFingerprint } from "../lib/flow-history-stacks";
+import {
+	type BoardEditReceiptHistoryMode,
+	flowIrCommitDeliveryId,
+} from "../lib/flowpilot/board-edit-job-delivery";
 import { toastError, toastWarning } from "../lib/messages";
 import type { IGenericCommand } from "../lib/schema";
 import type { FlowIrCommitToken } from "../lib/schema/copilot";
@@ -25,8 +29,13 @@ interface UseCommandExecutionProps {
 	boardId: string;
 	board: UseQueryResult<IBoard>;
 	version: [number, number, number] | undefined;
-	pushCommand: (command: any, append?: boolean) => Promise<void>;
-	pushCommands: (commands: any[]) => Promise<void>;
+	pushCommand: (command: IGenericCommand, append?: boolean) => Promise<void>;
+	pushCommands: (commands: IGenericCommand[]) => Promise<void>;
+	pushCommandsOnce: (
+		commands: IGenericCommand[],
+		deliveryId: string,
+		historyMode?: BoardEditReceiptHistoryMode,
+	) => Promise<void>;
 	stampHistory: (stamp?: string) => Promise<void>;
 }
 
@@ -45,6 +54,7 @@ export function useCommandExecution({
 	version,
 	pushCommand,
 	pushCommands,
+	pushCommandsOnce,
 	stampHistory,
 }: UseCommandExecutionProps) {
 	const awarenessRef = useRef<any | undefined>(undefined);
@@ -102,7 +112,7 @@ export function useCommandExecution({
 			}
 			return refreshed;
 		},
-		[board.refetch, refetchBoardAndStampHistory],
+		[refetchBoardAndStampHistory],
 	);
 
 	const executeCommand = useCallback(
@@ -308,7 +318,11 @@ export function useCommandExecution({
 	);
 
 	const applyFlowIrCommit = useCallback(
-		async (token: FlowIrCommitToken): Promise<IApplyFlowIrCommitResponse> => {
+		async (
+			token: FlowIrCommitToken,
+			deliveryId?: string,
+			historyMode: BoardEditReceiptHistoryMode = "append",
+		): Promise<IApplyFlowIrCommitResponse> => {
 			const backend = useBackendStore.getState().backend;
 			if (!backend?.boardState.applyFlowIrCommit) {
 				throw new Error(
@@ -318,9 +332,19 @@ export function useCommandExecution({
 			if (typeof version !== "undefined") {
 				throw new Error("Cannot change an old board version");
 			}
+			const effectiveDeliveryId = flowIrCommitDeliveryId(token);
+			if (deliveryId && deliveryId !== effectiveDeliveryId) {
+				throw new Error(
+					"Compiled workflow delivery identity must match its immutable claim id",
+				);
+			}
 			let result: IApplyFlowIrCommitResponse;
 			try {
-				result = await backend.boardState.applyFlowIrCommit(appId, token);
+				result = await backend.boardState.applyFlowIrCommit(
+					appId,
+					token,
+					effectiveDeliveryId,
+				);
 			} catch (error) {
 				throw await preserveApplyErrorAfterRefetch(
 					"Compiled workflow apply",
@@ -328,19 +352,33 @@ export function useCommandExecution({
 				);
 			}
 			if (result.status === "applied" && result.commands.length > 0) {
-				// The native transaction has already persisted and acknowledged the exact
-				// retained compiled workflow batch. Renderer bookkeeping must never turn that
-				// success into a retry/dismiss path: collect refresh/history failures as
-				// recoverable warnings.
-				const followups = await Promise.allSettled([
-					pushCommands(result.commands),
+				const effectiveHistoryMode = result.replayed
+					? "invalidate"
+					: historyMode;
+				// The native mutation is already committed, but its delivery job must remain
+				// retryable until both remote/outbox handoff and the idempotent history marker
+				// are durable. Refresh failure is visible but does not invalidate those writes.
+				const history = await Promise.resolve(
+					pushCommandsOnce(
+						result.commands,
+						effectiveDeliveryId,
+						effectiveHistoryMode,
+					),
+				).then(
+					() => ({ ok: true as const }),
+					(error) => ({ ok: false as const, error }),
+				);
+				const refresh = await Promise.resolve(
 					refetchBoardAndStampHistory(),
-				]);
+				).then(
+					() => ({ ok: true as const }),
+					(error) => ({ ok: false as const, error }),
+				);
 				awarenessRef.current?.setLocalStateField("boardUpdate", Date.now());
-				const followupErrors = followups.flatMap((followup) =>
-					followup.status === "rejected"
-						? [getErrorMessage(followup.reason, "Unknown renderer error")]
-						: [],
+				const followupErrors = [history, refresh].flatMap((followup) =>
+					followup.ok
+						? []
+						: [getErrorMessage(followup.error, "Unknown renderer error")],
 				);
 				if (followupErrors.length > 0) {
 					const warning = `The workflow was applied, but local history or refresh bookkeeping needs recovery: ${followupErrors.join("; ")}`;
@@ -351,9 +389,14 @@ export function useCommandExecution({
 					toastWarning(warning, <AlertTriangleIcon />);
 					return {
 						...result,
+						delivery_complete: result.delivery_complete === true && history.ok,
 						diagnostics: [...result.diagnostics, warning],
 					};
 				}
+				return {
+					...result,
+					delivery_complete: result.delivery_complete === true,
+				};
 			} else {
 				try {
 					await refetchBoardAndStampHistory();
@@ -371,7 +414,7 @@ export function useCommandExecution({
 		[
 			appId,
 			preserveApplyErrorAfterRefetch,
-			pushCommands,
+			pushCommandsOnce,
 			refetchBoardAndStampHistory,
 			version,
 		],

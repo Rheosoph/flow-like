@@ -12,6 +12,7 @@ import {
 	markExplicitSchemaCreateUnavailable,
 	retainPendingDatabaseSchema,
 } from "../lib/database-capability-session";
+import { normalizeDatabaseTableIdentifier } from "../lib/database-table-name";
 import { type IBackendState, useBackend } from "../state/backend-state";
 import type { IBoardState } from "../state/backend-state/board-state";
 import { IIndexType } from "../state/backend-state/db-state";
@@ -1002,6 +1003,12 @@ export function useFrontendRuntimeToolExecutor(
 						operation === "describe_table" ? 10 : 50,
 						200,
 					);
+					const includeSample = getArgBool(
+						args,
+						"include_sample",
+						"includeSample",
+						true,
+					);
 
 					switch (operation) {
 						case "list_tables": {
@@ -1034,9 +1041,11 @@ export function useFrontendRuntimeToolExecutor(
 							if (!tableName)
 								throw new Error("create_table requires table_name.");
 							const fields = parseDatabaseSchemaFields(args.fields);
-							return createTableRuntime(backend.dbState, {
+							const physicalTableName =
+								normalizeDatabaseTableIdentifier(tableName);
+							const result = await createTableRuntime(backend.dbState, {
 								appId: toolAppId,
-								tableName,
+								tableName: physicalTableName,
 								fields,
 								ifNotExists: getArgBool(
 									args,
@@ -1046,6 +1055,16 @@ export function useFrontendRuntimeToolExecutor(
 								),
 								userScoped,
 							});
+							return physicalTableName === tableName
+								? result
+								: {
+										...result,
+										table_name: physicalTableName,
+										requested_table_name: tableName,
+										name_normalized: true,
+										name_normalization:
+											"Human-facing table labels are stored as stable physical identifiers; use table_name in all workflow references.",
+									};
 						}
 						case "describe_table": {
 							if (!tableName)
@@ -1054,13 +1073,15 @@ export function useFrontendRuntimeToolExecutor(
 								backend.dbState.getSchema(toolAppId, tableName, userScoped),
 								backend.dbState.getIndices(toolAppId, tableName, userScoped),
 								backend.dbState.countItems(toolAppId, tableName, userScoped),
-								backend.dbState.listItems(
-									toolAppId,
-									tableName,
-									0,
-									limit,
-									userScoped,
-								),
+								includeSample
+									? backend.dbState.listItems(
+											toolAppId,
+											tableName,
+											0,
+											limit,
+											userScoped,
+										)
+									: Promise.resolve(undefined),
 							]);
 							return {
 								status: "ok",
@@ -1069,7 +1090,7 @@ export function useFrontendRuntimeToolExecutor(
 								schema,
 								indices,
 								row_count: rowCount,
-								sample,
+								...(includeSample ? { sample } : {}),
 							};
 						}
 						case "query": {

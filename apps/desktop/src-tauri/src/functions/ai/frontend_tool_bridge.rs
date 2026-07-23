@@ -180,6 +180,9 @@ pub struct FrontendToolContext {
     /// Immutable top-level user message that owns this tool tree. Delegated specialist prompts
     /// may add their own instruction, but host orchestration suffixes must never replace it.
     pub source_user_prompt: Option<String>,
+    /// Bounded database/UI/storage context gathered once by the host before board generation.
+    /// Kept transport-neutral so Bits, GitHub Copilot, Codex, and Claude receive one schema.
+    pub board_context_manifest: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -934,6 +937,7 @@ fn safe_request_context(context: &FrontendToolSafeContext) -> Option<FrontendToo
             parent_request_id: context.parent_request_id.clone(),
             conversation_id: None,
             source_user_prompt: None,
+            board_context_manifest: None,
         })
 }
 
@@ -1377,6 +1381,7 @@ mod tests {
             parent_request_id: Some("outer-request".to_string()),
             conversation_id: None,
             source_user_prompt: None,
+            board_context_manifest: None,
         };
 
         apply_tool_context("database_tool", &mut arguments, Some(&context));
@@ -1411,6 +1416,7 @@ mod tests {
             parent_request_id: Some("flowpilot-tool-parent-1".to_string()),
             conversation_id: None,
             source_user_prompt: None,
+            board_context_manifest: None,
         };
         let approval = FrontendToolApproval::mutating(
             "Apply board",
@@ -1487,6 +1493,7 @@ mod tests {
                 parent_request_id: Some("parent".to_string()),
                 conversation_id: None,
                 source_user_prompt: None,
+                board_context_manifest: None,
             }),
             dispatched_at_ms: 1_000,
             deadline_at_ms: 121_000,

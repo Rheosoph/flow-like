@@ -60,6 +60,7 @@ import { TauriApiState } from "./tauri-provider/api-state";
 import { AppState } from "./tauri-provider/app-state";
 import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
+import type { CommandSyncRemoteIdentity } from "./tauri-provider/command-sync";
 import { DatabaseState } from "./tauri-provider/db-state";
 import { QueryState } from "./tauri-provider/query-state";
 import { EventState } from "./tauri-provider/event-state";
@@ -202,9 +203,21 @@ export class TauriBackend implements IBackendState {
 	}
 
 	async isOffline(appId: string): Promise<boolean> {
+		const visibility = await this.appVisibility(appId);
+		return visibility === undefined || visibility === IAppVisibility.Offline;
+	}
+
+	/** True only when local metadata explicitly identifies an app as local-only. */
+	async isLocalOnly(appId: string): Promise<boolean> {
+		return (await this.appVisibility(appId)) === IAppVisibility.Offline;
+	}
+
+	private async appVisibility(
+		appId: string,
+	): Promise<IAppVisibility | undefined> {
 		const status = await appsDB.visibility.get(appId);
 		if (typeof status !== "undefined") {
-			return status.visibility === IAppVisibility.Offline;
+			return status.visibility;
 		}
 		try {
 			const app = await invoke<{ visibility?: IAppVisibility }>("get_app", {
@@ -212,24 +225,184 @@ export class TauriBackend implements IBackendState {
 			});
 			const visibility = app.visibility ?? IAppVisibility.Offline;
 			await appsDB.visibility.put({ visibility, appId });
-			return visibility === IAppVisibility.Offline;
+			return visibility;
 		} catch {
-			return true;
+			return undefined;
 		}
 	}
 
 	async pushOfflineSyncCommand(
 		appId: string,
 		boardId: string,
-		commands: IGenericCommand[],
+		chunks: IGenericCommand[][],
+		idempotencyKey?: string,
+		chunkOffset = 0,
+		commands?: IGenericCommand[],
+		blockedReason?: string,
+		remoteIdentity?: CommandSyncRemoteIdentity,
 	) {
-		console.log("Pushing offline sync command", { appId, boardId, commands });
-		await offlineSyncDB.commands.put({
-			commandId: createId(),
-			appId: appId,
-			boardId: boardId,
-			commands: commands,
-			createdAt: new Date(),
+		console.log("Pushing offline sync command", {
+			appId,
+			boardId,
+			chunkCount: chunks.length,
+			commandCount:
+				chunks.reduce((count, chunk) => count + chunk.length, 0) +
+				(commands?.length ?? 0),
+			blocked: Boolean(blockedReason),
+		});
+		const commandId = idempotencyKey
+			? `${appId}\u001f${boardId}\u001f${idempotencyKey}`
+			: createId();
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			// Preserve an already-queued undelivered tail. A renderer replay of the full receipt
+			// must not overwrite it and resend chunks that the server already accepted.
+			if (idempotencyKey && (await offlineSyncDB.commands.get(commandId)))
+				return;
+			const latest = await offlineSyncDB.commands.orderBy("sequence").last();
+			const sequence = Math.max(Date.now() * 1000, (latest?.sequence ?? 0) + 1);
+			await offlineSyncDB.commands.put({
+				commandId,
+				appId,
+				boardId,
+				chunks,
+				commands,
+				createdAt: new Date(),
+				idempotencyKey,
+				chunkOffset,
+				sequence,
+				blockedReason,
+				remoteIdentityVersion: 1,
+				remoteProfileId: remoteIdentity
+					? remoteIdentity.remoteProfileId
+					: this.profile?.id,
+				remotePrincipalId: remoteIdentity
+					? remoteIdentity.remotePrincipalId
+					: this.auth?.user?.profile.sub,
+				remoteHub: remoteIdentity
+					? remoteIdentity.remoteHub
+					: this.profile?.hub,
+				deferReceiptAckUntilNativeTerminal:
+					idempotencyKey?.startsWith("flowpilot-board-edit:") === true,
+			});
+		});
+	}
+
+	async checkpointOfflineSyncCommand(
+		commandId: string,
+		remainingChunks: IGenericCommand[][],
+		chunkOffset: number,
+		idempotencyKey: string,
+		receiptKey: string,
+		deferReceiptAck: boolean,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing) return;
+			const deferredReceiptAcks = deferReceiptAck
+				? Array.from(
+						new Set([...(existing.deferredReceiptAcks ?? []), receiptKey]),
+					)
+				: existing.deferredReceiptAcks;
+			await offlineSyncDB.commands.put({
+				...existing,
+				commands: undefined,
+				chunks: remainingChunks,
+				chunkOffset,
+				idempotencyKey,
+				pendingReceiptAck: deferReceiptAck ? undefined : receiptKey,
+				deferredReceiptAcks,
+			});
+		});
+	}
+
+	async migrateLegacyOfflineSyncCommand(
+		commandId: string,
+		chunks: IGenericCommand[][],
+		idempotencyKey: string,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing || existing.chunks) return;
+			// Freeze the exact recovery partition and key before its first POST. Recomputing
+			// either after a crash could reuse `:0` for a different digest and permanently
+			// conflict with the server's durable idempotency receipt.
+			await offlineSyncDB.commands.put({
+				...existing,
+				commands: undefined,
+				chunks,
+				chunkOffset: existing.chunkOffset ?? 0,
+				idempotencyKey,
+			});
+		});
+	}
+
+	async blockOfflineSyncCommand(
+		commandId: string,
+		blockedReason: string,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing) return;
+			await offlineSyncDB.commands.put({
+				...existing,
+				blockedReason,
+			});
+		});
+	}
+
+	async bindLegacyOfflineSyncCommand(
+		commandId: string,
+		remoteIdentity: CommandSyncRemoteIdentity,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing || existing.remoteIdentityVersion === 1) return;
+			await offlineSyncDB.commands.put({
+				...existing,
+				remoteIdentityVersion: 1,
+				remoteProfileId: remoteIdentity.remoteProfileId,
+				remotePrincipalId: remoteIdentity.remotePrincipalId,
+				remoteHub: remoteIdentity.remoteHub,
+			});
+		});
+	}
+
+	async completeOfflineSyncReceiptAck(
+		commandId: string,
+		pendingReceiptAck: string,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing || existing.pendingReceiptAck !== pendingReceiptAck) return;
+			if (
+				(existing.chunks?.length ?? 0) === 0 &&
+				(existing.deferredReceiptAcks?.length ?? 0) === 0
+			) {
+				await offlineSyncDB.commands.delete(commandId);
+				return;
+			}
+			await offlineSyncDB.commands.put({
+				...existing,
+				pendingReceiptAck: undefined,
+			});
+		});
+	}
+
+	async deferOfflineSyncReceiptAck(
+		commandId: string,
+		receiptKey: string,
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing || existing.pendingReceiptAck !== receiptKey) return;
+			await offlineSyncDB.commands.put({
+				...existing,
+				pendingReceiptAck: undefined,
+				deferReceiptAckUntilNativeTerminal: true,
+				deferredReceiptAcks: Array.from(
+					new Set([...(existing.deferredReceiptAcks ?? []), receiptKey]),
+				),
+			});
 		});
 	}
 
@@ -244,9 +417,11 @@ export class TauriBackend implements IBackendState {
 			})
 			.toArray();
 
-		return commands.toSorted(
-			(a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
-		);
+		return commands.toSorted((a, b) => {
+			const aOrder = a.sequence ?? a.createdAt.getTime() * 1000;
+			const bOrder = b.sequence ?? b.createdAt.getTime() * 1000;
+			return aOrder - bOrder || a.commandId.localeCompare(b.commandId);
+		});
 	}
 
 	async clearOfflineSyncCommands(

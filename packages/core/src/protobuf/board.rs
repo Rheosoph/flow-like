@@ -130,6 +130,7 @@ impl ToProto<flow_like_types::proto::Board> for Board {
             log_level: self.log_level.to_proto(),
             execution_mode: self.execution_mode.to_proto(),
             refs: self.refs.clone(),
+            internal_refs: self.internal_refs.clone(),
             hash: self.hash,
             created_at: Some(Timestamp::from(self.created_at)),
             updated_at: Some(Timestamp::from(self.updated_at)),
@@ -139,6 +140,23 @@ impl ToProto<flow_like_types::proto::Board> for Board {
 
 impl FromProto<flow_like_types::proto::Board> for Board {
     fn from_proto(proto: flow_like_types::proto::Board) -> Self {
+        // v1 receipts were stored under a reserved prefix in the semantic `refs` map. Partition
+        // them on every load so old boards migrate without a separate storage rewrite. The
+        // dedicated protobuf field wins if a partially migrated object contains the same key in
+        // both maps.
+        let mut refs = HashMap::new();
+        let mut internal_refs = proto
+            .internal_refs
+            .into_iter()
+            .filter(|(key, _)| crate::flow::board::is_internal_board_ref(key))
+            .collect::<HashMap<_, _>>();
+        for (key, value) in proto.refs {
+            if crate::flow::board::is_internal_board_ref(&key) {
+                internal_refs.entry(key).or_insert(value);
+            } else {
+                refs.insert(key, value);
+            }
+        }
         Board {
             id: proto.id,
             name: proto.name,
@@ -173,7 +191,8 @@ impl FromProto<flow_like_types::proto::Board> for Board {
             stage: ExecutionStage::from_proto(proto.stage),
             log_level: LogLevel::from_proto(proto.log_level),
             execution_mode: ExecutionMode::from_proto(proto.execution_mode),
-            refs: proto.refs,
+            refs,
+            internal_refs,
             hash: proto.hash,
             created_at: proto
                 .created_at

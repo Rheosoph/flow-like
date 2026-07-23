@@ -17,10 +17,15 @@ use super::ir_tools::{
 use super::platform::PlatformToolBridge;
 #[cfg(test)]
 use super::provider::MAX_DECLARATION_PRIORITY_BLOCK_BYTES;
-use super::provider::{CatalogProvider, DECLARATION_PRIORITY_BEGIN, DECLARATION_PRIORITY_END};
+use super::provider::{
+    CatalogProvider, DECLARATION_PRIORITY_BEGIN, DECLARATION_PRIORITY_END,
+    parse_declaration_resolution_metadata,
+};
 use super::search::score_catalog_metadata;
 use super::stream::stream_frame;
-use super::tool_spec::{find_runtime_execution_tool_spec, missing_required_args};
+use super::tool_spec::{
+    find_runtime_execution_tool_spec, find_workflow_context_tool_spec, missing_required_args,
+};
 use super::types::{BoardCommand, RunContext, TemplateInfo};
 use crate::flow::ast::{
     ReconcileResult, RenderOptions, blocked_destructive_flowscript_message, board_to_flowscript,
@@ -390,13 +395,9 @@ fn declaration_priority_block(section: &str) -> Option<&str> {
 
 fn declaration_priority_projection(section: &str) -> Option<String> {
     let block = declaration_priority_block(section)?;
-    let identity_end = section
-        .find('\n')
-        .map(|index| index.saturating_add(1))
-        .unwrap_or_default();
-    let identity = section.get(..identity_end).unwrap_or_default();
+    let identity = declaration_section_identity_line(section);
     let identity = if identity.len() <= MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES {
-        identity.to_string()
+        identity
     } else {
         let retained = MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES.saturating_sub(4);
         let boundary = identity
@@ -418,13 +419,9 @@ fn declaration_exact_signature_line(section: &str) -> Option<&str> {
 }
 
 fn declaration_section_identity(section: &str) -> String {
-    let identity_end = section
-        .find('\n')
-        .map(|index| index.saturating_add(1))
-        .unwrap_or(section.len());
-    let identity = section.get(..identity_end).unwrap_or_default();
+    let identity = declaration_section_identity_line(section);
     if identity.len() <= MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES {
-        return identity.to_string();
+        return identity;
     }
     let retained = MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES.saturating_sub(4);
     let boundary = identity
@@ -434,6 +431,15 @@ fn declaration_section_identity(section: &str) -> String {
         .last()
         .unwrap_or_default();
     format!("{}...\n", &identity[..boundary])
+}
+
+fn declaration_section_identity_line(section: &str) -> String {
+    let line = section
+        .lines()
+        .find(|line| line.trim_start().starts_with("// declaration query:"))
+        .or_else(|| section.lines().next())
+        .unwrap_or_default();
+    format!("{line}\n")
 }
 
 fn declaration_exact_projection(section: &str) -> Option<String> {
@@ -488,12 +494,15 @@ fn bound_declaration_section_to(section: &str, max_bytes: usize) -> String {
         return section.to_string();
     }
     if let Some(mut priority_projection) = declaration_priority_projection(section)
-        && priority_projection
+        && priority_projection.len() <= max_bytes
+    {
+        if priority_projection
             .len()
             .saturating_add(DECLARATION_PRIORITY_TRUNCATION_NOTICE.len())
             <= max_bytes
-    {
-        priority_projection.push_str(DECLARATION_PRIORITY_TRUNCATION_NOTICE);
+        {
+            priority_projection.push_str(DECLARATION_PRIORITY_TRUNCATION_NOTICE);
+        }
         return priority_projection;
     }
     if let Some(mut exact_projection) = declaration_exact_projection(section)
@@ -541,11 +550,30 @@ fn declaration_batch_header(
     let mut matched_queries = Vec::new();
     let mut unmatched_queries = Vec::new();
     let mut output_omitted_queries = Vec::new();
+    let mut resolution_summaries = Vec::new();
     for (index, query) in batch.processed.iter().enumerate() {
-        let provider_matched = sections
+        let resolution = sections
             .get(index)
-            .and_then(|section| declaration_exact_signature_line(section))
-            .is_some();
+            .and_then(|section| parse_declaration_resolution_metadata(section));
+        let provider_matched = resolution
+            .as_ref()
+            .is_some_and(|resolution| resolution.status.is_confident());
+        resolution_summaries.push(match resolution {
+            Some(resolution) => json!({
+                "query": query,
+                "status": resolution.status,
+                "top_score": resolution.top_score,
+                "margin": resolution.margin,
+                "reason_codes": resolution.reason_codes,
+            }),
+            None => json!({
+                "query": query,
+                "status": "unresolved",
+                "top_score": null,
+                "margin": null,
+                "reason_codes": ["missing_resolution_metadata"],
+            }),
+        });
         if output_omitted.get(index).copied().unwrap_or_default() && provider_matched {
             output_omitted_queries.push(query.clone());
         } else if provider_matched {
@@ -565,6 +593,7 @@ fn declaration_batch_header(
         "matched_queries": matched_queries,
         "unmatched_count": unmatched_queries.len(),
         "unmatched_queries": unmatched_queries,
+        "resolutions": resolution_summaries,
         "output_omitted_count": output_omitted_queries.len(),
         "output_omitted_queries": output_omitted_queries,
         "complete": complete,
@@ -614,8 +643,8 @@ fn render_declaration_query_batch(batch: &DeclarationQueryBatch, sections: &[Str
         .map(|(index, _)| {
             sections
                 .get(index)
-                .and_then(|section| declaration_exact_signature_line(section))
-                .is_some()
+                .and_then(|section| parse_declaration_resolution_metadata(section))
+                .is_some_and(|resolution| resolution.status.is_confident())
         })
         .collect::<Vec<_>>();
     let mut output_omitted = vec![false; batch.processed.len()];
@@ -1708,6 +1737,82 @@ REF_IDS: Use '$0', '$1', etc. to reference nodes in same batch"#.to_string(),
 // Runtime Verification Tools (desktop bridge)
 // ============================================================================
 
+fn workflow_context_tool_definition(name: &str) -> ToolDefinition {
+    find_workflow_context_tool_spec(name)
+        .expect("workflow context tool spec must exist")
+        .to_tool_definition()
+}
+
+async fn call_workflow_context_tool(
+    bridge: &Arc<dyn PlatformToolBridge>,
+    name: &str,
+    arguments: Value,
+) -> Result<String, RuntimeVerificationToolError> {
+    let spec = find_workflow_context_tool_spec(name)
+        .ok_or_else(|| RuntimeVerificationToolError(format!("missing tool spec for {name}")))?;
+    if let Some(error) = missing_required_args(&spec, &arguments) {
+        return Err(RuntimeVerificationToolError(error));
+    }
+    Ok(bridge.call(name, arguments).await)
+}
+
+pub struct DatabaseContextTool {
+    pub bridge: Arc<dyn PlatformToolBridge>,
+}
+
+impl Tool for DatabaseContextTool {
+    const NAME: &'static str = "database_tool";
+    type Error = RuntimeVerificationToolError;
+    type Args = Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        workflow_context_tool_definition(Self::NAME)
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        call_workflow_context_tool(&self.bridge, Self::NAME, args).await
+    }
+}
+
+pub struct StorageContextTool {
+    pub bridge: Arc<dyn PlatformToolBridge>,
+}
+
+impl Tool for StorageContextTool {
+    const NAME: &'static str = "storage_tool";
+    type Error = RuntimeVerificationToolError;
+    type Args = Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        workflow_context_tool_definition(Self::NAME)
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        call_workflow_context_tool(&self.bridge, Self::NAME, args).await
+    }
+}
+
+pub struct UiInspectContextTool {
+    pub bridge: Arc<dyn PlatformToolBridge>,
+}
+
+impl Tool for UiInspectContextTool {
+    const NAME: &'static str = "ui_inspect";
+    type Error = RuntimeVerificationToolError;
+    type Args = Value;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        workflow_context_tool_definition(Self::NAME)
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        call_workflow_context_tool(&self.bridge, Self::NAME, args).await
+    }
+}
+
 fn runtime_tool_definition(name: &str) -> ToolDefinition {
     find_runtime_execution_tool_spec(name)
         .expect("runtime execution tool spec must exist")
@@ -2129,12 +2234,60 @@ pub fn flowscript_workspace_tag(flowscript: &str, status: &str) -> String {
     )
 }
 
+/// Replace double-quoted string literal contents with spaces so stub-marker scanning cannot trip
+/// on legitimate user-facing text (labels, prompts, messages). Escapes are honored; comments and
+/// code stay scannable.
+fn strip_flowscript_string_literals(source: &str) -> String {
+    let mut out = String::with_capacity(source.len());
+    let mut chars = source.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '"' {
+            out.push(ch);
+            continue;
+        }
+        out.push(' ');
+        while let Some(inner) = chars.next() {
+            match inner {
+                '\\' => {
+                    let _ = chars.next();
+                }
+                '"' => break,
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// True when `marker` occurs in `haystack` with non-alphanumeric characters on both sides, so a
+/// short marker like "todo" cannot match inside identifiers such as `todoList`.
+fn contains_stub_marker(haystack: &str, marker: &str) -> bool {
+    let mut search_from = 0;
+    while let Some(offset) = haystack[search_from..].find(marker) {
+        let start = search_from + offset;
+        let end = start + marker.len();
+        let bounded_left = haystack[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|ch| !ch.is_alphanumeric());
+        let bounded_right = haystack[end..]
+            .chars()
+            .next()
+            .is_none_or(|ch| !ch.is_alphanumeric());
+        if bounded_left && bounded_right {
+            return true;
+        }
+        search_from = end;
+    }
+    false
+}
+
 fn edit_flowscript_actionability_feedback(
     flowscript: &str,
     board_is_empty: bool,
     diagnostics: &[String],
 ) -> Option<String> {
-    let lower = flowscript.to_lowercase();
+    let lower = strip_flowscript_string_literals(flowscript).to_lowercase();
     let stub_markers = [
         "implementation plan",
         "implementation notes",
@@ -2153,7 +2306,10 @@ fn edit_flowscript_actionability_feedback(
         "clear wiring plan",
     ];
 
-    if stub_markers.iter().any(|marker| lower.contains(marker)) {
+    if stub_markers
+        .iter()
+        .any(|marker| contains_stub_marker(&lower, marker))
+    {
         return Some(
             "This edit looks like a plan/stub, not actionable FlowScript. `edit_flowscript` only creates board changes from real catalog calls. Do not submit TODOs, stub comments, lists of node names, or \"replace with\" instructions; call `get_declarations` for the missing signatures and submit concrete calls inside a function/event block."
                 .to_string(),
@@ -2946,8 +3102,36 @@ pub fn render_edit_flowscript_result(
     board_is_empty: bool,
     allow_deletions: bool,
 ) -> String {
-    let mut rendered =
-        render_edit_flowscript_result_legacy(flowscript, result, board_is_empty, allow_deletions);
+    render_edit_flowscript_result_inner(flowscript, result, board_is_empty, allow_deletions, true)
+}
+
+/// Render a commit the draft store already validated at an exact revision. The pre-commit
+/// actionability scan must not run here: a false positive (e.g. a stub marker inside a string
+/// literal) would report "Nothing was queued." for a commit whose pending claim the store already
+/// holds — a wedged state no agent effort can escape.
+pub fn render_committed_flowscript_result(
+    flowscript: &str,
+    result: &ReconcileResult,
+    board_is_empty: bool,
+    allow_deletions: bool,
+) -> String {
+    render_edit_flowscript_result_inner(flowscript, result, board_is_empty, allow_deletions, false)
+}
+
+fn render_edit_flowscript_result_inner(
+    flowscript: &str,
+    result: &ReconcileResult,
+    board_is_empty: bool,
+    allow_deletions: bool,
+    enforce_actionability: bool,
+) -> String {
+    let mut rendered = render_edit_flowscript_result_legacy(
+        flowscript,
+        result,
+        board_is_empty,
+        allow_deletions,
+        enforce_actionability,
+    );
     if !result.corrections.is_empty() {
         let payload = serde_json::to_string(&result.corrections).unwrap_or_else(|_| "[]".into());
         rendered.push_str(&format!(
@@ -2967,12 +3151,14 @@ fn render_edit_flowscript_result_legacy(
     result: &ReconcileResult,
     board_is_empty: bool,
     allow_deletions: bool,
+    enforce_actionability: bool,
 ) -> String {
     // Run this before inspecting commands: an empty Event entry itself reconciles to AddNode, but
     // accepting that shell on a new board lets a failed rich draft collapse into a one-node
     // "success" and stops the repair loop.
-    if let Some(feedback) =
-        edit_flowscript_actionability_feedback(flowscript, board_is_empty, &result.diagnostics)
+    if enforce_actionability
+        && let Some(feedback) =
+            edit_flowscript_actionability_feedback(flowscript, board_is_empty, &result.diagnostics)
     {
         let mut msg = format!("{feedback}\n\nNothing was queued.");
         if !result.diagnostics.is_empty() {
@@ -3653,6 +3839,30 @@ mod tests {
         batch_calls: AtomicUsize,
     }
 
+    fn declaration_resolution_test_section(
+        query: &str,
+        status: &str,
+        body: impl AsRef<str>,
+    ) -> String {
+        format!(
+            "// flowpilot.declaration-resolution/v1 {}\n{}",
+            json!({
+                "query": query,
+                "status": status,
+                "top_score": if matches!(status, "exact" | "resolved") { Some(200) } else { None },
+                "runner_up_score": null,
+                "margin": if matches!(status, "exact" | "resolved") { Some(200) } else { None },
+                "reason_codes": if matches!(status, "exact" | "resolved") {
+                    vec!["test_confident_resolution"]
+                } else {
+                    vec!["test_resolver_abstained"]
+                },
+                "candidates": [],
+            }),
+            body.as_ref()
+        )
+    }
+
     #[async_trait::async_trait]
     impl CatalogProvider for BatchDispatchProvider {
         async fn search(&self, _query: &str) -> Vec<super::super::types::NodeMetadata> {
@@ -3695,7 +3905,11 @@ mod tests {
                 .iter()
                 .map(|query| {
                     let function_name = query.replace(' ', "");
-                    format!("declare function {function_name}(): void;")
+                    declaration_resolution_test_section(
+                        query,
+                        "resolved",
+                        format!("declare function {function_name}(): void;"),
+                    )
                 })
                 .collect()
         }
@@ -4022,6 +4236,59 @@ eventsSimple() {
         assert!(output.contains("\"status\":\"validation_errors\""));
         assert!(output.contains("future reconcile diagnostic wording"));
         assert!(!output.contains("<commands>"));
+    }
+
+    #[test]
+    fn stub_markers_ignore_string_literals_and_identifier_substrings() {
+        let result = ReconcileResult {
+            commands: vec![BoardCommand::AddNode {
+                node_type: "log".to_string(),
+                ref_id: Some("$0".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            }],
+            corrections: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        // "Todo" lives in a user-facing label literal and "todoList" is an identifier; neither is
+        // a stub. Before literal-stripping + word boundaries this rendered "Nothing was queued."
+        let source = "eventsSimple() {\n    const todoList = listCreate({ label: \"Todo entries\" })\n    logInfo({ message: \"Replace with care\" })\n}\n";
+        let output = render_edit_flowscript_result(source, &result, false, false);
+        assert!(!output.contains("Nothing was queued."), "{output}");
+        assert!(output.contains("<commands>"), "{output}");
+
+        // A genuine stub comment must still be caught.
+        let stub_source = "eventsSimple() {\n    // TODO: wire with the fetcher\n    logInfo({ message: \"x\" })\n}\n";
+        let stub_output = render_edit_flowscript_result(stub_source, &result, false, false);
+        assert!(stub_output.contains("Nothing was queued."), "{stub_output}");
+    }
+
+    #[test]
+    fn committed_render_never_voids_a_queued_batch_over_stub_markers() {
+        let result = ReconcileResult {
+            commands: vec![BoardCommand::AddNode {
+                node_type: "log".to_string(),
+                ref_id: Some("$0".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            }],
+            corrections: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        // Even a marker outside string literals must not void a commit the draft store already
+        // validated: the store holds the pending claim, so "Nothing was queued." would wedge the
+        // board with no agent-reachable recovery.
+        let source =
+            "eventsSimple() {\n    // todo\n    logInfo({ message: \"queued anyway\" })\n}\n";
+        let output = render_committed_flowscript_result(source, &result, false, true);
+        assert!(!output.contains("Nothing was queued."), "{output}");
+        assert!(output.contains("<commands>"), "{output}");
     }
 
     #[test]
@@ -4369,7 +4636,13 @@ eventsGeneric(payload: Struct) {
         let sections = batch
             .processed
             .iter()
-            .map(|query| format!("declare function {query}(): void;"))
+            .map(|query| {
+                declaration_resolution_test_section(
+                    query,
+                    "resolved",
+                    format!("declare function {query}(): void;"),
+                )
+            })
             .collect::<Vec<_>>();
         let result = render_declaration_query_batch(&batch, &sections);
         assert!(result.contains("flowpilot.declaration-batch/v1"));
@@ -4390,8 +4663,16 @@ eventsGeneric(payload: Struct) {
         };
         let batch = declaration_query_batch(&args);
         let sections = vec![
-            "// result\n  declare function boolOr({ boolean?: bool }): bool;".to_string(),
-            "// No FlowScript declarations matched this query.".to_string(),
+            declaration_resolution_test_section(
+                "boolean or",
+                "resolved",
+                "// result\n  declare function boolOr({ boolean?: bool }): bool;",
+            ),
+            declaration_resolution_test_section(
+                "unknown package capability",
+                "unresolved",
+                "// No FlowScript declarations matched this query.",
+            ),
         ];
 
         let result = render_declaration_query_batch(&batch, &sections);
@@ -4404,6 +4685,24 @@ eventsGeneric(payload: Struct) {
     }
 
     #[test]
+    fn declaration_batch_does_not_count_an_unclassified_signature_as_matched() {
+        let args = GetDeclarationsArgs {
+            query: "integer compare".to_string(),
+            queries: Vec::new(),
+        };
+        let batch = declaration_query_batch(&args);
+        let sections =
+            vec!["declare function fakerInteger({ min?: int, max?: int }): int;".to_string()];
+
+        let result = render_declaration_query_batch(&batch, &sections);
+
+        assert!(result.contains("\"matched_count\":0"));
+        assert!(result.contains("\"unmatched_count\":1"));
+        assert!(result.contains("missing_resolution_metadata"));
+        assert!(result.contains("\"complete\":false"));
+    }
+
+    #[test]
     fn declaration_batch_is_complete_only_when_every_requested_query_matches() {
         let args = GetDeclarationsArgs {
             query: "boolean or".to_string(),
@@ -4411,8 +4710,16 @@ eventsGeneric(payload: Struct) {
         };
         let batch = declaration_query_batch(&args);
         let sections = vec![
-            "declare function boolOr({ boolean?: bool }): bool;".to_string(),
-            "declare function emailSmtpSend({ connection: Struct }): void;".to_string(),
+            declaration_resolution_test_section(
+                "boolean or",
+                "resolved",
+                "declare function boolOr({ boolean?: bool }): bool;",
+            ),
+            declaration_resolution_test_section(
+                "smtp send email",
+                "resolved",
+                "declare function emailSmtpSend({ connection: Struct }): void;",
+            ),
         ];
 
         let result = render_declaration_query_batch(&batch, &sections);
@@ -4431,10 +4738,12 @@ eventsGeneric(payload: Struct) {
         let batch = declaration_query_batch(&args);
         let signature =
             format!("declare function largeLiveDeclaration({{ payload: Struct }}): string;");
-        let section = format!(
+        let body = format!(
             "// declaration query: large live declaration\n{DECLARATION_PRIORITY_BEGIN}{signature}\n// {}\n{DECLARATION_PRIORITY_END}",
             "usage".repeat(MAX_DECLARATION_RESPONSE_BYTES)
         );
+        let section =
+            declaration_resolution_test_section("large live declaration", "resolved", body);
 
         let result = render_declaration_query_batch(&batch, &[section]);
 
@@ -4455,9 +4764,11 @@ eventsGeneric(payload: Struct) {
             "declare function impossiblyLargeDeclaration({{ {} }}): void;",
             "payload: string, ".repeat(MAX_DECLARATION_RESPONSE_BYTES)
         );
-        let section = format!(
+        let body = format!(
             "// declaration query: impossibly large declaration\n{DECLARATION_PRIORITY_BEGIN}{signature}\n{DECLARATION_PRIORITY_END}"
         );
+        let section =
+            declaration_resolution_test_section("impossibly large declaration", "resolved", body);
 
         let result = render_declaration_query_batch(&batch, &[section]);
 
@@ -4540,9 +4851,13 @@ eventsGeneric(payload: Struct) {
             .iter()
             .enumerate()
             .map(|(index, query)| {
-                format!(
-                    "// declaration query: {query}\n{priority}// query-{index}\n{}",
-                    "x".repeat(10_000)
+                declaration_resolution_test_section(
+                    query,
+                    "resolved",
+                    format!(
+                        "// declaration query: {query}\n{priority}// query-{index}\n{}",
+                        "x".repeat(10_000)
+                    ),
                 )
             })
             .collect::<Vec<_>>();

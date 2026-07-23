@@ -62,8 +62,7 @@ pub async fn upsert_board(
 ) -> Result<Json<UpsertBoardResponse>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
-    let mutation_lock = state.board_mutation_lock(&app_id, &board_id);
-    let _mutation_guard = mutation_lock.lock().await;
+    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let mut app = state.master_app(&sub, &app_id, &state).await?;
     let mut id = board_id.clone();
@@ -84,7 +83,11 @@ pub async fn upsert_board(
             board.nodes = data.nodes;
             board.layers = data.layers;
             board.parent = data.parent;
-            board.refs = data.refs;
+            board.refs = data
+                .refs
+                .into_iter()
+                .filter(|(key, _)| !flow_like::flow::board::is_internal_board_ref(key))
+                .collect();
             board.version = data.version;
             board.viewport = data.viewport;
             board.page_ids = data.page_ids;

@@ -6,7 +6,7 @@ use crate::flow::pin::PinType;
 use flow_like_types::Result;
 
 /// Compact node representation for context
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct NodeContext {
     pub id: String,
     #[serde(rename = "t")] // "type" abbreviated
@@ -24,7 +24,7 @@ pub struct NodeContext {
 }
 
 /// Compact pin representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PinContext {
     #[serde(rename = "n")] // "name" abbreviated
     pub name: String,
@@ -36,7 +36,7 @@ pub struct PinContext {
 }
 
 /// Compact edge representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EdgeContext {
     #[serde(rename = "f")] // "from" abbreviated
     pub from_node_id: String,
@@ -49,7 +49,7 @@ pub struct EdgeContext {
 }
 
 /// Compact layer representation for context
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LayerContext {
     pub id: String,
     #[serde(rename = "n")] // "name" abbreviated
@@ -71,7 +71,7 @@ pub struct LayerContext {
 }
 
 /// Compact variable representation for context
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VariableContext {
     pub id: String,
     #[serde(rename = "n")] // "name" abbreviated
@@ -87,7 +87,7 @@ pub struct VariableContext {
 }
 
 /// Complete graph context for the LLM
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct GraphContext {
     pub nodes: Vec<NodeContext>,
     pub edges: Vec<EdgeContext>,

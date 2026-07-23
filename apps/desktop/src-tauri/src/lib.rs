@@ -30,6 +30,8 @@ use flow_like_types::{sync::Mutex, tokio::time::interval};
 use settings::Settings;
 use state::TauriFlowLikeState;
 use std::{sync::Arc, time::Duration};
+#[cfg(debug_assertions)]
+use tauri::Url;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_deep_link::DeepLinkExt;
 #[cfg(desktop)]
@@ -39,6 +41,19 @@ use tauri_plugin_updater::UpdaterExt;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{deeplink::handle_deep_link, event_bus::EventBus};
+
+#[cfg(debug_assertions)]
+fn flowpilot_e2e_cli_url() -> Option<Url> {
+    let url = Url::parse(&std::env::var("FLOWPILOT_E2E_CLI_URL").ok()?).ok()?;
+    let cli_mode = url
+        .query_pairs()
+        .any(|(key, value)| key == "cli" && value == "1");
+    (url.scheme() == "http"
+        && url.host_str() == Some("localhost")
+        && url.path() == "/developer/flowpilot-e2e"
+        && cli_mode)
+        .then_some(url)
+}
 
 #[cfg(target_os = "macos")]
 fn disable_app_nap() {
@@ -496,7 +511,16 @@ pub fn run() {
     let settings_state_for_sink = settings_state.clone();
     let shared_wasm_engine =
         state::TauriWasmEngineState::create_shared().expect("Failed to create shared WasmEngine");
-    let mut builder = tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // Tauri requires this plugin to be registered first so a secondary process exits before any
+    // other plugin or application setup hook runs.
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_single_instance::init(handle_instance));
+    }
+
+    builder = builder
         .manage(state::TauriSettingsState(settings_state.clone()))
         .manage(state::TauriFlowLikeState(state_ref.clone()))
         .manage(state::TauriRegistryState(Arc::new(Mutex::new(None))))
@@ -511,6 +535,14 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            #[cfg(debug_assertions)]
+            if let Some(url) = flowpilot_e2e_cli_url()
+                && let Some(main) = app.get_webview_window("main")
+                && let Err(error) = main.navigate(url)
+            {
+                tracing::error!(%error, "Failed to navigate to the FlowPilot E2E CLI runner");
+            }
+
             let storage_cleanup_handle = app.app_handle().clone();
             tauri::async_runtime::spawn(async move {
                 flow_like_types::tokio::time::sleep(Duration::from_secs(2)).await;
@@ -990,6 +1022,7 @@ pub fn run() {
             functions::flow::board::execute_commands,
             functions::flow::board::apply_flowscript,
             functions::flow::board::lint_flowscript,
+            functions::flow::board::check_flowscript_reconcile,
             functions::flow::board::get_flowscript,
             functions::flow::board::get_execution_elements,
             functions::flow::board::save_board,
@@ -1015,6 +1048,12 @@ pub fn run() {
             functions::ai::copilot::copilot_chat,
             functions::ai::copilot::cancel_copilot_chat,
             functions::ai::copilot::flowpilot_flow_ir_commit_disposition,
+            functions::ai::copilot::flowpilot_create_board_edit_job,
+            functions::ai::copilot::flowpilot_list_board_edit_jobs,
+            functions::ai::copilot::flowpilot_get_board_edit_job,
+            functions::ai::copilot::flowpilot_resolve_board_edit_job,
+            functions::ai::copilot::flowpilot_claim_board_edit_job_delivery,
+            functions::ai::copilot::flowpilot_ack_board_edit_job_delivery,
             functions::ai::copilot::flowpilot_apply_flow_ir_commit,
             functions::ai::copilot::global_chat,
             functions::ai::copilot::global_chat_resume,
@@ -1118,11 +1157,6 @@ pub fn run() {
             functions::feedback::delete_offline_feedback,
         ]);
 
-    #[cfg(desktop)]
-    {
-        builder = builder.plugin(tauri_plugin_single_instance::init(handle_instance));
-    }
-
     #[cfg(debug_assertions)]
     {
         // `tauri_plugin_devtools` dynamically mutates tracing-subscriber filters. We have observed
@@ -1145,10 +1179,13 @@ pub fn run() {
 fn handle_instance(app: &AppHandle, args: Vec<String>, _cwd: String) {
     #[cfg(desktop)]
     {
-        let _ = app
-            .get_webview_window("main")
-            .expect("no main window")
-            .set_focus();
+        let flowpilot_e2e_cli = args.iter().any(|arg| arg == "--flowpilot-e2e-cli");
+        if !flowpilot_e2e_cli {
+            let _ = app
+                .get_webview_window("main")
+                .expect("no main window")
+                .set_focus();
+        }
     }
 
     println!(

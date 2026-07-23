@@ -2,8 +2,8 @@
 //!
 //! Every backend (profile "Bits" models via the rig loop, GitHub Copilot via the Copilot SDK,
 //! Codex/Claude Code via the MCP bridge) advertises the SAME tools from these specs: name,
-//! description, JSON schema, approval requirement, and dispatch timeout. Adapters convert a spec
-//! into the backend-native tool type; execution always funnels through the desktop
+//! description, JSON schema, side-effect/approval policy, and dispatch timeout. Adapters convert a
+//! spec into the backend-native tool type; execution always funnels through the desktop
 //! `PlatformToolBridge`/`FrontendToolBridge`, except for the host-local tools listed below.
 //!
 //! Host-local tools (dispatched by name, not through the frontend):
@@ -13,7 +13,7 @@
 //! - `_memory_store` / `_memory_search` run against the core `AssistantMemory`.
 
 use rig::completion::ToolDefinition;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const INTERNET_SEARCH_TOOL: &str = "internet_search";
@@ -22,19 +22,64 @@ pub const ARCHIVE_LOOKUP_TOOL: &str = "archive_lookup";
 pub const MEMORY_STORE_TOOL: &str = "_memory_store";
 pub const MEMORY_SEARCH_TOOL: &str = "_memory_search";
 
-/// Approval the host must obtain before executing a tool call. The approval "action" key equals
-/// the tool name; messages are built from the call arguments so dialogs can name the target.
+/// The externally observable effect of a platform tool call. This is deliberately independent of
+/// when approval is requested: deferred-approval tools are still ordered mutations while they
+/// prepare their proposed changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolEffect {
+    ReadOnly,
+    Mutating,
+    Execute,
+}
+
+impl ToolEffect {
+    pub fn requires_ordered_execution(self) -> bool {
+        !matches!(self, Self::ReadOnly)
+    }
+}
+
+/// Lifecycle boundary at which the host must obtain approval for a side-effecting tool.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolApprovalTiming {
+    BeforeExecution,
+    BeforeApply,
+}
+
+/// Approval policy for a tool call. The approval "action" key equals the tool name; messages are
+/// built from the call arguments so dialogs can name the target. `timing` allows a tool to prepare
+/// and validate an artifact before asking permission to apply its retained side effects.
 #[derive(Clone, Copy)]
 pub enum ToolApprovalSpec {
     None,
     Mutating {
         title: &'static str,
         message: fn(&Value) -> String,
+        timing: ToolApprovalTiming,
     },
     Execute {
         title: &'static str,
         message: fn(&Value) -> String,
+        timing: ToolApprovalTiming,
     },
+}
+
+impl ToolApprovalSpec {
+    pub fn effect(self) -> ToolEffect {
+        match self {
+            Self::None => ToolEffect::ReadOnly,
+            Self::Mutating { .. } => ToolEffect::Mutating,
+            Self::Execute { .. } => ToolEffect::Execute,
+        }
+    }
+
+    pub fn timing(self) -> Option<ToolApprovalTiming> {
+        match self {
+            Self::None => None,
+            Self::Mutating { timing, .. } | Self::Execute { timing, .. } => Some(timing),
+        }
+    }
 }
 
 /// Backend-independent description of one platform tool.
@@ -65,18 +110,21 @@ pub fn spec_arg_str<'a>(args: &'a Value, snake: &str, camel: &str) -> &'a str {
         .unwrap_or("")
 }
 
-/// Host-neutral approval payload the client must satisfy before a tool runs. Serializes to the same
-/// camelCase shape every FlowPilot frontend already handles (`{kind, title, description, sessionKey}`),
-/// so the desktop (Tauri event) and the browser (SSE `tool_request` frame) send an identical object.
+/// Host-neutral approval payload the client must satisfy at the resolved lifecycle boundary.
+/// Serializes to the same camelCase shape every FlowPilot frontend already handles
+/// (`{kind, title, description, sessionKey}`), so the desktop (Tauri event) and the browser (SSE
+/// `tool_request` frame) send an identical object.
 /// `kind` is one of `"none" | "mutating" | "execute"`; `session_key` is the tool name (the
 /// "don't ask again this session" key).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedToolApproval {
     pub kind: String,
     pub title: String,
     pub description: String,
     pub session_key: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timing: Option<ToolApprovalTiming>,
 }
 
 impl ResolvedToolApproval {
@@ -86,22 +134,19 @@ impl ResolvedToolApproval {
             title: String::new(),
             description: String::new(),
             session_key: String::new(),
+            timing: None,
         }
     }
 }
 
-/// Resolve the approval a tool call requires from its spec + arguments. Single source of truth for
-/// approval policy across every backend and host, so a `flowpilot_board` explain call never prompts
-/// while a mutating/execute call always does.
-pub fn resolve_tool_approval(spec: &PlatformToolSpec, args: &Value) -> ResolvedToolApproval {
-    // A read-only board explanation (flowpilot_board mode="explain") changes nothing, so it must not
-    // surface the "Approve board edit" prompt — that would make asking about a board feel like
-    // authorizing a mutation.
+fn tool_call_has_read_only_override(spec: &PlatformToolSpec, args: &Value) -> bool {
+    // Asking about a board must neither serialize as an edit nor surface an edit prompt.
     if spec.name == "flowpilot_board" && spec_arg_str(args, "mode", "mode") == "explain" {
-        return ResolvedToolApproval::none();
+        return true;
     }
-    // Data Studio multiplexed tools carry a single approval policy, but their inspection operations
-    // are read-only and must never surface a prompt — only mutating/execute operations do.
+
+    // Data Studio multiplexed tools carry a conservative base effect, but their inspection
+    // operations are read-only.
     if matches!(spec.name, "graph_overlay_tool" | "ontology_action_tool") {
         const DATA_STUDIO_READONLY_OPS: &[&str] = &[
             "list_overlays",
@@ -112,25 +157,76 @@ pub fn resolve_tool_approval(spec: &PlatformToolSpec, args: &Value) -> ResolvedT
             "describe_action",
             "prerun_action",
         ];
-        if DATA_STUDIO_READONLY_OPS.contains(&spec_arg_str(args, "operation", "operation")) {
-            return ResolvedToolApproval::none();
-        }
+        return DATA_STUDIO_READONLY_OPS.contains(&spec_arg_str(args, "operation", "operation"));
     }
+
+    false
+}
+
+/// Resolve the call's effect independently from its approval boundary. All providers use this for
+/// ordering, so a deferred `flowpilot_board` edit remains an ordered execute operation.
+pub fn resolve_tool_effect(spec: &PlatformToolSpec, args: &Value) -> ToolEffect {
+    if tool_call_has_read_only_override(spec, args) {
+        ToolEffect::ReadOnly
+    } else {
+        spec.approval.effect()
+    }
+}
+
+/// Resolve when this concrete call needs approval. Read-only modes/operations have no boundary.
+pub fn resolve_tool_approval_timing(
+    spec: &PlatformToolSpec,
+    args: &Value,
+) -> Option<ToolApprovalTiming> {
+    if tool_call_has_read_only_override(spec, args) {
+        None
+    } else {
+        spec.approval.timing()
+    }
+}
+
+fn resolved_tool_approval_payload(spec: &PlatformToolSpec, args: &Value) -> ResolvedToolApproval {
     match spec.approval {
         ToolApprovalSpec::None => ResolvedToolApproval::none(),
-        ToolApprovalSpec::Mutating { title, message } => ResolvedToolApproval {
+        ToolApprovalSpec::Mutating { title, message, .. } => ResolvedToolApproval {
             kind: "mutating".to_string(),
             title: title.to_string(),
             description: message(args),
             session_key: spec.name.to_string(),
+            timing: spec.approval.timing(),
         },
-        ToolApprovalSpec::Execute { title, message } => ResolvedToolApproval {
+        ToolApprovalSpec::Execute { title, message, .. } => ResolvedToolApproval {
             kind: "execute".to_string(),
             title: title.to_string(),
             description: message(args),
             session_key: spec.name.to_string(),
+            timing: spec.approval.timing(),
         },
     }
+}
+
+/// Resolve the approval due at one lifecycle boundary. A policy for another boundary deliberately
+/// resolves to `kind="none"`, preventing existing pre-dispatch adapters from prompting too early.
+pub fn resolve_tool_approval_for_timing(
+    spec: &PlatformToolSpec,
+    args: &Value,
+    timing: ToolApprovalTiming,
+) -> ResolvedToolApproval {
+    if resolve_tool_approval_timing(spec, args) != Some(timing) {
+        return ResolvedToolApproval::none();
+    }
+    resolved_tool_approval_payload(spec, args)
+}
+
+/// Resolve approval due before dispatch. Kept as the common adapter entry point; deferred-apply
+/// tools return no approval here and are approved later from their retained artifact.
+pub fn resolve_tool_approval(spec: &PlatformToolSpec, args: &Value) -> ResolvedToolApproval {
+    resolve_tool_approval_for_timing(spec, args, ToolApprovalTiming::BeforeExecution)
+}
+
+/// Resolve approval due after preparation and immediately before applying retained side effects.
+pub fn resolve_tool_apply_approval(spec: &PlatformToolSpec, args: &Value) -> ResolvedToolApproval {
+    resolve_tool_approval_for_timing(spec, args, ToolApprovalTiming::BeforeApply)
 }
 
 fn snake_to_camel(snake: &str) -> String {
@@ -195,9 +291,9 @@ fn create_app_message(args: &Value) -> String {
 fn flowpilot_board_message(args: &Value) -> String {
     let instruction = spec_arg_str(args, "instruction", "instruction");
     if instruction.is_empty() {
-        "FlowPilot wants to run the board copilot on this app.".to_string()
+        "FlowPilot prepared a board edit and wants to apply it to this app.".to_string()
     } else {
-        format!("FlowPilot wants to run the board copilot: {instruction}")
+        format!("FlowPilot prepared this board edit and wants to apply it: {instruction}")
     }
 }
 
@@ -362,6 +458,86 @@ fn global_query_execution_logs_schema() -> Value {
     schema
 }
 
+fn workflow_database_context_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["list_tables", "describe_table", "query"] },
+            "app_id": { "type": "string", "description": "App id; the current app is injected when omitted." },
+            "table_name": { "type": "string", "description": "Table name for describe/query." },
+            "user_scoped": { "type": "boolean", "description": "Use the user-scoped database." },
+            "include_sample": { "type": "boolean", "description": "For describe_table, include sample rows. Defaults to true; use false for bounded schema-only discovery." },
+            "query": { "type": "object", "description": "Read-only query payload: {sql, filter, fts_term, vector_query, rerank}." },
+            "offset": { "type": "integer", "minimum": 0 },
+            "limit": { "type": "integer", "minimum": 1, "maximum": 200 }
+        },
+        "required": ["operation"]
+    })
+}
+
+fn workflow_storage_context_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["list_files", "read_file"] },
+            "app_id": { "type": "string", "description": "App id; the current app is injected when omitted." },
+            "prefix": { "type": "string", "description": "Folder/prefix to list." },
+            "path": { "type": "string", "description": "File path for read_file." },
+            "user_scoped": { "type": "boolean", "description": "Use user storage instead of app storage." },
+            "max_chars": { "type": "integer", "minimum": 1, "description": "Maximum text characters returned by read_file." }
+        },
+        "required": ["operation"]
+    })
+}
+
+fn workflow_ui_context_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": { "type": "string", "enum": ["list", "page", "widgets", "widget"] },
+            "app_id": { "type": "string", "description": "App id; the current app is injected when omitted." },
+            "board_id": { "type": "string", "description": "Optional board restriction for pages." },
+            "page_id": { "type": "string", "description": "Page id for operation page." },
+            "widget_selector": { "type": "string", "description": "Widget id/name for operation widget." }
+        }
+    })
+}
+
+/// Read-only database, UI and storage discovery used by every board-authoring backend. The
+/// immutable manifest should satisfy complete inventory reads first; these tools remain available
+/// for focused gaps and are governed by the shared session lease/budget.
+pub fn workflow_context_tool_specs() -> Vec<PlatformToolSpec> {
+    vec![
+        PlatformToolSpec {
+            name: "database_tool",
+            description: r#"Inspect existing app database tables without mutation. Use list_tables, describe_table, or read-only query. Prefer include_sample=false for schema discovery. Reuse complete immutable-manifest inventory and issue only focused reads for missing/truncated facts."#,
+            schema: workflow_database_context_schema,
+            approval: ToolApprovalSpec::None,
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "storage_tool",
+            description: r#"Inspect app storage without mutation. List paths or read bounded text content. Reuse a complete immutable-manifest root listing; read only exact files needed to author the workflow."#,
+            schema: workflow_storage_context_schema,
+            approval: ToolApprovalSpec::None,
+            timeout_secs: 120,
+        },
+        PlatformToolSpec {
+            name: "ui_inspect",
+            description: r#"Inspect app pages/widgets so A2UI workflow calls use real page, component, action and widget identifiers. Reuse complete immutable-manifest inventory; request page/widget details only when required."#,
+            schema: workflow_ui_context_schema,
+            approval: ToolApprovalSpec::None,
+            timeout_secs: 120,
+        },
+    ]
+}
+
+pub fn find_workflow_context_tool_spec(name: &str) -> Option<PlatformToolSpec> {
+    workflow_context_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == name)
+}
+
 /// Runtime verification tools offered inside a board-scoped FlowPilot session. The host supplies
 /// the current app, but callers must still identify the persisted board/node or Event they want to
 /// run. These definitions are shared by every desktop SDK/MCP provider.
@@ -377,6 +553,7 @@ finishes; do not execute it in the same board-agent turn and claim the new draft
             approval: ToolApprovalSpec::Execute {
                 title: "Approve workflow execution",
                 message: execute_event_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 600,
         },
@@ -390,6 +567,7 @@ to reproduce/debug an existing graph. A merely `queued` FlowScript draft is not 
             approval: ToolApprovalSpec::Execute {
                 title: "Approve node execution",
                 message: execute_node_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 600,
         },
@@ -426,6 +604,7 @@ board edit has been applied."#,
             approval: ToolApprovalSpec::Execute {
                 title: "Approve node execution",
                 message: execute_node_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 600,
         },
@@ -541,6 +720,7 @@ again this session"."#,
             approval: ToolApprovalSpec::Execute {
                 title: "Approve app event execution",
                 message: call_app_event_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 600,
         },
@@ -589,16 +769,17 @@ approval dialog with a "don't ask again this session" option before it runs."#,
             approval: ToolApprovalSpec::Mutating {
                 title: "Approve app creation",
                 message: create_app_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 120,
         },
         PlatformToolSpec {
             name: "flowpilot_board",
-            description: r#"The single entry point for ANYTHING about a specific board/workflow/page — explaining it, editing it, or debugging it. Delegates to the board FlowPilot, which has full access to the board's nodes, connections and layers.
+            description: r#"The single entry point for ANYTHING about a specific board or workflow LOGIC — building it, explaining it, editing it, or debugging it. Delegates to the board FlowPilot, the only specialist allowed to author FlowScript or change board nodes, connections, entry events, and layers. Page/widget/component DESIGN is not board work and goes to flowpilot_widget.
 
 Two modes (set `mode`):
 - mode="explain" (read-only): answer the user's question about the board — "explain this workflow", "what does this do", "why is this failing". Nothing is modified and no approval is asked. Relay the returned answer to the user.
-- mode="edit" (default): build or modify the board's WORKFLOW LOGIC (add/connect/configure nodes and events). This is NOT for UI — pages, widgets and components go to flowpilot_widget. If the app has no board yet, one is created automatically — never ask the user to create a board manually. Give a complete, self-contained instruction (trigger/event, the processing steps, and where results go). Side-effecting; asks for approval unless the user selected "don't ask again this session".
+- mode="edit" (default): build or modify the board's WORKFLOW LOGIC (add/connect/configure nodes and events). This is NOT for UI — pages, widgets and components go to flowpilot_widget. If the app has no board yet, one is created automatically — never ask the user to create a board manually. Give a complete, self-contained instruction (trigger/event, the processing steps, and where results go). The specialist prepares and validates the edit first; approval is requested only before the retained edit is applied.
 
 For edit mode, the complete user-requested behavior is the acceptance contract. Do not replace a
 failed/timeout full build with a reduced smoke test or a sequence of partial board calls unless the
@@ -628,7 +809,10 @@ Retained drafts are bound to THIS conversation plus the ORIGINAL user request: a
 repair call resumes them only within the same conversation, never from a different one. Include
 that original user request text verbatim in the instruction, name the retained draft_id and its
 expected_revision, and direct the specialist to repair that draft in place — same draft_id, same
-revision chain, never "start a new draft" or a from-scratch rewrite. Retry on the SAME app/board
+revision chain, never "start a new draft" or a from-scratch rewrite. The single exception is a
+`FLOWSCRIPT_BASE_REVISION_CONFLICT` result: the board moved underneath the draft and every
+operation on it will fail forever, so the specialist must restart with a fresh draft_id from the
+current board while keeping the same acceptance contract. Retry on the SAME app/board
 with the original acceptance contract and observed diagnostics, and explicitly instruct the
 specialist to repair and queue the retained production candidate. Only an
 explicit NEW end-user request may discard or reduce it.
@@ -652,6 +836,7 @@ SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use creat
             approval: ToolApprovalSpec::Execute {
                 title: "Approve board edit",
                 message: flowpilot_board_message,
+                timing: ToolApprovalTiming::BeforeApply,
             },
             // Full production FlowScripts can require several validator-driven repair passes in
             // the nested specialist. Keep the frontend dispatch bound aligned with the external
@@ -664,17 +849,19 @@ SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use creat
             description: r#"The UI specialist — design and build interfaces (A2UI). Two modes:
 - EDIT the user's currently OPEN widget/page builder (generated components are staged for review), OR
 - CREATE a NEW page from scratch in an app (pass app_id). A page is board-scoped, so a board is created automatically if the app has none.
-It builds the page AND any reusable widgets it needs — repeated or dynamic elements like list/grid cards, project or save-state rows, email-list items — in ONE call, then navigates the user to the page builder. A simple one-off layout (e.g. a dashboard with a chart and a table) needs no widget. Give a complete instruction of what the UI should look like and do. Side-effecting; asks for approval.
-SCOPE: UI only — pages, widgets, components. Board/workflow LOGIC (nodes, events, data wiring) goes through flowpilot_board."#,
+	It builds the page AND any reusable widgets it needs — repeated or dynamic elements like list/grid cards, project or save-state rows, email-list items — in ONE call, then navigates the user to the page builder. A simple one-off layout (e.g. a dashboard with a chart and a table) needs no widget. Give a complete instruction for layout, content, and interaction affordances. When the user specified exact reusable-widget names, pass them in widget_names so the persisted entities keep those names even if the UI renderer omits an inline label. Side-effecting; asks for approval.
+SCOPE: UI only — pages, widgets, components. This specialist has no FlowScript or board-mutation authority and cannot build nodes, connections, entry events, or data wiring. A page may require an empty board record as its owner; that metadata scaffold is NOT workflow logic and is never proof that the board was built. Any requested behavior must be delegated separately to flowpilot_board after the UI result supplies the real page/widget/action ids. Never include FlowScript in this instruction and never treat this tool's success as satisfying board work."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
                         "instruction": { "type": "string", "description": "Complete natural-language description of the UI to build or modify (layout, content, and any reusable/repeated widgets)." },
                         "app_id": { "type": "string", "description": "App to create a NEW page in (from list_apps/create_app). Omit when editing the currently open builder surface." },
-                        "page_name": { "type": "string", "description": "Name for the new page. Optional; a generic name is used if omitted." },
-                        "route": { "type": "string", "description": "URL route for the new page, e.g. \"/dashboard\". Optional; derived from the page name." },
-                        "board_id": { "type": "string", "description": "Board the new page binds to. Optional; defaults to the app's first board, creating one if none exists." }
+                            "page_name": { "type": "string", "description": "Name for the new page. Optional; a generic name is used if omitted." },
+                            "route": { "type": "string", "description": "URL route for the new page, e.g. \"/dashboard\". Optional; derived from the page name." },
+                            "board_id": { "type": "string", "description": "Board the new page binds to. Optional; defaults to the app's first board, creating one if none exists." },
+                            "widget_name": { "type": "string", "description": "Exact persisted name of the one reusable widget requested for this page. Use widget_names instead when more than one is requested." },
+                            "widget_names": { "type": "array", "items": { "type": "string" }, "description": "Exact persisted reusable-widget names, in the same order they are requested in the instruction. Pass this whenever the user specified widget names." }
                     },
                     "required": ["instruction"]
                 })
@@ -682,6 +869,7 @@ SCOPE: UI only — pages, widgets, components. Board/workflow LOGIC (nodes, even
             approval: ToolApprovalSpec::Execute {
                 title: "Approve UI edit",
                 message: flowpilot_widget_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 600,
         },
@@ -757,6 +945,7 @@ don't blindly forward everything — but when unsure whether a file is relevant,
             approval: ToolApprovalSpec::Execute {
                 title: "Approve app chat call",
                 message: call_app_chat_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             // Longer than the other tools: the app chat can raise interactive dialogs
             // (single/multiple choice, form) that a human must answer, and a workflow may chain
@@ -903,6 +1092,7 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
             approval: ToolApprovalSpec::Mutating {
                 title: "Approve event change",
                 message: upsert_event_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 120,
         },
@@ -922,6 +1112,7 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
             approval: ToolApprovalSpec::Mutating {
                 title: "Approve event deletion",
                 message: delete_event_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 120,
         },
@@ -945,6 +1136,7 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
             approval: ToolApprovalSpec::Mutating {
                 title: "Approve page event",
                 message: set_page_load_event_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 120,
         },
@@ -1040,6 +1232,7 @@ Operations: `list_overlays`, `get_overlay`, `get_schema`, `validate_overlay` (re
             approval: ToolApprovalSpec::Mutating {
                 title: "Approve ontology change",
                 message: graph_overlay_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 120,
         },
@@ -1061,6 +1254,7 @@ Operations: `add_nodes`, `add_edges`. Read `get_schema` first: node rows must in
             approval: ToolApprovalSpec::Mutating {
                 title: "Approve graph write",
                 message: graph_element_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 120,
         },
@@ -1073,6 +1267,7 @@ Operations: `list_actions`, `describe_action`, `prerun_action` (read-only); `inv
             approval: ToolApprovalSpec::Execute {
                 title: "Approve ontology action",
                 message: ontology_action_message,
+                timing: ToolApprovalTiming::BeforeExecution,
             },
             timeout_secs: 600,
         },
@@ -1362,6 +1557,143 @@ mod tests {
         assert!(instruction.contains("single retry after zero progress"));
         assert!(instruction.contains("no more than six ancillary"));
         assert!(instruction.contains("rewording alone is not a retry strategy"));
+    }
+
+    #[test]
+    fn board_edit_is_ordered_execute_work_but_approval_is_deferred_until_apply() {
+        let spec = find_global_tool_spec("flowpilot_board").expect("flowpilot_board spec");
+        let edit_args = json!({
+            "app_id": "app",
+            "instruction": "Build the complete workflow",
+        });
+
+        assert_eq!(resolve_tool_effect(&spec, &edit_args), ToolEffect::Execute);
+        assert!(
+            resolve_tool_effect(&spec, &edit_args).requires_ordered_execution(),
+            "preparing a retained edit must not become concurrent just because approval is deferred"
+        );
+        assert_eq!(
+            resolve_tool_approval_timing(&spec, &edit_args),
+            Some(ToolApprovalTiming::BeforeApply)
+        );
+        assert_eq!(resolve_tool_approval(&spec, &edit_args).kind, "none");
+
+        let apply_approval = resolve_tool_apply_approval(&spec, &edit_args);
+        assert_eq!(apply_approval.kind, "execute");
+        assert_eq!(apply_approval.title, "Approve board edit");
+        assert!(
+            apply_approval
+                .description
+                .contains("prepared this board edit")
+        );
+        assert_eq!(
+            serde_json::to_value(ToolEffect::Execute).unwrap(),
+            json!("execute")
+        );
+        assert_eq!(
+            serde_json::to_value(ToolApprovalTiming::BeforeApply).unwrap(),
+            json!("before_apply")
+        );
+    }
+
+    #[test]
+    fn board_explain_remains_read_only_and_never_requires_approval() {
+        let spec = find_global_tool_spec("flowpilot_board").expect("flowpilot_board spec");
+        let explain_args = json!({
+            "app_id": "app",
+            "board_id": "board",
+            "instruction": "Explain this workflow",
+            "mode": "explain",
+        });
+
+        assert_eq!(
+            resolve_tool_effect(&spec, &explain_args),
+            ToolEffect::ReadOnly
+        );
+        assert_eq!(resolve_tool_approval_timing(&spec, &explain_args), None);
+        assert_eq!(resolve_tool_approval(&spec, &explain_args).kind, "none");
+        assert_eq!(
+            resolve_tool_apply_approval(&spec, &explain_args).kind,
+            "none"
+        );
+    }
+
+    #[test]
+    fn ordinary_execute_tools_still_approve_before_execution() {
+        let spec = find_runtime_execution_tool_spec("execute_node").expect("execute_node spec");
+        let args = json!({ "board_id": "board", "node_id": "node" });
+
+        assert_eq!(resolve_tool_effect(&spec, &args), ToolEffect::Execute);
+        assert_eq!(
+            resolve_tool_approval_timing(&spec, &args),
+            Some(ToolApprovalTiming::BeforeExecution)
+        );
+        assert_eq!(resolve_tool_approval(&spec, &args).kind, "execute");
+        assert_eq!(resolve_tool_apply_approval(&spec, &args).kind, "none");
+    }
+
+    #[test]
+    fn multiplexed_read_only_operations_override_effect_and_approval_together() {
+        let spec =
+            find_data_studio_tool_spec("graph_overlay_tool").expect("graph_overlay_tool spec");
+        let read_args = json!({ "operation": "get_schema" });
+        let write_args = json!({ "operation": "update_overlay" });
+
+        assert_eq!(resolve_tool_effect(&spec, &read_args), ToolEffect::ReadOnly);
+        assert_eq!(resolve_tool_approval_timing(&spec, &read_args), None);
+        assert_eq!(resolve_tool_approval(&spec, &read_args).kind, "none");
+
+        assert_eq!(
+            resolve_tool_effect(&spec, &write_args),
+            ToolEffect::Mutating
+        );
+        assert_eq!(
+            resolve_tool_approval_timing(&spec, &write_args),
+            Some(ToolApprovalTiming::BeforeExecution)
+        );
+        assert_eq!(resolve_tool_approval(&spec, &write_args).kind, "mutating");
+    }
+
+    #[test]
+    fn delegated_build_tools_have_disjoint_authoring_boundaries() {
+        let board = find_global_tool_spec("flowpilot_board").expect("flowpilot_board spec");
+        assert!(
+            board
+                .description
+                .contains("only specialist allowed to author FlowScript")
+        );
+        assert!(
+            board
+                .description
+                .contains("Page/widget/component DESIGN is not board work")
+        );
+
+        let widget = find_global_tool_spec("flowpilot_widget").expect("flowpilot_widget spec");
+        assert!(
+            widget
+                .description
+                .contains("no FlowScript or board-mutation authority")
+        );
+        assert!(
+            widget
+                .description
+                .contains("metadata scaffold is NOT workflow logic")
+        );
+        assert!(
+            widget
+                .description
+                .contains("delegated separately to flowpilot_board")
+        );
+        assert!(
+            widget
+                .description
+                .contains("never treat this tool's success as satisfying board work")
+        );
+        assert!(widget.description.contains("pass them in widget_names"));
+        assert_eq!(
+            (widget.schema)()["properties"]["widget_names"]["items"]["type"],
+            json!("string")
+        );
     }
 
     #[test]

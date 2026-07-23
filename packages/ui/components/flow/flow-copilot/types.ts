@@ -63,6 +63,8 @@ export interface FlowCopilotProps {
 		| Promise<undefined | FlowScriptApplyResultLike>;
 	onApplyFlowIrCommit?: (
 		token: FlowIrCommitToken,
+		deliveryId?: string,
+		historyMode?: "append" | "invalidate",
 	) => Promise<IApplyFlowIrCommitResponse>;
 	onGhostNodesChange?: (suggestions: Suggestion[]) => void;
 	onClearRunContext?: () => void;

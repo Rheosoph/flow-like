@@ -4001,6 +4001,60 @@ impl<'a> StructuralPlanner<'a> {
             })
     }
 
+    /// A whole-document rewrite that drops the entry anchor must not mint a duplicate entry node:
+    /// the stranded old entry keeps every data edge hanging off its outputs (its `history` etc.
+    /// still feed body nodes), which renders as the new block's parameters and re-reconciles to a
+    /// spurious connect on every readback. Claim the live entry instead — but only on the strong
+    /// signal that it ALREADY drives this exact authored body, so a genuinely new sibling event
+    /// (whose body nodes are not yet driven by anything) still creates its own entry.
+    fn claim_existing_entry_for_unanchored_event(
+        &mut self,
+        event: &EventBlock,
+        target_layer: Option<&str>,
+    ) -> Option<NodeEntity> {
+        let exact_meta = self.exact_event_metadata(event).ok()?;
+        let first_body_node = first_existing_exec_body_node(self.existing, &event.body)?;
+        let first_body_node_id = first_body_node.id.clone();
+        let candidates: Vec<&Node> = all_board_nodes(self.existing)
+            .into_iter()
+            .filter(|node| {
+                !self.claimed_event_entries.contains(&node.id)
+                    && self.node_is_in_target_layer(node, target_layer)
+                    && node.start == Some(true)
+                    && event_entry_incompatibility(&node_to_metadata(node)).is_none()
+                    && exact_meta
+                        .as_ref()
+                        .is_none_or(|meta| node.name == meta.name)
+                    && event_parameter_contracts_match(
+                        node,
+                        &event.params,
+                        &self.interface_schemas,
+                        &self.existing.refs,
+                    )
+                    && self.event_entry_targets_node(node, &first_body_node_id)
+            })
+            .collect();
+        let [entry] = candidates.as_slice() else {
+            return None;
+        };
+        let entry_id = entry.id.clone();
+        let entry_friendly = entry.friendly_name.clone();
+        self.claimed_event_entries.insert(entry_id.clone());
+        let desired_name = event.event_name.as_deref().unwrap_or(&event.name);
+        if !pin_name_matches(&entry_friendly, desired_name) {
+            self.update_commands.push(BoardCommand::RenameNode {
+                node_id: entry_id.clone(),
+                friendly_name: desired_name.to_string(),
+                summary: Some(format!("Rename event to {desired_name}")),
+            });
+        }
+        self.result.corrections.push(format!(
+            "Bound event `{}` to live entry `{entry_id}`, which already drives this body, instead of creating a duplicate entry node.",
+            event.name
+        ));
+        Some(NodeEntity::Existing(entry_id))
+    }
+
     /// Recover an event whose explicit identity anchor disappeared from the live board.
     ///
     /// Recovery is deliberately deterministic:
@@ -4207,13 +4261,17 @@ impl<'a> StructuralPlanner<'a> {
                 }
                 None => self.recover_missing_event_entry(event, anchor, target_layer.clone()),
             },
-            None => self.add_entry_node(
-                &event.name,
-                &event.node_type,
-                event.event_name.as_deref(),
-                target_layer.clone(),
-                &event.params,
-            ),
+            None => self
+                .claim_existing_entry_for_unanchored_event(event, target_layer.as_deref())
+                .or_else(|| {
+                    self.add_entry_node(
+                        &event.name,
+                        &event.node_type,
+                        event.event_name.as_deref(),
+                        target_layer.clone(),
+                        &event.params,
+                    )
+                }),
         };
 
         self.push_scope();
@@ -9402,6 +9460,7 @@ mod tests {
             log_level: LogLevel::Info,
             execution_mode: ExecutionMode::Hybrid,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
             hash: None,
@@ -12248,6 +12307,161 @@ simpleEvent() {   //@n:event
                     if fn_refs == &vec!["fetchPage".to_string()]
             )
         }));
+    }
+
+    /// A root event can register a sibling root entry as an agent tool. The graph-level handler
+    /// still belongs to the registering event's lexical FlowScript scope: its body may read that
+    /// event's payload outputs (for example the current chat attachments). Lowering must nest the
+    /// handler under the owner event so those exact cross-entry pin edges remain resolvable when
+    /// the anchored text is reconciled against the same board.
+    #[test]
+    fn root_agent_tool_handler_capture_roundtrips_as_noop() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("simple_agent", "Simple Agent", "", "events");
+        event.id = "simple-agent".to_string();
+        event.set_start(true);
+        let event_exec = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        let attachments = event
+            .add_output_pin("attachments", "Attachments", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut register = Node::new(
+            "agent_register_function_tools",
+            "Register Function Tools",
+            "",
+            "agent",
+        );
+        register.id = "register-tools".to_string();
+        register.set_can_reference_fns(true);
+        register
+            .fn_refs
+            .as_mut()
+            .expect("function references enabled")
+            .fn_refs
+            .push("attachment-handler".to_string());
+        let registered_agent = register
+            .add_output_pin("agent", "Agent", "", VariableType::Struct)
+            .id
+            .clone();
+        board.nodes.insert(register.id.clone(), register);
+
+        let mut invoke = Node::new("agent_invoke", "Invoke Agent", "", "agent");
+        invoke.id = "invoke-agent".to_string();
+        let invoke_exec = invoke
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let invoke_agent = invoke
+            .add_input_pin("agent", "Agent", "", VariableType::Struct)
+            .id
+            .clone();
+        invoke.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        board.nodes.insert(invoke.id.clone(), invoke);
+
+        let mut handler = Node::new("events_generic", "Extract Current Attachment", "", "events");
+        handler.id = "attachment-handler".to_string();
+        handler.set_start(true);
+        handler.set_can_be_referenced_by_fns(true);
+        let handler_exec = handler
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        handler.add_output_pin("payload", "Payload", "", VariableType::Struct);
+        handler.add_output_pin("filename", "Filename", "", VariableType::String);
+        board.nodes.insert(handler.id.clone(), handler);
+
+        let mut extract = Node::new(
+            "extract_attachment_pages",
+            "Extract Attachment Pages",
+            "",
+            "files",
+        );
+        extract.id = "extract-pages".to_string();
+        let extract_exec = extract
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let current_attachments = extract
+            .add_input_pin(
+                "current_attachments",
+                "Current Attachments",
+                "",
+                VariableType::Struct,
+            )
+            .id
+            .clone();
+        extract.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        extract.add_output_pin("result", "Result", "", VariableType::String);
+        board.nodes.insert(extract.id.clone(), extract);
+
+        connect(
+            &mut board,
+            "simple-agent",
+            &event_exec,
+            "invoke-agent",
+            &invoke_exec,
+        );
+        connect(
+            &mut board,
+            "register-tools",
+            &registered_agent,
+            "invoke-agent",
+            &invoke_agent,
+        );
+        connect(
+            &mut board,
+            "attachment-handler",
+            &handler_exec,
+            "extract-pages",
+            &extract_exec,
+        );
+        connect(
+            &mut board,
+            "simple-agent",
+            &attachments,
+            "extract-pages",
+            &current_attachments,
+        );
+
+        let ast = super::super::lower_to_ast(&board);
+        assert_eq!(
+            ast.events.len(),
+            1,
+            "the referenced tool entry must not be rendered as a sibling root event"
+        );
+        assert!(
+            ast.events[0].body.stmts.iter().any(|statement| matches!(
+                statement,
+                Stmt::Handler(handler)
+                    if handler.anchor.as_deref() == Some("attachment-handler")
+            )),
+            "the referenced tool entry must be nested in its unique registering event"
+        );
+
+        let text = anchored_text(&board);
+        let catalog = board
+            .nodes
+            .values()
+            .map(node_to_metadata)
+            .collect::<Vec<_>>();
+        let result = reconcile_text_with_catalog(&board, &text, &catalog);
+
+        assert!(
+            result.diagnostics.is_empty(),
+            "the owner event's attachments parameter must remain visible to its tool handler:\n{text}\n{:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "an unchanged anchored owner/handler graph must be a no-op:\n{text}\n{:?}",
+            result.commands
+        );
     }
 
     #[test]
@@ -17728,6 +17942,16 @@ eventsSimple() {
         catalog
     }
 
+    fn required_struct_set_value_catalog() -> Vec<NodeMetadata> {
+        let mut catalog = struct_accumulator_catalog();
+        catalog
+            .iter_mut()
+            .find(|meta| meta.name == "struct_set")
+            .expect("struct_set catalog entry")
+            .required_inputs = vec!["value".to_string()];
+        catalog
+    }
+
     fn command_node_type(commands: &[BoardCommand], ref_id: &str) -> Option<String> {
         commands.iter().find_map(|command| match command {
             BoardCommand::AddNode {
@@ -18796,6 +19020,82 @@ eventsSimple() {
         }
 
         board
+    }
+
+    fn board_with_null_struct_accumulator() -> Board {
+        let mut board = board_with_struct_accumulator(false);
+        board
+            .nodes
+            .get_mut("acc")
+            .expect("accumulator node")
+            .pins
+            .values_mut()
+            .find(|pin| pin.pin_type == PinType::Input && pin.name == "value")
+            .expect("accumulator value pin")
+            .default_value = Some(b"null".to_vec());
+        board
+    }
+
+    #[test]
+    fn lower_preserves_explicit_null_struct_set_value() {
+        let board = board_with_null_struct_accumulator();
+        let text =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+
+        assert!(
+            text.contains("row.title = null"),
+            "an explicit struct_set.value=null must survive lowering:\n{text}"
+        );
+        assert!(
+            !text.contains("field: \"title\" }).structOut"),
+            "lowering must not emit a structSet call with its required value omitted:\n{text}"
+        );
+    }
+
+    #[test]
+    fn explicit_null_struct_set_value_roundtrips_and_satisfies_required_input() {
+        let board = board_with_null_struct_accumulator();
+        let catalog = required_struct_set_value_catalog();
+        let anchored = super::super::board_to_flowscript(
+            &board,
+            &flow_like_ast::RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+
+        let roundtrip = reconcile_text_with_catalog(&board, &anchored, &catalog);
+        assert!(
+            roundtrip.diagnostics.is_empty(),
+            "unchanged null-valued struct_set must remain valid: {:?}\n{anchored}",
+            roundtrip.diagnostics
+        );
+        assert!(
+            roundtrip.commands.is_empty(),
+            "unchanged null-valued struct_set must be a no-op: {:?}",
+            roundtrip.commands
+        );
+
+        let unanchored =
+            super::super::board_to_flowscript(&board, &flow_like_ast::RenderOptions::default());
+        let recreated = reconcile_text_with_catalog(&empty_board(), &unanchored, &catalog);
+        assert!(
+            recreated.diagnostics.is_empty(),
+            "rendered null-valued struct_set must reconcile from scratch: {:?}\n{unanchored}",
+            recreated.diagnostics
+        );
+        assert!(
+            recreated.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { node_id, pin_id, value, .. }
+                    if command_node_type(&recreated.commands, node_id).as_deref()
+                        == Some("struct_set")
+                        && pin_id == "value"
+                        && value == &flow_like_types::Value::Null
+            )),
+            "reconcile must restore the explicit null value: {:?}",
+            recreated.commands
+        );
     }
 
     #[test]

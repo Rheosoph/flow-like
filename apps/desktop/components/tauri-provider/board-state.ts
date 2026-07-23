@@ -1,4 +1,7 @@
 import {
+	type BoardEditJob,
+	type BoardEditJobDeliveryClaim,
+	type BoardEditJobResolution,
 	type ChatImage,
 	type CopilotScope,
 	type CopilotToolContext,
@@ -7,8 +10,10 @@ import {
 	type FlowIrCommitToken,
 	type IApplyFlowIrCommitResponse,
 	type IApplyFlowScriptResponse,
+	IAppVisibility,
 	type IBoard,
 	type IBoardState,
+	type ICheckFlowScriptReconcileResponse,
 	ICommentType,
 	IConnectionMode,
 	type IExecutionMode,
@@ -42,8 +47,11 @@ import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
 import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
+import { flowIrCommitDeliveryId } from "@flow-like/flow-like-ui/lib/flowpilot/board-edit-job-delivery";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { confirm } from "@tauri-apps/plugin-dialog";
+import { createId } from "@paralleldrive/cuid2";
 import { isObject } from "lodash-es";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
@@ -63,9 +71,13 @@ import {
 	shouldApplyRemoteBoard,
 } from "./board-merge";
 import {
-	MAX_UNDO_REDO_SYNC_BODY_BYTES,
+	CommandSyncPayloadTooLargeError,
+	type CommandSyncRemoteIdentity,
 	OFFLINE_SYNC_COMMAND_MAX_AGE_MS,
+	chunkLegacyCommandsForRecovery,
 	chunkCommandsForSync,
+	commandSyncHasPendingMutation,
+	evaluateCommandSyncRemoteIdentity,
 	evaluateBoardLineage,
 	systemTimeToNanos,
 } from "./command-sync";
@@ -295,7 +307,122 @@ const summarizeBoardElementRefs = (board: IBoard) => {
 };
 
 export class BoardState implements IBoardState {
+	private readonly offlineSyncDrains = new Map<
+		string,
+		Promise<{ failed: boolean; pushedBatches: number }>
+	>();
+	private readonly boardMutationSequences = new Map<string, Promise<void>>();
+
 	constructor(private readonly backend: TauriBackend) {}
+
+	private async remoteBoardDeliveryIdentity(
+		appId: string,
+		boardId?: string,
+	): Promise<CommandSyncRemoteIdentity | undefined> {
+		// Read native app metadata at the mutation boundary. The IndexedDB visibility cache is
+		// useful for rendering, but a stale value must not decide whether an edit targets Hub.
+		const app = await invoke<{ visibility?: IAppVisibility }>("get_app", {
+			appId,
+		});
+		if ((app.visibility ?? IAppVisibility.Offline) === IAppVisibility.Offline) {
+			if (boardId) {
+				const pending = (
+					await this.backend.getOfflineSyncCommands(appId, boardId)
+				).filter(commandSyncHasPendingMutation);
+				if (pending.length > 0) {
+					throw new Error(
+						"This board still has queued remote edits. Retry or recover them before making local-only edits that would fork their ordered state.",
+					);
+				}
+			}
+			return undefined;
+		}
+		const principal = this.backend.auth?.user?.profile.sub;
+		if (!this.backend.profile || !principal) {
+			throw new Error(
+				"A remote board edit cannot be applied while its authenticated account and Hub destination are unavailable. Sign in, then retry the edit.",
+			);
+		}
+		const identity: CommandSyncRemoteIdentity = {
+			remoteIdentityVersion: 1,
+			remoteProfileId: this.backend.profile.id,
+			remotePrincipalId: principal,
+			remoteHub: this.backend.profile.hub,
+		};
+		if (boardId) {
+			const pending = (
+				await this.backend.getOfflineSyncCommands(appId, boardId)
+			).filter(commandSyncHasPendingMutation);
+			for (const entry of pending) {
+				if (entry.remoteIdentityVersion !== 1) {
+					throw new Error(
+						"This board has an older queued edit with no provable account/Hub owner. Use Retry queued edits to review and bind it before making another edit.",
+					);
+				}
+				const owner = evaluateCommandSyncRemoteIdentity(entry, identity);
+				if (!owner.apply) {
+					throw new Error(
+						`This board has an earlier queued edit for another remote identity: ${owner.refusalReason}. Switch back to that account/Hub and retry it before making another edit.`,
+					);
+				}
+				if (
+					entry.blockedReason ||
+					entry.createdAt.getTime() <
+						Date.now() - OFFLINE_SYNC_COMMAND_MAX_AGE_MS
+				) {
+					throw new Error(
+						entry.blockedReason ??
+							"This board has an expired queued edit that requires recovery before another dependent edit can be applied.",
+					);
+				}
+			}
+		}
+		return identity;
+	}
+
+	/**
+	 * Preserve native and remote mutation order for one board. The native board lock protects the
+	 * local graph, while this renderer-side tail keeps its durable outbox handoff in the same order.
+	 */
+	private async sequenceBoardMutation<T>(
+		appId: string,
+		boardId: string,
+		operation: () => Promise<T>,
+	): Promise<T> {
+		const key = `${appId}\u001f${boardId}`;
+		const previous = this.boardMutationSequences.get(key) ?? Promise.resolve();
+		const result = previous.catch(() => undefined).then(operation);
+		const tail = result.then(
+			() => undefined,
+			() => undefined,
+		);
+		this.boardMutationSequences.set(key, tail);
+		try {
+			return await result;
+		} finally {
+			if (this.boardMutationSequences.get(key) === tail) {
+				this.boardMutationSequences.delete(key);
+			}
+		}
+	}
+
+	private async assertNoPendingNativeBoardDelivery(
+		appId: string,
+		boardId: string,
+	): Promise<void> {
+		const jobs = await this.listBoardEditJobs(appId, boardId, false);
+		const pending = jobs.find(
+			(job) =>
+				job.phase === "applying" ||
+				job.phase === "applied_pending_delivery" ||
+				job.phase === "failed",
+		);
+		if (pending) {
+			throw new Error(
+				`Board edits are paused while FlowPilot finishes durable delivery of review ${pending.jobId}. Reopen this board and let receipt recovery complete.`,
+			);
+		}
+	}
 
 	private async syncRemoteAppPackages(
 		appId: string,
@@ -479,12 +606,18 @@ export class BoardState implements IBoardState {
 							appId,
 							board.id,
 						);
-						if (pendingSync.length > 0) {
+						const pendingMutations = pendingSync.filter(
+							commandSyncHasPendingMutation,
+						);
+						if (pendingMutations.length > 0) {
 							// Local edits are still queued for the server; the remote snapshot
 							// predates them and applying it would clobber the local content.
 							console.warn(
 								"Skipping remote board with pending offline sync commands:",
-								{ boardId: board.id, pendingBatches: pendingSync.length },
+								{
+									boardId: board.id,
+									pendingBatches: pendingMutations.length,
+								},
 							);
 							continue;
 						}
@@ -638,12 +771,15 @@ export class BoardState implements IBoardState {
 					appId,
 					boardId,
 				);
-				if (pendingSync.length > 0) {
+				const pendingMutations = pendingSync.filter(
+					commandSyncHasPendingMutation,
+				);
+				if (pendingMutations.length > 0) {
 					// Local edits are still queued for the server; the remote snapshot
 					// predates them, so the local board is the fresher one.
 					console.warn(
 						"[BoardState] forceFresh: local board has pending offline sync commands, skipping remote overwrite:",
-						{ boardId, pendingBatches: pendingSync.length },
+						{ boardId, pendingBatches: pendingMutations.length },
 					);
 					return board;
 				}
@@ -716,6 +852,7 @@ export class BoardState implements IBoardState {
 				if (drainFailed) {
 					// Local edits are not on the server yet. Applying the remote snapshot
 					// now would clobber them with a board that predates the queued batch.
+					this.notifyEditsQueued(appId, boardId);
 					return board;
 				}
 
@@ -1506,90 +1643,104 @@ export class BoardState implements IBoardState {
 	}
 
 	async undoBoard(appId: string, boardId: string, commands: IGenericCommand[]) {
-		const isOffline = await this.backend.isOffline(appId);
+		return await this.sequenceBoardMutation(appId, boardId, async () => {
+			const isOffline = await this.backend.isOffline(appId);
 
-		if (isOffline) {
-			await invoke("undo_board", {
-				appId: appId,
-				boardId: boardId,
-				commands: commands,
-			});
-			return;
-		}
+			if (isOffline) {
+				await invoke("undo_board", {
+					appId: appId,
+					boardId: boardId,
+					commands: commands,
+				});
+				return;
+			}
 
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			toast.error("Undo only works when you are online.");
-			throw new Error(
-				"Profile, auth or query client not set. Cannot push board update.",
+			if (
+				!this.backend.profile ||
+				!this.backend.auth ||
+				!this.backend.queryClient
+			) {
+				toast.error("Undo only works when you are online.");
+				throw new Error(
+					"Profile, auth or query client not set. Cannot push board update.",
+				);
+			}
+			await this.assertNoPendingNativeBoardDelivery(appId, boardId);
+
+			// Undo must ship as a single request — a chunked/partial undo would
+			// diverge the board — so fail fast instead of hitting a raw HTTP 413.
+			const body = JSON.stringify({ commands: commands });
+			try {
+				chunkCommandsForSync(commands);
+			} catch (error) {
+				if (!(error instanceof CommandSyncPayloadTooLargeError)) throw error;
+				toast.error("Undo batch too large to sync. Undo in smaller steps.");
+				throw new Error(
+					`Undo batch of ${commands.length} commands exceeds the safe sync limit: ${error.message}`,
+					{ cause: error },
+				);
+			}
+
+			await fetcher(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/undo`,
+				{
+					method: "PATCH",
+					body,
+				},
+				this.backend.auth,
 			);
-		}
-
-		// Undo must ship as a single request — a chunked/partial undo would
-		// diverge the board — so fail fast instead of hitting a raw HTTP 413.
-		const body = JSON.stringify({ commands: commands });
-		if (body.length > MAX_UNDO_REDO_SYNC_BODY_BYTES) {
-			toast.error("Undo batch too large to sync. Undo in smaller steps.");
-			throw new Error(
-				`Undo batch of ${commands.length} commands (${body.length} bytes) exceeds the ${MAX_UNDO_REDO_SYNC_BODY_BYTES} byte sync limit`,
-			);
-		}
-
-		await fetcher(
-			this.backend.profile,
-			`apps/${appId}/board/${boardId}/undo`,
-			{
-				method: "PATCH",
-				body,
-			},
-			this.backend.auth,
-		);
+		});
 	}
 	async redoBoard(appId: string, boardId: string, commands: IGenericCommand[]) {
-		const isOffline = await this.backend.isOffline(appId);
+		return await this.sequenceBoardMutation(appId, boardId, async () => {
+			const isOffline = await this.backend.isOffline(appId);
 
-		if (isOffline) {
-			await invoke("redo_board", {
-				appId: appId,
-				boardId: boardId,
-				commands: commands,
-			});
-			return;
-		}
+			if (isOffline) {
+				await invoke("redo_board", {
+					appId: appId,
+					boardId: boardId,
+					commands: commands,
+				});
+				return;
+			}
 
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			toast.error("Undo only works when you are online.");
-			throw new Error(
-				"Profile, auth or query client not set. Cannot push board update.",
+			if (
+				!this.backend.profile ||
+				!this.backend.auth ||
+				!this.backend.queryClient
+			) {
+				toast.error("Undo only works when you are online.");
+				throw new Error(
+					"Profile, auth or query client not set. Cannot push board update.",
+				);
+			}
+			await this.assertNoPendingNativeBoardDelivery(appId, boardId);
+
+			// Redo must ship as a single request — a chunked/partial redo would
+			// diverge the board — so fail fast instead of hitting a raw HTTP 413.
+			const body = JSON.stringify({ commands: commands });
+			try {
+				chunkCommandsForSync(commands);
+			} catch (error) {
+				if (!(error instanceof CommandSyncPayloadTooLargeError)) throw error;
+				toast.error("Redo batch too large to sync. Redo in smaller steps.");
+				throw new Error(
+					`Redo batch of ${commands.length} commands exceeds the safe sync limit: ${error.message}`,
+					{ cause: error },
+				);
+			}
+
+			await fetcher(
+				this.backend.profile,
+				`apps/${appId}/board/${boardId}/redo`,
+				{
+					method: "PATCH",
+					body,
+				},
+				this.backend.auth,
 			);
-		}
-
-		// Redo must ship as a single request — a chunked/partial redo would
-		// diverge the board — so fail fast instead of hitting a raw HTTP 413.
-		const body = JSON.stringify({ commands: commands });
-		if (body.length > MAX_UNDO_REDO_SYNC_BODY_BYTES) {
-			toast.error("Redo batch too large to sync. Redo in smaller steps.");
-			throw new Error(
-				`Redo batch of ${commands.length} commands (${body.length} bytes) exceeds the ${MAX_UNDO_REDO_SYNC_BODY_BYTES} byte sync limit`,
-			);
-		}
-
-		await fetcher(
-			this.backend.profile,
-			`apps/${appId}/board/${boardId}/redo`,
-			{
-				method: "PATCH",
-				body,
-			},
-			this.backend.auth,
-		);
+		});
 	}
 
 	async upsertBoard(
@@ -1773,17 +1924,14 @@ export class BoardState implements IBoardState {
 		if (now - lastQueuedEditsToastAt < QUEUED_EDITS_TOAST_DEBOUNCE_MS) return;
 		lastQueuedEditsToastAt = now;
 
-		toast.warning(
-			"Server sync failed — your edits are queued and will retry on the next board load.",
-			{
-				action: {
-					label: "Retry now",
-					onClick: () => {
-						void this.retryOfflineSync(appId, boardId);
-					},
+		toast.warning("Server sync is incomplete — your queued edits were kept.", {
+			action: {
+				label: "Retry now",
+				onClick: () => {
+					void this.retryOfflineSync(appId, boardId);
 				},
 			},
-		);
+		});
 	}
 
 	/**
@@ -1796,51 +1944,227 @@ export class BoardState implements IBoardState {
 		appId: string,
 		boardId: string,
 	): Promise<{ failed: boolean; pushedBatches: number }> {
+		const key = `${appId}\u001f${boardId}`;
+		const active = this.offlineSyncDrains.get(key);
+		if (active) return await active;
+		const drain = this.drainOfflineSyncQueueExclusive(appId, boardId).finally(
+			() => {
+				if (this.offlineSyncDrains.get(key) === drain) {
+					this.offlineSyncDrains.delete(key);
+				}
+			},
+		);
+		this.offlineSyncDrains.set(key, drain);
+		return await drain;
+	}
+
+	private async drainOfflineSyncQueueExclusive(
+		appId: string,
+		boardId: string,
+	): Promise<{ failed: boolean; pushedBatches: number }> {
 		const unsyncedCommands = await this.backend.getOfflineSyncCommands(
 			appId,
 			boardId,
 		);
+		const transportProfile = this.backend.profile;
+		const transportAuth = this.backend.auth;
+		if (!transportProfile || !transportAuth) {
+			return {
+				failed: unsyncedCommands.some(commandSyncHasPendingMutation),
+				pushedBatches: 0,
+			};
+		}
+		// Freeze one authenticated destination for the complete ordered drain. A profile
+		// switch between legacy recovery chunks must never route the tail to another Hub.
+		const transportIdentity: CommandSyncRemoteIdentity = {
+			remoteIdentityVersion: 1,
+			remoteProfileId: transportProfile.id,
+			remotePrincipalId: transportAuth.user?.profile.sub,
+			remoteHub: transportProfile.hub,
+		};
 		let failed = false;
 		let pushedBatches = 0;
 
 		for (const commandSync of unsyncedCommands) {
-			// Replaying stale edits over a week of newer remote history does more
-			// harm than dropping them.
+			const hasPendingMutation = commandSyncHasPendingMutation(commandSync);
+			if (hasPendingMutation && commandSync.remoteIdentityVersion !== 1) {
+				console.error(
+					"Refusing to replay an ownerless legacy board mutation without explicit account/Hub confirmation.",
+				);
+				failed = true;
+				break;
+			}
+			const remoteIdentity = evaluateCommandSyncRemoteIdentity(
+				commandSync,
+				transportIdentity,
+			);
+			if (!remoteIdentity.apply) {
+				if (!hasPendingMutation) {
+					console.warn(
+						"Leaving a completed board-delivery tombstone with its original remote identity:",
+						remoteIdentity.refusalReason,
+					);
+					continue;
+				}
+				console.error(
+					"Refusing to drain a board mutation through a different remote identity:",
+					remoteIdentity.refusalReason,
+				);
+				failed = true;
+				break;
+			}
+			// A later row was produced from local state that already includes this one.
+			// Silently deleting an expired prefix would let dependent edits overtake it.
 			if (
+				hasPendingMutation &&
 				commandSync.createdAt.getTime() <
-				Date.now() - OFFLINE_SYNC_COMMAND_MAX_AGE_MS
+					Date.now() - OFFLINE_SYNC_COMMAND_MAX_AGE_MS &&
+				!commandSync.blockedReason &&
+				!commandSync.idempotencyKey?.startsWith("flowpilot-board-edit:")
 			) {
-				console.warn(
-					"Dropping expired offline sync command:",
+				const blockedReason =
+					"This queued board edit is older than the automatic replay window. It was retained because later edits may depend on it; restore or rebase the board before syncing again.";
+				console.error(blockedReason, commandSync.commandId);
+				await this.backend.blockOfflineSyncCommand(
 					commandSync.commandId,
+					blockedReason,
 				);
-				await this.backend.clearOfflineSyncCommands(
-					commandSync.commandId,
-					appId,
-					boardId,
+				failed = true;
+				break;
+			}
+			if (commandSync.blockedReason) {
+				console.error(
+					"Board sync is blocked behind a payload that exceeds the command transport:",
+					commandSync.blockedReason,
 				);
-				continue;
+				failed = true;
+				break;
 			}
 
 			try {
-				for (const chunk of chunkCommandsForSync(commandSync.commands)) {
+				const acknowledgeRemoteReceipt = async (receiptKey: string) => {
 					await fetcher(
-						this.backend.profile!,
+						transportProfile,
 						`apps/${appId}/board/${boardId}`,
 						{
 							method: "POST",
+							headers: {
+								"FlowLike-Idempotency-Ack": receiptKey,
+							},
+							body: JSON.stringify({ commands: [] }),
+						},
+						transportAuth,
+					);
+				};
+				const baseKey =
+					commandSync.idempotencyKey ?? `offline-sync:${commandSync.commandId}`;
+				const isFlowPilotDelivery =
+					commandSync.deferReceiptAckUntilNativeTerminal === true ||
+					baseKey.startsWith("flowpilot-board-edit:");
+
+				// The server mutation was accepted and IndexedDB advanced before a prior
+				// crash. Old FlowPilot rows are migrated to retained evidence because ACKing
+				// before every native replay authority is gone can reopen duplicate delivery.
+				if (commandSync.pendingReceiptAck) {
+					if (isFlowPilotDelivery) {
+						await this.backend.deferOfflineSyncReceiptAck(
+							commandSync.commandId,
+							commandSync.pendingReceiptAck,
+						);
+					} else {
+						await acknowledgeRemoteReceipt(commandSync.pendingReceiptAck);
+						await this.backend.completeOfflineSyncReceiptAck(
+							commandSync.commandId,
+							commandSync.pendingReceiptAck,
+						);
+					}
+				}
+				let chunks = commandSync.chunks;
+				if (!chunks) {
+					try {
+						chunks = chunkLegacyCommandsForRecovery(commandSync.commands ?? []);
+					} catch (error) {
+						if (!(error instanceof CommandSyncPayloadTooLargeError))
+							throw error;
+						const blockedReason = `${error.message} This legacy recovery tail cannot use the atomic command endpoint; restore the Hub board from an authoritative snapshot.`;
+						await this.backend.blockOfflineSyncCommand(
+							commandSync.commandId,
+							blockedReason,
+						);
+						throw new Error(blockedReason, { cause: error });
+					}
+					// Persist the exact partition and stable key before the first request. After
+					// this transaction, every crash/retry reuses the same key-to-digest mapping.
+					await this.backend.migrateLegacyOfflineSyncCommand(
+						commandSync.commandId,
+						chunks,
+						baseKey,
+					);
+				}
+				// A completed FlowPilot tombstone proves the remote/outbox handoff without
+				// deleting the server replay evidence or blocking later semantic mutations.
+				if (chunks.length === 0) {
+					if (isFlowPilotDelivery) {
+						pushedBatches += 1;
+						continue;
+					}
+					await this.backend.clearOfflineSyncCommands(
+						commandSync.commandId,
+						appId,
+						boardId,
+					);
+					continue;
+				}
+				const initialOffset = commandSync.chunkOffset ?? 0;
+				for (const [chunkIndex, chunk] of chunks.entries()) {
+					try {
+						chunkCommandsForSync(chunk);
+					} catch (error) {
+						if (!(error instanceof CommandSyncPayloadTooLargeError))
+							throw error;
+						const blockedReason = `${error.message} The persisted outbox payload requires snapshot recovery.`;
+						await this.backend.blockOfflineSyncCommand(
+							commandSync.commandId,
+							blockedReason,
+						);
+						throw new Error(blockedReason, { cause: error });
+					}
+					const receiptKey = `${baseKey}:${initialOffset + chunkIndex}`;
+					await fetcher(
+						transportProfile,
+						`apps/${appId}/board/${boardId}`,
+						{
+							method: "POST",
+							headers: {
+								"Idempotency-Key": receiptKey,
+							},
 							body: JSON.stringify({
 								commands: chunk,
 							}),
 						},
-						this.backend.auth,
+						transportAuth,
 					);
+					// Persist exact progress after every accepted chunk. A lost checkpoint can
+					// only replay the same digest/key, which the board-persisted server marker
+					// handles idempotently.
+					await this.backend.checkpointOfflineSyncCommand(
+						commandSync.commandId,
+						chunks.slice(chunkIndex + 1),
+						initialOffset + chunkIndex + 1,
+						baseKey,
+						receiptKey,
+						isFlowPilotDelivery,
+					);
+					if (!isFlowPilotDelivery) {
+						// Only the durable checkpoint authorizes ordinary receipt deletion.
+						// FlowPilot retains both server evidence and a nonblocking client tombstone.
+						await acknowledgeRemoteReceipt(receiptKey);
+						await this.backend.completeOfflineSyncReceiptAck(
+							commandSync.commandId,
+							receiptKey,
+						);
+					}
 				}
-				await this.backend.clearOfflineSyncCommands(
-					commandSync.commandId,
-					appId,
-					boardId,
-				);
 				pushedBatches += 1;
 				console.log("Executed offline sync command:", commandSync.commandId);
 			} catch (e) {
@@ -1866,12 +2190,68 @@ export class BoardState implements IBoardState {
 		boardId: string,
 	): Promise<{ pushedBatches: number; remainingBatches: number }> {
 		const countRemaining = async () =>
-			(await this.backend.getOfflineSyncCommands(appId, boardId)).length;
+			(await this.backend.getOfflineSyncCommands(appId, boardId)).filter(
+				commandSyncHasPendingMutation,
+			).length;
 
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline || !this.backend.profile || !this.backend.auth) {
+		const app = await invoke<{ visibility?: IAppVisibility }>("get_app", {
+			appId,
+		});
+		const isLocalOnly =
+			(app.visibility ?? IAppVisibility.Offline) === IAppVisibility.Offline;
+		if (isLocalOnly) {
+			const queued = await this.backend.getOfflineSyncCommands(appId, boardId);
+			const pending = queued.filter(commandSyncHasPendingMutation);
+			for (const entry of queued.filter(
+				(entry) => !commandSyncHasPendingMutation(entry),
+			)) {
+				await this.backend.clearOfflineSyncCommands(
+					entry.commandId,
+					appId,
+					boardId,
+				);
+			}
+			if (pending.length > 0) {
+				toast.error(
+					"Queued remote edits were retained because changing app visibility cannot safely discard an ordered mutation.",
+				);
+			}
+			return { pushedBatches: 0, remainingBatches: pending.length };
+		}
+		const principal = this.backend.auth?.user?.profile.sub;
+		if (!this.backend.profile || !this.backend.auth || !principal) {
 			toast.error("Cannot sync queued edits while offline or signed out.");
 			return { pushedBatches: 0, remainingBatches: await countRemaining() };
+		}
+
+		const queued = await this.backend.getOfflineSyncCommands(appId, boardId);
+		const ownerless = queued.filter(
+			(entry) =>
+				commandSyncHasPendingMutation(entry) &&
+				entry.remoteIdentityVersion !== 1,
+		);
+		if (ownerless.length > 0) {
+			const approved = await confirm(
+				`This board has ${ownerless.length} queued edit ${ownerless.length === 1 ? "batch" : "batches"} from an older desktop version that did not record its account or Hub. Retry only if this is the same account and Hub where the edit was originally made. Continue?`,
+			);
+			if (!approved) {
+				return {
+					pushedBatches: 0,
+					remainingBatches: await countRemaining(),
+				};
+			}
+			const identity: CommandSyncRemoteIdentity = {
+				remoteIdentityVersion: 1,
+				remoteProfileId: this.backend.profile.id,
+				remotePrincipalId: principal,
+				remoteHub: this.backend.profile.hub,
+			};
+			for (const entry of ownerless) {
+				await this.backend.bindLegacyOfflineSyncCommand(
+					entry.commandId,
+					identity,
+				);
+			}
 		}
 
 		const { failed, pushedBatches } = await this.drainOfflineSyncQueue(
@@ -1894,69 +2274,104 @@ export class BoardState implements IBoardState {
 	}
 
 	/**
-	 * Push executed commands to the server in order-preserving, size-bounded chunks.
+	 * Journal one logical mutation, then push it to the server as one atomic request.
 	 *
-	 * Every failure path appends the undelivered tail to the offline sync queue, and a
-	 * non-empty queue forces queueing instead of a direct push: a later small command must
-	 * never overtake an earlier failed batch, otherwise the remote board becomes "newer"
-	 * while missing that batch and the next sync clobbers the local content with it.
+	 * FlowScript setup, dynamic-pin updates, function targets, and connections are one
+	 * transaction. The API persists every request independently, so size-based splitting
+	 * would make a failed tail observable as a nodes-only board. Older multi-chunk outbox
+	 * rows remain readable solely so an already-partial delivery can finish recovery.
 	 */
 	private async syncExecutedCommandsToServer(
 		appId: string,
 		boardId: string,
 		commands: IGenericCommand[],
-	): Promise<void> {
-		if (commands.length === 0) return;
+		idempotencyKey?: string,
+		remoteIdentity?: CommandSyncRemoteIdentity,
+	): Promise<{ deliveryComplete: boolean; blockedReason?: string }> {
+		if (commands.length === 0) return { deliveryComplete: true };
+		const durableIdempotencyKey = idempotencyKey ?? `board-sync:${createId()}`;
 
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) return;
+		// Every caller captures this target before its native mutation. Do not re-read app
+		// visibility afterwards: a concurrent visibility change must not discard an edit that
+		// was committed for a remote destination.
+		const isLocalOnly = !remoteIdentity;
+		if (isLocalOnly) {
+			const queued = await this.backend.getOfflineSyncCommands(appId, boardId);
+			for (const entry of queued.filter(
+				(entry) => !commandSyncHasPendingMutation(entry),
+			)) {
+				await this.backend.clearOfflineSyncCommands(
+					entry.commandId,
+					appId,
+					boardId,
+				);
+			}
+			return { deliveryComplete: true };
+		}
+		if (!remoteIdentity?.remotePrincipalId) {
+			throw new Error(
+				"Remote board delivery requires the account and Hub identity captured before the native mutation.",
+			);
+		}
+
+		let chunks: IGenericCommand[][];
+		try {
+			chunks = chunkCommandsForSync(commands);
+		} catch (error) {
+			if (!(error instanceof CommandSyncPayloadTooLargeError)) throw error;
+			const blockedReason = `${error.message} The exact locally committed payload is retained in the durable sync outbox, but remote delivery requires a larger/snapshot transport.`;
+			await this.backend.pushOfflineSyncCommand(
+				appId,
+				boardId,
+				[],
+				durableIdempotencyKey,
+				0,
+				commands,
+				blockedReason,
+				remoteIdentity,
+			);
+			toast.error(blockedReason);
+			return { deliveryComplete: false, blockedReason };
+		}
+
+		// Every online mutation enters IndexedDB before the first network attempt. This makes the
+		// outbox the single ordering source for direct sends, retries, crashes, and concurrent edits.
+		await this.backend.pushOfflineSyncCommand(
+			appId,
+			boardId,
+			chunks,
+			durableIdempotencyKey,
+			0,
+			undefined,
+			undefined,
+			remoteIdentity,
+		);
 
 		if (
 			!this.backend.profile ||
 			!this.backend.auth ||
 			!this.backend.queryClient
 		) {
-			await this.backend.pushOfflineSyncCommand(appId, boardId, commands);
-			return;
-		}
-
-		const pending = await this.backend.getOfflineSyncCommands(appId, boardId);
-		if (pending.length > 0) {
-			await this.backend.pushOfflineSyncCommand(appId, boardId, commands);
 			this.notifyEditsQueued(appId, boardId);
-			return;
+			return { deliveryComplete: true };
 		}
 
-		const chunks = chunkCommandsForSync(commands);
-		for (let index = 0; index < chunks.length; index++) {
-			try {
-				await fetcher(
-					this.backend.profile,
-					`apps/${appId}/board/${boardId}`,
-					{
-						method: "POST",
-						body: JSON.stringify({
-							commands: chunks[index],
-						}),
-					},
-					this.backend.auth,
-				);
-			} catch (error) {
-				console.error(
-					"Failed to push commands to server; queueing the remainder for ordered sync:",
-					error,
-				);
-				await this.backend.pushOfflineSyncCommand(
-					appId,
-					boardId,
-					chunks.slice(index).flat(),
-				);
-				this.notifyEditsQueued(appId, boardId);
-				return;
+		let drain = await this.drainOfflineSyncQueue(appId, boardId);
+		// An already-running drain may have snapshotted the queue immediately before this journal
+		// write. Once it settles, run one more pass so the newly appended entry is not deferred.
+		if (!drain.failed) {
+			const remaining = await this.backend.getOfflineSyncCommands(
+				appId,
+				boardId,
+			);
+			if (remaining.some(commandSyncHasPendingMutation)) {
+				drain = await this.drainOfflineSyncQueue(appId, boardId);
 			}
 		}
-
-		await this.recordLineageAfterPush(appId, boardId);
+		if (drain.failed) {
+			this.notifyEditsQueued(appId, boardId);
+		}
+		return { deliveryComplete: true };
 	}
 
 	async executeCommand(
@@ -1964,15 +2379,32 @@ export class BoardState implements IBoardState {
 		boardId: string,
 		command: IGenericCommand,
 	): Promise<IGenericCommand> {
-		const executedCommand = await invoke<IGenericCommand>("execute_command", {
-			appId: appId,
-			boardId: boardId,
-			command: command,
+		return await this.sequenceBoardMutation(appId, boardId, async () => {
+			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
+				appId,
+				boardId,
+			);
+			if (remoteIdentity) {
+				// Reject an obviously unsyncable caller payload before committing it locally. Some
+				// commands acquire undo metadata during execution, so the returned command is checked
+				// and durably journaled again below.
+				chunkCommandsForSync([command]);
+			}
+			const executedCommand = await invoke<IGenericCommand>("execute_command", {
+				appId,
+				boardId,
+				command,
+			});
+
+			await this.syncExecutedCommandsToServer(
+				appId,
+				boardId,
+				[executedCommand],
+				undefined,
+				remoteIdentity,
+			);
+			return executedCommand;
 		});
-
-		await this.syncExecutedCommandsToServer(appId, boardId, [executedCommand]);
-
-		return executedCommand;
 	}
 
 	async executeCommands(
@@ -1980,18 +2412,32 @@ export class BoardState implements IBoardState {
 		boardId: string,
 		commands: IGenericCommand[],
 	): Promise<IGenericCommand[]> {
-		const executedCommands = await invoke<IGenericCommand[]>(
-			"execute_commands",
-			{
-				appId: appId,
-				boardId: boardId,
-				commands: commands,
-			},
-		);
+		return await this.sequenceBoardMutation(appId, boardId, async () => {
+			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
+				appId,
+				boardId,
+			);
+			if (remoteIdentity) {
+				chunkCommandsForSync(commands);
+			}
+			const executedCommands = await invoke<IGenericCommand[]>(
+				"execute_commands",
+				{
+					appId,
+					boardId,
+					commands,
+				},
+			);
 
-		await this.syncExecutedCommandsToServer(appId, boardId, executedCommands);
-
-		return executedCommands;
+			await this.syncExecutedCommandsToServer(
+				appId,
+				boardId,
+				executedCommands,
+				undefined,
+				remoteIdentity,
+			);
+			return executedCommands;
+		});
 	}
 
 	async applyFlowScript(
@@ -2002,22 +2448,44 @@ export class BoardState implements IBoardState {
 		catalogNodes?: INode[],
 		allowDeletions = false,
 	): Promise<IApplyFlowScriptResponse> {
-		const result = await invoke<IApplyFlowScriptResponse>("apply_flowscript", {
-			appId,
-			boardId,
-			flowscript,
-			currentLayer,
-			catalogNodes: getAppPackageCatalogNodes(catalogNodes),
-			allowDeletions,
-		});
+		return await this.sequenceBoardMutation(appId, boardId, async () => {
+			const remoteIdentity = await this.remoteBoardDeliveryIdentity(
+				appId,
+				boardId,
+			);
+			const result = await invoke<IApplyFlowScriptResponse>(
+				"apply_flowscript",
+				{
+					appId,
+					boardId,
+					flowscript,
+					currentLayer,
+					catalogNodes: getAppPackageCatalogNodes(catalogNodes),
+					allowDeletions,
+				},
+			);
 
-		if (result.commands.length === 0) {
+			if (result.commands.length > 0) {
+				const sync = await this.syncExecutedCommandsToServer(
+					appId,
+					boardId,
+					result.commands,
+					undefined,
+					remoteIdentity,
+				);
+				if (!sync.deliveryComplete) {
+					return {
+						...result,
+						diagnostics: [
+							...result.diagnostics,
+							sync.blockedReason ??
+								"FlowScript applied locally, but its atomic remote delivery is blocked.",
+						],
+					};
+				}
+			}
 			return result;
-		}
-
-		await this.syncExecutedCommandsToServer(appId, boardId, result.commands);
-
-		return result;
+		});
 	}
 
 	async getFlowScript(
@@ -2055,6 +2523,17 @@ export class BoardState implements IBoardState {
 		return await invoke<IFlowScriptDiagnostic[]>("lint_flowscript", {
 			flowscript,
 		});
+	}
+
+	async checkFlowScriptReconcile(
+		appId: string,
+		boardId: string,
+		flowscript: string,
+	): Promise<ICheckFlowScriptReconcileResponse> {
+		return await invoke<ICheckFlowScriptReconcileResponse>(
+			"check_flowscript_reconcile",
+			{ appId, boardId, flowscript },
+		);
 	}
 
 	async getExecutionElements(
@@ -2201,36 +2680,202 @@ export class BoardState implements IBoardState {
 	async applyFlowIrCommit(
 		appId: string,
 		token: FlowIrCommitToken,
+		deliveryId?: string,
 	): Promise<IApplyFlowIrCommitResponse> {
-		const result = await invoke<IApplyFlowIrCommitResponse>(
-			"flowpilot_apply_flow_ir_commit",
-			{
-				appId,
-				token,
-			},
-		);
-		if (result.status !== "applied" || result.commands.length === 0) {
-			return result;
-		}
-
-		try {
-			await this.syncExecutedCommandsToServer(
+		return await this.sequenceBoardMutation(appId, token.board_id, async () => {
+			const currentIdentity = await this.remoteBoardDeliveryIdentity(
 				appId,
 				token.board_id,
-				result.commands,
 			);
-		} catch (error) {
-			// Native apply has already committed and acknowledged the exact batch. A
-			// remote-sync bookkeeping failure is recoverable and must not make the caller
-			// retry or dismiss a commit that is already present locally.
-			const warning = `Typed workflow applied locally; remote synchronization must retry: ${getErrorMessage(error, "Unknown sync error")}`;
-			console.error(warning, error);
-			return {
-				...result,
-				diagnostics: [...result.diagnostics, warning],
-			};
+			const durableDeliveryId = flowIrCommitDeliveryId(token);
+			if (deliveryId && deliveryId !== durableDeliveryId) {
+				throw new Error(
+					"FlowPilot delivery identity must match its immutable compiler claim.",
+				);
+			}
+			let deliveryIdentity = currentIdentity;
+			const owningJob = (
+				await this.listBoardEditJobs(appId, token.board_id, true)
+			).find(
+				(job) =>
+					job.token.draft_id === token.draft_id &&
+					job.token.revision === token.revision &&
+					job.token.base_fingerprint === token.base_fingerprint &&
+					job.token.claim_id === token.claim_id,
+			);
+			if (currentIdentity) {
+				// A direct compatibility call may replay a receipt that was already committed by
+				// the durable job, but it must never be the authority that mutates a remote board.
+				// Otherwise a renderer crash between native commit and outbox journaling could send
+				// the edit later through a different account or Hub.
+				if (!owningJob) {
+					throw new Error(
+						"Remote FlowPilot edits require a durable board-edit review before native Apply. Regenerate the review and retry it from Pending edits.",
+					);
+				}
+				if (owningJob.phase !== "applied_pending_delivery") {
+					throw new Error(
+						`Remote FlowPilot Apply must resolve its durable review before receipt delivery (current phase: ${owningJob.phase}).`,
+					);
+				}
+				if (
+					!owningJob.remoteProfileId ||
+					!owningJob.remotePrincipalId ||
+					!owningJob.remoteHub
+				) {
+					throw new Error(
+						"The applied FlowPilot review has no complete durable remote owner. It was not delivered; dismiss and regenerate it while signed in.",
+					);
+				}
+				const boundIdentity: CommandSyncRemoteIdentity = {
+					remoteIdentityVersion: 1,
+					remoteProfileId: owningJob.remoteProfileId,
+					remotePrincipalId: owningJob.remotePrincipalId,
+					remoteHub: owningJob.remoteHub,
+				};
+				const ownerMatch = evaluateCommandSyncRemoteIdentity(
+					boundIdentity,
+					currentIdentity,
+				);
+				if (!ownerMatch.apply) {
+					throw new Error(
+						`This FlowPilot review belongs to another remote identity: ${ownerMatch.refusalReason}.`,
+					);
+				}
+				deliveryIdentity = boundIdentity;
+			}
+			const result = await invoke<IApplyFlowIrCommitResponse>(
+				"flowpilot_apply_flow_ir_commit",
+				{
+					appId,
+					token,
+				},
+			);
+			if (result.status !== "applied" || result.commands.length === 0) {
+				return result;
+			}
+
+			try {
+				const sync = await this.syncExecutedCommandsToServer(
+					appId,
+					token.board_id,
+					result.commands,
+					durableDeliveryId,
+					deliveryIdentity,
+				);
+				if (!sync.deliveryComplete) {
+					const warning =
+						sync.blockedReason ??
+						"Typed workflow applied locally, but its remote delivery remains blocked.";
+					return {
+						...result,
+						delivery_complete: false,
+						diagnostics: [...result.diagnostics, warning],
+					};
+				}
+			} catch (error) {
+				// Native apply has already committed the exact batch, but renderer delivery is
+				// deliberately incomplete until either the server or durable outbox accepts it.
+				const warning = `Typed workflow applied locally; remote synchronization must retry: ${getErrorMessage(error, "Unknown sync error")}`;
+				console.error(warning, error);
+				return {
+					...result,
+					delivery_complete: false,
+					diagnostics: [...result.diagnostics, warning],
+				};
+			}
+			return { ...result, delivery_complete: true };
+		});
+	}
+
+	async createBoardEditJob(
+		appId: string,
+		requestId: string | undefined,
+		token: FlowIrCommitToken,
+	): Promise<BoardEditJob> {
+		return await invoke<BoardEditJob>("flowpilot_create_board_edit_job", {
+			appId,
+			requestId,
+			token,
+		});
+	}
+
+	async listBoardEditJobs(
+		appId?: string,
+		boardId?: string,
+		includeTerminal = false,
+	): Promise<BoardEditJob[]> {
+		return await invoke<BoardEditJob[]>("flowpilot_list_board_edit_jobs", {
+			appId,
+			boardId,
+			includeTerminal,
+		});
+	}
+
+	async getBoardEditJob(jobId: string): Promise<BoardEditJob | undefined> {
+		return (
+			(await invoke<BoardEditJob | null>("flowpilot_get_board_edit_job", {
+				jobId,
+			})) ?? undefined
+		);
+	}
+
+	async resolveBoardEditJob(
+		jobId: string,
+		approved: boolean,
+	): Promise<BoardEditJobResolution> {
+		const job = await this.getBoardEditJob(jobId);
+		const remoteIdentity =
+			approved && job
+				? await this.remoteBoardDeliveryIdentity(job.appId, job.boardId)
+				: undefined;
+		if (remoteIdentity && job?.remotePrincipalId) {
+			// Bind the remote owner before the irreversible native mutation. Otherwise a
+			// signed-out apply could create an exact outbox no future account may drain.
+			const ownerMatch = evaluateCommandSyncRemoteIdentity(
+				{
+					remoteIdentityVersion: 1,
+					remoteProfileId: job.remoteProfileId,
+					remotePrincipalId: job.remotePrincipalId,
+					remoteHub: job.remoteHub,
+				},
+				remoteIdentity,
+			);
+			if (!ownerMatch.apply) {
+				throw new Error(
+					`This FlowPilot review belongs to another remote identity: ${ownerMatch.refusalReason}.`,
+				);
+			}
 		}
-		return result;
+		const resolve = () =>
+			invoke<BoardEditJobResolution>("flowpilot_resolve_board_edit_job", {
+				jobId,
+				approved,
+				remoteProfileId: remoteIdentity?.remoteProfileId,
+				remotePrincipalId: remoteIdentity?.remotePrincipalId,
+				remoteHub: remoteIdentity?.remoteHub,
+			});
+		if (!job) return await resolve();
+		return await this.sequenceBoardMutation(job.appId, job.boardId, resolve);
+	}
+
+	async claimBoardEditJobDelivery(
+		jobId: string,
+	): Promise<BoardEditJobDeliveryClaim> {
+		return await invoke<BoardEditJobDeliveryClaim>(
+			"flowpilot_claim_board_edit_job_delivery",
+			{ jobId },
+		);
+	}
+
+	async ackBoardEditJobDelivery(
+		jobId: string,
+		deliveryLeaseId: string,
+	): Promise<BoardEditJob> {
+		return await invoke<BoardEditJob>("flowpilot_ack_board_edit_job_delivery", {
+			jobId,
+			deliveryLeaseId,
+		});
 	}
 
 	async prerunBoard(

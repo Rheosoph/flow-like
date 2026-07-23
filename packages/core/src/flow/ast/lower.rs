@@ -147,11 +147,24 @@ mod util {
 
     /// Decode a pin/variable JSON default (`Vec<u8>`) into an AST `Literal`.
     pub fn decode_default(bytes: &[u8]) -> Option<Literal> {
+        let value = decode_value(bytes)?;
+        literal_from_value(&value)
+    }
+
+    /// Decode a configured JSON default while preserving an explicit `null` value.
+    pub fn decode_default_preserving_null(bytes: &[u8]) -> Option<Literal> {
+        let value = decode_value(bytes)?;
+        match value {
+            flow_like_types::Value::Null => Some(Literal::Null),
+            other => literal_from_value(&other),
+        }
+    }
+
+    fn decode_value(bytes: &[u8]) -> Option<flow_like_types::Value> {
         if bytes.is_empty() {
             return None;
         }
-        let value: flow_like_types::Value = flow_like_types::json::from_slice(bytes).ok()?;
-        literal_from_value(&value)
+        flow_like_types::json::from_slice(bytes).ok()
     }
 
     pub fn literal_from_value(value: &flow_like_types::Value) -> Option<Literal> {
@@ -791,7 +804,219 @@ impl<'a> Lowering<'a> {
                 anchor: Some(entry.id.clone()),
             });
         }
-        events
+        self.nest_root_agent_tool_handlers(events)
+    }
+
+    /// Root-level tool entry nodes are stored beside their owning app event on the board, even
+    /// though FlowScript gives them lexical ownership by nesting them in that event's body. The
+    /// registration node plus a concrete cross-entry data edge is the authoritative relationship:
+    /// when one root event body registers a referenceable root entry and that handler consumes an
+    /// output of the event, move the entry under the event as a `Stmt::Handler`.
+    ///
+    /// Do this only for a unique capturing owner. An entry that captures outputs from multiple
+    /// registering root events (or is involved in a malformed ownership cycle) remains top-level
+    /// rather than guessing a scope and silently changing what a bare reference resolves to.
+    fn nest_root_agent_tool_handlers(&self, events: Vec<EventBlock>) -> Vec<EventBlock> {
+        if events.len() < 2 {
+            return events;
+        }
+
+        let event_index_by_anchor: HashMap<&str, usize> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| event.anchor.as_deref().map(|anchor| (anchor, index)))
+            .collect();
+        let mut owners_by_handler: HashMap<usize, HashSet<usize>> = HashMap::new();
+
+        for (owner_index, event) in events.iter().enumerate() {
+            let mut calls = Vec::new();
+            collect_calls_in_block(&event.body, &mut calls);
+            for call in calls {
+                let Some(register) = call
+                    .anchor
+                    .as_deref()
+                    .and_then(|anchor| self.nodes_by_id.get(anchor).copied())
+                else {
+                    continue;
+                };
+                if !AGENT_REGISTER_TOOLS.contains(&register.name.as_str()) {
+                    continue;
+                }
+                let Some(fn_refs) = register
+                    .fn_refs
+                    .as_ref()
+                    .filter(|refs| refs.can_reference_fns)
+                else {
+                    continue;
+                };
+
+                for target_id in &fn_refs.fn_refs {
+                    let Some(&handler_index) = event_index_by_anchor.get(target_id.as_str()) else {
+                        continue;
+                    };
+                    if handler_index == owner_index {
+                        continue;
+                    }
+                    let is_referenceable_entry = self
+                        .nodes_by_id
+                        .get(target_id.as_str())
+                        .and_then(|target| target.fn_refs.as_ref())
+                        .is_some_and(|refs| refs.can_be_referenced_by_fns);
+                    if !is_referenceable_entry {
+                        continue;
+                    }
+                    let Some(owner_id) = event.anchor.as_deref() else {
+                        continue;
+                    };
+                    // A nested handler parameter would shadow the owner's same-named capture.
+                    // Keep that still-ambiguous shape top-level until FlowScript can qualify
+                    // cross-handler sources explicitly.
+                    if event.params.iter().any(|owner_param| {
+                        events[handler_index]
+                            .params
+                            .iter()
+                            .any(|handler_param| handler_param.name == owner_param.name)
+                    }) {
+                        continue;
+                    }
+                    if !self.handler_captures_event_output(&events[handler_index], owner_id) {
+                        continue;
+                    }
+                    owners_by_handler
+                        .entry(handler_index)
+                        .or_default()
+                        .insert(owner_index);
+                }
+            }
+        }
+
+        let mut parent_by_child: HashMap<usize, usize> = owners_by_handler
+            .into_iter()
+            .filter_map(|(child, owners)| {
+                (owners.len() == 1).then(|| (child, *owners.iter().next().expect("one owner")))
+            })
+            .collect();
+
+        // Reject every ownership path that reaches a cycle. This also keeps descendants of a
+        // malformed cycle at the root instead of partially nesting an unsafe hierarchy.
+        let cyclic_paths: HashSet<usize> = parent_by_child
+            .keys()
+            .copied()
+            .filter(|start| {
+                let mut seen = HashSet::new();
+                let mut current = *start;
+                loop {
+                    if !seen.insert(current) {
+                        return true;
+                    }
+                    let Some(parent) = parent_by_child.get(&current).copied() else {
+                        return false;
+                    };
+                    current = parent;
+                }
+            })
+            .collect();
+        parent_by_child.retain(|child, parent| {
+            !cyclic_paths.contains(child) && !cyclic_paths.contains(parent)
+        });
+
+        let mut children_by_parent: HashMap<usize, Vec<usize>> = HashMap::new();
+        for (&child, &parent) in &parent_by_child {
+            children_by_parent.entry(parent).or_default().push(child);
+        }
+        for children in children_by_parent.values_mut() {
+            children.sort_unstable();
+        }
+
+        fn assemble_event(
+            index: usize,
+            slots: &mut [Option<EventBlock>],
+            children_by_parent: &HashMap<usize, Vec<usize>>,
+        ) -> EventBlock {
+            let mut event = slots[index]
+                .take()
+                .expect("each lowered event is assembled exactly once");
+            if let Some(children) = children_by_parent.get(&index) {
+                for child in children {
+                    event.body.stmts.push(Stmt::Handler(assemble_event(
+                        *child,
+                        slots,
+                        children_by_parent,
+                    )));
+                }
+            }
+            event
+        }
+
+        let mut slots: Vec<Option<EventBlock>> = events.into_iter().map(Some).collect();
+        let mut nested = Vec::new();
+        for index in 0..slots.len() {
+            if !parent_by_child.contains_key(&index) {
+                nested.push(assemble_event(index, &mut slots, &children_by_parent));
+            }
+        }
+        // Defensive fallback for malformed ownership metadata not covered above: never drop an
+        // event from rendered FlowScript.
+        nested.extend(slots.into_iter().flatten());
+        nested
+    }
+
+    /// Whether an emitted handler body has a data dependency on one of `owner_id`'s outputs.
+    /// That concrete cross-entry edge is the evidence that the handler needs the registering
+    /// event's lexical parameter scope; registration alone is not enough because the same tool
+    /// entry may intentionally be shared by independent events.
+    fn handler_captures_event_output(&self, handler: &EventBlock, owner_id: &str) -> bool {
+        let mut calls = Vec::new();
+        collect_calls_in_block(&handler.body, &mut calls);
+        calls.into_iter().any(|call| {
+            let Some(node) = call
+                .anchor
+                .as_deref()
+                .and_then(|anchor| self.nodes_by_id.get(anchor).copied())
+            else {
+                return false;
+            };
+            node.pins
+                .values()
+                .filter(|pin| pin.pin_type == PinType::Input && !is_exec(pin))
+                .flat_map(|pin| &pin.depends_on)
+                .any(|source_pin_id| {
+                    self.data_source_reaches_node(source_pin_id, owner_id, &mut HashSet::new())
+                })
+        })
+    }
+
+    /// Follow upstream data plumbing from one source pin. Pure transforms and reroutes still
+    /// carry the owner event's lexical value, so recurse through every non-exec input while
+    /// guarding malformed graph cycles by pin id.
+    fn data_source_reaches_node(
+        &self,
+        source_pin_id: &str,
+        target_node_id: &str,
+        seen: &mut HashSet<String>,
+    ) -> bool {
+        if !seen.insert(source_pin_id.to_string()) {
+            return false;
+        }
+        if let Some(source_node) = self.pin_owner.get(source_pin_id).copied() {
+            if source_node.id == target_node_id {
+                return true;
+            }
+            return source_node
+                .pins
+                .values()
+                .filter(|pin| pin.pin_type == PinType::Input && !is_exec(pin))
+                .flat_map(|pin| &pin.depends_on)
+                .any(|upstream| self.data_source_reaches_node(upstream, target_node_id, seen));
+        }
+        self.boundary_pins
+            .get(source_pin_id)
+            .is_some_and(|boundary| {
+                boundary
+                    .depends_on
+                    .iter()
+                    .any(|upstream| self.data_source_reaches_node(upstream, target_node_id, seen))
+            })
     }
 
     /// Collect an event entry's non-exec data output pins as a typed parameter list, registering
@@ -1127,7 +1352,16 @@ impl<'a> Lowering<'a> {
             }
             // No connection: include a configured literal default if present.
             if let Some(bytes) = &pin.default_value {
-                if let Some(lit) = util::decode_default(bytes) {
+                // Most JSON `null` defaults mean "unset" and intentionally stay absent from
+                // FlowScript. `struct_set.value` is different: an explicit null is the required,
+                // semantic value used to clear a field, so dropping it makes the rendered call
+                // invalid and prevents a lossless round-trip.
+                let lit = if node.name == STRUCT_SET && pin.name == STRUCT_SET_VALUE_PIN {
+                    util::decode_default_preserving_null(bytes)
+                } else {
+                    util::decode_default(bytes)
+                };
+                if let Some(lit) = lit {
                     // `controlCallReference.fnRef` holds an opaque target node id; resolve it to
                     // that node's binding/display name instead of leaking the CUID.
                     if node.name == CALL_REFERENCE && pin.name == FN_REF_PIN {
@@ -1754,6 +1988,88 @@ fn ref_name_of_arg(args: &[Arg], pin: &str) -> Option<String> {
             Expr::Ref(name) => Some(name.clone()),
             _ => None,
         })
+}
+
+/// Collect every node call in one lexical block, including calls nested in argument expressions.
+/// Nested handlers intentionally are not traversed: they are independent scopes and own their
+/// registrations themselves.
+fn collect_calls_in_block<'a>(block: &'a Block, calls: &mut Vec<&'a Call>) {
+    for statement in &block.stmts {
+        match statement {
+            Stmt::Let { call, .. } | Stmt::Call { call, .. } => {
+                collect_calls_in_call(call, calls);
+            }
+            Stmt::Branch {
+                call,
+                condition,
+                arms,
+                ..
+            } => {
+                collect_calls_in_call(call, calls);
+                if let Some(condition) = condition {
+                    collect_calls_in_expr(condition, calls);
+                }
+                for arm in arms {
+                    collect_calls_in_block(&arm.body, calls);
+                }
+            }
+            Stmt::Loop { call, body, .. } => {
+                collect_calls_in_call(call, calls);
+                collect_calls_in_block(body, calls);
+            }
+            Stmt::Assign { value, .. }
+            | Stmt::FieldAssign { value, .. }
+            | Stmt::LocalAlias { value, .. } => collect_calls_in_expr(value, calls),
+            Stmt::Return { values, .. } => {
+                for value in values {
+                    collect_calls_in_expr(value, calls);
+                }
+            }
+            Stmt::Handler(_) | Stmt::Local(_) | Stmt::Comment(_) => {}
+        }
+    }
+}
+
+fn collect_calls_in_call<'a>(call: &'a Call, calls: &mut Vec<&'a Call>) {
+    calls.push(call);
+    for arg in &call.args {
+        collect_calls_in_expr(&arg.value, calls);
+    }
+}
+
+fn collect_calls_in_expr<'a>(expr: &'a Expr, calls: &mut Vec<&'a Call>) {
+    match expr {
+        Expr::Call(call) => collect_calls_in_call(call, calls),
+        Expr::Field { base, .. } | Expr::Member { base, .. } => collect_calls_in_expr(base, calls),
+        Expr::Object(fields) => {
+            for field in fields {
+                collect_calls_in_expr(&field.value, calls);
+            }
+        }
+        Expr::Array(values) => {
+            for value in values {
+                collect_calls_in_expr(value, calls);
+            }
+        }
+        Expr::Index { base, index } => {
+            collect_calls_in_expr(base, calls);
+            collect_calls_in_expr(index, calls);
+        }
+        Expr::Ternary {
+            cond,
+            then,
+            otherwise,
+        } => {
+            collect_calls_in_expr(cond, calls);
+            collect_calls_in_expr(then, calls);
+            collect_calls_in_expr(otherwise, calls);
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_calls_in_expr(lhs, calls);
+            collect_calls_in_expr(rhs, calls);
+        }
+        Expr::Ref(_) | Expr::Literal(_) => {}
+    }
 }
 
 fn is_impure(node: &Node) -> bool {

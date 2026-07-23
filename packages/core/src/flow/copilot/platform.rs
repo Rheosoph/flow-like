@@ -44,7 +44,7 @@ use super::stream::{
 };
 use super::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL,
-    OPEN_URL_TOOL, find_global_tool_spec, global_assistant_tool_specs, resolve_tool_approval,
+    OPEN_URL_TOOL, find_global_tool_spec, global_assistant_tool_specs, resolve_tool_effect,
     spec_arg_str,
 };
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
@@ -130,15 +130,16 @@ pub trait PlatformToolBridge: Send + Sync {
 
 /// Whether a platform tool must preserve the model's declared call order within its round.
 ///
-/// Read-only calls can run concurrently, but approval-requiring actions must not race each other:
+/// Read-only calls can run concurrently, but side-effecting actions must not race each other:
 /// for example, `flowpilot_board` has to finish persisting its entry node before a later
 /// `upsert_event` can validate and register that node. Unknown tools are kept ordered as the safe
-/// default because their side-effect policy is not available here.
+/// default because their side-effect policy is not available here. Ordering is based on effect,
+/// not approval timing: preparing a deferred-approval board edit remains an execute operation.
 fn platform_tool_requires_ordered_execution(name: &str, arguments: &Value) -> bool {
     let Some(spec) = find_global_tool_spec(name) else {
         return true;
     };
-    resolve_tool_approval(&spec, arguments).kind != "none"
+    resolve_tool_effect(&spec, arguments).requires_ordered_execution()
 }
 
 fn platform_tool_round_requires_ordered_execution<'a>(
@@ -1505,7 +1506,7 @@ mod tests {
     }
 
     #[test]
-    fn approval_requiring_platform_rounds_preserve_model_order() {
+    fn side_effecting_platform_rounds_preserve_model_order_even_with_deferred_approval() {
         let list_args = json!({});
         let board_args = json!({
             "app_id": "app",

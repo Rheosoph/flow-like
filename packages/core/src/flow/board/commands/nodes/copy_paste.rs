@@ -58,6 +58,19 @@ impl CopyPasteCommand {
             added_variables: vec![],
         }
     }
+
+    fn validate_original_refs(&self) -> flow_like_types::Result<()> {
+        if let Some(key) = self
+            .original_refs
+            .keys()
+            .find(|key| crate::flow::board::is_internal_board_ref(key))
+        {
+            return Err(flow_like_types::anyhow!(
+                "copy/paste payload contains reserved internal board reference '{key}'"
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -67,7 +80,7 @@ impl Command for CopyPasteCommand {
         _board: &Board,
         _state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
-        Ok(())
+        self.validate_original_refs()
     }
 
     async fn execute(
@@ -75,6 +88,9 @@ impl Command for CopyPasteCommand {
         board: &mut Board,
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<()> {
+        // Keep the namespace boundary intact even for internal callers that invoke `execute`
+        // directly instead of going through `Board::execute_commands` validation.
+        self.validate_original_refs()?;
         if !self.new_comments.is_empty()
             || !self.new_nodes.is_empty()
             || !self.new_layers.is_empty()
@@ -468,5 +484,45 @@ impl Command for CopyPasteCommand {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_internal_refs_from_copy_paste_payloads() {
+        let mut command =
+            CopyPasteCommand::new(Vec::new(), Vec::new(), Vec::new(), (0.0, 0.0, 0.0));
+        command.original_refs.insert(
+            format!(
+                "{}copilot-receipt/test",
+                crate::flow::board::INTERNAL_BOARD_REF_PREFIX
+            ),
+            "private".to_string(),
+        );
+
+        let error = command
+            .validate_original_refs()
+            .expect_err("reserved refs must not be accepted from copy/paste payloads");
+        assert!(
+            error
+                .to_string()
+                .contains("reserved internal board reference")
+        );
+    }
+
+    #[test]
+    fn accepts_public_refs_from_copy_paste_payloads() {
+        let mut command =
+            CopyPasteCommand::new(Vec::new(), Vec::new(), Vec::new(), (0.0, 0.0, 0.0));
+        command
+            .original_refs
+            .insert("schema/customer".to_string(), "public".to_string());
+
+        command
+            .validate_original_refs()
+            .expect("ordinary board refs must remain copyable");
     }
 }

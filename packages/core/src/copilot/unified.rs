@@ -11,7 +11,10 @@ use crate::a2ui::SurfaceComponent;
 use crate::a2ui::copilot::A2UICopilot;
 use crate::flow::board::Board;
 use crate::flow::copilot::platform::PlatformToolBridge;
-use crate::flow::copilot::{CatalogProvider, Copilot, FlowIrDraftStore, RunContext};
+use crate::flow::copilot::{
+    CatalogProvider, Copilot, FlowIrDraftMutationHook, FlowIrDraftStore, RunContext,
+    WorkflowSessionSnapshotSink,
+};
 use crate::models::llm::ModelUsageContext;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
@@ -80,6 +83,10 @@ pub struct UnifiedCopilot {
     flow_ir_drafts: Arc<FlowIrDraftStore>,
     typed_flow_ir_lifecycle: bool,
     request_identity_prompt: Option<String>,
+    board_context_augmentation: Option<serde_json::Value>,
+    read_only: bool,
+    workflow_session_snapshot_sink: Option<WorkflowSessionSnapshotSink>,
+    flow_ir_draft_mutation_hook: Option<FlowIrDraftMutationHook>,
 }
 
 impl UnifiedCopilot {
@@ -101,6 +108,10 @@ impl UnifiedCopilot {
             flow_ir_drafts: Arc::new(FlowIrDraftStore::new()),
             typed_flow_ir_lifecycle: false,
             request_identity_prompt: None,
+            board_context_augmentation: None,
+            read_only: false,
+            workflow_session_snapshot_sink: None,
+            flow_ir_draft_mutation_hook: None,
         })
     }
 
@@ -111,6 +122,36 @@ impl UnifiedCopilot {
     /// either way.
     pub fn with_request_identity_prompt(mut self, prompt: Option<String>) -> Self {
         self.request_identity_prompt = prompt.filter(|prompt| !prompt.trim().is_empty());
+        self
+    }
+
+    /// Attach the immutable frontend-owned DB/UI/storage inventory used by every board model
+    /// backend. The board delegate folds it into the provider-neutral authoring manifest.
+    pub fn with_board_context_augmentation(
+        mut self,
+        augmentation: Option<serde_json::Value>,
+    ) -> Self {
+        self.board_context_augmentation = augmentation;
+        self
+    }
+
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Forward provider-neutral board lifecycle snapshots to a host-owned run-summary sink.
+    pub fn with_workflow_session_snapshot_sink(
+        mut self,
+        sink: WorkflowSessionSnapshotSink,
+    ) -> Self {
+        self.workflow_session_snapshot_sink = Some(sink);
+        self
+    }
+
+    /// Forward retained FlowScript lifecycle mutations to the host's crash-snapshot scheduler.
+    pub fn with_flow_ir_draft_mutation_hook(mut self, hook: FlowIrDraftMutationHook) -> Self {
+        self.flow_ir_draft_mutation_hook = Some(hook);
         self
     }
 
@@ -199,7 +240,17 @@ impl UnifiedCopilot {
             .unwrap_or_else(|| user_prompt.clone());
 
         // Determine effective scope based on available data
-        let effective_scope = self.determine_effective_scope(scope, board, current_surface);
+        let effective_scope = if self.read_only {
+            if board.is_some() && self.catalog_provider.is_some() {
+                CopilotScope::Board
+            } else {
+                return Err(flow_like_types::anyhow!(
+                    "Read-only copilot mode requires board context; frontend authoring is disabled."
+                ));
+            }
+        } else {
+            self.determine_effective_scope(scope, board, current_surface)
+        };
 
         // Send scope decision event
         if let Some(ref callback) = on_token {
@@ -334,6 +385,14 @@ impl UnifiedCopilot {
         copilot = copilot.with_typed_flow_ir_enabled(self.typed_flow_ir_lifecycle);
         copilot = copilot.with_raw_user_prompt(Some(raw_user_prompt));
         copilot = copilot.with_request_identity_prompt(self.request_identity_prompt.clone());
+        copilot = copilot.with_board_context_augmentation(self.board_context_augmentation.clone());
+        copilot = copilot.with_read_only(self.read_only);
+        if let Some(sink) = self.workflow_session_snapshot_sink.as_ref() {
+            copilot = copilot.with_workflow_session_snapshot_sink(sink.clone());
+        }
+        if let Some(hook) = self.flow_ir_draft_mutation_hook.as_ref() {
+            copilot = copilot.with_flow_ir_draft_mutation_hook(hook.clone());
+        }
 
         // Convert history to flow ChatMessage format
         let board_history = history
@@ -840,6 +899,7 @@ mod tests {
             log_level: LogLevel::Info,
             execution_mode: ExecutionMode::Hybrid,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
             hash: None,

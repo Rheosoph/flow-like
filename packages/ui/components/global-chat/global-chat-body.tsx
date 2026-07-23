@@ -76,6 +76,7 @@ import {
 } from "../../state/global-chat/global-chat-memory";
 import {
 	AGENT_MODEL_KEY,
+	beginGlobalChatTurnSelection,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import {
@@ -111,6 +112,7 @@ import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
 import { InlineAppSurfaceCard } from "./inline-app-surface-card";
 import { InlineToolPrompt } from "./inline-tool-prompt";
+import { resolveModelSelection } from "./model-selection";
 import { PendingComponentsCard } from "./pending-components-card";
 import { useHydrateAgentSelection } from "./use-agent-persistence";
 import { useGlobalChatRunWidgetAction } from "./use-global-widget-action";
@@ -191,6 +193,9 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const setEmbeddingModelId = useGlobalChatStore((s) => s.setEmbeddingModelId);
 	const autoMode = useGlobalChatStore((s) => s.autoMode);
 	const setAutoMode = useGlobalChatStore((s) => s.setAutoMode);
+	const enableOverlayAutoOpen = useGlobalChatStore(
+		(s) => s.enableOverlayAutoOpen,
+	);
 	const appendMessage = useGlobalChatStore((s) => s.appendMessage);
 	const setStreaming = useGlobalChatStore((s) => s.setStreaming);
 	const consumeDraft = useGlobalChatStore((s) => s.consumeDraft);
@@ -209,6 +214,9 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	);
 	const flowscriptWorkspace = useGlobalChatStore((s) => s.flowscriptWorkspace);
 	const pendingComponents = useGlobalChatStore((s) => s.pendingComponents);
+	const handlePageInteraction = useCallback(() => {
+		if (variant === "page") enableOverlayAutoOpen();
+	}, [enableOverlayAutoOpen, variant]);
 	// Turning auto mode on mid-run settles approval cards whose promises the bridge captured
 	// before the flip; queued ones drain as each is answered. `ask` prompts are never
 	// auto-answered — auto mode waives permission, not questions — and neither are prompts
@@ -384,18 +392,13 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		} catch {}
 		if (isAgent) {
 			const models = copilotSDK.models;
-			if (models.length === 0) return;
-			if (
-				remembered &&
-				remembered !== selectedModelId &&
-				models.some((m) => m.id === remembered)
-			) {
-				setSelectedModelId(remembered);
-				return;
-			}
-			if (!selectedModelId || !models.some((m) => m.id === selectedModelId)) {
-				setSelectedModelId(models[0].id);
-			}
+			const nextModelId = resolveModelSelection({
+				models,
+				selectedModelId,
+				rememberedModelId: remembered,
+				canReplaceInvalidSelection: copilotSDK.hasLoadedModelCatalog,
+			});
+			if (nextModelId !== null) setSelectedModelId(nextModelId);
 			return;
 		}
 		if (!llmBits.data) return;
@@ -420,6 +423,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	}, [
 		isAgent,
 		copilotSDK.models,
+		copilotSDK.hasLoadedModelCatalog,
 		llmBits.data,
 		bitsModels,
 		selectedModelId,
@@ -461,6 +465,11 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			const trimmed = content.trim();
 			const state = useGlobalChatStore.getState();
 			if (state.isStreaming) return;
+			const agentSelection = Object.freeze({
+				provider: state.provider,
+				selectedModelId: state.selectedModelId,
+				reasoningEffort: state.reasoningEffort,
+			});
 
 			// Any file type is accepted: files become local tmp files (Tauri) or presigned tmp
 			// uploads — only URLs travel through IPC and land in IndexedDB, no blobs. FlowPilot
@@ -498,6 +507,12 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						},
 			);
 			if (!trimmed && attachments.length === 0) return;
+			// Attachment preparation is asynchronous. Re-check the singleton turn claim so two rapid
+			// sends cannot start overlapping runs and replace each other's execution selection.
+			if (useGlobalChatStore.getState().isStreaming) return;
+			// A real interaction on the full FlowPilot page starts a new visibility cycle. If the
+			// user previously dismissed the dock, later agent/navigation activity may show it again.
+			if (variant === "page") state.enableOverlayAutoOpen();
 			setStreaming(true);
 			useGlobalChatStore.getState().clearPendingAppRefs();
 			useGlobalChatStore.getState().clearSubPlanSteps();
@@ -508,8 +523,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			const sessionId = state.activeConversationId;
 			const priorMessages = state.messages;
 			const effectiveModelId = flowPilotModelIdForProvider(
-				normalizeAIProvider(state.provider),
-				state.selectedModelId,
+				normalizeAIProvider(agentSelection.provider),
+				agentSelection.selectedModelId,
 			);
 
 			const userMessage = makeGlobalChatMessage(IRole.User, trimmed, sessionId);
@@ -523,9 +538,13 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				"",
 				sessionId,
 			);
+			const turnSelection = beginGlobalChatTurnSelection(
+				responseMessage.id,
+				agentSelection,
+			);
 			useGlobalChatStore.getState().setStreamingMessage({ ...responseMessage });
 			// Register the run so a reload mid-response can re-attach to the live Rust stream.
-			setActiveRun(sessionId, responseMessage.id);
+			setActiveRun(sessionId, responseMessage.id, turnSelection);
 
 			const historyPayload = priorMessages.map((m) => ({
 				role: m.inner.role === IRole.Assistant ? "Assistant" : "User",
@@ -610,6 +629,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			// morph) and survives a hard reload via the Rust run registry (global_chat_resume).
 			await driveGlobalChatStream({
 				responseMessage,
+				agentSelection: turnSelection,
 				inputPreview: {
 					prompt: trimmed,
 					attachments: allFiles.map((file) => ({
@@ -634,7 +654,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							history: historyPayload,
 							currentImages: widgetImages.length > 0 ? widgetImages : undefined,
 							modelId: effectiveModelId,
-							reasoningEffort: state.reasoningEffort || undefined,
+							reasoningEffort: turnSelection.reasoningEffort || undefined,
 							embeddingModelId: state.embeddingModelId || undefined,
 							token: authUser?.access_token ?? undefined,
 							userContext: userContext ?? undefined,
@@ -683,7 +703,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						}),
 			});
 		},
-		[appendMessage, setStreaming, backend],
+		[appendMessage, setStreaming, backend, variant],
 	);
 
 	// Answer an app-chat dialog raised during a call_app_chat run. Responding unblocks the app's
@@ -1074,7 +1094,11 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	);
 
 	return (
-		<div className="flex flex-col flex-1 min-h-0 w-full h-full">
+		<div
+			onPointerDownCapture={handlePageInteraction}
+			onKeyDownCapture={handlePageInteraction}
+			className="flex flex-col flex-1 min-h-0 w-full h-full"
+		>
 			<header className="flex items-center gap-1.5 px-3 py-2 border-b border-border/50 shrink-0">
 				<div className="flex flex-1 min-w-0 items-center gap-1.5 overflow-x-auto no-scrollbar">
 					{providerModelPicker}

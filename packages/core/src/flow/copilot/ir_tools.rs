@@ -35,7 +35,7 @@ use super::provider::{CatalogProvider, metadata_to_signature};
 use super::tools::{
     FlowScriptCandidateProfile, FlowScriptCandidateRegression, board_has_no_nodes,
     detect_flowscript_candidate_regression, flowscript_workspace_tag, profile_flowscript_candidate,
-    render_edit_flowscript_result,
+    render_committed_flowscript_result,
 };
 use super::types::{BoardCommand, FlowIrCommitToken, NodeMetadata, PinMetadata};
 use crate::flow::ast::{
@@ -3642,6 +3642,55 @@ impl FlowIrDraftStore {
                     && draft.pending_claim_id.as_deref() == Some(claim_id)
                     && draft.pending_commands.is_some())
                 .then_some(draft.mode == FlowIrDraftMode::Replace)
+            })
+        })
+    }
+
+    /// Atomically clone the exact retained batch and its host-derived replacement policy when the
+    /// live board and every claim field still match. Hosts persisting a review for cross-process
+    /// delivery must read these together so a concurrent disposition can never pair commands from
+    /// one claim state with policy from another.
+    pub fn pending_commit_payload_if_current(
+        &self,
+        board: &Board,
+        draft_id: &str,
+        revision: u64,
+        base_fingerprint: &str,
+        claim_id: &str,
+    ) -> Option<(Vec<BoardCommand>, bool)> {
+        if board_fingerprint(board) != base_fingerprint {
+            return None;
+        }
+        let typed = self.drafts.lock().ok().and_then(|drafts| {
+            let draft = drafts.get(draft_id.trim())?;
+            (draft.revision == revision
+                && draft.committed_revision == Some(revision)
+                && draft.pending_revision == Some(revision)
+                && draft.base_fingerprint == base_fingerprint
+                && draft.pending_claim_id.as_deref() == Some(claim_id))
+            .then(|| {
+                draft
+                    .pending_commands
+                    .clone()
+                    .map(|commands| (commands, draft.mode == FlowIrDraftMode::Replace))
+            })
+            .flatten()
+        });
+        typed.or_else(|| {
+            self.source_drafts.lock().ok().and_then(|drafts| {
+                let draft = drafts.get(draft_id.trim())?;
+                (draft.revision == revision
+                    && draft.committed_revision == Some(revision)
+                    && draft.pending_revision == Some(revision)
+                    && draft.base_fingerprint == base_fingerprint
+                    && draft.pending_claim_id.as_deref() == Some(claim_id))
+                .then(|| {
+                    draft
+                        .pending_commands
+                        .clone()
+                        .map(|commands| (commands, draft.mode == FlowIrDraftMode::Replace))
+                })
+                .flatten()
             })
         })
     }
@@ -8922,7 +8971,10 @@ fn module_scope_items(module: &FlowIrModule) -> HashMap<String, usize> {
     items
 }
 
-fn board_fingerprint(board: &Board) -> String {
+/// Stable semantic board fingerprint shared by retained compiler claims and provider-neutral
+/// session manifests. Keeping one implementation prevents an adapter from auditing a different
+/// base than the exact CAS token used at Apply time.
+pub fn board_fingerprint(board: &Board) -> String {
     let source = board_to_flowscript(
         board,
         &RenderOptions {
@@ -9260,8 +9312,12 @@ impl FlowScriptDraftResponse {
                 corrections: self.corrections.clone(),
                 diagnostics: Vec::new(),
             };
-            let legacy =
-                render_edit_flowscript_result(source, &result, board_has_no_nodes(board), true);
+            let legacy = render_committed_flowscript_result(
+                source,
+                &result,
+                board_has_no_nodes(board),
+                true,
+            );
             let envelope = self.model_envelope();
             return format!(
                 "{legacy}\n<flowscript_commit_result>{envelope}</flowscript_commit_result>"
@@ -9623,7 +9679,7 @@ impl FlowIrCommitResult {
                 corrections: Vec::new(),
                 diagnostics: Vec::new(),
             };
-            let legacy = render_edit_flowscript_result(
+            let legacy = render_committed_flowscript_result(
                 flowscript,
                 &result,
                 board_has_no_nodes(board),
@@ -10394,6 +10450,7 @@ mod tests {
             log_level: LogLevel::Info,
             execution_mode: ExecutionMode::Hybrid,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
             hash: None,
@@ -14130,6 +14187,28 @@ eventsSimple() {
                 &claim_id,
             ),
             Some(true),
+        );
+        let (retained_commands, replacement_mode) = store
+            .pending_commit_payload_if_current(
+                &board,
+                "replacement-review",
+                0,
+                &base_fingerprint,
+                &claim_id,
+            )
+            .expect("batch and policy are read from one claim state");
+        assert!(!retained_commands.is_empty());
+        assert!(replacement_mode);
+        assert!(
+            store
+                .pending_commit_payload_if_current(
+                    &board,
+                    "replacement-review",
+                    0,
+                    &base_fingerprint,
+                    "forged-claim",
+                )
+                .is_none()
         );
         assert!(
             store
