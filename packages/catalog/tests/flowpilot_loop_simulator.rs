@@ -505,6 +505,56 @@ async fn multi_output_return_golden_path() {
     assert_noop_roundtrip(&board, "multi_output_return_golden_path");
 }
 
+/// Commit runs the required check inline: write → commit with no explicit check queues the
+/// exact derived batch, saving the model round that used to bounce with
+/// FLOWSCRIPT_CHECK_REQUIRED. An invalid source still returns validation_errors and queues
+/// nothing.
+#[test]
+fn commit_runs_check_inline() {
+    let fixture = &*FIXTURE;
+    let store = FlowIrDraftStore::new();
+    let mut agent = ScriptedAgent::new(
+        &store,
+        empty_board("sim-inline-check"),
+        &fixture.metadata,
+        "inline-check-draft",
+    );
+    agent.run(vec![
+        Step::Write {
+            source: simple_log_script("triage the mail", "notify the reviewer"),
+        },
+        Step::ExpectStatus {
+            status: "draft_started",
+            code: None,
+        },
+        Step::Commit,
+        Step::ExpectStatus {
+            status: "queued",
+            code: None,
+        },
+    ]);
+    assert!(!agent.last().commands.is_empty());
+
+    let mut invalid = ScriptedAgent::new(
+        &store,
+        empty_board("sim-inline-check-invalid"),
+        &fixture.metadata,
+        "inline-check-invalid",
+    );
+    invalid.run(vec![
+        Step::Write {
+            source: "eventsSimple() {\n    definitelyNotACatalogNode({ value: 1 })\n}\n"
+                .to_string(),
+        },
+        Step::Commit,
+        Step::ExpectStatus {
+            status: "validation_errors",
+            code: None,
+        },
+    ]);
+    assert!(invalid.last().commands.is_empty());
+}
+
 /// A source with an unknown node name yields actionable structured
 /// diagnostics; one unique text patch repairs it in place, after which the
 /// same draft checks valid and commits.

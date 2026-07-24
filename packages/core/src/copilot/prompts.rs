@@ -448,6 +448,18 @@ read node (`filterLocalDb`, `listLocalDb`, the fts/vector/hybrid search nodes, o
 nothing, and rendering from in-memory state that was just written is a correctness bug: the flow
 must work on a fresh run where memory is empty.
 
+SETUP FUNCTION — populate shared references once:
+Start the workflow with one `function setup() { ... }`, called first from the entry event, that
+resolves every long-lived reference (database connections, embedding/LLM models) and stores each
+in a top-level variable via its variable set node. Downstream functions read them with
+`variableGet` instead of re-opening or re-loading per call, and the user adjusts everything in ONE
+place.
+- Embedding models load from a Bit, never from an invented id:
+  `const bit = bitFromString({ bitId: "" })` — leave `bitId` as the empty string; the user selects
+  the concrete bit on the board later — then `const embedding = loadModel({ bit: bit.outputBit })`
+  and store `embedding.model` into a top-level variable.
+- Databases: `openLocalDb({ name: "..." })` stored into a variable the same way.
+
 Inspect before you design: when `database_tool` is registered for a board specialist, use only its
 read-only operations (`list_tables`, `describe_table`, and read-only `query`) to inspect schemas,
 indices, row counts, and sample rows. Never call its create/insert/update/delete/index/optimize/schema

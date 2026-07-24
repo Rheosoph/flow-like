@@ -120,7 +120,7 @@ Reply with clear messages for empty results and errors. Keep everything on one c
 		smoke: true,
 		prompt: `Build a compact community forum. Create a page named "Forum" with a new-thread form, a thread list, a selected-thread view, and a reply form. Repeated threads must use one widget named "Thread Card".
 
-Persist threads in a table named exactly "Forum Threads" and replies in "Forum Posts". The workflow must list threads newest-first by READING the persisted rows back from the table with a database read/filter node (never from in-memory state), create a thread with validation, open one thread with its replies, and add a reply. Wire the real "Forum" page and "Thread Card" widget ids into the workflow, and refresh the relevant view after each write. Include useful empty and validation states.`,
+Persist threads in a table named exactly "Forum Threads" and replies in "Forum Posts". The workflow must list threads newest-first by READING the persisted rows back from the table with a database read/filter node (never from in-memory state), create a thread with validation, open one thread with its replies, and add a reply. Wire the real "Forum" page and "Thread Card" widget ids into the workflow, and refresh the relevant view after each write. Include useful empty and validation states. Register EVERY workflow entry as an app event before reporting completion — the page-load entry AND each user-action entry (new thread, reply, open thread), at least two registrations in total.`,
 		requirements: requirements({
 			minFlowScriptNonWhitespaceChars: 800,
 			minTotalNodes: 8,

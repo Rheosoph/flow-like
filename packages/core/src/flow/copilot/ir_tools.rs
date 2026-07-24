@@ -1756,6 +1756,45 @@ impl FlowIrDraftStore {
             self.reopen_request_acceptance_contract(binding, &snapshot);
             return flowscript_base_revision_conflict_response(args.draft_id, &snapshot);
         }
+        // An unchecked head used to bounce with FLOWSCRIPT_CHECK_REQUIRED — a full model round
+        // spent asking for work the store can do right here. Run the same check inline: the
+        // committed batch is exactly what this evaluation derives, so the checked-commit
+        // guarantee is unchanged, and a failing inline check returns the same validation_errors
+        // response a separate check would have.
+        let head_is_checked = snapshot.checked.as_ref().is_some_and(|checked| {
+            checked.revision == snapshot.revision
+                && checked.board_fingerprint == snapshot.base_fingerprint
+        });
+        if !head_is_checked {
+            let catalog_fingerprint = flowscript_catalog_fingerprint(catalog);
+            if snapshot.evaluation_catalog_fingerprint != catalog_fingerprint {
+                snapshot.evaluation = self.evaluate_flowscript(
+                    board,
+                    catalog,
+                    &snapshot.source,
+                    snapshot.mode,
+                    Some(&snapshot.request_acceptance_contract),
+                );
+                snapshot.evaluation_catalog_fingerprint = catalog_fingerprint.clone();
+            }
+            if !snapshot.evaluation.is_valid() {
+                // Shape this exactly like a failing check_flowscript: a special code here reads
+                // as a mechanical "you must call check" failure and makes models/orchestrators
+                // stop instead of repairing the listed diagnostics.
+                return FlowScriptDraftResponse::for_draft(
+                    "validation_errors",
+                    "Commit ran the required check inline and it failed; nothing was queued. Apply a unique text patch to this retained revision, then commit again.",
+                    args.draft_id,
+                    &snapshot,
+                );
+            }
+            snapshot.checked = Some(CheckedFlowScriptRevision {
+                revision: snapshot.revision,
+                board_fingerprint: snapshot.base_fingerprint.clone(),
+                catalog_fingerprint,
+                commands: snapshot.evaluation.commands.clone(),
+            });
+        }
         let Some(checked) = snapshot.checked.as_ref().filter(|checked| {
             checked.revision == snapshot.revision
                 && checked.board_fingerprint == snapshot.base_fingerprint
