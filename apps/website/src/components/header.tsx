@@ -727,6 +727,13 @@ export function Header() {
 	const { t, lang } = useTranslation();
 	const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 	const [scrolled, setScrolled] = useState(false);
+	// Pages with a dark hero (e.g. the landing) mark it with [data-dark-hero];
+	// while the transparent header sits over it, invert the header tokens.
+	const [heroDark, setHeroDark] = useState(
+		() =>
+			typeof document !== "undefined" &&
+			!!document.querySelector("[data-dark-hero]"),
+	);
 	const stars = useGitHubStars();
 
 	useEffect(() => {
@@ -734,6 +741,12 @@ export function Header() {
 		window.addEventListener("scroll", handleScroll, { passive: true });
 		return () => window.removeEventListener("scroll", handleScroll);
 	}, []);
+
+	useEffect(() => {
+		setHeroDark(!!document.querySelector("[data-dark-hero]"));
+	}, []);
+
+	const overDarkHero = heroDark && !scrolled;
 
 	const solutionsGroups: SolutionsGroup[] = [
 		{
@@ -861,7 +874,7 @@ export function Header() {
 					scrolled
 						? "h-14 bg-background/60 backdrop-blur-xl border-b border-border/20"
 						: "h-16 bg-transparent"
-				}`}
+				} ${overDarkHero ? "dark" : ""}`}
 			>
 				<div className="max-w-7xl mx-auto h-full px-4 flex items-center justify-between">
 					{/* Logo */}

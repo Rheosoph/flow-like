@@ -1,0 +1,200 @@
+---
+const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
+---
+
+<section id="hero" data-dark-hero class="dark v5-hero relative isolate overflow-hidden" style="color-scheme:dark">
+  <canvas class="shader" aria-hidden="true"></canvas>
+  <div class="hero-grid" aria-hidden="true"></div>
+  <div class="v5-hero__topfade" aria-hidden="true"></div>
+
+  <div class="hero-copy">
+    <span class="eyebrow live"><i aria-hidden="true"></i> THE OPERATING LAYER FOR AI-NATIVE COMPANIES</span>
+    <h1>Build the systems.<br /><em>Let AI run the work.</em></h1>
+    <p>Apps, workflows, data, and agents in one governed platform. From the first prompt to every process that follows.</p>
+    <div class="hero-actions">
+      <a href="#platform">Explore the platform <span aria-hidden="true">↘</span></a>
+      <a href="#flowpilot">See FlowPilot work <span aria-hidden="true">▶</span></a>
+    </div>
+  </div>
+
+  <div class="hero-card">
+    <header><span><i aria-hidden="true"></i> FLOWPILOT / LIVE</span><em aria-hidden="true">•••</em></header>
+    <main><i class="orb" aria-hidden="true">✦</i><p>Prepare tomorrow’s customer meeting and handle the follow-ups.</p></main>
+    <div class="hero-flow">
+      <span><i aria-hidden="true">01</i><b>Email</b><small>18 threads</small></span><em aria-hidden="true">→</em>
+      <span><i aria-hidden="true">02</i><b>Data</b><small>Customer 360</small></span><em aria-hidden="true">→</em>
+      <span><i aria-hidden="true">03</i><b>Calendar</b><small>Briefing added</small></span>
+    </div>
+    <footer><span><i aria-hidden="true"></i> Complete</span><b>Briefing ready ↗</b></footer>
+  </div>
+
+  <div class="hero-tech">
+    <span>VISUAL WHEN YOU WANT IT</span>
+    <div>{tech.map((x) => <i>{x}</i>)}</div>
+    <span>CODE WHEN YOU NEED IT</span>
+  </div>
+</section>
+
+<style>
+  .eyebrow { font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .16em; color: color-mix(in oklab, var(--muted-foreground) 90%, transparent); }
+
+  .v5-hero { position: relative; min-height: 100svh; display: flex; align-items: center; overflow: hidden; border-bottom: 1px solid var(--border); background: var(--background); color: var(--foreground); }
+  .shader { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .v5-hero:after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, color-mix(in oklab, var(--background) 30%, transparent), transparent 45%, color-mix(in oklab, var(--background) 16%, transparent)); pointer-events: none; }
+  .hero-grid { position: absolute; inset: 0; opacity: .18; background-image: linear-gradient(color-mix(in oklab, var(--foreground) 9%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in oklab, var(--foreground) 9%, transparent) 1px, transparent 1px); background-size: 84px 84px; mask-image: linear-gradient(to bottom, transparent 4%, #000 38%, transparent 95%); }
+
+  .v5-hero__topfade { position: absolute; inset: 0 0 auto 0; height: 160px; z-index: 1; pointer-events: none; background: linear-gradient(to bottom, color-mix(in oklab, var(--background) 62%, transparent), transparent); }
+
+  .hero-copy { position: relative; z-index: 2; width: min(790px, 59vw); margin-left: 7vw; margin-top: -2vh; padding-top: 64px; }
+  .live { display: flex; align-items: center; gap: 10px; margin-bottom: 30px; color: var(--accent); }
+  .live > i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 17px color-mix(in oklab, var(--accent) 65%, transparent); }
+  .v5-hero h1 { font-size: clamp(56px, 6.8vw, 110px); line-height: .91; letter-spacing: -.066em; margin: 0; font-weight: 680; color: var(--foreground); }
+  .v5-hero h1 em { font-style: normal; font-weight: 560; background: linear-gradient(100deg, color-mix(in oklab, var(--accent) 70%, white), var(--accent) 48%, var(--primary)); background-clip: text; -webkit-background-clip: text; color: transparent; }
+  .hero-copy > p { width: min(620px, 82%); margin: 34px 0; font-size: clamp(16px, 1.4vw, 21px); line-height: 1.55; color: var(--muted-foreground); }
+  .hero-actions { display: flex; gap: 12px; }
+  .hero-actions > a { display: flex; align-items: center; justify-content: space-between; min-width: 212px; height: 54px; padding: 0 18px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklab, var(--background) 42%, transparent); color: var(--foreground); backdrop-filter: blur(12px); font-size: 13px; font-weight: 700; text-decoration: none; transition: transform .25s, background .25s, color .25s, box-shadow .25s; }
+  .hero-actions > a:first-child { border-color: transparent; background: linear-gradient(100deg, var(--primary), var(--accent)); color: var(--primary-foreground); box-shadow: 0 12px 30px color-mix(in oklab, var(--primary) 24%, transparent); }
+  .hero-actions > a:hover { transform: translateY(-3px); background: var(--foreground); color: var(--background); }
+
+  .orb { display: grid !important; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 9px; background: var(--primary); box-shadow: 0 0 26px color-mix(in oklab, var(--primary) 50%, transparent); font-style: normal; color: var(--primary-foreground); }
+
+  .hero-card { position: absolute; z-index: 3; right: 6vw; bottom: 12vh; width: min(390px, 32vw); overflow: hidden; border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent); border-radius: 16px; background: color-mix(in oklab, var(--card) 92%, transparent); color: var(--foreground); backdrop-filter: blur(22px); box-shadow: 0 30px 100px color-mix(in oklab, var(--primary) 22%, transparent); animation: v5-float 7s ease-in-out infinite; }
+  @keyframes v5-float { 0%, 100% { transform: translateY(0) rotate(.15deg); } 50% { transform: translateY(-12px) rotate(-.15deg); } }
+  .hero-card > header, .hero-card > footer { height: 46px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .11em; }
+  .hero-card > header span, .hero-card > footer span { display: flex; align-items: center; gap: 8px; }
+  .hero-card > header span i, .hero-card > footer span i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+  .hero-card > header em { font-style: normal; color: color-mix(in oklab, var(--muted-foreground) 60%, transparent); }
+  .hero-card > main { display: flex; gap: 13px; padding: 22px 18px 18px; }
+  .hero-card > main p { margin: 1px 0 0; font-size: 15px; line-height: 1.45; }
+  .hero-flow { display: flex; align-items: center; gap: 7px; padding: 6px 18px 22px; }
+  .hero-flow > span { min-width: 0; flex: 1; padding: 9px; border: 1px solid var(--border); border-radius: 9px; background: color-mix(in oklab, var(--foreground) 3.5%, transparent); }
+  .hero-flow span i { display: block; margin-bottom: 12px; color: var(--accent); font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; font-style: normal; }
+  .hero-flow span b { display: block; font-size: 10px; }
+  .hero-flow span small { display: block; white-space: nowrap; color: var(--muted-foreground); font-size: 8px; }
+  .hero-flow > em { font-style: normal; color: color-mix(in oklab, var(--muted-foreground) 50%, transparent); font-size: 9px; }
+  .hero-card > footer { border: 0; border-top: 1px solid var(--border); }
+  .hero-card > footer span { color: var(--accent); }
+  .hero-card > footer b { font-size: 10px; color: var(--muted-foreground); }
+
+  .hero-tech { position: absolute; z-index: 2; left: 7vw; right: 7vw; bottom: 24px; display: flex; align-items: center; justify-content: space-between; color: var(--muted-foreground); font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .16em; }
+  .hero-tech > div { display: flex; gap: 7px; }
+  .hero-tech i { padding: 6px 9px; border: 1px solid var(--border); border-radius: 20px; font-style: normal; }
+
+  @media (max-width: 1050px) {
+    .hero-copy { width: 70vw; margin-left: 5vw; }
+    .hero-card { right: 4vw; width: 34vw; }
+    .hero-tech { right: 5vw; left: 5vw; }
+  }
+  @media (max-width: 800px) {
+    .v5-hero { min-height: 900px; align-items: flex-start; }
+    .hero-copy { width: auto; margin: 135px 22px 0; padding-top: 0; }
+    .v5-hero h1 { font-size: 58px; }
+    .hero-copy > p { width: 100%; font-size: 16px; }
+    .hero-actions { width: 230px; flex-direction: column; align-items: stretch; }
+    .hero-card { right: 22px; bottom: 96px; left: 22px; width: auto; animation: none; }
+    .hero-tech { display: none; }
+    .hero-grid { background-size: 54px 54px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-card { animation: none; }
+  }
+</style>
+
+<script>
+  function initV5Hero() {
+    const canvas = document.querySelector<HTMLCanvasElement>(".v5-hero .shader");
+    if (!canvas || canvas.dataset.ready === "true") return;
+    const gl = canvas.getContext("webgl", { alpha: true, antialias: false });
+    if (!gl) return;
+    canvas.dataset.ready = "true";
+
+    const vertex = `attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}`;
+    const fragment = `
+      precision highp float;
+      uniform vec2 r,m;
+      uniform float t;
+      float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+      float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);}
+      void main(){
+        vec2 u=(gl_FragCoord.xy*2.-r)/min(r.x,r.y);
+        vec2 q=u;
+        float z=t*.16;
+        q.x+=.18*sin(q.y*2.4+z*2.);
+        q.y+=.13*cos(q.x*2.-z);
+        float n=noise(q*1.7+vec2(z,-z*.7));
+        q+=(n-.5)*.32;
+        vec2 pm=(m*2.-1.)*vec2(r.x/r.y,1.);
+        float a=length(q-vec2(-.58+sin(z)*.08,.16));
+        float b=length(q-vec2(.55,-.24+cos(z)*.08));
+        float c=length(q-pm*.3);
+        float f=sin(a*12.-z*4.)+sin(b*9.+z*3.)+sin(c*7.-z*2.)*.4;
+        float lines=smoothstep(.82,.98,abs(sin(f*2.4)));
+        float veil=smoothstep(1.7,-.2,length(u*vec2(.75,1.)));
+        vec3 base=vec3(.014,.018,.026);
+        vec3 red=vec3(.76,.055,.13);
+        vec3 orange=vec3(1.,.25,.035);
+        vec3 ember=vec3(1.,.49,.16);
+        vec3 col=base;
+        col+=red*exp(-2.6*a*a)*.62;
+        col+=orange*exp(-2.2*b*b)*.42;
+        col+=mix(red,ember,smoothstep(-1.,1.,u.x))*lines*.13*veil;
+        col+=n*.014;
+        col*=veil*.93+.1;
+        gl_FragColor=vec4(col,1.);
+      }`;
+
+    const compile = (type: number, source: string) => {
+      const shader = gl.createShader(type);
+      if (!shader) return null;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) return null;
+      return shader;
+    };
+    const vs = compile(gl.VERTEX_SHADER, vertex);
+    const fs = compile(gl.FRAGMENT_SHADER, fragment);
+    if (!vs || !fs) return;
+    const program = gl.createProgram();
+    if (!program) return;
+    gl.attachShader(program, vs);
+    gl.attachShader(program, fs);
+    gl.linkProgram(program);
+    gl.useProgram(program);
+    const buffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const position = gl.getAttribLocation(program, "p");
+    gl.enableVertexAttribArray(position);
+    gl.vertexAttribPointer(position, 2, gl.FLOAT, false, 0, 0);
+    const resolution = gl.getUniformLocation(program, "r");
+    const mouse = gl.getUniformLocation(program, "m");
+    const time = gl.getUniformLocation(program, "t");
+    const pointer = { x: 0.7, y: 0.44 };
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const start = performance.now();
+    let frame = 0;
+
+    const move = (event: PointerEvent) => {
+      pointer.x += (event.clientX / window.innerWidth - pointer.x) * 0.55;
+      pointer.y += (1 - event.clientY / window.innerHeight - pointer.y) * 0.55;
+    };
+    const draw = () => {
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.75);
+      const w = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+      const h = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+        gl.viewport(0, 0, w, h);
+      }
+      gl.uniform2f(resolution, w, h);
+      gl.uniform2f(mouse, pointer.x, pointer.y);
+      gl.uniform1f(time, reduced ? 4 : (performance.now() - start) / 1000);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      if (!reduced) frame = window.requestAnimationFrame(draw);
+    };
+    window.addEventListener("pointermove", move, { passive: true });
+    draw();
+  }
+  initV5Hero();
+</script>

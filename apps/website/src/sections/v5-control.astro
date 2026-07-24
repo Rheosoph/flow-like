@@ -1,0 +1,85 @@
+<section class="v5-control control-section">
+  <div>
+    <span class="eyebrow">04 / CONTROL</span>
+    <h2>Move at AI speed.<br/>Stay in control.</h2>
+  </div>
+  <div>
+    <p>One view over every process, app, interaction, permission, and log—across your entire company.</p>
+    <ul>
+      <li><span>01</span>Immutable audit trails</li>
+      <li><span>02</span>Human-in-the-loop controls</li>
+      <li><span>03</span>EU AI Act readiness</li>
+      <li><span>04</span>End-to-end observability</li>
+    </ul>
+  </div>
+</section>
+
+<style>
+  .eyebrow {
+    font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: .16em;
+    color: color-mix(in oklab, var(--primary-foreground) 65%, transparent);
+  }
+
+  .control-section {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10vw;
+    padding: 140px 7vw;
+    background: linear-gradient(125deg, color-mix(in oklab, var(--primary) 82%, black), var(--primary) 45%, var(--accent));
+    color: var(--primary-foreground);
+  }
+  .control-section .eyebrow {
+    color: color-mix(in oklab, var(--primary-foreground) 65%, transparent);
+  }
+  .control-section h2 {
+    margin: 25px 0 0;
+    font-size: clamp(50px, 6vw, 90px);
+    line-height: .94;
+    letter-spacing: -.065em;
+    color: var(--primary-foreground);
+  }
+  .control-section > div:last-child {
+    align-self: end;
+  }
+  .control-section > div:last-child > p {
+    max-width: 550px;
+    margin: 0 0 50px;
+    font-size: 20px;
+    line-height: 1.5;
+    color: var(--primary-foreground);
+  }
+  .control-section ul {
+    margin: 0;
+    padding: 0;
+    border-top: 1px solid color-mix(in oklab, var(--primary-foreground) 30%, transparent);
+    list-style: none;
+  }
+  .control-section li {
+    height: 50px;
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    align-items: center;
+    border-bottom: 1px solid color-mix(in oklab, var(--primary-foreground) 30%, transparent);
+    font-size: 12px;
+    color: var(--primary-foreground);
+  }
+  .control-section li span {
+    color: color-mix(in oklab, var(--primary-foreground) 65%, transparent);
+    font: 8px ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  @media (max-width: 800px) {
+    .control-section {
+      grid-template-columns: 1fr;
+      gap: 60px;
+      padding: 100px 22px;
+    }
+    .control-section h2 {
+      font-size: 55px;
+    }
+    .control-section > div:last-child > p {
+      font-size: 17px;
+    }
+  }
+</style>

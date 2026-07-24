@@ -2,22 +2,12 @@
 import "@flow-like/flow-like-ui/global.css";
 import "../styles/website-base.css";
 import { Header } from "../components/header";
-import SoftSeam from "../components/soft-seam.astro";
 
-import HeroV4 from "../sections/hero-v4.astro";
-import SprawlV4 from "../sections/sprawl-v4.astro";
-import SystemMapV4 from "../sections/system-map-v4.astro";
-import EngineV4 from "../sections/engine-v4.astro";
-import DataLayerV4 from "../sections/data-layer-v4.astro";
-import ScreensV4 from "../sections/screens-v4.astro";
-import PartsV4 from "../sections/parts-v4.astro";
-import RulesV4 from "../sections/rules-v4.astro";
-import HardwareV4 from "../sections/hardware-v4.astro";
-import TeamsV4 from "../sections/teams-v4.astro";
-import ComparisonV4 from "../sections/comparison-v4.astro";
-import PracticeV4 from "../sections/practice-v4.astro";
-import FaqV4 from "../sections/faq-v4.astro";
-import CtaV4 from "../sections/cta-v4.astro";
+import V5Hero from "../sections/v5-hero.astro";
+import V5Apps from "../sections/v5-apps.astro";
+import V5Platform from "../sections/v5-platform.astro";
+import V5Flowpilot from "../sections/v5-flowpilot.astro";
+import V5Control from "../sections/v5-control.astro";
 import NotesFooterV4 from "../sections/notes-footer-v4.astro";
 
 const site = "https://flow-like.com";
@@ -156,33 +146,11 @@ const websiteLd = {
     <a href="#content" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100] focus:rounded-md focus:bg-background focus:px-4 focus:py-2 focus:text-sm focus:shadow-xl">Skip to content</a>
     <Header client:only="react" />
     <main id="content" class="w-full max-w-full overflow-x-clip">
-      <HeroV4 />
-      <SoftSeam />
-      <SprawlV4 />
-      <SoftSeam />
-      <SystemMapV4 />
-      <SoftSeam />
-      <EngineV4 />
-      <SoftSeam />
-      <DataLayerV4 />
-      <SoftSeam />
-      <ScreensV4 />
-      <SoftSeam />
-      <PartsV4 />
-      <SoftSeam />
-      <RulesV4 />
-      <SoftSeam />
-      <HardwareV4 />
-      <SoftSeam />
-      <TeamsV4 />
-      <SoftSeam />
-      <ComparisonV4 />
-      <SoftSeam />
-      <PracticeV4 />
-      <SoftSeam />
-      <FaqV4 />
-      <SoftSeam />
-      <CtaV4 />
+      <V5Hero />
+      <V5Apps />
+      <V5Platform />
+      <V5Flowpilot />
+      <V5Control />
     </main>
     <NotesFooterV4 />
   </body>
