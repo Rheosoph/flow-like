@@ -120,7 +120,7 @@ Reply with clear messages for empty results and errors. Keep everything on one c
 		smoke: true,
 		prompt: `Build a compact community forum. Create a page named "Forum" with a new-thread form, a thread list, a selected-thread view, and a reply form. Repeated threads must use one widget named "Thread Card".
 
-Persist threads in a table named exactly "Forum Threads" and replies in "Forum Posts". The workflow must list threads newest-first, create a thread with validation, open one thread with its replies, and add a reply. Wire the real "Forum" page and "Thread Card" widget ids into the workflow, and refresh the relevant view after each write. Include useful empty and validation states.`,
+Persist threads in a table named exactly "Forum Threads" and replies in "Forum Posts". The workflow must list threads newest-first by READING the persisted rows back from the table with a database read/filter node (never from in-memory state), create a thread with validation, open one thread with its replies, and add a reply. Wire the real "Forum" page and "Thread Card" widget ids into the workflow, and refresh the relevant view after each write. Include useful empty and validation states.`,
 		requirements: requirements({
 			minFlowScriptNonWhitespaceChars: 800,
 			minTotalNodes: 8,
@@ -136,7 +136,14 @@ Persist threads in a table named exactly "Forum Threads" and replies in "Forum P
 			requiredNodeCapabilities: [
 				{
 					alias: "database_read",
-					anyOf: ["filter_local_db", "list_local_db"],
+					anyOf: [
+						"filter_local_db",
+						"list_local_db",
+						"fts_search_local_db",
+						"vector_search_local_db",
+						"hybrid_search_local_db",
+						"df_sql_query",
+					],
 				},
 				{
 					alias: "database_write",
@@ -160,7 +167,7 @@ Persist threads in a table named exactly "Forum Threads" and replies in "Forum P
 		smoke: true,
 		prompt: `Build an operations dashboard page named "Ops Dashboard" for an on-call lead. It needs KPI cards for healthy services, open incidents, and mean time to resolution; a severity breakdown chart; and a recent-incidents table with a service filter.
 
-Use tables named exactly "Services", "Incidents", and "Metric Snapshots". The page-load workflow must query real data, calculate the KPIs, populate the chart/table, and handle an empty dataset. The filter must rerun the view with the selected service. Use the persisted page/component ids rather than guessed ids. This is a one-off dashboard, so do not create a reusable widget merely to satisfy the test.`,
+Use tables named exactly "Services", "Incidents", and "Metric Snapshots". The page-load workflow must READ the persisted rows back from those tables with database read/filter nodes (never from in-memory state), calculate the KPIs, populate the chart/table, and handle an empty dataset. The filter must rerun the view with the selected service. Use the persisted page/component ids rather than guessed ids. This is a one-off dashboard, so do not create a reusable widget merely to satisfy the test.`,
 		requirements: requirements({
 			minFlowScriptNonWhitespaceChars: 700,
 			minTotalNodes: 8,
@@ -178,7 +185,14 @@ Use tables named exactly "Services", "Incidents", and "Metric Snapshots". The pa
 			requiredNodeCapabilities: [
 				{
 					alias: "database_read",
-					anyOf: ["filter_local_db", "list_local_db"],
+					anyOf: [
+						"filter_local_db",
+						"list_local_db",
+						"fts_search_local_db",
+						"vector_search_local_db",
+						"hybrid_search_local_db",
+						"df_sql_query",
+					],
 				},
 				{
 					alias: "dashboard_update",
@@ -382,6 +396,8 @@ export function buildCasePrompt(
 		: "- Complete the whole app in this run; the committed FlowScript program is the deliverable.";
 	const verificationLine =
 		"- Do NOT execute the workflow, start chat sessions, or run any other runtime verification in this benchmark: compile/lint/reconcile receipts are the only acceptance evidence. Once the FlowScript is committed and the required events are registered, stop and summarize.";
+	const repairBudgetLine =
+		"- REPAIR BUDGET: after the first board build returns a persisted result, delegate at most TWO follow-up board repairs. If problems remain after the second repair, stop and report them honestly instead of iterating further.";
 	const contract = `FlowPilot E2E contract:
 - Create the app named exactly ${JSON.stringify(expectedAppName)} as a LOCAL app: pass online: false to create_app. The benchmark must stay hermetic — cloud sync (e.g. remote event registration) is unavailable and would fail the run.
 ${setupLine}
@@ -389,6 +405,7 @@ ${setupLine}
 - Keep working FlowScript as short as practical: no comments, padding, repeated helpers, dead branches, or prose. It must still contain at least ${minChars} non-whitespace characters and no more than ${caseDefinition.requirements.maxFlowScriptNonWhitespaceChars}; the lower threshold is only a truncation sanity check, so never pad to reach it.
 ${idsLine}
 ${verificationLine}
+${repairBudgetLine}
 ${completionLine}`;
 
 	return {

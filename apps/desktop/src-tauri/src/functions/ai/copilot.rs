@@ -4352,8 +4352,7 @@ async fn external_code_agent_chat_internal(
         // work and retry on their own bounded counter even mid-phase; burning a continuation per
         // dropped stream ended runs with no FlowScript after two unlucky disconnects.
         let host_initiated_phase_end = run_failure.as_deref().is_some_and(|error| {
-            error.contains("pre-draft source checkpoint")
-                || error.contains("zero-progress circuit")
+            error.contains("pre-draft source checkpoint") || error.contains("zero-progress circuit")
         });
         if run_failure.is_some() && !host_initiated_phase_end {
             let restart_cap = if phase_tool_calls == 0 {
@@ -12308,6 +12307,8 @@ fn external_result_details(
                 | "valid"
                 | "queued"
                 | "already_queued"
+                // A check of a board that already matches the source — success, not an error.
+                | "no_changes"
                 | "applied"
                 | "completed"
                 | "rendered"

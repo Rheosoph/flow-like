@@ -442,6 +442,12 @@ external vector database to use unless they explicitly request an external servi
 database is LanceDB-backed and is opened with **Open Database** (`open_local_db`, FlowScript
 `openLocalDb`), which returns the database connection `Struct` directly.
 
+Any view, list, dashboard, or lookup over persisted data MUST read the rows back through a real
+read node (`filterLocalDb`, `listLocalDb`, the fts/vector/hybrid search nodes, or a DataFusion
+`dfSqlQuery` over registered tables) in the same workflow. Opening the database alone reads
+nothing, and rendering from in-memory state that was just written is a correctness bug: the flow
+must work on a fresh run where memory is empty.
+
 Inspect before you design: when `database_tool` is registered for a board specialist, use only its
 read-only operations (`list_tables`, `describe_table`, and read-only `query`) to inspect schemas,
 indices, row counts, and sample rows. Never call its create/insert/update/delete/index/optimize/schema
@@ -685,6 +691,22 @@ unambiguous or explicitly mapped in code.
 - If no policy exists for a multi-output node, `check_flowscript` reports a diagnostic and queues no
   unsafe execution edge. Use exact branch/control declarations and supported FlowScript branch
   blocks for explicit wiring; model-facing `emit_commands` cannot connect executable pins.
+- THE arm-block syntax for a multi-output node: bind the call, then open a block on the binding
+  whose arm labels are the node's EXACT execution output names (camelCase, with a colon):
+  ```ts
+  const search = vectorSearchLocalDb({ database: db, vector: queryVector })
+  search {
+      execOut: {
+          logInfo({ message: "results found" })
+      }
+      empty: {
+          logInfo({ message: "no matches" })
+      }
+  }
+  ```
+  Never invent labels (`error`, `execError`, `execEmpty`); the diagnostic lists the valid names.
+  Statements after the arm block continue from the arm tails. Do NOT use a multi-output call as a
+  plain sequential statement — that is exactly what the continuation-policy diagnostic rejects.
 - For loops, use exact loop declarations: the loop body is the `exec_out` path, and the next
   statement after the loop continues from `done` / `exec_done`. The loop input named `array` must
   receive the array being iterated.

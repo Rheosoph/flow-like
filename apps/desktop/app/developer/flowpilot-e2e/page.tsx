@@ -65,7 +65,9 @@ import {
 } from "../../../lib/flowpilot-e2e";
 
 const START_TIMEOUT_MS = 60_000;
-const RUN_TIMEOUT_MS = 20 * 60_000;
+// Generous per-case ceiling: slow runs must COMPLETE so their receipts show where the time went
+// (plan-step timestamps + generation-run windows); a timeout destroys exactly that evidence.
+const RUN_TIMEOUT_MS = 35 * 60_000;
 // After a case timeout the shared chat is still streaming; give cancellation this long to land
 // before abandoning the remaining cases.
 const CANCEL_TIMEOUT_MS = 30_000;

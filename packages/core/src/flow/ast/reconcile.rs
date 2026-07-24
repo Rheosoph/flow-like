@@ -4970,9 +4970,27 @@ impl<'a> StructuralPlanner<'a> {
                             Some(pin) => Some(ExecCursor::with_output(entity, Some(pin))),
                             None => {
                                 if !arm.body.stmts.is_empty() {
+                                    // Name the node and list the real labels: without them the
+                                    // model guesses spellings (`error`, `execError`, ...) for
+                                    // many rounds instead of fixing the label in one.
+                                    let node_name = if call.display.trim().is_empty() {
+                                        entity.node_ref()
+                                    } else {
+                                        call.display.clone()
+                                    };
+                                    let available = self.entity_exec_output_pins(&entity);
+                                    let available = if available.is_empty() {
+                                        "none".to_string()
+                                    } else {
+                                        available
+                                            .iter()
+                                            .map(|name| to_camel_case(name))
+                                            .collect::<Vec<_>>()
+                                            .join(", ")
+                                    };
                                     self.result.diagnostics.push(format!(
-                                        "branch arm label `{}` does not match an execution output on `{}`; its body was not wired — use the exact exec pin name as the arm label",
-                                        arm.label, call.display
+                                        "branch arm label `{}` does not match an execution output on `{node_name}` (available execution outputs: {available}); its body was not wired — use the exact exec pin name as the arm label",
+                                        arm.label
                                     ));
                                 }
                                 None
@@ -7089,8 +7107,13 @@ impl<'a> StructuralPlanner<'a> {
         else {
             let outputs = self.entity_exec_output_pins(&previous.entity);
             if outputs.len() > 1 {
+                let arm_labels = outputs
+                    .iter()
+                    .map(|name| format!("{}: {{ ... }}", to_camel_case(name)))
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 self.result.diagnostics.push(format!(
-                    "node `{}` has multiple execution outputs ({}) and no default continuation policy; add an explicit policy before auto-wiring sequential FlowScript calls",
+                    "node `{}` has multiple execution outputs ({}) and no default continuation policy; bind it (`const r = call({{ ... }})`) and handle its outputs in an arm block `r {{ {arm_labels} }}` — arm labels must be these exact execution output names — instead of a plain sequential statement",
                     previous.entity.node_ref(),
                     outputs.join(", ")
                 ));

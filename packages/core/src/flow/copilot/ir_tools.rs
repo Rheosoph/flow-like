@@ -1602,12 +1602,17 @@ impl FlowIrDraftStore {
             );
         }
         if retained.evaluation.commands.is_empty() {
-            let mut response = FlowScriptDraftResponse::for_draft(
-                "no_changes",
-                "FlowScript is valid but derives no board changes.",
-                args.draft_id,
-                &retained,
-            );
+            // On a non-empty board this is the SUCCESS shape of a repair round: everything the
+            // source describes is already applied. Without saying so, hosts and models read
+            // "no changes" as "nothing was accomplished" and burn their remaining budget
+            // rewriting an already-correct board.
+            let message = if board.nodes.is_empty() {
+                "FlowScript is valid but derives no board changes."
+            } else {
+                "FlowScript is valid and derives no board changes: everything this source describes is already applied and persisted on the live board. Treat this as success — do not rewrite or repair further; continue with registration/summary."
+            };
+            let mut response =
+                FlowScriptDraftResponse::for_draft("no_changes", message, args.draft_id, &retained);
             response.code = Some("FLOWSCRIPT_NO_CHANGES".to_string());
             return response;
         }

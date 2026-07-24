@@ -1273,7 +1273,10 @@ impl WorkflowSession {
                 });
 
         let validation_status = match status {
-            Some("valid" | "queued" | "already_queued") => Some(WorkflowValidationStatus::Valid),
+            // "no_changes" is a valid check of a board that already matches the source.
+            Some("valid" | "queued" | "already_queued" | "no_changes") => {
+                Some(WorkflowValidationStatus::Valid)
+            }
             Some("validation_errors" | "invalid" | "error") => {
                 Some(WorkflowValidationStatus::Invalid)
             }

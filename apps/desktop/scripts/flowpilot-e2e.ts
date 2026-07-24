@@ -22,7 +22,8 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, "..");
 const MAX_REPEAT = 20;
-const DEFAULT_CASE_TIMEOUT_MS = 25 * 60_000;
+// Must stay above the runner page's RUN_TIMEOUT_MS (35 min) plus collection overhead.
+const DEFAULT_CASE_TIMEOUT_MS = 40 * 60_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 5 * 60_000;
 const CALLBACK_BODY_LIMIT = 256 * 1024 * 1024;
 
