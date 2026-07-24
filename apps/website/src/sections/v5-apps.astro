@@ -1,13 +1,15 @@
 ---
+// [name, category, mockup-kind, color, screenshot-slug]. Drop a real screenshot at
+// /public/images/apps/<slug>.webp and it crossfades in over the mockup fallback.
 const carouselApps = [
-  ["Operations HQ", "Operations", "ops", "coral"],
-  ["Finance Approvals", "Finance", "finance", "orange"],
-  ["Customer 360", "Revenue", "customer", "red"],
-  ["Knowledge Graph", "Data", "graph", "rust"],
-  ["AI Control Center", "Governance", "control", "coral"],
-  ["Inventory Planner", "Supply chain", "inventory", "orange"],
-  ["FlowPilot Workspace", "Everyone", "agent", "red"],
-  ["Field Service", "Mobile", "field", "rust"],
+  ["Operations HQ", "Operations", "ops", "coral", "operations-hq"],
+  ["Finance Approvals", "Finance", "finance", "orange", "finance-approvals"],
+  ["Customer 360", "Revenue", "customer", "red", "customer-360"],
+  ["Knowledge Graph", "Data", "graph", "rust", "knowledge-graph"],
+  ["AI Control Center", "Governance", "control", "coral", "ai-control-center"],
+  ["Inventory Planner", "Supply chain", "inventory", "orange", "inventory-planner"],
+  ["FlowPilot Workspace", "Everyone", "agent", "red", "flowpilot-workspace"],
+  ["Field Service", "Mobile", "field", "rust", "field-service"],
 ];
 
 const appFlows = [
@@ -116,7 +118,7 @@ function miniApp(kind: string): string {
 }
 
 const mailCanvas = `<div class="mail-canvas"><div><i>AS</i><span><b>New supplier request</b><small>Anna Schmidt · 2m</small></span><em>NEW</em></div><div><i>JM</i><span><b>Q3 review notes</b><small>Jonas Müller · 18m</small></span><em>3</em></div><div><i>LP</i><span><b>Production update</b><small>Lea Peters · 42m</small></span><em>✓</em></div></div>`;
-const notesCanvas = `<div class="notes-canvas"><span>Q3 renewal themes</span><p>Adoption is up. Procurement needs a revised value case.</p><i>Updated 2m ago</i></div>`;
+const notesCanvas = `<div class="notes-canvas"><span>Q3 renewal themes</span><p>Adoption is up. Procurement needs a revised value case.</p></div>`;
 const calendarCanvas = `<div class="calendar-canvas"><span><b>24</b><small>THU</small></span><p>Quarterly review</p><i>10:30 — 11:15</i></div>`;
 
 const connectedApps = [
@@ -147,39 +149,61 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
     </div>
   </div>
 
-  <div class="unified-shell">
-    <div class="app-rail-header">
-      <span><i></i> COMPANY APP STORE <b>8 LIVE APPS</b></span>
-      <div>
-        <button type="button" data-rail-prev aria-label="Previous applications">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5" /><path d="m12 19-7-7 7-7" /></svg>
-        </button>
-        <button type="button" data-rail-next aria-label="Next applications">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
-        </button>
+  <div class="subsection-head">
+    <span class="sub-kicker"><i></i> Shipped on Flow-Like</span>
+    <h3>Real apps. Real business.</h3>
+    <p>Every frontend below is a live app a team actually uses — designed, governed, and run on Flow-Like.</p>
+  </div>
+
+  <div class="unified-shell store-shell">
+    <div class="app-store">
+      <div class="app-rail-header">
+        <span><i></i> COMPANY APP STORE <b>8 LIVE APPS</b></span>
+        <div>
+          <button type="button" data-rail-prev aria-label="Previous applications">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5" /><path d="m12 19-7-7 7-7" /></svg>
+          </button>
+          <button type="button" data-rail-next aria-label="Next applications">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="app-rail" data-rail aria-label="Select an application to connect to Flow-Like">
+        {carouselApps.map((app, index) => (
+          <article
+            class:list={["app-card", app[3], index === selectedIndex0 && "selected"]}
+            data-app-card
+            data-index={index}
+            role="button"
+            tabindex="0"
+            aria-pressed={index === selectedIndex0 ? "true" : "false"}
+          >
+            <header><i>{app[0][0]}</i><span><b>{app[0]}</b><small>{app[1]}</small></span><em>•••</em></header>
+            <div class="app-body">
+              <div class="app-shot-fallback" set:html={miniApp(app[2])} />
+              <img
+                class="app-shot"
+                src={`/images/apps/${app[4]}.webp`}
+                alt={`${app[0]} — a real app built with Flow-Like`}
+                loading="lazy"
+                decoding="async"
+                onload="this.classList.add('shot-ready')"
+                onerror="this.classList.add('shot-missing')"
+              />
+              <span class="app-shot-veil" aria-hidden="true"></span>
+            </div>
+            <footer>
+              <span data-card-footer-span>{index === selectedIndex0 ? "Connected to operating layer" : "Built with Flow-Like"}</span>
+              <b data-card-footer-b>{index === selectedIndex0 ? "Live ●" : "Select app"}</b>
+            </footer>
+          </article>
+        ))}
       </div>
     </div>
+  </div>
 
-    <div class="app-rail" data-rail aria-label="Select an application to connect to Flow-Like">
-      {carouselApps.map((app, index) => (
-        <article
-          class:list={["app-card", app[3], index === selectedIndex0 && "selected"]}
-          data-app-card
-          data-index={index}
-          role="button"
-          tabindex="0"
-          aria-pressed={index === selectedIndex0 ? "true" : "false"}
-        >
-          <header><i>{app[0][0]}</i><span><b>{app[0]}</b><small>{app[1]}</small></span><em>•••</em></header>
-          <div class="app-body" set:html={miniApp(app[2])} />
-          <footer>
-            <span data-card-footer-span>{index === selectedIndex0 ? "Connected to operating layer" : "Built with Flow-Like"}</span>
-            <b data-card-footer-b>{index === selectedIndex0 ? "Live ●" : "Select app"}</b>
-          </footer>
-        </article>
-      ))}
-    </div>
-
+  <div class="unified-shell layer-shell">
     <div class="rail-bridge" aria-live="polite">
       <span>
         <i data-role="bridge-letter">{selApp0[0][0]}</i>
@@ -233,7 +257,7 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
 
       <div class="os-core dark">
         <header><span><i></i> FLOW–LIKE / OPERATING LAYER</span><em>LIVE</em></header>
-        <div class="core-orbit"><i></i><i></i><i></i><span>FL</span></div>
+        <div class="core-orbit"><i></i><i></i><i></i><img src="/favicon.svg" alt="Flow-Like" width="34" height="34" /></div>
         <label data-role="core-label">{selApp0[0]} / {flow0.label}</label>
         <h3 data-role="core-title">{flow0.title}</h3>
         <p data-role="core-detail">{flow0.detail}</p>
@@ -269,9 +293,9 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
   .apps { padding: 150px 0 130px; background: var(--background); color: var(--foreground); overflow: hidden; }
   .section-head { display: grid; grid-template-columns: 24% 1fr; padding: 0 6vw 75px; }
   .apps .eyebrow { padding-top: 13px; color: var(--muted-foreground); }
-  .section-head > div { display: flex; align-items: flex-end; justify-content: space-between; }
-  .section-head h2 { margin: 0; font-size: clamp(54px, 6.1vw, 96px); line-height: .92; letter-spacing: -.065em; font-weight: 650; }
-  .section-head p { width: 380px; margin: 0 0 5px; color: var(--muted-foreground); font-size: 15px; line-height: 1.55; }
+  .section-head > div { display: flex; flex-direction: column; align-items: flex-start; gap: 34px; }
+  .section-head h2 { margin: 0; font-size: clamp(54px, 6.1vw, 96px); line-height: .92; letter-spacing: -.065em; font-weight: 650; white-space: nowrap; }
+  .section-head p { align-self: flex-end; width: 380px; margin: 0; color: var(--muted-foreground); font-size: 15px; line-height: 1.55; }
 
   /* App cards (authored shells) */
   .app-card { width: 380px; height: 270px; flex: 0 0 auto; overflow: hidden; border: 1px solid var(--border); border-radius: 15px; background: var(--card); box-shadow: 0 16px 50px color-mix(in oklab, var(--foreground) 8%, transparent); transition: transform .3s, box-shadow .3s; }
@@ -286,9 +310,20 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
   .app-card > header b { font-size: 11px; }
   .app-card > header small { font-size: 8px; color: var(--muted-foreground); }
   .app-card > header em { margin-left: auto; color: color-mix(in oklab, var(--muted-foreground) 75%, transparent); font-size: 9px; font-style: normal; letter-spacing: .1em; }
-  .app-body { height: 190px; padding: 13px; background: color-mix(in oklab, var(--muted) 70%, var(--background)); }
+  .app-body { position: relative; height: 190px; padding: 13px; overflow: hidden; background: color-mix(in oklab, var(--muted) 70%, var(--background)); }
   .app-card > footer { height: 30px; padding: 0 13px; display: flex; align-items: center; justify-content: space-between; color: var(--muted-foreground); font-size: 8px; }
   .app-card > footer b { font-weight: 500; color: var(--foreground); }
+
+  /* Real screenshot bleeds edge-to-edge over the mockup fallback and crossfades in.
+     Missing file -> the img flags itself .shot-missing and the mockup stays visible. */
+  .app-shot-fallback { height: 100%; }
+  .app-shot { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; object-fit: cover; object-position: top center; opacity: 0; transform: scale(1.015); transition: opacity .55s ease, transform .5s ease; }
+  .app-shot.shot-ready { opacity: 1; transform: scale(1); }
+  .app-shot.shot-missing { display: none; }
+  .app-shot-veil { position: absolute; inset: 0; z-index: 3; pointer-events: none; opacity: 0; transition: opacity .55s ease; box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--foreground) 5%, transparent); background: linear-gradient(to top, color-mix(in oklab, var(--foreground) 9%, transparent) 0%, transparent 26%), linear-gradient(to bottom, color-mix(in oklab, var(--background) 22%, transparent) 0%, transparent 14%); }
+  .app-shot.shot-ready ~ .app-shot-veil { opacity: 1; }
+  .app-card:hover .app-shot.shot-ready { transform: scale(1.05); }
+  .app-card.selected .app-shot.shot-ready { transform: scale(1.03); }
 
   /* Ecosystem (authored) */
   .ecosystem { position: relative; width: min(1380px, 94vw); height: 780px; margin: 0 auto; overflow: hidden; border: 1px solid var(--border); border-radius: 24px; background: var(--muted); box-shadow: 0 40px 100px color-mix(in oklab, var(--foreground) 10%, transparent); }
@@ -331,15 +366,12 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
   .core-orbit > i:nth-child(1) { width: 82px; height: 82px; }
   .core-orbit > i:nth-child(2) { width: 62px; height: 62px; animation-direction: reverse; }
   .core-orbit > i:nth-child(3) { width: 43px; height: 43px; }
-  .core-orbit > span { position: relative; z-index: 2; display: grid; place-items: center; width: 31px; height: 31px; border-radius: 9px; background: var(--primary); font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700; }
+  .core-orbit > img { position: relative; z-index: 2; width: 34px; height: 34px; filter: drop-shadow(0 4px 12px color-mix(in oklab, var(--primary) 45%, transparent)); }
   @keyframes v5CoreOrbit { to { transform: rotate(360deg); } }
   .os-core > label { display: block; margin-top: 18px; color: var(--accent); font: 7px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
   .os-core > h3 { width: 70%; margin: 8px 0 8px; font-size: 21px; letter-spacing: -.035em; }
   .os-core > p { width: 72%; min-height: 56px; margin: 0; color: var(--muted-foreground); font-size: 9px; line-height: 1.45; }
   .core-route { display: flex; align-items: center; gap: 4px; margin: 12px 0; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: color-mix(in oklab, var(--foreground) 4%, transparent); }
-  .core-route > span { display: flex; align-items: center; gap: 4px; min-width: 0; }
-  .core-route b { white-space: nowrap; font: 6px ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; }
-  .core-route i { color: var(--muted-foreground); font-size: 7px; font-style: normal; }
   .os-core > footer { display: flex; align-items: center; justify-content: space-between; padding-top: 11px; border-top: 1px solid var(--border); font: 7px ui-monospace, SFMono-Regular, Menlo, monospace; }
   .os-core > footer span { display: flex; align-items: center; gap: 7px; color: var(--accent); }
   .os-core > footer b { color: var(--muted-foreground); font-weight: 400; }
@@ -373,9 +405,22 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
 
   /* Unified shell */
   .unified-apps { padding-bottom: 150px; }
-  .unified-head { padding-bottom: 58px; }
+  .unified-head { padding-bottom: 40px; }
   .unified-head p { width: 440px; }
+
+  /* Subsection intro framing the App Store shelf */
+  .subsection-head { width: min(1460px, 94vw); margin: 0 auto 20px; padding: 0 6px; }
+  .sub-kicker { display: inline-flex; align-items: center; gap: 8px; color: var(--primary); font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .16em; text-transform: uppercase; font-style: normal; }
+  .sub-kicker > i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px color-mix(in oklab, var(--accent) 60%, transparent); }
+  .subsection-head h3 { margin: 13px 0 0; font-size: clamp(26px, 3vw, 40px); line-height: 1; letter-spacing: -.04em; font-weight: 640; }
+  .subsection-head p { margin: 12px 0 0; max-width: 460px; color: var(--muted-foreground); font-size: 14px; line-height: 1.55; }
   .unified-shell { width: min(1460px, 94vw); margin: 0 auto; padding: 16px 16px 22px; border: 1px solid var(--border); border-radius: 28px; background: var(--muted); box-shadow: 0 44px 110px color-mix(in oklab, var(--foreground) 11%, transparent); }
+
+  /* Two distinct shells: the app-store shelf sits clearly apart from the
+     operating-layer stage below, tied together only by the section heading. */
+  .store-shell { padding-bottom: 10px; margin-bottom: 24px; }
+  .layer-shell { padding-top: 18px; }
+
   .app-rail-header { height: 50px; display: flex; align-items: center; justify-content: space-between; padding: 0 7px 0 11px; color: var(--muted-foreground); font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; }
   .app-rail-header > span { display: flex; align-items: center; gap: 9px; }
   .app-rail-header > span > i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 12px color-mix(in oklab, var(--accent) 60%, transparent); }
@@ -383,7 +428,7 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
   .app-rail-header > div { display: flex; gap: 6px; }
   .app-rail-header button { width: 36px; height: 34px; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 8px; background: var(--background); color: var(--muted-foreground); cursor: pointer; transition: background .2s, color .2s, transform .2s; }
   .app-rail-header button:hover { background: var(--foreground); color: var(--background); transform: translateY(-2px); }
-  .app-rail { display: flex; gap: 12px; overflow-x: auto; padding: 3px 4px 22px; scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain; }
+  .app-rail { display: flex; gap: 12px; overflow-x: auto; padding: 3px 4px 12px; scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain; }
   .app-rail::-webkit-scrollbar { display: none; }
   .app-rail .app-card { width: 330px; height: 238px; scroll-snap-align: start; cursor: pointer; box-shadow: 0 12px 35px color-mix(in oklab, var(--foreground) 7%, transparent); }
   .app-rail .app-card:focus-visible { outline: 3px solid color-mix(in oklab, var(--accent) 38%, transparent); outline-offset: 2px; }
@@ -423,8 +468,8 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
     .section-head { display: block; padding: 0 22px 50px; }
     .section-head > .eyebrow { display: block; margin-bottom: 22px; }
     .section-head > div { display: block; }
-    .section-head h2 { font-size: 55px; }
-    .section-head p { width: auto; margin-top: 25px; }
+    .section-head h2 { font-size: 55px; white-space: normal; }
+    .section-head p { align-self: auto; width: auto; margin-top: 25px; }
     .app-card { width: 320px; height: 250px; }
     .app-body { height: 170px; }
     .unified-apps { padding-bottom: 90px; }
@@ -456,6 +501,12 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
 -->
 <style is:global>
   .v5-apps .orb { display: grid !important; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 9px; background: var(--primary); box-shadow: 0 0 26px color-mix(in oklab, var(--primary) 50%, transparent); font-style: normal; }
+
+  /* Route pills are re-rendered via innerHTML in JS, so they lose Astro's scope
+     hash. These rules live global (anchored to .v5-apps) so they keep applying. */
+  .v5-apps .core-route > span { display: flex; align-items: center; gap: 4px; min-width: 0; }
+  .v5-apps .core-route b { white-space: nowrap; font: 6px ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 500; }
+  .v5-apps .core-route i { color: var(--muted-foreground); font-size: 7px; font-style: normal; }
 
   .v5-apps .mini { height: 100%; }
   .v5-apps .metric-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; }
@@ -589,6 +640,51 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
 
     const ecosystemAria = ecosystem ? ecosystem.getAttribute("aria-label") : null;
 
+    const core = root.querySelector(".os-core");
+
+    const centerIn = (el, originRect) => {
+      const r = el.getBoundingClientRect();
+      return [r.left + r.width / 2 - originRect.left, r.top + r.height / 2 - originRect.top];
+    };
+
+    const placeBar = (bar, ax, ay, bx, by) => {
+      const [x1, y1, x2, y2] = ax <= bx ? [ax, ay, bx, by] : [bx, by, ax, ay];
+      const dx = x2 - x1;
+      const dy = y2 - y1;
+      bar.style.left = `${x1}px`;
+      bar.style.top = `${y1}px`;
+      bar.style.width = `${Math.hypot(dx, dy)}px`;
+      bar.style.transform = `rotate(${(Math.atan2(dy, dx) * 180) / Math.PI}deg)`;
+    };
+
+    const layoutConnectors = () => {
+      if (ecosystem && core && ecosystem.clientWidth) {
+        const originRect = ecosystem.getBoundingClientRect();
+        const coreCenter = centerIn(core, originRect);
+        links.forEach((link) => {
+          if (getComputedStyle(link).display === "none") return;
+          const card = root.querySelector(`[data-connected="${link.dataset.link}"]`);
+          if (!card || !card.offsetWidth) return;
+          const [x1, y1] = centerIn(card, originRect);
+          placeBar(link, x1, y1, coreCenter[0], coreCenter[1]);
+        });
+      }
+
+      root.querySelectorAll(".mini-graph").forEach((graph) => {
+        if (!graph.clientWidth) return;
+        const hub = graph.querySelector(".g1");
+        if (!hub) return;
+        const originRect = graph.getBoundingClientRect();
+        const [hx, hy] = centerIn(hub, originRect);
+        graph.querySelectorAll(".g-line").forEach((line, index) => {
+          const target = graph.querySelector(`.g${index + 2}`);
+          if (!target) return;
+          const [tx, ty] = centerIn(target, originRect);
+          placeBar(line, hx, hy, tx, ty);
+        });
+      });
+    };
+
     const render = () => {
       const flow = appFlows[flowIndex];
       const selectedApp = carouselApps[selectedIndex];
@@ -645,6 +741,8 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
         button.classList.toggle("active", on);
         button.setAttribute("aria-pressed", String(on));
       });
+
+      layoutConnectors();
     };
 
     const selectApp = (index) => {
@@ -680,6 +778,13 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
     scenarios.forEach((button, index) => {
       button.addEventListener("click", () => selectScenario(index));
     });
+
+    let resizeRaf = 0;
+    window.addEventListener("resize", () => {
+      cancelAnimationFrame(resizeRaf);
+      resizeRaf = requestAnimationFrame(layoutConnectors);
+    });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(layoutConnectors);
 
     render();
   }

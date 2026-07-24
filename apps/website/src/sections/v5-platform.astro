@@ -1,4 +1,5 @@
 ---
+import { FlowPilotBubbleOrb } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-orb";
 const features = [
   {
     id: "builder",
@@ -61,7 +62,7 @@ const features = [
 const steps = [
   ["01", "Every 15 min", "Schedule"],
   ["02", "Query suppliers", "Data Studio"],
-  ["03", "Score risk", "Python"],
+  ["03", "Score risk", "FlowScript"],
   ["04", "High risk?", "Condition"],
   ["05", "Notify owner", "Mail + Teams"],
 ];
@@ -117,10 +118,12 @@ const featuresJson = JSON.stringify(
             {f.id === "workflow" && (
               <div class="mock workflow">
                 <header><b>Supplier risk monitor</b><span>LIVE</span></header>
-                <div class="workflow-canvas">{steps.map((s, i) => (<div class={`flow-step fs${i + 1}`}><i>{s[0]}</i><span><b>{s[1]}</b><small>{s[2]}</small></span></div>))}<i class="wire w1"></i><i class="wire w2"></i><i class="wire w3"></i><i class="wire w4"></i></div>
-                <div class="code"><header><span>risk_score.py</span><em>Python 3.12</em></header><pre><b>def</b> score_risk(supplier):
-  signals = ontology.signals(supplier)
-  <b>return</b> model.predict(signals)</pre></div>
+                <div class="workflow-canvas">{steps.map((s, i) => (<div class={`flow-step fs${i + 1}`}><i>{s[0]}</i><span><b>{s[1]}</b><small>{s[2]}</small></span></div>))}<div class="wires" data-connect data-links="fs1-fs2,fs1-fs3,fs2-fs4,fs4-fs5"></div></div>
+                <div class="code"><header><span>score_risk.flow</span><em>FlowScript</em></header><pre><span class="fn">onSchedule</span>() &#123;
+  <span class="k">const</span> signals = <span class="fn">ontologySignals</span>(&#123; <span class="pr">supplier</span> &#125;)
+  <span class="k">const</span> score = <span class="fn">modelPredict</span>(&#123; <span class="pr">model</span>: <span class="st">"risk-v3"</span>, <span class="pr">signals</span> &#125;)
+  <span class="fn">log</span>(&#123; <span class="pr">text</span>: score.risk &#125;)
+&#125;</pre></div>
               </div>
             )}
             {f.id === "frontend" && (
@@ -133,7 +136,7 @@ const featuresJson = JSON.stringify(
             {f.id === "data" && (
               <div class="mock data">
                 <header><b>Company Ontology</b><span>42 objects · 128 relations</span><em>QUERY</em></header>
-                <div class="ontology"><div class="object o1"><i>CO</i><span><b>Company</b><small>12.4k records</small></span></div><div class="object o2"><i>PE</i><span><b>Person</b><small>84.2k records</small></span></div><div class="object o3"><i>CT</i><span><b>Contract</b><small>31.8k records</small></span></div><div class="object o4"><i>PR</i><span><b>Product</b><small>4.2k records</small></span></div><div class="object o5"><i>EV</i><span><b>Interaction</b><small>2.8B events</small></span></div><i class="rel r1"></i><i class="rel r2"></i><i class="rel r3"></i><i class="rel r4"></i></div>
+                <div class="ontology"><div class="object o1"><i>CO</i><span><b>Company</b><small>12.4k records</small></span></div><div class="object o2"><i>PE</i><span><b>Person</b><small>84.2k records</small></span></div><div class="object o3"><i>CT</i><span><b>Contract</b><small>31.8k records</small></span></div><div class="object o4"><i>PR</i><span><b>Product</b><small>4.2k records</small></span></div><div class="object o5"><i>EV</i><span><b>Interaction</b><small>2.8B events</small></span></div><div class="rels" data-connect data-links="o1-o2,o1-o3,o1-o4,o1-o5"></div></div>
                 <footer><label>ASK YOUR ONTOLOGY</label><p>Which strategic accounts have declining engagement and renew this quarter?</p><b>⌘ ↵</b></footer>
               </div>
             )}
@@ -152,7 +155,7 @@ const featuresJson = JSON.stringify(
             )}
             {f.id === "pilot" && (
               <div class="mock pilot">
-                <div class="pilot-command"><i class="orb large">✦</i><p>Prepare me for the Acme renewal meeting tomorrow. Include risks, recent conversations, and a proposed agenda.</p><span>FlowPilot · Company access</span></div>
+                <div class="pilot-command"><FlowPilotBubbleOrb client:only="react" aria-label="FlowPilot" className="size-9 shrink-0" /><p>Prepare me for the Acme renewal meeting tomorrow. Include risks, recent conversations, and a proposed agenda.</p><span>FlowPilot · Company access</span></div>
                 <div class="execution">{execSteps.map((s) => (<div><i>{s[0]}</i><span><b>{s[1]}</b><small>{s[2]}</small></span><em>Done ✓</em></div>))}</div>
                 <div class="pilot-result light-screen"><label>BRIEFING READY</label><b>Acme Renewal · €1.2M ARR</b><p>Three expansion signals, one adoption risk, and a clear path to renewal.</p><button>Open briefing ↗</button></div>
               </div>
@@ -187,10 +190,12 @@ const featuresJson = JSON.stringify(
         {f.id === "workflow" && (
           <div class="mock workflow">
             <header><b>Supplier risk monitor</b><span>LIVE</span></header>
-            <div class="workflow-canvas">{steps.map((s, i) => (<div class={`flow-step fs${i + 1}`}><i>{s[0]}</i><span><b>{s[1]}</b><small>{s[2]}</small></span></div>))}<i class="wire w1"></i><i class="wire w2"></i><i class="wire w3"></i><i class="wire w4"></i></div>
-            <div class="code"><header><span>risk_score.py</span><em>Python 3.12</em></header><pre><b>def</b> score_risk(supplier):
-  signals = ontology.signals(supplier)
-  <b>return</b> model.predict(signals)</pre></div>
+            <div class="workflow-canvas">{steps.map((s, i) => (<div class={`flow-step fs${i + 1}`}><i>{s[0]}</i><span><b>{s[1]}</b><small>{s[2]}</small></span></div>))}<div class="wires" data-connect data-links="fs1-fs2,fs1-fs3,fs2-fs4,fs4-fs5"></div></div>
+            <div class="code"><header><span>score_risk.flow</span><em>FlowScript</em></header><pre><span class="fn">onSchedule</span>() &#123;
+  <span class="k">const</span> signals = <span class="fn">ontologySignals</span>(&#123; <span class="pr">supplier</span> &#125;)
+  <span class="k">const</span> score = <span class="fn">modelPredict</span>(&#123; <span class="pr">model</span>: <span class="st">"risk-v3"</span>, <span class="pr">signals</span> &#125;)
+  <span class="fn">log</span>(&#123; <span class="pr">text</span>: score.risk &#125;)
+&#125;</pre></div>
           </div>
         )}
         {f.id === "frontend" && (
@@ -203,7 +208,7 @@ const featuresJson = JSON.stringify(
         {f.id === "data" && (
           <div class="mock data">
             <header><b>Company Ontology</b><span>42 objects · 128 relations</span><em>QUERY</em></header>
-            <div class="ontology"><div class="object o1"><i>CO</i><span><b>Company</b><small>12.4k records</small></span></div><div class="object o2"><i>PE</i><span><b>Person</b><small>84.2k records</small></span></div><div class="object o3"><i>CT</i><span><b>Contract</b><small>31.8k records</small></span></div><div class="object o4"><i>PR</i><span><b>Product</b><small>4.2k records</small></span></div><div class="object o5"><i>EV</i><span><b>Interaction</b><small>2.8B events</small></span></div><i class="rel r1"></i><i class="rel r2"></i><i class="rel r3"></i><i class="rel r4"></i></div>
+            <div class="ontology"><div class="object o1"><i>CO</i><span><b>Company</b><small>12.4k records</small></span></div><div class="object o2"><i>PE</i><span><b>Person</b><small>84.2k records</small></span></div><div class="object o3"><i>CT</i><span><b>Contract</b><small>31.8k records</small></span></div><div class="object o4"><i>PR</i><span><b>Product</b><small>4.2k records</small></span></div><div class="object o5"><i>EV</i><span><b>Interaction</b><small>2.8B events</small></span></div><div class="rels" data-connect data-links="o1-o2,o1-o3,o1-o4,o1-o5"></div></div>
             <footer><label>ASK YOUR ONTOLOGY</label><p>Which strategic accounts have declining engagement and renew this quarter?</p><b>⌘ ↵</b></footer>
           </div>
         )}
@@ -222,7 +227,7 @@ const featuresJson = JSON.stringify(
         )}
         {f.id === "pilot" && (
           <div class="mock pilot">
-            <div class="pilot-command"><i class="orb large">✦</i><p>Prepare me for the Acme renewal meeting tomorrow. Include risks, recent conversations, and a proposed agenda.</p><span>FlowPilot · Company access</span></div>
+            <div class="pilot-command"><FlowPilotBubbleOrb client:only="react" aria-label="FlowPilot" className="size-9 shrink-0" /><p>Prepare me for the Acme renewal meeting tomorrow. Include risks, recent conversations, and a proposed agenda.</p><span>FlowPilot · Company access</span></div>
             <div class="execution">{execSteps.map((s) => (<div><i>{s[0]}</i><span><b>{s[1]}</b><small>{s[2]}</small></span><em>Done ✓</em></div>))}</div>
             <div class="pilot-result light-screen"><label>BRIEFING READY</label><b>Acme Renewal · €1.2M ARR</b><p>Three expansion signals, one adoption risk, and a clear path to renewal.</p><button>Open briefing ↗</button></div>
           </div>
@@ -233,10 +238,8 @@ const featuresJson = JSON.stringify(
 </section>
 
 <style>
-  .v5-platform { --mono: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--background); }
+  .v5-platform { --mono: ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--background); color: var(--foreground); }
   .eyebrow { font: 9px/1 var(--mono); letter-spacing: .16em; color: var(--muted-foreground); }
-  .orb { display: grid !important; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 9px; background: var(--primary); color: var(--primary-foreground); box-shadow: 0 0 26px color-mix(in oklab, var(--primary) 50%, transparent); font-style: normal; }
-  .orb.large { width: 38px; height: 38px; border-radius: 11px; font-size: 16px; }
 
   .story { position: relative; height: 700vh; background: var(--background); }
   .story-sticky { position: sticky; top: 0; height: 100vh; display: grid; grid-template-columns: 19vw 1fr 24vw; grid-template-rows: 55px 1fr; overflow: hidden; padding: 24px 3vw; background: radial-gradient(circle at 52% 50%, color-mix(in oklab, var(--primary) 8%, transparent), transparent 34%), var(--background); }
@@ -315,16 +318,15 @@ const featuresJson = JSON.stringify(
   .fs3 { left: 29%; top: 59%; }
   .fs4 { right: 26%; top: 38%; }
   .fs5 { right: 3%; top: 38%; border-color: color-mix(in oklab, var(--accent) 35%, transparent); }
-  .wire { position: absolute; height: 1px; background: color-mix(in oklab, var(--accent) 35%, transparent); transform-origin: left; }
-  .w1 { left: 24%; top: 48%; width: 11%; transform: rotate(-25deg); }
-  .w2 { left: 24%; top: 50%; width: 11%; transform: rotate(25deg); }
-  .w3 { left: 51%; top: 29%; width: 20%; transform: rotate(23deg); }
-  .w4 { left: 70%; top: 49%; width: 11%; }
+  .wires { position: absolute; inset: 0; pointer-events: none; }
   .code { position: absolute; right: 0; bottom: 0; left: 0; height: 30%; padding: 12px 16px; border-top: 1px solid var(--border); background: color-mix(in oklab, var(--background) 68%, black); }
   .code > header { display: flex; justify-content: space-between; color: var(--muted-foreground); font: 7px var(--mono); }
   .code header em { font-style: normal; }
-  .code pre { color: var(--foreground); font: 9px/1.6 var(--mono); }
-  .code pre b { color: var(--accent); }
+  .code pre { color: #e5e7eb; font: 9px/1.6 var(--mono); }
+  .code pre .k { color: #60a5fa; }
+  .code pre .fn { color: #22d3ee; }
+  .code pre .pr { color: #93c5fd; }
+  .code pre .st { color: #86efac; }
 
   .frontend { display: grid; grid-template-columns: 17% 1fr; background: var(--background); }
   .frontend > aside { display: grid; align-content: start; gap: 7px; padding: 15px 10px; border-right: 1px solid var(--border); }
@@ -364,11 +366,7 @@ const featuresJson = JSON.stringify(
   .o3 { top: 13%; right: 8%; }
   .o4 { bottom: 12%; left: 15%; }
   .o5 { right: 15%; bottom: 10%; }
-  .rel { position: absolute; height: 1px; background: color-mix(in oklab, var(--accent) 30%, transparent); transform-origin: left; }
-  .r1 { top: 29%; left: 26%; width: 19%; transform: rotate(21deg); }
-  .r2 { top: 42%; left: 56%; width: 25%; transform: rotate(-25deg); }
-  .r3 { top: 69%; left: 28%; width: 19%; transform: rotate(-24deg); }
-  .r4 { top: 57%; left: 55%; width: 23%; transform: rotate(24deg); }
+  .rels { position: absolute; inset: 0; pointer-events: none; }
   .data > footer { position: absolute; right: 13px; bottom: 13px; left: 13px; display: grid; grid-template-columns: 120px 1fr auto; align-items: center; padding: 11px 14px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklab, var(--background) 68%, black); }
   .data > footer label { color: var(--accent); font-size: 7px; }
   .data > footer p { margin: 0; color: var(--muted-foreground); font-size: 9px; }
@@ -481,6 +479,16 @@ const featuresJson = JSON.stringify(
   }
 </style>
 
+<!--
+  Connector bars (.wires/.rels children) are created in the script below, so they
+  never receive Astro's scope hash. These rules are global but anchored to the
+  unique .v5-platform root class, so they style only this section and never leak.
+-->
+<style is:global>
+  .v5-platform .wires > i { position: absolute; height: 1px; background: color-mix(in oklab, var(--accent) 35%, transparent); transform-origin: left center; }
+  .v5-platform .rels > i { position: absolute; height: 1px; background: color-mix(in oklab, var(--accent) 30%, transparent); transform-origin: left center; }
+</style>
+
 <script>
   function initV5Platform() {
     const story = document.querySelector<HTMLElement>("[data-v5-story]");
@@ -501,6 +509,40 @@ const featuresJson = JSON.stringify(
     const tagEls = [...story.querySelectorAll<HTMLElement>("[data-tag]")];
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+    const section = story.closest("section") ?? document;
+
+    const drawConnectors = (scope: ParentNode) => {
+      scope.querySelectorAll<HTMLElement>("[data-connect]").forEach((container) => {
+        const canvas = container.parentElement;
+        if (!canvas) return;
+        if (!canvas.clientWidth || !canvas.clientHeight) return;
+        const cls = container.classList.contains("rels") ? "rel" : "wire";
+        const links = (container.getAttribute("data-links") ?? "").split(",").filter(Boolean);
+        const center = (name: string) => {
+          const el = canvas.querySelector<HTMLElement>(`.${name}`);
+          if (!el) return null;
+          return [el.offsetLeft + el.offsetWidth / 2, el.offsetTop + el.offsetHeight / 2] as [number, number];
+        };
+        container.textContent = "";
+        links.forEach((link) => {
+          const [a, b] = link.split("-");
+          const p1 = center(a);
+          const p2 = center(b);
+          if (!p1 || !p2) return;
+          let [x1, y1] = p1;
+          let [x2, y2] = p2;
+          if (x2 < x1) [x1, y1, x2, y2] = [x2, y2, x1, y1];
+          const bar = document.createElement("i");
+          bar.className = cls;
+          bar.style.left = `${x1}px`;
+          bar.style.top = `${y1}px`;
+          bar.style.width = `${Math.hypot(x2 - x1, y2 - y1)}px`;
+          bar.style.transform = `rotate(${(Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI}deg)`;
+          container.appendChild(bar);
+        });
+      });
+    };
+
     let current = -1;
     let ticking = false;
     const pad = (i: number) => String(i + 1).padStart(2, "0");
@@ -512,6 +554,7 @@ const featuresJson = JSON.stringify(
       if (active === current) return;
       current = active;
       items.forEach((el, i) => el.classList.toggle("is-active", i === active));
+      drawConnectors(section);
       const f = features[active];
       if (!f) return;
       if (copyLabel) copyLabel.textContent = f.kicker;
@@ -546,6 +589,8 @@ const featuresJson = JSON.stringify(
 
     window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("resize", onScroll);
+    window.addEventListener("resize", () => drawConnectors(section));
+    document.fonts?.ready.then(() => drawConnectors(section));
 
     navButtons.forEach((button, i) => {
       button.addEventListener("click", () => {
@@ -557,6 +602,7 @@ const featuresJson = JSON.stringify(
     });
 
     update();
+    drawConnectors(section);
   }
   initV5Platform();
 </script>

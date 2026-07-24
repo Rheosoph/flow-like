@@ -1,11 +1,5 @@
 ---
-const apps = [
-  ["DA", "Data Studio", "Find affected orders"],
-  ["SC", "Supply Control", "Model alternatives"],
-  ["WF", "Workflow Core", "Trigger approvals"],
-  ["EM", "Email", "Notify suppliers"],
-  ["OP", "Operations HQ", "Update production"],
-] as const;
+import FlowPilotUseCase from "../components/showcase/flowpilot-usecase";
 ---
 
 <section id="flowpilot" class="dark v5-flowpilot pilot-section" style="color-scheme:dark">
@@ -13,73 +7,31 @@ const apps = [
   <div class="pilot-heading">
     <span class="eyebrow">03 / FLOWPILOT</span>
     <h2>One call.<br /><em>Your whole company</em><br />in motion.</h2>
-    <p>FlowPilot doesn’t sit beside your work. It understands the tools, data, permissions, and processes that make your company run.</p>
+    <p>FlowPilot doesn’t sit beside your work. It understands the tools, data, permissions, and processes that make your company run — the composer below is the real thing.</p>
   </div>
-  <div class="motion">
-    <div class="motion-prompt">
-      <i class="orb large" aria-hidden="true">✦</i>
-      <p>Resolve the supplier delay without impacting next week’s production.</p>
-      <b>RUN</b>
-    </div>
-    <div class="stem" aria-hidden="true"><i></i></div>
-    <div class="motion-apps">
-      {apps.map((x, i) => (
-        <div style={`--delay:${i * 0.12}s`}>
-          <i>{x[0]}</i>
-          <span><b>{x[1]}</b><small>{x[2]}</small></span>
-          <em aria-hidden="true">✓</em>
-        </div>
-      ))}
-    </div>
-    <div class="motion-result">
-      <label>RESOLVED IN 42 SECONDS</label>
-      <b>Production protected</b>
-      <p>Two orders rerouted, approvals captured, and every stakeholder informed.</p>
-    </div>
+  <div class="pilot-stage">
+    <FlowPilotUseCase client:only="react" className="h-[32rem]" />
   </div>
 </section>
 
 <style>
   .eyebrow { font: 9px/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .16em; color: var(--muted-foreground); }
-  .orb { display: grid !important; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 9px; background: var(--primary); box-shadow: 0 0 26px color-mix(in oklab, var(--primary) 50%, transparent); font-style: normal; }
-  .orb.large { width: 38px; height: 38px; border-radius: 11px; font-size: 16px; }
 
-  .pilot-section { position: relative; min-height: 100vh; display: grid; grid-template-columns: .8fr 1.2fr; gap: 8vw; align-items: center; overflow: hidden; padding: 140px 7vw; border-top: 1px solid var(--border); background: var(--background); }
+  .pilot-section { position: relative; min-height: 100vh; display: grid; grid-template-columns: .8fr 1.2fr; gap: 8vw; align-items: center; overflow: hidden; padding: 140px 7vw; border-top: 1px solid var(--border); background: var(--background); color: var(--foreground); }
   .aura { position: absolute; top: 0; left: -25%; width: 800px; height: 800px; border-radius: 50%; background: radial-gradient(circle, color-mix(in oklab, var(--primary) 25%, transparent), transparent 65%); filter: blur(20px); }
   .pilot-heading { position: relative; z-index: 2; }
   .pilot-heading h2 { margin: 24px 0 35px; font-size: clamp(52px, 6vw, 92px); line-height: .92; letter-spacing: -.065em; }
   .pilot-heading h2 em { color: var(--muted-foreground); font-style: normal; font-weight: 400; }
   .pilot-heading > p { max-width: 470px; color: var(--muted-foreground); font-size: 15px; line-height: 1.65; }
 
-  .motion { position: relative; z-index: 2; padding: 22px; border: 1px solid var(--border); border-radius: 18px; background: color-mix(in oklab, var(--card) 85%, transparent); box-shadow: 0 50px 120px color-mix(in srgb, black 40%, transparent); }
-  .motion-prompt { display: grid; grid-template-columns: auto 1fr auto; gap: 13px; align-items: center; padding: 15px; border-radius: 11px; background: var(--card); }
-  .motion-prompt p { margin: 0; font-size: 12px; line-height: 1.45; }
-  .motion-prompt > b { padding: 7px; border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent); border-radius: 5px; color: var(--accent); font: 7px ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .stem { position: relative; height: 38px; }
-  .stem:before { content: ""; position: absolute; top: 0; bottom: 0; left: 18px; width: 1px; background: color-mix(in oklab, var(--accent) 30%, transparent); }
-  .stem > i { position: absolute; top: 17px; left: 15px; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 15px var(--accent); }
-  .motion-apps { display: grid; gap: 7px; }
-  .motion-apps > div { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 9px; animation: appPulse 5s ease-in-out infinite; animation-delay: var(--delay); }
-  @keyframes appPulse { 0%, 70%, 100% { border-color: var(--border); background: transparent; } 78% { border-color: color-mix(in oklab, var(--accent) 40%, transparent); background: color-mix(in oklab, var(--accent) 4%, transparent); } }
-  .motion-apps > div > i { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 7px; background: color-mix(in oklab, var(--card) 88%, var(--foreground)); font: 7px ui-monospace, SFMono-Regular, Menlo, monospace; font-style: normal; }
-  .motion-apps > div > span { display: grid; }
-  .motion-apps b { font-size: 9px; }
-  .motion-apps small { margin-top: 2px; color: var(--muted-foreground); font-size: 7px; }
-  .motion-apps em { color: var(--accent); font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; font-style: normal; }
-  .motion-result { margin-top: 14px; padding: 18px; border-radius: 11px; background: var(--accent); color: var(--background); }
-  .motion-result label { font: 7px ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .motion-result b { display: block; margin: 7px 0 3px; font-size: 20px; }
-  .motion-result p { margin: 0; font-size: 8px; }
+  .pilot-stage { position: relative; z-index: 2; min-width: 0; }
 
   @media (max-width: 1050px) {
     .pilot-section { grid-template-columns: 1fr; gap: 60px; }
-    .motion { width: 100%; max-width: 760px; justify-self: center; }
+    .pilot-stage { max-width: 760px; width: 100%; justify-self: center; }
   }
   @media (max-width: 800px) {
     .pilot-section { padding: 110px 22px; }
     .pilot-heading h2 { font-size: 56px; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .motion-apps > div { animation-duration: .001ms; animation-iteration-count: 1; }
   }
 </style>

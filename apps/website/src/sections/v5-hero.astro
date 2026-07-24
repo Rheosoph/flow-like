@@ -1,4 +1,5 @@
 ---
+import { FlowPilotBubbleOrb } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-orb";
 const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
 ---
 
@@ -19,7 +20,7 @@ const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
 
   <div class="hero-card">
     <header><span><i aria-hidden="true"></i> FLOWPILOT / LIVE</span><em aria-hidden="true">•••</em></header>
-    <main><i class="orb" aria-hidden="true">✦</i><p>Prepare tomorrow’s customer meeting and handle the follow-ups.</p></main>
+    <main><FlowPilotBubbleOrb client:only="react" aria-label="FlowPilot" className="size-9 shrink-0" /><p>Prepare tomorrow’s customer meeting and handle the follow-ups.</p></main>
     <div class="hero-flow">
       <span><i aria-hidden="true">01</i><b>Email</b><small>18 threads</small></span><em aria-hidden="true">→</em>
       <span><i aria-hidden="true">02</i><b>Data</b><small>Customer 360</small></span><em aria-hidden="true">→</em>
@@ -55,8 +56,6 @@ const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
   .hero-actions > a { display: flex; align-items: center; justify-content: space-between; min-width: 212px; height: 54px; padding: 0 18px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklab, var(--background) 42%, transparent); color: var(--foreground); backdrop-filter: blur(12px); font-size: 13px; font-weight: 700; text-decoration: none; transition: transform .25s, background .25s, color .25s, box-shadow .25s; }
   .hero-actions > a:first-child { border-color: transparent; background: linear-gradient(100deg, var(--primary), var(--accent)); color: var(--primary-foreground); box-shadow: 0 12px 30px color-mix(in oklab, var(--primary) 24%, transparent); }
   .hero-actions > a:hover { transform: translateY(-3px); background: var(--foreground); color: var(--background); }
-
-  .orb { display: grid !important; place-items: center; width: 28px; height: 28px; flex: 0 0 auto; border-radius: 9px; background: var(--primary); box-shadow: 0 0 26px color-mix(in oklab, var(--primary) 50%, transparent); font-style: normal; color: var(--primary-foreground); }
 
   .hero-card { position: absolute; z-index: 3; right: 6vw; bottom: 12vh; width: min(390px, 32vw); overflow: hidden; border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent); border-radius: 16px; background: color-mix(in oklab, var(--card) 92%, transparent); color: var(--foreground); backdrop-filter: blur(22px); box-shadow: 0 30px 100px color-mix(in oklab, var(--primary) 22%, transparent); animation: v5-float 7s ease-in-out infinite; }
   @keyframes v5-float { 0%, 100% { transform: translateY(0) rotate(.15deg); } 50% { transform: translateY(-12px) rotate(-.15deg); } }
