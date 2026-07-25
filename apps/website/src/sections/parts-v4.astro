@@ -1,0 +1,893 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props {
+	lang?: Lang;
+}
+
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+	const localized = translations[lang] as Record<string, string>;
+	const english = translations.en as Record<string, string>;
+	return localized?.[key] ?? english[key] ?? key;
+};
+
+const samples = [
+	{
+		id: "rust",
+		label: "Rust",
+		file: "src/lib.rs",
+		command: "cargo build --release",
+		permission: "NetworkHttp",
+		color: "#f59e0b",
+		code: `use flow_like_wasm_sdk::*;
+
+#[register_node]
+#[derive(Default)]
+pub struct WeatherAlert;
+
+impl WasmNode for WeatherAlert {
+    fn get_node(&self) -> NodeDefinition {
+        let mut node = NodeDefinition::new(
+            "weather_alert", "Weather Alert",
+            "Checks weather and alerts a team", "Custom/WASM",
+        );
+        node.add_input_pin("exec", "Exec", "Trigger", VariableType::Execution);
+        node.add_input_pin(
+            "url", "URL", "Weather endpoint", VariableType::String,
+        );
+        node.add_output_pin(
+            "exec_out", "Done", "Continue", VariableType::Execution,
+        );
+        node.add_output_pin(
+            "response", "Response", "Weather data", VariableType::String,
+        );
+        node.add_permission(NodePermission::NetworkHttp);
+        node
+    }
+
+    fn run(&self, mut ctx: Context) -> ExecutionResult {
+        let url = ctx.get_string("url").unwrap_or_default();
+        let response = match http_ns::http_request(0, &url, "{}", &[]) {
+            Some(value) => value,
+            None => return ctx.fail("HTTP request failed"),
+        };
+        ctx.set_output("response", response);
+        ctx.activate_exec("exec_out");
+        ctx.success()
+    }
+}`,
+	},
+	{
+		id: "python",
+		label: "Python",
+		file: "src/node.py",
+		command: "mise run build",
+		permission: "network:http",
+		color: "#38bdf8",
+		code: `from sdk import Input, Output, WasmNode
+
+class WeatherAlert(
+    WasmNode,
+    name="weather_alert_py",
+    title="Weather Alert",
+    category="Custom/WASM",
+):
+    permissions = ["network:http"]
+
+    url: str = Input(default="https://httpbin.org/get")
+    forecast: str = Output()
+
+    def run(self, ctx):
+        response = ctx.http_get(ctx.url)
+        if response is None:
+            return ctx.fail("HTTP request failed")
+        ctx.forecast = response.get("body", "")
+        return ctx.success()`,
+	},
+	{
+		id: "typescript",
+		label: "TypeScript",
+		file: "src/node.ts",
+		command: "mise run build",
+		permission: "network:http",
+		color: "#60a5fa",
+		code: `import {
+  type Context, type ExecutionResult,
+  NodeDefinition, PinDefinition, PinType,
+} from "@flow-like/wasm-sdk-typescript";
+
+export function getDefinition(): NodeDefinition {
+  const node = new NodeDefinition(
+    "weather_alert_ts", "Weather Alert",
+    "Checks weather and alerts a team", "Custom/WASM",
+  );
+
+  node.addPermission("network:http");
+  node.addPin(PinDefinition.inputExec("exec"));
+  node.addPin(PinDefinition.inputPin(
+    "url", PinType.STRING,
+  ));
+  node.addPin(PinDefinition.outputExec("exec_out"));
+  node.addPin(PinDefinition.outputPin("response", PinType.STRING));
+  return node;
+}
+
+export function run(ctx: Context): ExecutionResult {
+  const response = ctx.httpGet(ctx.getString("url", "") ?? "");
+  if (!response) return ctx.fail("HTTP request failed");
+  ctx.setOutput("response", response.body);
+  return ctx.success();
+}`,
+	},
+	{
+		id: "go",
+		label: "Go",
+		file: "main.go",
+		command: "mise run build",
+		permission: "network:http",
+		color: "#38bdf8",
+		code: `func buildDefinition() NodeDefinition {
+    def := NewNodeDefinition(
+        "weather_alert_go", "Weather Alert",
+        "Checks weather and alerts a team", "Custom/WASM",
+    )
+    def.AddPermission("network:http")
+    def.AddPin(InputExecPin("exec"))
+    def.AddPin(InputPin(
+        "url", "URL", "Weather endpoint", "String",
+    ))
+    def.AddPin(OutputExecPin("exec_out"))
+    def.AddPin(OutputPin(
+        "response", "Response", "Weather data", "String",
+    ))
+    return def
+}
+
+func handleRun(ctx *Context) ExecutionResult {
+    url := ctx.GetString("url", "")
+    body, ok := ctx.HTTPRequest(0, url, "{}", nil)
+    if !ok { return ctx.Fail("request denied") }
+    ctx.SetOutput("response", jsonQuote(body))
+    return ctx.Success()
+}`,
+	},
+] as const;
+
+const moreLanguages = ["C#", "Java", "Swift", "Kotlin", "C++", "Zig", "Nim", "Lua", "Grain", "MoonBit", "AssemblyScript"];
+
+const items = [
+	{ title: t("v4.pkg.item1.title"), description: t("v4.pkg.item1.desc"), sub: t("v4.pkg.item1.sub"), icon: "catalog" },
+	{ title: t("v4.pkg.item2.title"), description: t("v4.pkg.item2.desc"), sub: t("v4.pkg.item2.sub"), icon: "code" },
+	{ title: t("v4.pkg.item3.title"), description: t("v4.pkg.item3.desc"), sub: t("v4.pkg.item3.sub"), icon: "shield" },
+] as const;
+---
+
+<section id="packages" class="parts-section relative isolate overflow-hidden py-24 md:py-32" data-parts-section>
+	<div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+		<div class="parts-halo parts-halo--left"></div>
+		<div class="parts-halo parts-halo--right"></div>
+	</div>
+
+	<div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+		<div class="parts-reveal mx-auto mb-12 max-w-3xl text-center md:mb-16">
+			<span class="mb-6 inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 font-mono text-[0.7rem] font-medium uppercase tracking-[0.16em] text-primary/90">
+				{t("v4.pkg.kicker")}
+			</span>
+			<h2 class="text-3xl font-bold leading-tight tracking-tight text-foreground sm:text-4xl lg:text-5xl">
+				{t("v4.pkg.headline")}
+			</h2>
+			<p class="mt-5 text-base leading-relaxed text-muted-foreground sm:text-lg">
+				{t("v4.pkg.body")}
+			</p>
+		</div>
+
+		<div
+			class="parts-reveal parts-workbench mx-auto max-w-6xl overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950 text-zinc-100 shadow-2xl shadow-black/25"
+			data-parts-demo
+			role="group"
+			aria-label={t("v4.pkg.editor.aria")}
+		>
+			<div class="flex flex-wrap items-center gap-3 border-b border-white/[0.08] bg-zinc-900/80 px-4 py-3">
+				<div class="flex items-center gap-1.5" aria-hidden="true">
+					<span class="h-2.5 w-2.5 rounded-full bg-rose-400/70"></span>
+					<span class="h-2.5 w-2.5 rounded-full bg-amber-400/70"></span>
+					<span class="h-2.5 w-2.5 rounded-full bg-emerald-400/70"></span>
+				</div>
+				<div class="flex min-w-0 items-center gap-2 font-mono text-[0.65rem] text-zinc-500">
+					<span class="hidden sm:inline">templates</span><span class="hidden text-zinc-700 sm:inline">/</span><span class="truncate text-zinc-300">weather-alert</span>
+				</div>
+				<div class="ml-auto flex items-center gap-3">
+					<span class="hidden items-center gap-1.5 font-mono text-[0.6rem] uppercase tracking-wider text-zinc-500 sm:inline-flex"><span class="h-1.5 w-1.5 rounded-full bg-emerald-400"></span>local workspace</span>
+				<button type="button" class="parts-build inline-flex min-w-[132px] items-center justify-center gap-2 rounded-lg bg-white px-3.5 py-2 text-xs font-semibold text-zinc-950 transition-transform hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-70" data-parts-build aria-controls="parts-terminal-output parts-canvas-output" aria-describedby="parts-build-state">
+						<svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v8m0 0 3-3m-3 3L5 7M3 13h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+						<span data-parts-build-label>Build &amp; install</span>
+					</button>
+				</div>
+			</div>
+
+		<div class="flex min-w-0 items-center border-b border-white/[0.08] bg-zinc-950 px-2">
+			<div class="flex min-w-0 flex-1 items-center gap-0 overflow-x-auto" role="tablist" aria-label={t("v4.pkg.tabs.aria")}>
+				{samples.map((sample, index) => (
+					<button
+						type="button"
+						id={`parts-tab-${sample.id}`}
+						class:list={["parts-tab", index === 0 && "is-active"]}
+						role="tab"
+						aria-selected={index === 0 ? "true" : "false"}
+						aria-controls={`parts-panel-${sample.id}`}
+						tabindex={index === 0 ? 0 : -1}
+						data-parts-lang={sample.id}
+						data-command={sample.command}
+						data-permission={sample.permission}
+						data-file={sample.file}
+						style={`--tab-color: ${sample.color}; --tab-accent: ${sample.color}`}
+					>
+						<span class="parts-tab__dot"></span>{sample.label}
+					</button>
+				))}
+			</div>
+			<button type="button" class="parts-more ml-1 shrink-0 whitespace-nowrap rounded-md px-3 py-1.5 text-[0.68rem] font-medium text-zinc-500 transition-colors hover:bg-white/[0.04] hover:text-zinc-300" data-parts-more aria-expanded="false" aria-controls="parts-more-languages">
+				{t("v4.pkg.moreLangs")}
+			</button>
+		</div>
+
+		<div id="parts-more-languages" class="parts-more-panel hidden border-b border-white/[0.08] bg-zinc-900/50 px-4 py-3" data-parts-more-panel hidden>
+				<div class="flex flex-wrap gap-1.5">
+					{moreLanguages.map((language) => <span class="rounded-full border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 font-mono text-[0.6rem] text-zinc-400">{language}</span>)}
+				</div>
+			</div>
+
+			<div class="grid min-h-[500px] lg:grid-cols-[minmax(0,1.18fr)_minmax(330px,0.82fr)]">
+				<div class="min-w-0 border-b border-white/[0.08] lg:border-b-0 lg:border-r">
+					<div class="flex items-center justify-between border-b border-white/[0.06] bg-zinc-900/30 px-4 py-2">
+						<span class="font-mono text-[0.62rem] text-zinc-500" data-parts-file>{samples[0].file}</span>
+						<span class="font-mono text-[0.58rem] uppercase tracking-wider text-zinc-600">template excerpt</span>
+					</div>
+					<div class="parts-code-wrap overflow-auto p-4 sm:p-5">
+					{samples.map((sample, index) => (
+						<pre
+							id={`parts-panel-${sample.id}`}
+							class:list={["parts-code", index !== 0 && "hidden"]}
+							data-parts-code={sample.id}
+							role="tabpanel"
+							aria-labelledby={`parts-tab-${sample.id}`}
+							tabindex="0"
+							hidden={index !== 0}
+						><code>{sample.code}</code></pre>
+					))}
+					</div>
+				</div>
+
+				<div class="grid min-w-0 grid-rows-[minmax(205px,0.8fr)_minmax(270px,1.2fr)]">
+					<div class="border-b border-white/[0.08] p-4 sm:p-5">
+						<div class="flex items-center justify-between gap-3">
+							<span class="font-mono text-[0.62rem] uppercase tracking-[0.16em] text-zinc-500">{t("v4.pkg.terminal.label")}</span>
+						<span id="parts-build-state" class="parts-terminal-state inline-flex items-center gap-1.5 rounded-full border border-white/[0.08] px-2 py-1 font-mono text-[0.58rem] text-zinc-500" data-parts-state role="status" aria-live="polite" aria-atomic="true"><span class="h-1.5 w-1.5 rounded-full bg-zinc-600" aria-hidden="true"></span><span data-parts-state-label>ready</span></span>
+					</div>
+					<div id="parts-terminal-output" class="mt-4 space-y-2 font-mono text-[0.68rem] leading-relaxed text-zinc-400" role="log" aria-live="polite" aria-relevant="additions text">
+						<div class="parts-terminal-line" data-parts-terminal-line="0"><span class="select-none text-zinc-600">$</span> <span data-parts-command>{samples[0].command}</span></div>
+						<div class="parts-terminal-line is-pending" data-parts-terminal-line="1" aria-hidden="true"><span class="text-sky-400">compile</span> wasm32 component <span class="text-zinc-600">·</span> release</div>
+						<div class="parts-terminal-line is-pending" data-parts-terminal-line="2" aria-hidden="true"><span class="text-amber-300">inspect</span> permission <span class="text-zinc-200" data-parts-permission>{samples[0].permission}</span> <span class="text-zinc-600">·</span> declared · ok</div>
+						<div class="parts-terminal-line is-pending" data-parts-terminal-line="3" aria-hidden="true"><span class="text-emerald-400">install</span> Weather Alert <span class="text-zinc-600">→</span> catalog</div>
+						</div>
+					</div>
+
+			<div id="parts-canvas-output" class="parts-canvas relative overflow-hidden p-4 sm:p-5" role="region" aria-label="Installed node canvas preview">
+						<div class="flex items-center justify-between gap-3">
+							<span class="font-mono text-[0.62rem] uppercase tracking-[0.16em] text-zinc-500">{t("v4.pkg.canvas.label")}</span>
+							<span class="font-mono text-[0.58rem] text-zinc-600">flow / weather-notify</span>
+						</div>
+					<div class="parts-node-scroll mt-6 pb-1">
+						<div class="parts-node-stage mx-auto" role="img" aria-label="Flow canvas with custom Weather Alert node between a location input and team notification">
+							<div class="parts-node parts-node--small">
+								<span class="parts-node__mark bg-sky-400/15 text-sky-300"><svg viewBox="0 0 16 16" fill="none"><path d="M3 3h10v10H3zM5 6h6M5 8.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path></svg></span>
+								<div><p>Location</p><span>String</span></div>
+							</div>
+							<span class="parts-wire" data-parts-wire aria-hidden="true"></span>
+							<div class="parts-node parts-node--custom" data-parts-node aria-hidden="true">
+								<span class="parts-node__new">new</span>
+								<span class="parts-node__mark bg-amber-400/15 text-amber-300"><svg viewBox="0 0 16 16" fill="none"><path d="M8 2.5v2M8 11.5v2M2.5 8h2M11.5 8h2M4.1 4.1l1.4 1.4M10.5 10.5l1.4 1.4M11.9 4.1l-1.4 1.4M5.5 10.5l-1.4 1.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path><circle cx="8" cy="8" r="2.5" stroke="currentColor" stroke-width="1.2"></circle></svg></span>
+								<div><p>Weather Alert</p><span data-parts-node-lang>Rust · WASM</span></div>
+								<span class="parts-node__permission" data-parts-node-permission>NetworkHttp</span>
+							</div>
+							<span class="parts-wire" data-parts-wire aria-hidden="true"></span>
+							<div class="parts-node parts-node--small">
+								<span class="parts-node__mark bg-emerald-400/15 text-emerald-300"><svg viewBox="0 0 16 16" fill="none"><path d="M4 11.5h8M5 11.5V7a3 3 0 0 1 6 0v4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path></svg></span>
+								<div><p>Notify team</p><span>Exec</span></div>
+							</div>
+						</div>
+						<div class="parts-installed mx-auto mt-4 w-fit rounded-full border border-emerald-400/20 bg-emerald-400/[0.08] px-3 py-1.5 text-center font-mono text-[0.6rem] text-emerald-300" data-parts-installed aria-hidden="true">
+							Available like every built-in node
+						</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div class="mt-10 grid grid-cols-1 gap-4 md:mt-12 md:grid-cols-3 md:gap-5">
+			{items.map((item) => (
+				<div class="parts-reveal parts-card rounded-xl border border-border/50 bg-background/60 p-6 backdrop-blur-sm dark:border-white/10">
+					<div class="parts-card__icon" aria-hidden="true">
+						{item.icon === "catalog" && <svg viewBox="0 0 20 20" fill="none"><rect x="2.5" y="3" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"></rect><rect x="11.5" y="3" width="6" height="6" rx="1.2" stroke="currentColor" stroke-width="1.3"></rect><rect x="2.5" y="12" width="6" height="5" rx="1.2" stroke="currentColor" stroke-width="1.3"></rect><path d="M14.5 12v5M12 14.5h5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>}
+						{item.icon === "code" && <svg viewBox="0 0 20 20" fill="none"><path d="m7.5 5-5 5 5 5M12.5 5l5 5-5 5M11 3 9 17" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>}
+						{item.icon === "shield" && <svg viewBox="0 0 20 20" fill="none"><path d="m10 2.5 6 2v4c0 4.2-2.5 7.1-6 9-3.5-1.9-6-4.8-6-9v-4l6-2Z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path><path d="m7.2 10 1.8 1.8 3.8-4.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>}
+					</div>
+					<h3 class="mt-4 text-base font-semibold text-foreground">{item.title}</h3>
+					<p class="mt-2 text-sm leading-relaxed text-muted-foreground">{item.description}</p>
+					<span class="mt-4 block font-mono text-[0.62rem] uppercase tracking-[0.14em] text-primary/70">{item.sub}</span>
+				</div>
+			))}
+		</div>
+
+		<p class="mx-auto mt-12 max-w-3xl text-center text-xs leading-relaxed text-muted-foreground/70">
+			<span class="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground/60">{t("v4.common.underTheHood")}</span>
+			 — {t("v4.pkg.uth")}
+		</p>
+	</div>
+</section>
+
+<style>
+	.parts-halo {
+		position: absolute;
+		border-radius: 999px;
+		filter: blur(120px);
+		opacity: 0.32;
+	}
+	.parts-halo--left {
+		top: 6%;
+		left: -130px;
+		width: 500px;
+		height: 500px;
+		background: color-mix(in oklch, var(--primary) 12%, transparent);
+	}
+	.parts-halo--right {
+		right: -120px;
+		bottom: 8%;
+		width: 440px;
+		height: 440px;
+		background: color-mix(in oklch, #a855f7 8%, transparent);
+	}
+	.parts-tab {
+		display: inline-flex;
+		align-items: center;
+		gap: 7px;
+		padding: 10px 14px 9px;
+		border-bottom: 2px solid transparent;
+		color: #71717a;
+		font-size: 0.72rem;
+		font-weight: 500;
+		white-space: nowrap;
+		transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+	}
+	.parts-tab:hover {
+		color: #d4d4d8;
+		background: rgb(255 255 255 / 0.025);
+	}
+	.parts-tab:focus-visible,
+	.parts-more:focus-visible,
+	.parts-build:focus-visible {
+		outline: 2px solid #93c5fd;
+		outline-offset: 2px;
+	}
+	.parts-tab.is-active {
+		color: #f4f4f5;
+		border-bottom-color: var(--tab-accent, #60a5fa);
+		background: rgb(255 255 255 / 0.035);
+	}
+	.parts-tab__dot {
+		width: 6px;
+		height: 6px;
+		border-radius: 999px;
+		background: var(--tab-color);
+		opacity: 0.55;
+	}
+	.parts-tab.is-active .parts-tab__dot {
+		opacity: 1;
+		box-shadow: 0 0 12px color-mix(in srgb, var(--tab-color) 70%, transparent);
+	}
+	.parts-code-wrap {
+		height: 455px;
+		background:
+			linear-gradient(90deg, rgb(255 255 255 / 0.025) 1px, transparent 1px) 3.2rem 0 / 1px 100% no-repeat,
+			linear-gradient(to bottom, rgb(255 255 255 / 0.012), transparent 35%);
+	}
+		.parts-code {
+		min-width: 570px;
+		margin: 0;
+		counter-reset: line;
+		font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+		font-size: 0.72rem;
+		line-height: 1.75;
+		color: #d4d4d8;
+		white-space: pre;
+			tab-size: 2;
+		}
+	.parts-node-scroll {
+		min-width: 0;
+	}
+	.parts-code[hidden] {
+		display: none;
+	}
+	.parts-code code {
+		background: linear-gradient(90deg, #c084fc, #60a5fa 38%, #d4d4d8 75%);
+		-webkit-background-clip: text;
+		background-clip: text;
+		color: transparent;
+	}
+	.parts-terminal-line {
+		opacity: 1;
+		transform: translateY(0);
+		transition: opacity 0.25s ease, transform 0.25s ease;
+	}
+	.parts-terminal-line.is-pending {
+		opacity: 0.2;
+		transform: translateY(3px);
+	}
+	.parts-terminal-line.is-visible {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	.parts-terminal-state.is-running span {
+		background: #38bdf8;
+		animation: parts-state-pulse 0.8s ease-in-out infinite alternate;
+	}
+	.parts-terminal-state.is-done {
+		border-color: rgb(52 211 153 / 0.2);
+		color: #6ee7b7;
+	}
+	.parts-terminal-state.is-done span {
+		background: #34d399;
+	}
+	.parts-canvas {
+		background-image: radial-gradient(rgb(255 255 255 / 0.11) 0.75px, transparent 0.75px);
+		background-size: 17px 17px;
+	}
+	.parts-node-stage {
+		display: grid;
+		width: 100%;
+		max-width: 34rem;
+		grid-template-columns: minmax(68px, 0.8fr) minmax(12px, 0.24fr) minmax(108px, 1.15fr) minmax(12px, 0.24fr) minmax(68px, 0.8fr);
+		align-items: center;
+	}
+	.parts-wire {
+		position: relative;
+		z-index: 0;
+		display: block;
+		width: 100%;
+		height: 0;
+		border-top: 1px dashed rgb(161 161 170 / 0.4);
+		transition: border-color 0.2s ease, box-shadow 0.35s ease;
+	}
+	.parts-wire::after {
+		position: absolute;
+		right: 1px;
+		top: -3px;
+		width: 5px;
+		height: 5px;
+		border-top: 1px solid rgb(161 161 170 / 0.45);
+		border-right: 1px solid rgb(161 161 170 / 0.45);
+		content: "";
+		transform: rotate(45deg);
+	}
+	.parts-wire.is-visible {
+		border-color: #60a5fa;
+		box-shadow: 0 -1px 0 #60a5fa;
+	}
+	.parts-wire.is-visible::after {
+		border-color: #60a5fa;
+	}
+	.parts-node {
+		position: relative;
+		z-index: 1;
+		display: flex;
+		min-width: 0;
+		align-items: center;
+		gap: 8px;
+		box-sizing: border-box;
+		border: 1px solid rgb(255 255 255 / 0.1);
+		border-radius: 10px;
+		background: rgb(24 24 27 / 0.94);
+		box-shadow: 0 12px 24px -16px rgb(0 0 0 / 0.8);
+	}
+	.parts-node--small {
+		width: 100%;
+		padding: 9px 8px;
+	}
+	.parts-node--small > div,
+	.parts-node--custom > div {
+		min-width: 0;
+	}
+	.parts-node--small p {
+		overflow: hidden;
+		margin: 0;
+		font-size: 0.57rem;
+		font-weight: 600;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.parts-node--small div > span {
+		display: block;
+		margin-top: 1px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.48rem;
+		color: #71717a;
+	}
+	.parts-node__mark {
+		display: grid;
+		width: 22px;
+		height: 22px;
+		flex: 0 0 auto;
+		place-items: center;
+		border-radius: 6px;
+	}
+	.parts-node__mark svg {
+		width: 13px;
+		height: 13px;
+	}
+	.parts-node--custom {
+		z-index: 2;
+		width: 100%;
+		min-height: 96px;
+		flex-wrap: wrap;
+		justify-content: center;
+		padding: 14px 8px 9px;
+		border-color: rgb(96 165 250 / 0.35);
+		background: linear-gradient(145deg, rgb(39 39 42 / 0.98), rgb(24 24 27 / 0.98));
+		opacity: 0.18;
+		filter: saturate(0);
+		transform: translateY(7px) scale(0.96);
+		transition: opacity 0.4s ease, filter 0.4s ease, transform 0.5s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.4s ease;
+	}
+	.parts-node--custom.is-installed {
+		opacity: 1;
+		filter: none;
+		transform: none;
+		box-shadow: 0 20px 38px -18px rgb(37 99 235 / 0.45);
+	}
+	.parts-node--custom p {
+		overflow: hidden;
+		margin: 0;
+		font-size: 0.66rem;
+		font-weight: 650;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.parts-node--custom div > span {
+		display: block;
+		margin-top: 2px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.49rem;
+		color: #71717a;
+	}
+	.parts-node__new {
+		position: absolute;
+		top: -8px;
+		right: 8px;
+		border: 1px solid rgb(96 165 250 / 0.3);
+		border-radius: 999px;
+		background: #172554;
+		padding: 2px 6px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.47rem;
+		color: #93c5fd;
+	}
+	.parts-node__permission {
+		width: 100%;
+		border-radius: 5px;
+		background: rgb(245 158 11 / 0.09);
+		padding: 3px 5px;
+		text-align: center;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.47rem;
+		color: #fcd34d;
+	}
+	.parts-installed {
+		opacity: 0;
+		transform: translateY(6px);
+		transition: opacity 0.3s ease, transform 0.3s ease;
+	}
+	.parts-installed.is-visible {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	.parts-card {
+		transition: transform 0.25s ease, border-color 0.25s ease;
+	}
+	.parts-card:hover {
+		transform: translateY(-3px);
+		border-color: color-mix(in oklch, var(--primary) 28%, var(--border));
+	}
+	.parts-card__icon {
+		display: grid;
+		width: 38px;
+		height: 38px;
+		place-items: center;
+		border: 1px solid color-mix(in oklch, var(--primary) 20%, transparent);
+		border-radius: 10px;
+		background: color-mix(in oklch, var(--primary) 8%, transparent);
+		color: var(--primary);
+	}
+	.parts-card__icon svg {
+		width: 20px;
+		height: 20px;
+	}
+	.parts-reveal {
+		opacity: 0;
+		transform: translateY(22px);
+		transition: opacity 0.6s ease, transform 0.6s ease;
+	}
+	.parts-reveal.is-visible {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	@keyframes parts-state-pulse {
+		to { opacity: 0.35; }
+	}
+		@media (max-width: 640px) {
+			.parts-code-wrap {
+				height: 340px;
+				background-position: 2.55rem 0, 0 0;
+			}
+			.parts-code {
+				min-width: 0;
+				font-size: 0.65rem;
+				line-height: 1.62;
+				white-space: pre-wrap;
+				overflow-wrap: anywhere;
+			}
+		}
+	@media (max-width: 480px) {
+		.parts-node-stage {
+			max-width: 13.5rem;
+			grid-template-columns: minmax(0, 1fr);
+		}
+		.parts-node {
+			width: 100%;
+		}
+		.parts-node--small {
+			min-height: 48px;
+		}
+		.parts-node--custom {
+			min-height: 86px;
+		}
+		.parts-wire {
+			width: 0;
+			height: 18px;
+			justify-self: center;
+			border-top: 0;
+			border-left: 1px dashed rgb(161 161 170 / 0.4);
+		}
+		.parts-wire::after {
+			right: -2px;
+			top: 11px;
+			transform: rotate(135deg);
+		}
+		.parts-wire.is-visible {
+			border-color: #60a5fa;
+			box-shadow: -1px 0 0 #60a5fa;
+		}
+	}
+	@media (forced-colors: active) {
+		.parts-code code {
+			background: none;
+			color: CanvasText;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.parts-reveal,
+		.parts-terminal-line,
+		.parts-wire,
+		.parts-node--custom,
+		.parts-installed {
+			transition: none !important;
+		}
+		.parts-reveal {
+			opacity: 1 !important;
+			transform: none !important;
+		}
+		.parts-terminal-state.is-running span {
+			animation: none !important;
+		}
+	}
+</style>
+
+<script>
+	function initPartsV4() {
+		document.querySelectorAll<HTMLElement>("[data-parts-section]").forEach((section) => {
+			if (section.dataset.partsReady === "true") return;
+			section.dataset.partsReady = "true";
+
+			const reveals = section.querySelectorAll<HTMLElement>(".parts-reveal");
+			const demo = section.querySelector<HTMLElement>("[data-parts-demo]");
+			const tabs = Array.from(section.querySelectorAll<HTMLButtonElement>("[data-parts-lang]"));
+			const codePanels = Array.from(section.querySelectorAll<HTMLElement>("[data-parts-code]"));
+			const fileLabel = section.querySelector<HTMLElement>("[data-parts-file]");
+			const commandLabel = section.querySelector<HTMLElement>("[data-parts-command]");
+			const permissionLabel = section.querySelector<HTMLElement>("[data-parts-permission]");
+			const nodePermission = section.querySelector<HTMLElement>("[data-parts-node-permission]");
+			const nodeLanguage = section.querySelector<HTMLElement>("[data-parts-node-lang]");
+			const buildButton = section.querySelector<HTMLButtonElement>("[data-parts-build]");
+			const buildLabel = section.querySelector<HTMLElement>("[data-parts-build-label]");
+			const terminalState = section.querySelector<HTMLElement>("[data-parts-state]");
+			const stateLabel = section.querySelector<HTMLElement>("[data-parts-state-label]");
+			const terminalLines = Array.from(section.querySelectorAll<HTMLElement>("[data-parts-terminal-line]"));
+			const customNode = section.querySelector<HTMLElement>("[data-parts-node]");
+			const installed = section.querySelector<HTMLElement>("[data-parts-installed]");
+			const installedWires = Array.from(section.querySelectorAll<HTMLElement>("[data-parts-wire]"));
+			const moreButton = section.querySelector<HTMLButtonElement>("[data-parts-more]");
+			const morePanel = section.querySelector<HTMLElement>("[data-parts-more-panel]");
+			const timers: number[] = [];
+			const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+			let hasAutoRun = false;
+			let revealObserver: IntersectionObserver | undefined;
+			let installObserver: IntersectionObserver | undefined;
+
+			const clearTimers = () => {
+				while (timers.length) {
+					const timer = timers.pop();
+					if (timer !== undefined) window.clearTimeout(timer);
+				}
+			};
+
+			const activeTab = () => tabs.find((tab) => tab.classList.contains("is-active")) ?? tabs[0];
+
+			const resetInstall = () => {
+				clearTimers();
+				terminalLines.forEach((line, index) => {
+					line.classList.toggle("is-pending", index !== 0);
+					line.classList.remove("is-visible");
+					line.setAttribute("aria-hidden", String(index !== 0));
+				});
+				customNode?.classList.remove("is-installed");
+				customNode?.setAttribute("aria-hidden", "true");
+				installed?.classList.remove("is-visible");
+				installed?.setAttribute("aria-hidden", "true");
+				installedWires.forEach((wire) => wire.classList.remove("is-visible"));
+				terminalState?.classList.remove("is-running", "is-done");
+				if (stateLabel) stateLabel.textContent = "ready";
+				demo?.setAttribute("aria-busy", "false");
+				if (buildLabel) buildLabel.textContent = "Build & install";
+				if (buildButton) buildButton.disabled = false;
+			};
+
+			const completeInstall = () => {
+				terminalLines.forEach((line) => {
+					line.classList.add("is-visible");
+					line.setAttribute("aria-hidden", "false");
+				});
+				customNode?.classList.add("is-installed");
+				customNode?.setAttribute("aria-hidden", "false");
+				installed?.classList.add("is-visible");
+				installed?.setAttribute("aria-hidden", "false");
+				installedWires.forEach((wire) => wire.classList.add("is-visible"));
+				terminalState?.classList.remove("is-running");
+				terminalState?.classList.add("is-done");
+				if (stateLabel) stateLabel.textContent = "installed";
+				demo?.setAttribute("aria-busy", "false");
+				if (buildLabel) buildLabel.textContent = "Build again";
+				if (buildButton) buildButton.disabled = false;
+			};
+
+			const runInstall = () => {
+				resetInstall();
+				if (!buildButton) return;
+				buildButton.disabled = true;
+				if (buildLabel) buildLabel.textContent = "Building…";
+				terminalState?.classList.add("is-running");
+				if (stateLabel) stateLabel.textContent = "building";
+				demo?.setAttribute("aria-busy", "true");
+
+				if (reduced) {
+					completeInstall();
+					return;
+				}
+
+				terminalLines.slice(1).forEach((line, index) => {
+					timers.push(window.setTimeout(() => {
+						line.classList.add("is-visible");
+						line.setAttribute("aria-hidden", "false");
+					}, 430 + index * 430));
+				});
+				timers.push(window.setTimeout(completeInstall, 430 + terminalLines.length * 430));
+			};
+
+			const selectLanguage = (tab: HTMLButtonElement) => {
+				resetInstall();
+				tabs.forEach((candidate) => {
+					const selected = candidate === tab;
+					candidate.classList.toggle("is-active", selected);
+					candidate.setAttribute("aria-selected", String(selected));
+					candidate.tabIndex = selected ? 0 : -1;
+				});
+				codePanels.forEach((panel) => {
+					const selected = panel.dataset.partsCode === tab.dataset.partsLang;
+					panel.classList.toggle("hidden", !selected);
+					panel.hidden = !selected;
+				});
+				if (fileLabel) fileLabel.textContent = tab.dataset.file ?? "src/lib.rs";
+				if (commandLabel) commandLabel.textContent = tab.dataset.command ?? "build";
+				if (permissionLabel) permissionLabel.textContent = tab.dataset.permission ?? "declared";
+				if (nodePermission) nodePermission.textContent = tab.dataset.permission ?? "declared";
+				if (nodeLanguage) nodeLanguage.textContent = `${tab.textContent?.trim() ?? "SDK"} · WASM`;
+			};
+
+			const focusTab = (index: number) => {
+				const next = tabs[(index + tabs.length) % tabs.length];
+				if (!next) return;
+				selectLanguage(next);
+				next.focus();
+				next.scrollIntoView({ block: "nearest", inline: "nearest" });
+			};
+
+			tabs.forEach((tab, index) => {
+				tab.addEventListener("click", () => selectLanguage(tab));
+				tab.addEventListener("keydown", (event) => {
+					let targetIndex: number | undefined;
+					if (event.key === "ArrowRight") targetIndex = index + 1;
+					if (event.key === "ArrowLeft") targetIndex = index - 1;
+					if (event.key === "Home") targetIndex = 0;
+					if (event.key === "End") targetIndex = tabs.length - 1;
+					if (targetIndex === undefined) return;
+					event.preventDefault();
+					focusTab(targetIndex);
+				});
+			});
+			buildButton?.addEventListener("click", runInstall);
+			moreButton?.addEventListener("click", () => {
+				const expanded = moreButton.getAttribute("aria-expanded") === "true";
+				const nextExpanded = !expanded;
+				moreButton.setAttribute("aria-expanded", String(nextExpanded));
+				morePanel?.classList.toggle("hidden", !nextExpanded);
+				if (morePanel) morePanel.hidden = !nextExpanded;
+			});
+			moreButton?.addEventListener("keydown", (event) => {
+				if (event.key !== "Escape" || moreButton.getAttribute("aria-expanded") !== "true") return;
+				event.preventDefault();
+				moreButton.setAttribute("aria-expanded", "false");
+				morePanel?.classList.add("hidden");
+				if (morePanel) morePanel.hidden = true;
+			});
+
+			const initialTab = activeTab();
+			if (initialTab) selectLanguage(initialTab);
+
+			if (!("IntersectionObserver" in window) || reduced) {
+				reveals.forEach((element) => element.classList.add("is-visible"));
+				if (reduced) completeInstall();
+			} else {
+				revealObserver = new IntersectionObserver((entries) => {
+					entries.forEach((entry) => {
+						if (!entry.isIntersecting) return;
+						entry.target.classList.add("is-visible");
+						revealObserver?.unobserve(entry.target);
+					});
+				}, { rootMargin: "0px 0px -8% 0px", threshold: 0.08 });
+				reveals.forEach((element) => revealObserver?.observe(element));
+
+				if (demo) {
+					installObserver = new IntersectionObserver((entries) => {
+						if (entries.some((entry) => entry.isIntersecting) && !hasAutoRun) {
+							hasAutoRun = true;
+							timers.push(window.setTimeout(runInstall, 500));
+							installObserver?.disconnect();
+						}
+					}, { threshold: 0.35 });
+					installObserver?.observe(demo);
+				}
+			}
+
+			const cleanup = () => {
+				clearTimers();
+				revealObserver?.disconnect();
+				installObserver?.disconnect();
+			};
+			document.addEventListener("astro:before-swap", cleanup, { once: true });
+		});
+	}
+
+	initPartsV4();
+	document.addEventListener("astro:page-load", initPartsV4);
+</script>

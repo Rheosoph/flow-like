@@ -1,0 +1,178 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const rows = [
+  { label: t("v4.cmp.rows.code.label"), us: t("v4.cmp.rows.code.us"), them: t("v4.cmp.rows.code.them") },
+  { label: t("v4.cmp.rows.run.label"), us: t("v4.cmp.rows.run.us"), them: t("v4.cmp.rows.run.them") },
+  { label: t("v4.cmp.rows.start.label"), us: t("v4.cmp.rows.start.us"), them: t("v4.cmp.rows.start.them") },
+  { label: t("v4.cmp.rows.builders.label"), us: t("v4.cmp.rows.builders.us"), them: t("v4.cmp.rows.builders.them") },
+  { label: t("v4.cmp.rows.data.label"), us: t("v4.cmp.rows.data.us"), them: t("v4.cmp.rows.data.them") },
+  { label: t("v4.cmp.rows.leaving.label"), us: t("v4.cmp.rows.leaving.us"), them: t("v4.cmp.rows.leaving.them") },
+];
+---
+
+<section id="comparison" class="cmp-section relative isolate overflow-hidden py-24 md:py-32">
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="cmp-orb cmp-orb--top"></div>
+    <div class="cmp-orb cmp-orb--bottom"></div>
+  </div>
+
+  <div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+    <!-- Header -->
+    <div class="cmp-reveal mx-auto max-w-3xl text-center mb-8 md:mb-10">
+      <p class="font-mono text-xs uppercase tracking-[0.2em] text-primary mb-5">
+        {t("v4.cmp.kicker")}
+      </p>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight text-balance">
+        {t("v4.cmp.headline")}
+      </h2>
+    </div>
+
+    <div class="cmp-reveal mx-auto max-w-3xl mb-14 md:mb-20" style="--cmp-delay: 80ms;">
+      <p class="text-base sm:text-[1.0625rem] leading-relaxed text-muted-foreground">
+        {t("v4.cmp.body")}
+      </p>
+    </div>
+
+    <!-- Ledger -->
+    <div class="mx-auto max-w-5xl" aria-label={t("v4.cmp.ledger.aria")} role="group">
+      <!-- Column headers (desktop) -->
+      <div class="cmp-reveal hidden md:grid md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)_minmax(0,7fr)] gap-x-8 lg:gap-x-12 border-t-2 border-primary/70 pt-4 pb-3" aria-hidden="true">
+        <div></div>
+        <div class="flex items-center gap-2">
+          <span class="h-1.5 w-1.5 rounded-full bg-primary"></span>
+          <span class="font-mono text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-foreground">{t("v4.cmp.col.us")}</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="h-1.5 w-1.5 rounded-full bg-muted-foreground/30"></span>
+          <span class="font-mono text-[0.7rem] uppercase tracking-[0.16em] text-muted-foreground/70">{t("v4.cmp.col.them")}</span>
+        </div>
+      </div>
+      <div class="cmp-reveal md:hidden border-t-2 border-primary/70 mb-1" aria-hidden="true"></div>
+
+      <dl class="m-0">
+        {rows.map((row, i) => (
+          <div
+            class="cmp-reveal grid grid-cols-1 md:grid-cols-[minmax(0,5fr)_minmax(0,7fr)_minmax(0,7fr)] gap-x-8 lg:gap-x-12 gap-y-3 border-b border-border/60 py-5 md:py-6"
+            style={`--cmp-delay: ${i * 70}ms;`}
+          >
+            <dt class="text-sm font-semibold tracking-tight text-foreground md:pt-0.5">
+              {row.label}
+            </dt>
+            <dd class="m-0 min-w-0">
+              <span class="cmp-tag md:sr-only block font-mono text-[0.6rem] uppercase tracking-[0.14em] text-primary/80 mb-1">{t("v4.cmp.col.us")}</span>
+              <span class="flex items-start gap-2.5">
+                <svg class="mt-1 h-3.5 w-3.5 shrink-0 text-primary" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 8.5 L6.5 12 L13 4.5" />
+                </svg>
+                <span class="text-sm leading-relaxed text-foreground">{row.us}</span>
+              </span>
+            </dd>
+            <dd class="m-0 min-w-0 mt-1 md:mt-0">
+              <span class="cmp-tag md:sr-only block font-mono text-[0.6rem] uppercase tracking-[0.14em] text-muted-foreground/50 mb-1">{t("v4.cmp.col.them")}</span>
+              <span class="flex items-start gap-2.5">
+                <svg class="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground/40" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                  <path d="M3.5 8 L12.5 8" />
+                </svg>
+                <span class="text-sm leading-relaxed text-muted-foreground">{row.them}</span>
+              </span>
+            </dd>
+          </div>
+        ))}
+
+        <!-- Concession row: full width, deliberately muted -->
+        <div class="cmp-reveal mt-8 rounded-xl border border-dashed border-border/70 bg-muted/30 px-5 py-5 sm:px-7 sm:py-6" style="--cmp-delay: 420ms;">
+          <dt class="font-mono text-[0.65rem] uppercase tracking-[0.16em] text-muted-foreground/70 mb-2.5">
+            {t("v4.cmp.concession.label")}
+          </dt>
+          <dd class="m-0 max-w-3xl text-sm leading-relaxed text-muted-foreground">
+            {t("v4.cmp.concession.body")}
+          </dd>
+        </div>
+      </dl>
+    </div>
+  </div>
+
+  <p class="mx-auto mt-12 max-w-3xl px-4 text-center text-xs leading-relaxed text-muted-foreground/70"><span class="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground/60">{t("v4.common.underTheHood")}</span> — {t("v4.cmp.uth")}</p>
+</section>
+
+<style>
+  .cmp-orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(110px);
+    opacity: 0.4;
+  }
+  .cmp-orb--top {
+    width: 480px;
+    height: 480px;
+    top: -120px;
+    right: -140px;
+    background: radial-gradient(circle, color-mix(in srgb, var(--primary) 8%, transparent), transparent 70%);
+  }
+  .cmp-orb--bottom {
+    width: 420px;
+    height: 420px;
+    bottom: -100px;
+    left: -120px;
+    background: radial-gradient(circle, color-mix(in srgb, var(--muted-foreground) 7%, transparent), transparent 70%);
+  }
+
+  .cmp-reveal {
+    opacity: 0;
+    transform: translateY(18px);
+    transition:
+      opacity 0.6s ease var(--cmp-delay, 0ms),
+      transform 0.6s ease var(--cmp-delay, 0ms);
+  }
+  .cmp-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cmp-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+  }
+</style>
+
+<script>
+  function initComparison() {
+    const section = document.getElementById("comparison");
+    if (!section) return;
+
+    const reveals = section.querySelectorAll<HTMLElement>(".cmp-reveal");
+
+    if (!("IntersectionObserver" in window)) {
+      reveals.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -8% 0px", threshold: 0.1 },
+    );
+    reveals.forEach((el) => io.observe(el));
+  }
+
+  initComparison();
+</script>

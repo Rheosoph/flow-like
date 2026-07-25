@@ -1,0 +1,268 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { translations, defaultLang } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const l = translations[lang] as Record<string, string>;
+  const e = translations.en as Record<string, string>;
+  return l?.[key] ?? e[key] ?? key;
+};
+
+const layers = [
+  { name: t("v4.faq.osdef.l1.name"), sub: t("v4.faq.osdef.l1.sub") },
+  { name: t("v4.faq.osdef.l2.name"), sub: t("v4.faq.osdef.l2.sub") },
+  { name: t("v4.faq.osdef.l3.name"), sub: t("v4.faq.osdef.l3.sub") },
+  { name: t("v4.faq.osdef.l4.name"), sub: t("v4.faq.osdef.l4.sub") },
+  { name: t("v4.faq.osdef.l5.name"), sub: t("v4.faq.osdef.l5.sub") },
+  { name: t("v4.faq.osdef.l6.name"), sub: t("v4.faq.osdef.l6.sub") },
+];
+
+interface FaqItem {
+  id: string;
+  q: string;
+  p: string;
+  d?: string;
+  tags: string;
+  layers?: { name: string; sub: string }[];
+  outro?: string;
+}
+
+const groups: { label: string; items: FaqItem[] }[] = [
+  {
+    label: t("v4.faq.group.big"),
+    items: [
+      { id: "osdef", q: t("v4.faq.osdef.q"), p: t("v4.faq.osdef.p"), tags: t("v4.faq.osdef.tags"), layers, outro: t("v4.faq.osdef.outro") },
+      { id: "platforms", q: t("v4.faq.platforms.q"), p: t("v4.faq.platforms.p"), d: t("v4.faq.platforms.d"), tags: t("v4.faq.platforms.tags") },
+      { id: "surveillance", q: t("v4.faq.surveillance.q"), p: t("v4.faq.surveillance.p"), d: t("v4.faq.surveillance.d"), tags: t("v4.faq.surveillance.tags") },
+      { id: "maturity", q: t("v4.faq.maturity.q"), p: t("v4.faq.maturity.p"), d: t("v4.faq.maturity.d"), tags: t("v4.faq.maturity.tags") },
+    ],
+  },
+  {
+    label: t("v4.faq.group.start"),
+    items: [
+      { id: "free", q: t("v4.faq.free.q"), p: t("v4.faq.free.p"), d: t("v4.faq.free.d"), tags: t("v4.faq.free.tags") },
+      { id: "nocode", q: t("v4.faq.nocode.q"), p: t("v4.faq.nocode.p"), d: t("v4.faq.nocode.d"), tags: t("v4.faq.nocode.tags") },
+      { id: "offline", q: t("v4.faq.offline.q"), p: t("v4.faq.offline.p"), d: t("v4.faq.offline.d"), tags: t("v4.faq.offline.tags") },
+    ],
+  },
+  {
+    label: t("v4.faq.group.tech"),
+    items: [
+      { id: "agents", q: t("v4.faq.agents.q"), p: t("v4.faq.agents.p"), d: t("v4.faq.agents.d"), tags: t("v4.faq.agents.tags") },
+      { id: "models", q: t("v4.faq.models.q"), p: t("v4.faq.models.p"), d: t("v4.faq.models.d"), tags: t("v4.faq.models.tags") },
+      { id: "onprem", q: t("v4.faq.onprem.q"), p: t("v4.faq.onprem.p"), d: t("v4.faq.onprem.d"), tags: t("v4.faq.onprem.tags") },
+      { id: "governance", q: t("v4.faq.governance.q"), p: t("v4.faq.governance.p"), d: t("v4.faq.governance.d"), tags: t("v4.faq.governance.tags") },
+      { id: "audit", q: t("v4.faq.audit.q"), p: t("v4.faq.audit.p"), d: t("v4.faq.audit.d"), tags: t("v4.faq.audit.tags") },
+    ],
+  },
+  {
+    label: t("v4.faq.group.compare"),
+    items: [
+      { id: "opensource", q: t("v4.faq.opensource.q"), p: t("v4.faq.opensource.p"), d: t("v4.faq.opensource.d"), tags: t("v4.faq.opensource.tags") },
+      { id: "cloud", q: t("v4.faq.cloud.q"), p: t("v4.faq.cloud.p"), d: t("v4.faq.cloud.d"), tags: t("v4.faq.cloud.tags") },
+      { id: "migrate", q: t("v4.faq.migrate.q"), p: t("v4.faq.migrate.p"), d: t("v4.faq.migrate.d"), tags: t("v4.faq.migrate.tags") },
+    ],
+  },
+];
+
+const answerText = (item: FaqItem): string => {
+  if (item.layers) {
+    const layerLine = item.layers.map((l) => `${l.name} (${l.sub})`).join(" · ");
+    return `${item.p} ${layerLine} — ${item.outro}.`;
+  }
+  return `${item.p} ${item.d}`;
+};
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  mainEntity: groups.flatMap((g) =>
+    g.items.map((item) => ({
+      "@type": "Question",
+      name: item.q,
+      acceptedAnswer: { "@type": "Answer", text: answerText(item) },
+    })),
+  ),
+};
+---
+
+<section id="faq" class="faqv4-section relative isolate overflow-hidden py-24 md:py-32">
+  <script type="application/ld+json" set:html={JSON.stringify(jsonLd)} />
+
+  <div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+    <div class="faqv4-orb faqv4-orb--top"></div>
+    <div class="faqv4-orb faqv4-orb--bottom"></div>
+  </div>
+
+  <div class="mx-auto max-w-3xl px-4 sm:px-6 lg:px-8">
+    <div class="faqv4-reveal mb-12 md:mb-16">
+      <span class="inline-block rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 text-xs font-medium text-primary mb-6">
+        {t("v4.faq.kicker")}
+      </span>
+      <h2 class="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight">
+        {t("v4.faq.headline")}
+      </h2>
+      <p class="mt-4 text-sm text-muted-foreground leading-relaxed max-w-xl">
+        {t("v4.faq.note")}
+      </p>
+    </div>
+
+    {groups.map((group, gi) => (
+      <div class="faqv4-reveal mb-10 last:mb-0">
+        <div class="flex items-center gap-3 mb-4">
+          <h3 class="shrink-0 text-xs font-medium tracking-[0.2em] uppercase text-muted-foreground">
+            {group.label}
+          </h3>
+          <span class="h-px flex-1 bg-border/60" aria-hidden="true"></span>
+        </div>
+
+        <div class="divide-y divide-border/50 rounded-xl border border-border/40 bg-background/60 backdrop-blur-sm">
+          {group.items.map((faq, i) => (
+            <details class="group" open={gi === 0 && i === 0}>
+              <summary class="flex cursor-pointer list-none items-center gap-3 px-5 py-4 text-left">
+                <span class="flex-1 text-sm font-medium text-foreground">
+                  {faq.q}
+                </span>
+
+                <span class="hidden sm:flex items-center gap-1.5 shrink-0">
+                  {faq.tags.split(",").map((tag: string) => (
+                    <span class="inline-block rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      {tag.trim()}
+                    </span>
+                  ))}
+                </span>
+
+                <svg
+                  class="w-4 h-4 text-muted-foreground shrink-0 transition-transform duration-200 group-open:rotate-180"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m6 9 6 6 6-6" />
+                </svg>
+              </summary>
+
+              <div class="faqv4-content">
+                <div class="px-5 pb-5">
+                  <div class="flex sm:hidden flex-wrap gap-1.5 mb-2">
+                    {faq.tags.split(",").map((tag: string) => (
+                      <span class="inline-block rounded-full border border-border/60 bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                        {tag.trim()}
+                      </span>
+                    ))}
+                  </div>
+
+                  <p class="text-sm leading-relaxed text-muted-foreground">
+                    <span class="font-medium text-foreground">{faq.p}</span>
+                    {faq.d && <Fragment> {faq.d}</Fragment>}
+                  </p>
+
+                  {faq.layers && (
+                    <Fragment>
+                      <ul class="mt-4 grid gap-2 sm:grid-cols-2" role="list">
+                        {faq.layers.map((layer) => (
+                          <li class="flex items-baseline justify-between gap-3 rounded-lg border border-border/40 bg-muted/30 px-3 py-2">
+                            <span class="text-sm font-medium text-foreground">{layer.name}</span>
+                            <span class="font-mono text-[0.65rem] uppercase tracking-wider text-muted-foreground/50">{layer.sub}</span>
+                          </li>
+                        ))}
+                      </ul>
+                      <p class="mt-3 font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground/60">
+                        {faq.outro}
+                      </p>
+                    </Fragment>
+                  )}
+                </div>
+              </div>
+            </details>
+          ))}
+        </div>
+      </div>
+    ))}
+  </div>
+</section>
+
+<style>
+  .faqv4-orb {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    filter: blur(80px);
+  }
+  .faqv4-orb--top {
+    width: 500px;
+    height: 500px;
+    top: -100px;
+    right: -150px;
+    background: radial-gradient(circle, color-mix(in srgb, var(--primary) 7%, transparent), transparent 70%);
+  }
+  .faqv4-orb--bottom {
+    width: 420px;
+    height: 420px;
+    bottom: -140px;
+    left: -160px;
+    background: radial-gradient(circle, color-mix(in srgb, var(--primary) 5%, transparent), transparent 70%);
+  }
+
+  .faqv4-reveal {
+    opacity: 0;
+    transform: translateY(24px);
+    transition: opacity 0.6s ease, transform 0.6s ease;
+  }
+  .faqv4-reveal.is-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .faqv4-content {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.2s ease;
+  }
+  details[open] .faqv4-content {
+    grid-template-rows: 1fr;
+  }
+  .faqv4-content > * {
+    overflow: hidden;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .faqv4-reveal {
+      transition: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+    }
+    .faqv4-content {
+      transition: none !important;
+    }
+  }
+</style>
+
+<script>
+  function initFaqV4Reveal() {
+    const els = document.querySelectorAll(".faqv4-section .faqv4-reveal");
+    if (!("IntersectionObserver" in window)) {
+      els.forEach((el) => el.classList.add("is-visible"));
+      return;
+    }
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            io.unobserve(entry.target);
+          }
+        }
+      },
+      { rootMargin: "0px 0px -10% 0px", threshold: 0.1 },
+    );
+    els.forEach((el) => io.observe(el));
+  }
+  initFaqV4Reveal();
+</script>

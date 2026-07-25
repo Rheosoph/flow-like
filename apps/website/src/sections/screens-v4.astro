@@ -1,0 +1,584 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props {
+	lang?: Lang;
+}
+
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+	const localized = translations[lang] as Record<string, string>;
+	const english = translations.en as Record<string, string>;
+	return localized?.[key] ?? english[key] ?? key;
+};
+
+const items = [
+	{
+		title: t("v4.interface.item1.title"),
+		description: t("v4.interface.item1.desc"),
+		icon: "window",
+	},
+	{
+		title: t("v4.interface.item2.title"),
+		description: t("v4.interface.item2.desc"),
+		icon: "action",
+	},
+	{
+		title: t("v4.interface.item3.title"),
+		description: t("v4.interface.item3.desc"),
+		icon: "record",
+	},
+] as const;
+---
+
+<section
+	id="interface"
+	class="screens-section relative isolate overflow-hidden py-24 md:py-32"
+	data-screens-section
+>
+	<div class="pointer-events-none absolute inset-0 -z-10" aria-hidden="true">
+		<div class="screens-grid"></div>
+		<div class="screens-orb screens-orb--one"></div>
+		<div class="screens-orb screens-orb--two"></div>
+	</div>
+
+	<div class="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+		<div class="screens-reveal mx-auto mb-12 max-w-3xl text-center md:mb-16">
+			<span class="mb-6 inline-flex items-center rounded-full border border-primary/20 bg-primary/5 px-4 py-1.5 font-mono text-[0.7rem] font-medium uppercase tracking-[0.16em] text-primary/90">
+				{t("v4.interface.kicker")}
+			</span>
+			<h2 class="text-3xl font-bold leading-tight tracking-tight text-foreground sm:text-4xl lg:text-5xl">
+				{t("v4.interface.headline")}
+			</h2>
+			<p class="mt-5 text-base leading-relaxed text-muted-foreground sm:text-lg">
+				{t("v4.interface.body")}
+			</p>
+		</div>
+
+		<div
+			class="screens-reveal screens-window mx-auto max-w-6xl overflow-hidden rounded-2xl border border-border/60 bg-background/80 shadow-2xl shadow-black/10 backdrop-blur-xl dark:border-white/10 dark:shadow-black/40"
+			data-screens-demo
+			role="group"
+			aria-label={t("v4.interface.visualAria")}
+		>
+			<div class="screens-titlebar flex items-center gap-3 overflow-hidden border-b border-border/50 px-4 py-3 dark:border-white/10">
+				<div class="flex items-center gap-1.5" aria-hidden="true">
+					<span class="h-2.5 w-2.5 rounded-full bg-rose-400/70"></span>
+					<span class="h-2.5 w-2.5 rounded-full bg-amber-400/70"></span>
+					<span class="h-2.5 w-2.5 rounded-full bg-emerald-400/70"></span>
+				</div>
+				<div class="mx-auto flex min-w-0 items-center gap-2 rounded-md border border-border/50 bg-background/70 px-3 py-1 font-mono text-[0.65rem] text-muted-foreground shadow-sm dark:border-white/10">
+					<svg class="h-3 w-3 text-primary/70" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+						<path d="M4.25 7V5.25a3.75 3.75 0 0 1 7.5 0V7M3 7h10v7H3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"></path>
+					</svg>
+					<span class="truncate">operations.flow-like.local / approvals</span>
+				</div>
+				<span class="hidden rounded-md border border-border/50 bg-muted/30 px-2 py-1 font-mono text-[0.6rem] uppercase tracking-wider text-muted-foreground sm:inline-flex dark:border-white/10">
+					Live app
+				</span>
+			</div>
+
+			<div class="grid min-h-[560px] lg:grid-cols-[minmax(0,1.45fr)_minmax(310px,0.8fr)]">
+				<div class="screens-app border-b border-border/50 lg:border-b-0 lg:border-r dark:border-white/10">
+					<div class="grid h-full sm:grid-cols-[148px_minmax(0,1fr)]">
+						<aside class="hidden border-r border-border/50 bg-muted/20 p-3 sm:block dark:border-white/10" aria-label="App navigation">
+							<div class="flex items-center gap-2 px-2 py-3">
+								<div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-xs font-bold text-primary-foreground">O</div>
+								<div>
+									<p class="text-xs font-semibold text-foreground">Operations</p>
+									<p class="text-[0.65rem] text-muted-foreground">Internal app</p>
+								</div>
+							</div>
+							<nav class="mt-4 space-y-1 text-xs">
+								<span class="flex items-center gap-2 rounded-lg bg-primary/10 px-2.5 py-2 font-medium text-primary">
+									<svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2.5 4.5h11v8h-11zM5 2.5h6v2H5zM5.5 8l1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+									Approvals
+								</span>
+								<span class="flex items-center gap-2 rounded-lg px-2.5 py-2 text-muted-foreground">
+									<svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3h10v10H3zM5 10V8m3 2V5m3 5V7" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path></svg>
+									Overview
+								</span>
+								<span class="flex items-center gap-2 rounded-lg px-2.5 py-2 text-muted-foreground">
+									<svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2v12M3 5h7.5a2.5 2.5 0 0 1 0 5H5.5A2.5 2.5 0 0 0 3 12.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"></path></svg>
+									Vendors
+								</span>
+							</nav>
+							<div class="mt-8 rounded-lg border border-border/50 bg-background/60 p-2.5 text-[0.65rem] leading-relaxed text-muted-foreground dark:border-white/10">
+								<span class="font-medium text-foreground">4 open requests</span><br />Two need a decision today.
+							</div>
+						</aside>
+
+						<div class="p-4 sm:p-6">
+							<div class="flex flex-wrap items-start justify-between gap-3">
+								<div>
+									<p class="font-mono text-[0.65rem] uppercase tracking-[0.16em] text-muted-foreground">Purchase request</p>
+									<h3 class="mt-1 text-xl font-semibold text-foreground">Review PR-1048</h3>
+								</div>
+							<span id="screens-request-status" class="screens-status rounded-full border border-amber-500/20 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-700 dark:text-amber-300" data-screens-status role="status" aria-live="polite" aria-atomic="true">
+									Pending review
+								</span>
+							</div>
+
+							<div class="mt-6 rounded-xl border border-border/60 bg-background/70 p-4 shadow-sm dark:border-white/10">
+								<div class="flex items-center gap-3">
+									<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-sky-500/10 text-sky-600 dark:text-sky-300" aria-hidden="true">
+										<svg class="h-5 w-5" viewBox="0 0 20 20" fill="none"><path d="M3 8.5h14v8H3zM5 8.5V5.25L10 3l5 2.25V8.5M6 11.5h2m4 0h2M6 14h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+									</div>
+									<div class="min-w-0 flex-1">
+										<p class="truncate text-sm font-semibold text-foreground">Northline Systems</p>
+										<p class="text-xs text-muted-foreground">Replacement sensor package · Plant 02</p>
+									</div>
+									<p class="font-mono text-sm font-semibold tabular-nums text-foreground">€12,480</p>
+								</div>
+								<div class="mt-4 grid grid-cols-2 gap-3 border-t border-border/50 pt-4 text-xs dark:border-white/10">
+									<div><p class="text-muted-foreground">Requested by</p><p class="mt-1 font-medium text-foreground">Mara Klein</p></div>
+									<div><p class="text-muted-foreground">Budget remaining</p><p class="mt-1 font-medium text-foreground">€84,320</p></div>
+									<div><p class="text-muted-foreground">Cost center</p><p class="mt-1 font-medium text-foreground">Maintenance</p></div>
+									<div><p class="text-muted-foreground">Policy check</p><p class="mt-1 inline-flex items-center gap-1.5 font-medium text-emerald-700 dark:text-emerald-300"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Within limit</p></div>
+								</div>
+							</div>
+
+							<div class="mt-5 flex flex-wrap items-center justify-between gap-3">
+								<p class="max-w-[260px] text-xs leading-relaxed text-muted-foreground">Your decision starts the connected flow and writes the outcome back here.</p>
+								<div class="flex items-center gap-2">
+									<span class="cursor-default rounded-lg border border-border/70 bg-background px-4 py-2 text-sm font-medium text-muted-foreground dark:border-white/10" aria-hidden="true">Send back</span>
+									<button type="button" class="screens-approve relative inline-flex min-w-[104px] items-center justify-center gap-2 overflow-hidden rounded-lg bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow-lg shadow-primary/15 transition-transform hover:-translate-y-0.5 disabled:cursor-wait disabled:opacity-80" data-screens-run aria-controls="screens-request-status screens-writeback screens-audit-record" aria-describedby="screens-stage-status">
+										<svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+										<span data-screens-button-label>Approve</span>
+									</button>
+								</div>
+							</div>
+
+							<div id="screens-writeback" class="screens-written mt-5 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] p-3" data-screens-written aria-hidden="true">
+								<div class="flex items-center gap-2 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+									<svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 14a6 6 0 1 0 0-12 6 6 0 0 0 0 12Z" stroke="currentColor" stroke-width="1.2"></path><path d="m5 8.2 2 2 4-4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+									Decision saved to the purchase request
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<div class="screens-flow relative bg-muted/15 p-5 sm:p-7">
+					<div class="flex items-start justify-between gap-3">
+						<div>
+							<p class="font-mono text-[0.65rem] uppercase tracking-[0.16em] text-muted-foreground">Connected flow</p>
+							<h3 class="mt-1 text-sm font-semibold text-foreground">Purchase approval</h3>
+						</div>
+						<span id="screens-stage-status" class="whitespace-nowrap rounded-full border border-border/60 bg-background/70 px-2.5 py-1 font-mono text-[0.6rem] uppercase tracking-wider text-muted-foreground dark:border-white/10" data-screens-stage role="status" aria-live="polite" aria-atomic="true">Waiting for action</span>
+					</div>
+
+					<div class="mt-8 space-y-3" role="list" aria-label="Flow steps">
+						<div class="screens-step" data-screens-node role="listitem">
+							<span class="screens-step__icon"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+							<div><p>Receive decision</p><span>button / approve</span></div>
+							<span class="screens-step__state">01</span>
+						</div>
+						<div class="screens-step" data-screens-node role="listitem">
+							<span class="screens-step__icon"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2.5 13 4v3.3c0 3.1-2.1 5.3-5 6.2-2.9-.9-5-3.1-5-6.2V4l5-1.5Z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"></path><path d="m5.5 8 1.5 1.5L10.5 6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+							<div><p>Check policy</p><span>budget / permissions</span></div>
+							<span class="screens-step__state">02</span>
+						</div>
+						<div class="screens-step" data-screens-node role="listitem">
+							<span class="screens-step__icon"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 3h10v10H3zM5.5 6h5M5.5 8.5h5M5.5 11h3" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+							<div><p>Write result</p><span>request / approved</span></div>
+							<span class="screens-step__state">03</span>
+						</div>
+						<div class="screens-step" data-screens-node role="listitem">
+							<span class="screens-step__icon"><svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 11.5h8M5 11.5V7a3 3 0 0 1 6 0v4.5M6.5 13.5h3" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"></path></svg></span>
+							<div><p>Record and notify</p><span>audit log / requester</span></div>
+							<span class="screens-step__state">04</span>
+						</div>
+					</div>
+
+					<div id="screens-audit-record" class="screens-audit mt-6 rounded-xl border border-border/60 bg-background/70 p-4 dark:border-white/10" data-screens-audit aria-hidden="true">
+						<div class="flex items-center justify-between gap-3">
+							<span class="inline-flex items-center gap-2 text-xs font-semibold text-foreground"><span class="h-2 w-2 rounded-full bg-emerald-500"></span>Action recorded</span>
+							<span class="font-mono text-[0.6rem] text-muted-foreground">AUD-2841</span>
+						</div>
+						<div class="mt-3 grid grid-cols-2 gap-2 text-[0.68rem]">
+							<div><p class="text-muted-foreground">Decision</p><p class="mt-0.5 font-medium text-foreground">Approved</p></div>
+							<div><p class="text-muted-foreground">Actor</p><p class="mt-0.5 font-medium text-foreground">You</p></div>
+							<div><p class="text-muted-foreground">Flow</p><p class="mt-0.5 font-medium text-foreground">4 / 4 steps</p></div>
+							<div><p class="text-muted-foreground">Result</p><p class="mt-0.5 font-medium text-foreground">Written back</p></div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<div class="mt-10 grid grid-cols-1 gap-4 md:mt-12 md:grid-cols-3 md:gap-5">
+			{items.map((item) => (
+				<div class="screens-reveal screens-card rounded-xl border border-border/50 bg-background/60 p-6 backdrop-blur-sm dark:border-white/10">
+					<div class="screens-card__icon" aria-hidden="true">
+						{item.icon === "window" && <svg viewBox="0 0 20 20" fill="none"><rect x="2.5" y="3" width="15" height="14" rx="2" stroke="currentColor" stroke-width="1.4"></rect><path d="M2.5 7h15M5 5h.01M7 5h.01" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"></path></svg>}
+						{item.icon === "action" && <svg viewBox="0 0 20 20" fill="none"><path d="M3 10h10M10 6l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path><circle cx="15.5" cy="10" r="2.5" stroke="currentColor" stroke-width="1.3"></circle></svg>}
+						{item.icon === "record" && <svg viewBox="0 0 20 20" fill="none"><path d="M5 2.5h7l3 3V17H5z" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"></path><path d="M12 2.5V6h3M8 10h4M8 13h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"></path></svg>}
+					</div>
+					<h3 class="mt-4 text-base font-semibold text-foreground">{item.title}</h3>
+					<p class="mt-2 text-sm leading-relaxed text-muted-foreground">{item.description}</p>
+				</div>
+			))}
+		</div>
+
+		<p class="mx-auto mt-12 max-w-3xl text-center text-xs leading-relaxed text-muted-foreground/70">
+			<span class="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground/60">{t("v4.common.underTheHood")}</span>
+			 — {t("v4.interface.uth")}
+		</p>
+	</div>
+</section>
+
+<style>
+	.screens-grid {
+		position: absolute;
+		inset: 0;
+		background-image:
+			linear-gradient(to right, color-mix(in oklch, var(--foreground) 4%, transparent) 1px, transparent 1px),
+			linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 4%, transparent) 1px, transparent 1px);
+		background-size: 48px 48px;
+		mask-image: linear-gradient(to bottom, transparent, black 20%, black 80%, transparent);
+	}
+	.screens-orb {
+		position: absolute;
+		border-radius: 999px;
+		filter: blur(110px);
+		opacity: 0.3;
+	}
+	.screens-orb--one {
+		top: 4%;
+		left: -120px;
+		width: 460px;
+		height: 460px;
+		background: color-mix(in oklch, var(--primary) 13%, transparent);
+	}
+	.screens-orb--two {
+		right: -100px;
+		bottom: 4%;
+		width: 400px;
+		height: 400px;
+		background: color-mix(in oklch, var(--foreground) 6%, transparent);
+	}
+	.screens-titlebar {
+		background: color-mix(in oklch, var(--muted) 35%, var(--background));
+	}
+	.screens-titlebar > :first-child,
+	.screens-titlebar > :last-child {
+		flex: 0 0 auto;
+	}
+	.screens-app {
+		background:
+			radial-gradient(circle at 92% 8%, color-mix(in oklch, var(--primary) 5%, transparent), transparent 34%),
+			var(--background);
+	}
+	.screens-flow {
+		background-image: radial-gradient(color-mix(in oklch, var(--foreground) 13%, transparent) 0.8px, transparent 0.8px);
+		background-size: 18px 18px;
+	}
+	.screens-step {
+		position: relative;
+		display: grid;
+		grid-template-columns: 34px minmax(0, 1fr) auto;
+		align-items: center;
+		gap: 11px;
+		min-height: 58px;
+		padding: 10px 12px;
+		border: 1px solid color-mix(in oklch, var(--border) 65%, transparent);
+		border-radius: 11px;
+		background: color-mix(in oklch, var(--background) 82%, transparent);
+		box-shadow: 0 8px 20px -18px rgb(0 0 0 / 0.35);
+		transition: border-color 0.25s ease, background-color 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
+	}
+	.screens-step:not(:last-child)::after {
+		content: "";
+		position: absolute;
+		z-index: -1;
+		left: 28px;
+		top: calc(100% + 1px);
+		width: 1px;
+		height: 13px;
+		background: color-mix(in oklch, var(--border) 70%, transparent);
+	}
+	.screens-step__icon {
+		display: grid;
+		width: 32px;
+		height: 32px;
+		place-items: center;
+		border-radius: 8px;
+		background: color-mix(in oklch, var(--muted) 70%, transparent);
+		color: var(--muted-foreground);
+		transition: background-color 0.25s ease, color 0.25s ease, transform 0.25s ease;
+	}
+	.screens-step__icon svg {
+		width: 16px;
+		height: 16px;
+	}
+	.screens-step p {
+		font-size: 0.76rem;
+		font-weight: 600;
+		color: var(--foreground);
+	}
+	.screens-step div > span {
+		display: block;
+		margin-top: 2px;
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.58rem;
+		color: var(--muted-foreground);
+	}
+	.screens-step__state {
+		font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+		font-size: 0.62rem;
+		color: color-mix(in oklch, var(--muted-foreground) 65%, transparent);
+	}
+	.screens-step.is-active {
+		transform: translateX(4px);
+		border-color: color-mix(in oklch, var(--primary) 55%, transparent);
+		background: color-mix(in oklch, var(--primary) 7%, var(--background));
+		box-shadow: 0 12px 30px -18px color-mix(in oklch, var(--primary) 55%, transparent);
+	}
+	.screens-step.is-active .screens-step__icon {
+		color: var(--primary);
+		background: color-mix(in oklch, var(--primary) 15%, transparent);
+		animation: screens-pulse 1s ease-in-out infinite;
+	}
+	.screens-step.is-complete {
+		border-color: color-mix(in oklch, #10b981 30%, transparent);
+	}
+	.screens-step.is-complete .screens-step__icon {
+		color: #10b981;
+		background: color-mix(in oklch, #10b981 12%, transparent);
+	}
+	.screens-step.is-complete .screens-step__state {
+		font-size: 0;
+	}
+	.screens-step.is-complete .screens-step__state::after {
+		content: "done";
+		font-size: 0.58rem;
+		color: #059669;
+	}
+	.screens-status.is-complete {
+		border-color: color-mix(in oklch, #10b981 20%, transparent);
+		background: color-mix(in oklch, #10b981 10%, transparent);
+		color: #047857;
+	}
+	:global(.dark) .screens-status.is-complete {
+		color: #6ee7b7;
+	}
+	.screens-written,
+	.screens-audit {
+		opacity: 0;
+		transform: translateY(8px);
+		pointer-events: none;
+		transition: opacity 0.35s ease, transform 0.35s ease;
+	}
+	.screens-written.is-visible,
+	.screens-audit.is-visible {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	.screens-approve::after {
+		content: "";
+		position: absolute;
+		inset: -2px;
+		border: 1px solid color-mix(in oklch, var(--primary) 50%, transparent);
+		border-radius: inherit;
+		animation: screens-invite 2.4s ease-out infinite;
+		pointer-events: none;
+	}
+	.screens-approve:focus-visible {
+		outline: 2px solid var(--ring, var(--primary));
+		outline-offset: 3px;
+	}
+	.screens-card {
+		transition: transform 0.25s ease, border-color 0.25s ease;
+	}
+	.screens-card:hover {
+		transform: translateY(-3px);
+		border-color: color-mix(in oklch, var(--primary) 28%, var(--border));
+	}
+	.screens-card__icon {
+		display: grid;
+		width: 38px;
+		height: 38px;
+		place-items: center;
+		border: 1px solid color-mix(in oklch, var(--primary) 20%, transparent);
+		border-radius: 10px;
+		background: color-mix(in oklch, var(--primary) 8%, transparent);
+		color: var(--primary);
+	}
+	.screens-card__icon svg {
+		width: 20px;
+		height: 20px;
+	}
+	.screens-reveal {
+		opacity: 0;
+		transform: translateY(22px);
+		transition: opacity 0.6s ease, transform 0.6s ease;
+	}
+	.screens-reveal.is-visible {
+		opacity: 1;
+		transform: translateY(0);
+	}
+	@keyframes screens-pulse {
+		50% { transform: scale(0.92); }
+	}
+	@keyframes screens-invite {
+		0% { opacity: 0.5; transform: scale(1); }
+		75%, 100% { opacity: 0; transform: scale(1.14, 1.35); }
+	}
+	@media (max-width: 420px) {
+		.screens-titlebar {
+			gap: 0.5rem;
+			padding-inline: 0.75rem;
+		}
+		.screens-titlebar > :first-child {
+			gap: 0.25rem;
+		}
+		.screens-titlebar > :first-child span {
+			width: 0.5rem;
+			height: 0.5rem;
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.screens-reveal,
+		.screens-step,
+		.screens-step__icon,
+		.screens-written,
+		.screens-audit {
+			transition: none !important;
+		}
+		.screens-reveal {
+			opacity: 1 !important;
+			transform: none !important;
+		}
+		.screens-step.is-active .screens-step__icon,
+		.screens-approve::after {
+			animation: none !important;
+		}
+	}
+</style>
+
+<script>
+	function initScreensV4() {
+		document.querySelectorAll<HTMLElement>("[data-screens-section]").forEach((section) => {
+			if (section.dataset.screensReady === "true") return;
+			section.dataset.screensReady = "true";
+
+			const reveals = section.querySelectorAll<HTMLElement>(".screens-reveal");
+			const demo = section.querySelector<HTMLElement>("[data-screens-demo]");
+			const runButton = section.querySelector<HTMLButtonElement>("[data-screens-run]");
+			const buttonLabel = section.querySelector<HTMLElement>("[data-screens-button-label]");
+			const status = section.querySelector<HTMLElement>("[data-screens-status]");
+			const stage = section.querySelector<HTMLElement>("[data-screens-stage]");
+			const steps = Array.from(section.querySelectorAll<HTMLElement>("[data-screens-node]"));
+			const written = section.querySelector<HTMLElement>("[data-screens-written]");
+			const audit = section.querySelector<HTMLElement>("[data-screens-audit]");
+			const timers: number[] = [];
+			const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+			let revealObserver: IntersectionObserver | undefined;
+
+			const clearTimers = () => {
+				while (timers.length) {
+					const timer = timers.pop();
+					if (timer !== undefined) window.clearTimeout(timer);
+				}
+			};
+
+			const reset = () => {
+				clearTimers();
+				steps.forEach((step) => {
+					step.classList.remove("is-active", "is-complete");
+					step.removeAttribute("aria-current");
+				});
+				written?.classList.remove("is-visible");
+				audit?.classList.remove("is-visible");
+				written?.setAttribute("aria-hidden", "true");
+				audit?.setAttribute("aria-hidden", "true");
+				status?.classList.remove("is-complete");
+				if (status) status.textContent = "Pending review";
+				if (stage) stage.textContent = "Waiting for action";
+				if (buttonLabel) buttonLabel.textContent = "Approve";
+				if (runButton) {
+					runButton.disabled = false;
+					runButton.setAttribute("aria-busy", "false");
+				}
+				demo?.setAttribute("aria-busy", "false");
+			};
+
+			const finish = () => {
+				steps.forEach((step) => {
+					step.classList.remove("is-active");
+					step.classList.add("is-complete");
+					step.removeAttribute("aria-current");
+				});
+				if (status) status.textContent = "Approved · recorded";
+				status?.classList.add("is-complete");
+				if (stage) stage.textContent = "4 of 4 · complete";
+				written?.classList.add("is-visible");
+				audit?.classList.add("is-visible");
+				written?.setAttribute("aria-hidden", "false");
+				audit?.setAttribute("aria-hidden", "false");
+				if (buttonLabel) buttonLabel.textContent = "Run again";
+				if (runButton) {
+					runButton.disabled = false;
+					runButton.setAttribute("aria-busy", "false");
+				}
+				demo?.setAttribute("aria-busy", "false");
+			};
+
+			const run = () => {
+				reset();
+				if (!runButton) return;
+				runButton.disabled = true;
+				runButton.setAttribute("aria-busy", "true");
+				demo?.setAttribute("aria-busy", "true");
+				if (buttonLabel) buttonLabel.textContent = "Running…";
+				if (status) status.textContent = "Flow running";
+				if (stage) stage.textContent = "Starting run";
+
+				if (reduced) {
+					finish();
+					return;
+				}
+
+				steps.forEach((_step, index) => {
+					timers.push(window.setTimeout(() => {
+						steps.forEach((candidate, candidateIndex) => {
+							const active = candidateIndex === index;
+							candidate.classList.toggle("is-active", active);
+							if (active) candidate.setAttribute("aria-current", "step");
+							else candidate.removeAttribute("aria-current");
+							if (candidateIndex < index) candidate.classList.add("is-complete");
+						});
+						if (stage) stage.textContent = `${index + 1} of ${steps.length} · running`;
+					}, 220 + index * 430));
+				});
+				timers.push(window.setTimeout(finish, 220 + steps.length * 430));
+			};
+
+			runButton?.addEventListener("click", run);
+
+			if (!("IntersectionObserver" in window) || reduced) {
+				reveals.forEach((element) => element.classList.add("is-visible"));
+			} else {
+				revealObserver = new IntersectionObserver((entries) => {
+					entries.forEach((entry) => {
+						if (!entry.isIntersecting) return;
+						entry.target.classList.add("is-visible");
+						revealObserver?.unobserve(entry.target);
+					});
+				}, { rootMargin: "0px 0px -8% 0px", threshold: 0.08 });
+				reveals.forEach((element) => revealObserver?.observe(element));
+			}
+
+			const cleanup = () => {
+				clearTimers();
+				revealObserver?.disconnect();
+			};
+			document.addEventListener("astro:before-swap", cleanup, { once: true });
+		});
+	}
+
+	initScreensV4();
+	document.addEventListener("astro:page-load", initScreensV4);
+</script>

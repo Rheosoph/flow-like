@@ -22,3 +22,7 @@ export * from "./learn/index";
 export * from "./library/index";
 export * from "./layout/index";
 export * from "./animated-icons/index";
+export {
+	FlowPilotBubbleOrb,
+	type FlowPilotBubbleOrbProps,
+} from "./global-chat/flowpilot-bubble-orb";

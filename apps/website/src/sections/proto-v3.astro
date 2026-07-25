@@ -1,6 +1,7 @@
 ---
 import type { Lang, TranslationKey } from "../i18n";
 import { translations, defaultLang } from "../i18n";
+import LiveShowcase from "../components/showcase/LiveShowcase.astro";
 
 interface Props { lang?: Lang; }
 const { lang = defaultLang } = Astro.props;
@@ -42,8 +43,10 @@ const t = (key: TranslationKey): string => {
             <span class="flex items-center justify-center w-6 h-6 rounded-md bg-amber-500/10 text-amber-600 text-xs font-bold">1</span>
             <span class="text-xs font-bold uppercase tracking-wider text-amber-600">{t("v3.proto.stage1.title")}</span>
           </div>
-          <div class="flex-1 p-2">
-            <img src="/images/product/PlaceholdersForPrototyping.webp" alt="Flow-Like prototyping with placeholder nodes" class="w-full h-full object-cover rounded-lg" loading="lazy" />
+          <div class="h-72 min-h-72 shrink-0 p-2">
+            <div class="h-full overflow-hidden rounded-lg border border-border/35">
+              <LiveShowcase bare presentation="compact" variant="workflow" posterAlt={`${t("v3.proto.stage1.title")} — interactive Flow-Like demo`} />
+            </div>
           </div>
           <div class="px-4 py-3 border-t border-border/20">
             <p class="text-xs text-muted-foreground">{t("v3.proto.stage1.desc")}</p>
@@ -67,8 +70,10 @@ const t = (key: TranslationKey): string => {
             <span class="flex items-center justify-center w-6 h-6 rounded-md bg-indigo-500/10 text-indigo-500 text-xs font-bold">2</span>
             <span class="text-xs font-bold uppercase tracking-wider text-indigo-500">{t("v3.proto.stage2.title")}</span>
           </div>
-          <div class="flex-1 p-2">
-            <img src="/images/product/FlowWithLayers.webp" alt="Flow-Like refined workflow with layers" class="w-full h-full object-cover rounded-lg" loading="lazy" />
+          <div class="h-72 min-h-72 shrink-0 p-2">
+            <div class="h-full overflow-hidden rounded-lg border border-border/35">
+              <LiveShowcase bare presentation="compact" variant="data" posterAlt={`${t("v3.proto.stage2.title")} — interactive Flow-Like demo`} />
+            </div>
           </div>
           <div class="px-4 py-3 border-t border-border/20">
             <p class="text-xs text-muted-foreground">{t("v3.proto.stage2.desc")}</p>
@@ -100,8 +105,10 @@ const t = (key: TranslationKey): string => {
               LIVE
             </span>
           </div>
-          <div class="flex-1 p-2">
-            <img src="/images/product/RunsAndLogs.webp" alt="Flow-Like deployed workflow runs and logs" class="w-full h-full object-cover rounded-lg" loading="lazy" />
+          <div class="h-72 min-h-72 shrink-0 p-2">
+            <div class="h-full overflow-hidden rounded-lg border border-border/35">
+              <LiveShowcase bare presentation="compact" variant="runs" posterAlt={`${t("v3.proto.stage3.title")} — interactive Flow-Like demo`} />
+            </div>
           </div>
           <div class="px-4 py-3 border-t border-border/20">
             <p class="text-xs text-muted-foreground">{t("v3.proto.stage3.desc")}</p>

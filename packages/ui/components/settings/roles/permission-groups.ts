@@ -17,7 +17,7 @@ import {
 	Users,
 	Zap,
 } from "lucide-react";
-import { RolePermissions } from "../../../lib";
+import { RolePermissions } from "../../../lib/permission/role-permission";
 
 export interface PermissionEntry {
 	permission: RolePermissions;
