@@ -633,53 +633,100 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
         duplicate: &mut HashSet<String>,
     ) {
         register(event.anchor.as_deref(), seen, duplicate);
-        visit_block(&event.body, seen, duplicate);
+        // The lowerer renders an entry node with MULTIPLE exec outputs as its EventBlock header
+        // plus an immediate arm-routing Branch carrying the SAME anchor (the arms select the
+        // entry's own labelled outputs). That pair is one entity: the planner resolves the
+        // anchored branch back to the existing entry node, so the reappearing anchor is legal
+        // exactly once, as the first body statement.
+        let mut statements = event.body.stmts.iter();
+        if let (
+            Some(event_anchor),
+            Some(Stmt::Branch {
+                call,
+                condition,
+                arms,
+                anchor,
+                ..
+            }),
+        ) = (
+            event
+                .anchor
+                .as_deref()
+                .map(str::trim)
+                .filter(|anchor| !anchor.is_empty()),
+            event.body.stmts.first(),
+        ) {
+            let branch_anchor = anchor
+                .as_deref()
+                .or(call.anchor.as_deref())
+                .map(str::trim)
+                .filter(|anchor| !anchor.is_empty());
+            if branch_anchor == Some(event_anchor) {
+                for argument in &call.args {
+                    visit_expr(&argument.value, None, seen, duplicate);
+                }
+                if let Some(condition) = condition {
+                    visit_expr(condition, None, seen, duplicate);
+                }
+                for arm in arms {
+                    visit_block(&arm.body, seen, duplicate);
+                }
+                statements.next();
+            }
+        }
+        for statement in statements {
+            visit_stmt(statement, seen, duplicate);
+        }
     }
 
     fn visit_block(block: &Block, seen: &mut HashSet<String>, duplicate: &mut HashSet<String>) {
         for statement in &block.stmts {
-            match statement {
-                Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
-                    visit_call(call, anchor.as_deref(), seen, duplicate)
+            visit_stmt(statement, seen, duplicate);
+        }
+    }
+
+    fn visit_stmt(statement: &Stmt, seen: &mut HashSet<String>, duplicate: &mut HashSet<String>) {
+        match statement {
+            Stmt::Let { call, anchor, .. } | Stmt::Call { call, anchor } => {
+                visit_call(call, anchor.as_deref(), seen, duplicate)
+            }
+            Stmt::Branch {
+                call,
+                condition,
+                arms,
+                anchor,
+                ..
+            } => {
+                visit_call(call, anchor.as_deref(), seen, duplicate);
+                if let Some(condition) = condition {
+                    visit_expr(condition, None, seen, duplicate);
                 }
-                Stmt::Branch {
-                    call,
-                    condition,
-                    arms,
-                    anchor,
-                    ..
-                } => {
-                    visit_call(call, anchor.as_deref(), seen, duplicate);
-                    if let Some(condition) = condition {
-                        visit_expr(condition, None, seen, duplicate);
-                    }
-                    for arm in arms {
-                        visit_block(&arm.body, seen, duplicate);
-                    }
+                for arm in arms {
+                    visit_block(&arm.body, seen, duplicate);
                 }
-                Stmt::Loop {
-                    call, body, anchor, ..
-                } => {
-                    visit_call(call, anchor.as_deref(), seen, duplicate);
-                    visit_block(body, seen, duplicate);
-                }
-                Stmt::Assign { value, anchor, .. } | Stmt::LocalAlias { value, anchor, .. } => {
-                    visit_expr(value, anchor.as_deref(), seen, duplicate)
-                }
-                Stmt::FieldAssign { value, anchor, .. } => {
-                    register(anchor.as_deref(), seen, duplicate);
+            }
+            Stmt::Loop {
+                call, body, anchor, ..
+            } => {
+                visit_call(call, anchor.as_deref(), seen, duplicate);
+                visit_block(body, seen, duplicate);
+            }
+            Stmt::Assign { value, anchor, .. } | Stmt::LocalAlias { value, anchor, .. } => {
+                visit_expr(value, anchor.as_deref(), seen, duplicate)
+            }
+            Stmt::FieldAssign { value, anchor, .. } => {
+                register(anchor.as_deref(), seen, duplicate);
+                visit_expr(value, None, seen, duplicate);
+            }
+            Stmt::Return { values, anchor } => {
+                register(anchor.as_deref(), seen, duplicate);
+                for value in values {
                     visit_expr(value, None, seen, duplicate);
                 }
-                Stmt::Return { values, anchor } => {
-                    register(anchor.as_deref(), seen, duplicate);
-                    for value in values {
-                        visit_expr(value, None, seen, duplicate);
-                    }
-                }
-                Stmt::Local(variable) => register(variable.anchor.as_deref(), seen, duplicate),
-                Stmt::Handler(event) => visit_event(event, seen, duplicate),
-                Stmt::Comment(_) => {}
             }
+            Stmt::Local(variable) => register(variable.anchor.as_deref(), seen, duplicate),
+            Stmt::Handler(event) => visit_event(event, seen, duplicate),
+            Stmt::Comment(_) => {}
         }
     }
 
@@ -10498,6 +10545,28 @@ const apiKey: string = "ordinary-default"   //@v:var_api
         assert!(result.commands.is_empty());
         assert_eq!(result.diagnostics.len(), 1);
         assert!(result.diagnostics[0].contains("duplicate FlowScript anchor"));
+    }
+
+    /// The lowerer renders an entry node with multiple exec outputs as its EventBlock header
+    /// PLUS an immediate arm-routing branch carrying the same anchor. That pair is one entity
+    /// and must not trip the duplicate-anchor preflight; the same anchor reappearing anywhere
+    /// else stays a duplicate.
+    #[test]
+    fn entry_arm_routing_branch_shares_the_event_anchor_without_tripping_preflight() {
+        let arm_routing = "eventsSimple() {   //@n:entrynode\n    if (eventsSimple()) { // exec_out   //@n:entrynode\n        logInfo({ message: \"hi\" })\n    }\n}\n";
+        let ast = flow_like_ast::parse(arm_routing).expect("parse arm-routing form");
+        assert!(
+            duplicate_ast_anchors(&ast).is_empty(),
+            "the entry's own arm-routing branch must not count as a duplicate anchor"
+        );
+
+        let elsewhere = "eventsSimple() {   //@n:entrynode\n    logInfo({ message: \"hi\" })   //@n:entrynode\n}\n";
+        let ast = flow_like_ast::parse(elsewhere).expect("parse misuse form");
+        assert_eq!(
+            duplicate_ast_anchors(&ast),
+            vec!["entrynode".to_string()],
+            "a non-first-branch reuse of the entry anchor stays a duplicate"
+        );
     }
 
     #[test]

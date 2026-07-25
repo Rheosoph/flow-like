@@ -214,7 +214,7 @@ Use tables named exactly "Services", "Incidents", and "Metric Snapshots". The pa
 		smoke: false,
 		prompt: `Build an expense-approval app with a page named "Expense Queue". Show pending requests as instances of a reusable widget named "Expense Row" with Approve and Reject actions, plus status/amount filters and an audit panel.
 
-Use tables named exactly "Expense Requests" and "Expense Audit". The workflow must load pending expenses, approve or reject exactly one request, require a rejection reason, prevent a request from being decided twice, append an audit record, and refresh the queue. Wire both real widget action ids and persisted table ids into the workflow. Register EVERY workflow entry as an app event before reporting completion — the page-load entry AND each widget-action handler, at least three registrations in total.`,
+Use tables named exactly "Expense Requests" and "Expense Audit". The workflow must load pending expenses, approve or reject exactly one request, require a rejection reason, prevent a request from being decided twice, append an audit record, and refresh the queue. Wire both real widget action ids and persisted table ids into the workflow. Register the workflow's non-widget entries (the page-load entry and each simple/generic entry such as filter or audit refreshes) as app events before reporting completion — at least three registrations in total. Widget-action handlers are bound at widget instantiation via fnRefs; they are not registrable app events, so leave them out of registration.`,
 		requirements: requirements({
 			minFlowScriptNonWhitespaceChars: 850,
 			minTotalNodes: 9,
@@ -267,7 +267,7 @@ Use tables named exactly "RSS Feeds", "RSS Articles", and "RSS Digests". A sched
 		smoke: false,
 		prompt: `Build an incident-response console page named "Incident Console". Render active incidents with a reusable widget named "Incident Row" that has Acknowledge and Resolve actions, and show the selected incident's timeline.
 
-Use tables named exactly "Incidents" and "Incident Updates". Support creating an incident from an incoming/manual event, loading active incidents, acknowledging once, resolving with a summary, and appending every transition to the timeline. Reject invalid state transitions and make repeated action delivery idempotent. Wire the real page, table, widget, and widget-action ids. Register EVERY workflow entry as an app event before reporting completion — the page-load entry AND each widget-action handler, at least three registrations in total.`,
+Use tables named exactly "Incidents" and "Incident Updates". Support creating an incident from an incoming/manual event, loading active incidents, acknowledging once, resolving with a summary, and appending every transition to the timeline. Reject invalid state transitions and make repeated action delivery idempotent. Wire the real page, table, widget, and widget-action ids. Register the workflow's non-widget entries (the page-load entry and each simple/generic entry such as filter or audit refreshes) as app events before reporting completion — at least three registrations in total. Widget-action handlers are bound at widget instantiation via fnRefs; they are not registrable app events, so leave them out of registration.`,
 		requirements: requirements({
 			minFlowScriptNonWhitespaceChars: 850,
 			minTotalNodes: 10,

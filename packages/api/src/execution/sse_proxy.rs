@@ -88,9 +88,14 @@ fn create_sse_stream(
                 }
                 Err(err) => {
                     tracing::warn!(run_id = %run_id, error = %err, "SSE parse error");
+                    if let Some(db) = &db
+                        && let Err(e) = update_run_on_completion(db.as_ref(), &run_id, RunStatus::Failed, 0).await {
+                            tracing::error!(run_id = %run_id, error = %e, "Failed to mark run failed after SSE parse error");
+                        }
+                    let payload = serde_json::json!({ "error": err.to_string() });
                     let error_event = Event::default()
                         .event("error")
-                        .data(format!(r#"{{"error":"{}"}}"#, err));
+                        .data(serde_json::to_string(&payload).unwrap_or_else(|_| "{\"error\":\"stream error\"}".to_string()));
                     yield Ok(error_event);
                     break;
                 }

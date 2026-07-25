@@ -4253,18 +4253,67 @@ Completion contract: build complete helper logic first and add the Event entry l
 							for (const iw of inlineWidgets) {
 								let realId = realIdByCopilotId.get(iw.copilotWidgetId);
 								if (!realId) {
-									realId = createId();
 									const widgetName =
 										requestedWidgetNames[createdWidgets.length] ||
 										(typeof iw.inlineDef.name === "string" &&
 										iw.inlineDef.name.trim()
 											? iw.inlineDef.name.trim()
 											: "Widget");
-									const widget = await backend.widgetState.createWidget(
-										targetAppId,
-										realId,
-										widgetName,
-									);
+									// Specialist retries re-emit the same inline widget definition.
+									// Reuse the app's existing widget with this exact name instead of
+									// minting a duplicate: a second "Incident Row" makes the name
+									// ambiguous for the board specialist and is never cleaned up.
+									// The latest definition wins either way.
+									let widget:
+										| Awaited<
+												ReturnType<typeof backend.widgetState.getWidget>
+										  >
+										| undefined;
+									try {
+										// Tuple metadata is often absent for local apps, so fall
+										// back to fetching each widget and comparing its real name.
+										const entries =
+											await backend.widgetState.getWidgets(targetAppId);
+										for (const [, widgetId, metadata] of entries) {
+											if (metadata?.name?.trim() === widgetName) {
+												realId = widgetId;
+												break;
+											}
+										}
+										if (!realId) {
+											for (const [, widgetId] of entries) {
+												try {
+													const candidate =
+														await backend.widgetState.getWidget(
+															targetAppId,
+															widgetId,
+														);
+													if (candidate?.name?.trim() === widgetName) {
+														realId = widgetId;
+														widget = candidate;
+														break;
+													}
+												} catch {
+													// Skip unreadable widgets.
+												}
+											}
+										} else if (realId) {
+											widget = await backend.widgetState.getWidget(
+												targetAppId,
+												realId,
+											);
+										}
+									} catch {
+										// Reuse is best-effort; fall through to creation.
+									}
+									if (!realId || !widget) {
+										realId = createId();
+										widget = await backend.widgetState.createWidget(
+											targetAppId,
+											realId,
+											widgetName,
+										);
+									}
 									widget.components = ensureRootId(
 										collectComponents(iw.inlineDef.components),
 									);

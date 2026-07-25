@@ -1887,11 +1887,13 @@ async fn dispatch_event_collect(
                 .dispatch_streaming(request)
                 .await
                 .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-            Ok(
-                collect_generic_result_bytes(byte_stream, run_id, db, INBOUND_RESULT_TIMEOUT)
-                    .await
-                    .unwrap_or(Value::Null),
-            )
+            collect_generic_result_bytes(byte_stream, run_id, db, INBOUND_RESULT_TIMEOUT)
+                .await
+                .ok_or_else(|| {
+                    ApiError::gateway_timeout(
+                        "flow did not return a result within the allotted time",
+                    )
+                })
         }
         _ => {
             let (_dispatch_response, executor_response) = state
@@ -1899,11 +1901,13 @@ async fn dispatch_event_collect(
                 .dispatch_http_sse(request)
                 .await
                 .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
-            Ok(
-                collect_generic_result(executor_response, run_id, db, INBOUND_RESULT_TIMEOUT)
-                    .await
-                    .unwrap_or(Value::Null),
-            )
+            collect_generic_result(executor_response, run_id, db, INBOUND_RESULT_TIMEOUT)
+                .await
+                .ok_or_else(|| {
+                    ApiError::gateway_timeout(
+                        "flow did not return a result within the allotted time",
+                    )
+                })
         }
     }
 }

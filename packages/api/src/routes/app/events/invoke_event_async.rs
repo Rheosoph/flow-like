@@ -32,7 +32,7 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like_types::{anyhow, create_id};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -138,6 +138,25 @@ pub async fn invoke_event_async(
     // Get the event from database (validates event belongs to this app)
     let event = get_event_from_db(&state.db, &event_id, &app_id).await?;
     super::ensure_connected_app_direct_event_allowed(&user, &event.event_type, event.active)?;
+
+    // Async dispatch always runs the event's configured board version. A request
+    // asking for a different version cannot be honored here (there is no
+    // validation against the app's available board versions), so reject it
+    // rather than silently executing a different version than the caller asked
+    // for. A malformed version string is likewise a bad request.
+    if let Some(requested) = params.version.as_deref() {
+        let parsed = super::parse_version_tuple(requested).ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "Invalid version '{requested}': expected MAJOR_MINOR_PATCH"
+            ))
+        })?;
+        if event.board_version != Some(parsed) {
+            return Err(ApiError::bad_request(
+                "Executing a board version other than the event's configured version is not supported",
+            ));
+        }
+    }
+
     let board_id = event.board_id.clone();
     let event_json =
         serde_json::to_string(&event).map_err(|e| anyhow!("Failed to serialize event: {}", e))?;
@@ -331,14 +350,38 @@ pub async fn invoke_event_async(
         wasm_packages,
     };
 
-    let response = state
-        .dispatcher
-        .dispatch_async(request)
-        .await
-        .map_err(|e| {
+    let response = match state.dispatcher.dispatch_async(request).await {
+        Ok(response) => response,
+        Err(e) => {
             tracing::error!(error = %e, "Failed to dispatch job to queue");
-            ApiError::internal_error(anyhow!("Failed to dispatch job: {}", e))
-        })?;
+            // The run row was inserted as Pending before dispatch; a dispatch
+            // failure means it will never run, so mark it Failed instead of
+            // leaving a zombie Pending row for the sweeper to time out.
+            let now = chrono::Utc::now().naive_utc();
+            if let Err(update_err) = execution_run::Entity::update_many()
+                .set(execution_run::ActiveModel {
+                    status: Set(RunStatus::Failed),
+                    completed_at: Set(Some(now)),
+                    updated_at: Set(now),
+                    error_message: Set(Some(format!("Failed to dispatch job: {}", e))),
+                    ..Default::default()
+                })
+                .filter(execution_run::Column::Id.eq(&run_id))
+                .exec(&state.db)
+                .await
+            {
+                tracing::error!(
+                    run_id = %run_id,
+                    error = %update_err,
+                    "Failed to mark run as failed after dispatch error"
+                );
+            }
+            return Err(ApiError::internal_error(anyhow!(
+                "Failed to dispatch job: {}",
+                e
+            )));
+        }
+    };
 
     Ok(Json(InvokeEventAsyncResponse {
         run_id,

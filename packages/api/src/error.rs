@@ -218,6 +218,17 @@ impl ApiError {
         )
     }
 
+    pub fn gateway_timeout(msg: impl Into<String>) -> Self {
+        let msg = msg.into();
+        tracing::warn!("Gateway timeout: {}", msg);
+        Self::new(
+            StatusCode::GATEWAY_TIMEOUT,
+            "GATEWAY_TIMEOUT",
+            Some(msg),
+            ReportPolicy::Ignore,
+        )
+    }
+
     pub fn not_implemented(msg: impl Into<String>) -> Self {
         let msg = msg.into();
         tracing::warn!("Not implemented: {}", msg);
