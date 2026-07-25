@@ -1,5 +1,16 @@
 ---
 import { FlowPilotBubbleOrb } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-orb";
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+
 const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
 ---
 
@@ -9,30 +20,30 @@ const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
   <div class="v5-hero__topfade" aria-hidden="true"></div>
 
   <div class="hero-copy">
-    <span class="eyebrow live"><i aria-hidden="true"></i> THE OPERATING LAYER FOR AI-NATIVE COMPANIES</span>
-    <h1>Build the systems.<br /><em>Let AI run the work.</em></h1>
-    <p>Apps, workflows, data, and agents in one governed platform. From the first prompt to every process that follows.</p>
+    <span class="eyebrow live"><i aria-hidden="true"></i> {t("v5.hero.eyebrow")}</span>
+    <h1>{t("v5.hero.title.l1")}<br /><em>{t("v5.hero.title.em")}</em></h1>
+    <p>{t("v5.hero.body")}</p>
     <div class="hero-actions">
-      <a href="#platform">Explore the platform <span aria-hidden="true">↘</span></a>
-      <a href="#flowpilot">See FlowPilot work <span aria-hidden="true">▶</span></a>
+      <a href="#platform">{t("v5.hero.cta.platform")} <span aria-hidden="true">↘</span></a>
+      <a href="#flowpilot">{t("v5.hero.cta.flowpilot")} <span aria-hidden="true">▶</span></a>
     </div>
   </div>
 
   <div class="hero-card">
     <header><span><i aria-hidden="true"></i> FLOWPILOT / LIVE</span><em aria-hidden="true">•••</em></header>
-    <main><FlowPilotBubbleOrb client:only="react" aria-label="FlowPilot" className="size-9 shrink-0" /><p>Prepare tomorrow’s customer meeting and handle the follow-ups.</p></main>
+    <main><FlowPilotBubbleOrb client:only="react" aria-label="FlowPilot" className="size-9 shrink-0" /><p>{t("v5.hero.card.prompt")}</p></main>
     <div class="hero-flow">
-      <span><i aria-hidden="true">01</i><b>Email</b><small>18 threads</small></span><em aria-hidden="true">→</em>
-      <span><i aria-hidden="true">02</i><b>Data</b><small>Customer 360</small></span><em aria-hidden="true">→</em>
-      <span><i aria-hidden="true">03</i><b>Calendar</b><small>Briefing added</small></span>
+      <span><i aria-hidden="true">01</i><b>{t("v5.hero.flow.email")}</b><small>{t("v5.hero.flow.email.sub")}</small></span><em aria-hidden="true">→</em>
+      <span><i aria-hidden="true">02</i><b>{t("v5.hero.flow.data")}</b><small>Customer 360</small></span><em aria-hidden="true">→</em>
+      <span><i aria-hidden="true">03</i><b>{t("v5.hero.flow.calendar")}</b><small>{t("v5.hero.flow.calendar.sub")}</small></span>
     </div>
-    <footer><span><i aria-hidden="true"></i> Complete</span><b>Briefing ready ↗</b></footer>
+    <footer><span><i aria-hidden="true"></i> {t("v5.hero.card.footerStatus")}</span><b>{t("v5.hero.card.footerResult")} ↗</b></footer>
   </div>
 
   <div class="hero-tech">
-    <span>VISUAL WHEN YOU WANT IT</span>
+    <span>{t("v5.hero.tech.visual")}</span>
     <div>{tech.map((x) => <i>{x}</i>)}</div>
-    <span>CODE WHEN YOU NEED IT</span>
+    <span>{t("v5.hero.tech.code")}</span>
   </div>
 </section>
 

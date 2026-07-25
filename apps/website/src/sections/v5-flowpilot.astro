@@ -1,13 +1,23 @@
 ---
 import FlowPilotUseCase from "../components/showcase/flowpilot-usecase";
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
 ---
 
 <section id="flowpilot" class="dark v5-flowpilot pilot-section" style="color-scheme:dark">
   <div class="aura" aria-hidden="true"></div>
   <div class="pilot-heading">
     <span class="eyebrow">03 / FLOWPILOT</span>
-    <h2>One call.<br /><em>Your whole company</em><br />in motion.</h2>
-    <p>FlowPilot doesn’t sit beside your work. It understands the tools, data, permissions, and processes that make your company run — the composer below is the real thing.</p>
+    <h2>{t("v5.flowpilot.title.l1")}<br /><em>{t("v5.flowpilot.title.em")}</em><br />{t("v5.flowpilot.title.l3")}</h2>
+    <p>{t("v5.flowpilot.body")}</p>
   </div>
   <div class="pilot-stage">
     <FlowPilotUseCase client:only="react" className="h-[32rem]" />

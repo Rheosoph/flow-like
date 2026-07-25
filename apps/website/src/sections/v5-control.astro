@@ -1,15 +1,34 @@
+---
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+
+const items = [
+  "v5.control.item1",
+  "v5.control.item2",
+  "v5.control.item3",
+  "v5.control.item4",
+] as const;
+---
+
 <section class="v5-control control-section">
   <div>
-    <span class="eyebrow">04 / CONTROL</span>
-    <h2>Move at AI speed.<br/>Stay in control.</h2>
+    <span class="eyebrow">04 / {t("v5.control.eyebrow")}</span>
+    <h2>{t("v5.control.title.l1")}<br />{t("v5.control.title.l2")}</h2>
   </div>
   <div>
-    <p>One view over every process, app, interaction, permission, and log—across your entire company.</p>
+    <p>{t("v5.control.body")}</p>
     <ul>
-      <li><span>01</span>Immutable audit trails</li>
-      <li><span>02</span>Human-in-the-loop controls</li>
-      <li><span>03</span>EU AI Act readiness</li>
-      <li><span>04</span>End-to-end observability</li>
+      {items.map((key, index) => (
+        <li><span>0{index + 1}</span>{t(key)}</li>
+      ))}
     </ul>
   </div>
 </section>

@@ -12,8 +12,9 @@ import {
 	zh,
 } from "./locales";
 import { v4en } from "./locales/v4";
+import { v5 } from "./locales/v5";
 
-const en = { ...enBase, ...v4en };
+const en = { ...enBase, ...v4en, ...v5.en };
 
 export const languages = {
 	en: "English",
@@ -62,16 +63,16 @@ export function getTranslation(lang: Lang, key: TranslationKey): string {
 
 export const translations = {
 	en,
-	de,
-	es,
-	fr,
-	zh,
-	ja,
-	ko,
-	pt,
-	it,
-	nl,
-	sv,
+	de: { ...de, ...v5.de },
+	es: { ...es, ...v5.es },
+	fr: { ...fr, ...v5.fr },
+	zh: { ...zh, ...v5.zh },
+	ja: { ...ja, ...v5.ja },
+	ko: { ...ko, ...v5.ko },
+	pt: { ...pt, ...v5.pt },
+	it: { ...it, ...v5.it },
+	nl: { ...nl, ...v5.nl },
+	sv: { ...sv, ...v5.sv },
 } as const;
 
 export type TranslationKey = string;

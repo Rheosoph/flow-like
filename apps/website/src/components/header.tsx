@@ -884,7 +884,7 @@ export function Header() {
 							src="/icon.webp"
 							className={`transition-all duration-300 ${scrolled ? "h-8 w-8" : "h-10 w-10"}`}
 						/>
-						<span className="font-semibold text-lg tracking-tight group-hover:text-primary transition-colors duration-300">
+						<span className="font-semibold text-lg tracking-tight text-foreground group-hover:text-primary transition-colors duration-300">
 							Flow Like
 						</span>
 					</a>
@@ -948,7 +948,7 @@ export function Header() {
 					<button
 						type="button"
 						onClick={() => setMobileMenuOpen(true)}
-						className="lg:hidden p-2 rounded-lg hover:bg-muted/50 transition-colors duration-300"
+						className="lg:hidden p-2 rounded-lg text-foreground hover:bg-muted/50 transition-colors duration-300"
 						aria-label="Open menu"
 						aria-controls="mobile-navigation"
 						aria-expanded={mobileMenuOpen}

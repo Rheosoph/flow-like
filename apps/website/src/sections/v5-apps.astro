@@ -1,44 +1,66 @@
 ---
+import type { Lang, TranslationKey } from "../i18n";
+import { defaultLang, translations } from "../i18n";
+
+interface Props { lang?: Lang; }
+const { lang = defaultLang } = Astro.props;
+const t = (key: TranslationKey): string => {
+  const localized = translations[lang] as Record<string, string>;
+  const english = translations.en as Record<string, string>;
+  return localized?.[key] ?? english[key] ?? key;
+};
+const tList = (key: TranslationKey): string[] => t(key).split("|");
+
+// Client-script labels (kept in sync with the server-rendered initial state below).
+const labels = {
+  connectedLayer: t("v5.apps.state.connectedLayer"),
+  builtWith: t("v5.apps.state.builtWith"),
+  liveFlag: t("v5.apps.state.liveFlag"),
+  selectApp: t("v5.apps.state.selectApp"),
+  live: t("v5.apps.state.live"),
+  ready: t("v5.apps.state.ready"),
+  exchanging: t("v5.apps.state.exchanging"),
+  connected: t("v5.apps.state.connected"),
+  frontendSelected: t("v5.apps.bridge.frontendSelected"),
+};
+
 // [name, category, mockup-kind, color, screenshot-slug]. Drop a real screenshot at
 // /public/images/apps/<slug>.webp and it crossfades in over the mockup fallback.
 const carouselApps = [
-  ["Operations HQ", "Operations", "ops", "coral", "operations-hq"],
-  ["Finance Approvals", "Finance", "finance", "orange", "finance-approvals"],
-  ["Customer 360", "Revenue", "customer", "red", "customer-360"],
-  ["Knowledge Graph", "Data", "graph", "rust", "knowledge-graph"],
-  ["AI Control Center", "Governance", "control", "coral", "ai-control-center"],
-  ["Inventory Planner", "Supply chain", "inventory", "orange", "inventory-planner"],
-  ["FlowPilot Workspace", "Everyone", "agent", "red", "flowpilot-workspace"],
-  ["Field Service", "Mobile", "field", "rust", "field-service"],
+  ["Operations HQ", t("v5.apps.cat.operations"), "ops", "coral", "operations-hq"],
+  ["Finance Approvals", t("v5.apps.cat.finance"), "finance", "orange", "finance-approvals"],
+  ["Customer 360", t("v5.apps.cat.revenue"), "customer", "red", "customer-360"],
+  ["Knowledge Graph", t("v5.apps.cat.data"), "graph", "rust", "knowledge-graph"],
+  ["AI Control Center", t("v5.apps.cat.governance"), "control", "coral", "ai-control-center"],
+  ["Inventory Planner", t("v5.apps.cat.supplyChain"), "inventory", "orange", "inventory-planner"],
+  ["FlowPilot Workspace", t("v5.apps.cat.everyone"), "agent", "red", "flowpilot-workspace"],
+  ["Field Service", t("v5.apps.cat.mobile"), "field", "rust", "field-service"],
 ];
 
 const appFlows = [
   {
     id: "approval",
-    label: "Email → approval",
-    title: "New supplier request",
-    detail:
-      "Flow-Like extracts the request, enriches it with company data, and starts the governed approval workflow.",
+    label: t("v5.apps.flow.approval.label"),
+    title: t("v5.apps.flow.approval.title"),
+    detail: t("v5.apps.flow.approval.detail"),
     nodes: ["email", "approval"],
-    route: ["Email", "Workflow Core", "Finance Approvals"],
+    route: tList("v5.apps.flow.approval.route"),
   },
   {
     id: "insight",
-    label: "Ontology → dashboard",
-    title: "Live operations intelligence",
-    detail:
-      "Data Studio resolves the ontology query and streams one trusted operational view into the dashboard.",
+    label: t("v5.apps.flow.insight.label"),
+    title: t("v5.apps.flow.insight.title"),
+    detail: t("v5.apps.flow.insight.detail"),
     nodes: ["data", "dashboard"],
-    route: ["Data Studio", "Ontology", "Operations HQ"],
+    route: tList("v5.apps.flow.insight.route"),
   },
   {
     id: "flowpilot",
-    label: "FlowPilot → company",
-    title: "Prepare the quarterly review",
-    detail:
-      "FlowPilot reads mail and notes, queries company data, prepares the dashboard, and schedules the review.",
+    label: t("v5.apps.flow.flowpilot.label"),
+    title: t("v5.apps.flow.flowpilot.title"),
+    detail: t("v5.apps.flow.flowpilot.detail"),
     nodes: ["email", "data", "notes", "dashboard", "calendar"],
-    route: ["FlowPilot", "5 company apps", "Briefing ready"],
+    route: tList("v5.apps.flow.flowpilot.route"),
   },
 ];
 
@@ -47,23 +69,23 @@ const scenarioAppIndex = [1, 3, 6];
 
 const linkLabel = (id: string): string =>
   id === "approval"
-    ? "approval task"
+    ? t("v5.apps.link.approval")
     : id === "dashboard"
-      ? "live metrics"
+      ? t("v5.apps.link.dashboard")
       : id === "data"
-        ? "ontology query"
+        ? t("v5.apps.link.data")
         : id === "email"
-          ? "message context"
+          ? t("v5.apps.link.email")
           : id === "calendar"
-            ? "schedule"
-            : "meeting notes";
+            ? t("v5.apps.link.calendar")
+            : t("v5.apps.link.notes");
 
 function miniApp(kind: string): string {
   if (kind === "ops") {
     const bars = [43, 58, 49, 73, 62, 88, 78, 95]
       .map((x) => `<i style="height:${x}%"></i>`)
       .join("");
-    return `<div class="mini ops-mini"><div class="metric-row"><span><b>98.4%</b><small>On time</small></span><span><b>214</b><small>Live runs</small></span><span><b>6</b><small>Attention</small></span></div><div class="bar-chart">${bars}</div></div>`;
+    return `<div class="mini ops-mini"><div class="metric-row"><span><b>98.4%</b><small>${t("v5.apps.mini.ops.onTime")}</small></span><span><b>214</b><small>${t("v5.apps.mini.ops.liveRuns")}</small></span><span><b>6</b><small>${t("v5.apps.mini.ops.attention")}</small></span></div><div class="bar-chart">${bars}</div></div>`;
   }
   if (kind === "finance") {
     const rows: [string, string][] = [
@@ -74,21 +96,21 @@ function miniApp(kind: string): string {
     return `<div class="mini approval">${rows
       .map(
         (r, i) =>
-          `<div><span><b>${r[0]}</b><small>Infrastructure</small></span><em>${r[1]}</em><button>${i === 1 ? "Approve" : "Review"}</button></div>`,
+          `<div><span><b>${r[0]}</b><small>${t("v5.apps.mini.finance.dept")}</small></span><em>${r[1]}</em><button>${i === 1 ? t("v5.apps.mini.finance.approve") : t("v5.apps.mini.finance.review")}</button></div>`,
       )
       .join("")}</div>`;
   }
   if (kind === "customer") {
-    return `<div class="mini customer"><aside><i></i><i></i><i></i><i></i></aside><section><div class="avatar">AK</div><span><b>Acme Industries</b><small>Health score · 92</small></span><div class="health"><i></i></div><p>Renewal briefing generated by FlowPilot</p></section></div>`;
+    return `<div class="mini customer"><aside><i></i><i></i><i></i><i></i></aside><section><div class="avatar">AK</div><span><b>Acme Industries</b><small>${t("v5.apps.mini.customer.healthScore")} · 92</small></span><div class="health"><i></i></div><p>${t("v5.apps.mini.customer.briefing")}</p></section></div>`;
   }
   if (kind === "graph") {
-    return `<div class="mini mini-graph"><span class="g-node g1">Customer</span><span class="g-node g2">Contract</span><span class="g-node g3">Product</span><span class="g-node g4">Interaction</span><i class="g-line l1"></i><i class="g-line l2"></i><i class="g-line l3"></i></div>`;
+    return `<div class="mini mini-graph"><span class="g-node g1">${t("v5.apps.mini.graph.customer")}</span><span class="g-node g2">${t("v5.apps.mini.graph.contract")}</span><span class="g-node g3">${t("v5.apps.mini.graph.product")}</span><span class="g-node g4">${t("v5.apps.mini.graph.interaction")}</span><i class="g-line l1"></i><i class="g-line l2"></i><i class="g-line l3"></i></div>`;
   }
   if (kind === "control") {
     const rows: [string, string][] = [
-      ["Customer summary", "Compliant"],
-      ["Invoice extraction", "Compliant"],
-      ["Hiring assistant", "Review"],
+      [t("v5.apps.mini.control.row1"), t("v5.apps.status.compliant")],
+      [t("v5.apps.mini.control.row2"), t("v5.apps.status.compliant")],
+      [t("v5.apps.mini.control.row3"), t("v5.apps.status.review")],
     ];
     return `<div class="mini control">${rows
       .map(
@@ -112,22 +134,22 @@ function miniApp(kind: string): string {
       .join("")}</div>`;
   }
   if (kind === "agent") {
-    return `<div class="mini agent dark"><i class="orb">✦</i><p>Prepare the Q3 supplier review and schedule follow-ups.</p><div><span>Mail</span><em>→</em><span>Data</span><em>→</em><span>Calendar</span></div></div>`;
+    return `<div class="mini agent dark"><i class="orb">✦</i><p>${t("v5.apps.mini.agent.prompt")}</p><div><span>${t("v5.apps.mini.agent.mail")}</span><em>→</em><span>${t("v5.apps.mini.agent.data")}</span><em>→</em><span>${t("v5.apps.mini.agent.calendar")}</span></div></div>`;
   }
-  return `<div class="mini field"><div class="map"><i></i><i></i><b>3</b></div><section><small>Next visit</small><b>Turbine B–14</b><span>14:30 · 4.2 km</span><button>Start route</button></section></div>`;
+  return `<div class="mini field"><div class="map"><i></i><i></i><b>3</b></div><section><small>${t("v5.apps.mini.field.nextVisit")}</small><b>Turbine B–14</b><span>14:30 · 4.2 km</span><button>${t("v5.apps.mini.field.startRoute")}</button></section></div>`;
 }
 
-const mailCanvas = `<div class="mail-canvas"><div><i>AS</i><span><b>New supplier request</b><small>Anna Schmidt · 2m</small></span><em>NEW</em></div><div><i>JM</i><span><b>Q3 review notes</b><small>Jonas Müller · 18m</small></span><em>3</em></div><div><i>LP</i><span><b>Production update</b><small>Lea Peters · 42m</small></span><em>✓</em></div></div>`;
-const notesCanvas = `<div class="notes-canvas"><span>Q3 renewal themes</span><p>Adoption is up. Procurement needs a revised value case.</p></div>`;
-const calendarCanvas = `<div class="calendar-canvas"><span><b>24</b><small>THU</small></span><p>Quarterly review</p><i>10:30 — 11:15</i></div>`;
+const mailCanvas = `<div class="mail-canvas"><div><i>AS</i><span><b>${t("v5.apps.mail.subject1")}</b><small>Anna Schmidt · 2m</small></span><em>${t("v5.apps.mail.new")}</em></div><div><i>JM</i><span><b>${t("v5.apps.mail.subject2")}</b><small>Jonas Müller · 18m</small></span><em>3</em></div><div><i>LP</i><span><b>${t("v5.apps.mail.subject3")}</b><small>Lea Peters · 42m</small></span><em>✓</em></div></div>`;
+const notesCanvas = `<div class="notes-canvas"><span>${t("v5.apps.notes.title")}</span><p>${t("v5.apps.notes.body")}</p></div>`;
+const calendarCanvas = `<div class="calendar-canvas"><span><b>24</b><small>${t("v5.apps.cal.day")}</small></span><p>${t("v5.apps.cal.event")}</p><i>10:30 — 11:15</i></div>`;
 
 const connectedApps = [
-  { id: "email", title: "Email", meta: "Company inbox", kind: "customer", compact: false, canvas: `<div class="connected-canvas">${mailCanvas}</div>` },
-  { id: "approval", title: "Finance Approvals", meta: "Governed workflow", kind: "finance", compact: false, canvas: `<div class="connected-canvas">${miniApp("finance")}</div>` },
-  { id: "data", title: "Data Studio", meta: "Company ontology", kind: "graph", compact: false, canvas: `<div class="connected-canvas">${miniApp("graph")}</div>` },
-  { id: "dashboard", title: "Operations HQ", meta: "Live command center", kind: "ops", compact: false, canvas: `<div class="connected-canvas">${miniApp("ops")}</div>` },
-  { id: "notes", title: "Notes", meta: "Shared knowledge", kind: "customer", compact: true, canvas: notesCanvas },
-  { id: "calendar", title: "Calendar", meta: "Company schedule", kind: "field", compact: true, canvas: calendarCanvas },
+  { id: "email", title: t("v5.apps.connected.email.title"), meta: t("v5.apps.connected.email.meta"), kind: "customer", compact: false, canvas: `<div class="connected-canvas">${mailCanvas}</div>` },
+  { id: "approval", title: "Finance Approvals", meta: t("v5.apps.connected.approval.meta"), kind: "finance", compact: false, canvas: `<div class="connected-canvas">${miniApp("finance")}</div>` },
+  { id: "data", title: "Data Studio", meta: t("v5.apps.connected.data.meta"), kind: "graph", compact: false, canvas: `<div class="connected-canvas">${miniApp("graph")}</div>` },
+  { id: "dashboard", title: "Operations HQ", meta: t("v5.apps.connected.dashboard.meta"), kind: "ops", compact: false, canvas: `<div class="connected-canvas">${miniApp("ops")}</div>` },
+  { id: "notes", title: t("v5.apps.connected.notes.title"), meta: t("v5.apps.connected.notes.meta"), kind: "customer", compact: true, canvas: notesCanvas },
+  { id: "calendar", title: t("v5.apps.connected.calendar.title"), meta: t("v5.apps.connected.calendar.meta"), kind: "field", compact: true, canvas: calendarCanvas },
 ];
 
 const nodeIds = ["email", "approval", "data", "dashboard", "notes", "calendar"] as const;
@@ -142,34 +164,34 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
 
 <section id="apps" class="v5-apps apps unified-apps" data-v5-apps>
   <div class="section-head unified-head">
-    <span class="eyebrow">01 / COMPANY APPLICATIONS</span>
+    <span class="eyebrow">01 / {t("v5.apps.eyebrow")}</span>
     <div>
-      <h2>Every app.<br />One operating system.</h2>
-      <p>Explore the frontends your teams use, then watch the shared data, workflows, permissions, and FlowPilot intelligence move behind them.</p>
+      <h2>{t("v5.apps.h2.l1")}<br />{t("v5.apps.h2.l2")}</h2>
+      <p>{t("v5.apps.intro")}</p>
     </div>
   </div>
 
   <div class="subsection-head">
-    <span class="sub-kicker"><i></i> Shipped on Flow-Like</span>
-    <h3>Real apps. Real business.</h3>
-    <p>Every frontend below is a live app a team actually uses — designed, governed, and run on Flow-Like.</p>
+    <span class="sub-kicker"><i></i> {t("v5.apps.sub.kicker")}</span>
+    <h3>{t("v5.apps.sub.h3")}</h3>
+    <p>{t("v5.apps.sub.p")}</p>
   </div>
 
   <div class="unified-shell store-shell">
     <div class="app-store">
       <div class="app-rail-header">
-        <span><i></i> COMPANY APP STORE <b>8 LIVE APPS</b></span>
+        <span><i></i> {t("v5.apps.store.header")} <b>{t("v5.apps.store.count")}</b></span>
         <div>
-          <button type="button" data-rail-prev aria-label="Previous applications">
+          <button type="button" data-rail-prev aria-label={t("v5.apps.aria.prev")}>
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 12H5" /><path d="m12 19-7-7 7-7" /></svg>
           </button>
-          <button type="button" data-rail-next aria-label="Next applications">
+          <button type="button" data-rail-next aria-label={t("v5.apps.aria.next")}>
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14" /><path d="m12 5 7 7-7 7" /></svg>
           </button>
         </div>
       </div>
 
-      <div class="app-rail" data-rail aria-label="Select an application to connect to Flow-Like">
+      <div class="app-rail" data-rail aria-label={t("v5.apps.aria.rail")}>
         {carouselApps.map((app, index) => (
           <article
             class:list={["app-card", app[3], index === selectedIndex0 && "selected"]}
@@ -185,7 +207,7 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
               <img
                 class="app-shot"
                 src={`/images/apps/${app[4]}.webp`}
-                alt={`${app[0]} — a real app built with Flow-Like`}
+                alt={`${app[0]} — ${t("v5.apps.card.alt")}`}
                 loading="lazy"
                 decoding="async"
                 onload="this.classList.add('shot-ready')"
@@ -194,8 +216,8 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
               <span class="app-shot-veil" aria-hidden="true"></span>
             </div>
             <footer>
-              <span data-card-footer-span>{index === selectedIndex0 ? "Connected to operating layer" : "Built with Flow-Like"}</span>
-              <b data-card-footer-b>{index === selectedIndex0 ? "Live ●" : "Select app"}</b>
+              <span data-card-footer-span>{index === selectedIndex0 ? labels.connectedLayer : labels.builtWith}</span>
+              <b data-card-footer-b>{index === selectedIndex0 ? labels.liveFlag : labels.selectApp}</b>
             </footer>
           </article>
         ))}
@@ -208,17 +230,17 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
       <span>
         <i data-role="bridge-letter">{selApp0[0][0]}</i>
         <b data-role="bridge-name">{selApp0[0]}</b>
-        <small data-role="bridge-cat">{selApp0[1]} frontend selected</small>
+        <small data-role="bridge-cat">{selApp0[1]} {labels.frontendSelected}</small>
       </span>
-      <div><i></i><b>Shared context, permissions and live state</b><i></i></div>
+      <div><i></i><b>{t("v5.apps.bridge.shared")}</b><i></i></div>
       <span>
         <i>FL</i>
-        <b>Flow-Like operating layer</b>
+        <b>{t("v5.apps.bridge.operatingLayer")}</b>
         <small data-role="bridge-right">{flow0.label}</small>
       </span>
     </div>
 
-    <div class={`ecosystem flow-${flow0.id}`} data-ecosystem aria-label="The selected app connected to the Flow-Like operating system">
+    <div class={`ecosystem flow-${flow0.id}`} data-ecosystem aria-label={t("v5.apps.aria.ecosystem")}>
       <div class="ecosystem-grid" aria-hidden="true"></div>
 
       {nodeIds.map((id) => (
@@ -244,11 +266,11 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
             <header>
               <i>{app.title.slice(0, 2).toUpperCase()}</i>
               <span><b>{app.title}</b><small>{app.meta}</small></span>
-              <em data-role="app-em">{on ? "LIVE" : "READY"}</em>
+              <em data-role="app-em">{on ? labels.live : labels.ready}</em>
             </header>
             <Fragment set:html={app.canvas} />
             <footer>
-              <span data-role="app-foot-span">{on ? "Exchanging context" : "Connected"}</span>
+              <span data-role="app-foot-span">{on ? labels.exchanging : labels.connected}</span>
               <b data-role="app-foot-b">{on ? "●" : "○"}</b>
             </footer>
           </article>
@@ -256,7 +278,7 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
       })}
 
       <div class="os-core dark">
-        <header><span><i></i> FLOW–LIKE / OPERATING LAYER</span><em>LIVE</em></header>
+        <header><span><i></i> {t("v5.apps.core.header")}</span><em>LIVE</em></header>
         <div class="core-orbit"><i></i><i></i><i></i><img src="/favicon.svg" alt="Flow-Like" width="34" height="34" /></div>
         <label data-role="core-label">{selApp0[0]} / {flow0.label}</label>
         <h3 data-role="core-title">{flow0.title}</h3>
@@ -266,11 +288,11 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
             <span><b>{step}</b>{index < flow0.route.length - 1 && <i>→</i>}</span>
           ))}
         </div>
-        <footer><span><i></i> Process running</span><b>Governed end to end</b></footer>
+        <footer><span><i></i> {t("v5.apps.core.processRunning")}</span><b>{t("v5.apps.core.governed")}</b></footer>
       </div>
     </div>
 
-    <div class="flow-switcher" aria-label="Choose an application connection scenario">
+    <div class="flow-switcher" aria-label={t("v5.apps.aria.switcher")}>
       {appFlows.map((item, index) => (
         <button
           type="button"
@@ -612,7 +634,7 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
   .v5-apps .calendar-canvas > i { color: var(--muted-foreground); font-size: 6px; font-style: normal; }
 </style>
 
-<script is:inline define:vars={{ carouselApps, appFlows, appFlowIndex, scenarioAppIndex }}>
+<script is:inline define:vars={{ carouselApps, appFlows, appFlowIndex, scenarioAppIndex, labels }}>
   function initV5Apps() {
     const root = document.querySelector("[data-v5-apps]");
     if (!root || root.dataset.ready === "true") return;
@@ -696,8 +718,8 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
         card.setAttribute("aria-pressed", String(on));
         const foot = card.querySelector("[data-card-footer-span]");
         const flag = card.querySelector("[data-card-footer-b]");
-        if (foot) foot.textContent = on ? "Connected to operating layer" : "Built with Flow-Like";
-        if (flag) flag.textContent = on ? "Live ●" : "Select app";
+        if (foot) foot.textContent = on ? labels.connectedLayer : labels.builtWith;
+        if (flag) flag.textContent = on ? labels.liveFlag : labels.selectApp;
       });
 
       if (ecosystem) {
@@ -713,14 +735,14 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
         const em = app.querySelector("[data-role='app-em']");
         const footSpan = app.querySelector("[data-role='app-foot-span']");
         const footB = app.querySelector("[data-role='app-foot-b']");
-        if (em) em.textContent = on ? "LIVE" : "READY";
-        if (footSpan) footSpan.textContent = on ? "Exchanging context" : "Connected";
+        if (em) em.textContent = on ? labels.live : labels.ready;
+        if (footSpan) footSpan.textContent = on ? labels.exchanging : labels.connected;
         if (footB) footB.textContent = on ? "●" : "○";
       });
 
       if (bridgeLetter) bridgeLetter.textContent = selectedApp[0][0];
       if (bridgeName) bridgeName.textContent = selectedApp[0];
-      if (bridgeCat) bridgeCat.textContent = selectedApp[1] + " frontend selected";
+      if (bridgeCat) bridgeCat.textContent = selectedApp[1] + " " + labels.frontendSelected;
       if (bridgeRight) bridgeRight.textContent = flow.label;
 
       if (coreLabel) coreLabel.textContent = selectedApp[0] + " / " + flow.label;
