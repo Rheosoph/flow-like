@@ -11,7 +11,7 @@ import {
 } from "../index";
 
 describe("FlowPilot app-creation E2E cases", () => {
-	test("defines six stable cases and the three requested smoke archetypes", () => {
+	test("defines ten stable cases and the three requested smoke archetypes", () => {
 		expect(FLOWPILOT_APP_CREATION_CASES.map(({ id }) => id)).toEqual([
 			"simple-agent",
 			"forum",
@@ -19,6 +19,10 @@ describe("FlowPilot app-creation E2E cases", () => {
 			"expense-approval",
 			"rss-digest",
 			"incident-console",
+			"mail-approval",
+			"doc-compliance",
+			"webhook-enrichment",
+			"agent-tools",
 		]);
 		expect(FLOWPILOT_APP_CREATION_SMOKE_CASES.map(({ id }) => id)).toEqual([
 			"simple-agent",
@@ -94,7 +98,7 @@ describe("FlowPilot app-creation E2E cases", () => {
 		expect(
 			resolveFlowPilotE2ERunCases({ suite: "smoke" }).map(({ id }) => id),
 		).toEqual(["simple-agent", "forum", "ops-dashboard"]);
-		expect(resolveFlowPilotE2ERunCases({ suite: "full" })).toHaveLength(6);
+		expect(resolveFlowPilotE2ERunCases({ suite: "full" })).toHaveLength(10);
 	});
 
 	test("rejects ambiguous runner selections", () => {

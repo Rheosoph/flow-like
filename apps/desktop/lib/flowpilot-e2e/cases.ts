@@ -54,7 +54,7 @@ export const FLOWPILOT_APP_CREATION_CASES = [
 			"Exercises web research, on-demand upload extraction, vector ingestion and retrieval in one chat-event workflow — no UI or Data Studio scaffolding.",
 		appName: "Simple Agent",
 		smoke: true,
-		prompt: `Build a research agent that lives entirely in chat: implement everything behind exactly ONE Chat Event entry (eventsChat) and answer through the chat response. Do not add eventsSimple or eventsGeneric entries — branch on the incoming message inside the workflow, using functions for the sub-behaviors. Do not build any pages or widgets — the chat surface is the whole UI — and do not pre-create database tables: the tables are defined by the workflow's first write.
+		prompt: `Build a research agent that lives entirely in chat: implement everything behind exactly ONE Chat Event entry (eventsChat) and answer through the chat response. Do not add eventsSimple or eventsGeneric entries — branch on the incoming message inside the workflow, using functions for the sub-behaviors. Do not build any pages or widgets — the chat surface is the whole UI — The database tables are created automatically by the workflow's first write.
 
 The agent must:
 1. Search the internet and perform deeper research through https://search.flow-like.com (SearXNG), citing source URLs in the chat reply.
@@ -214,7 +214,7 @@ Use tables named exactly "Services", "Incidents", and "Metric Snapshots". The pa
 		smoke: false,
 		prompt: `Build an expense-approval app with a page named "Expense Queue". Show pending requests as instances of a reusable widget named "Expense Row" with Approve and Reject actions, plus status/amount filters and an audit panel.
 
-Use tables named exactly "Expense Requests" and "Expense Audit". The workflow must load pending expenses, approve or reject exactly one request, require a rejection reason, prevent a request from being decided twice, append an audit record, and refresh the queue. Wire both real widget action ids and persisted table ids into the workflow.`,
+Use tables named exactly "Expense Requests" and "Expense Audit". The workflow must load pending expenses, approve or reject exactly one request, require a rejection reason, prevent a request from being decided twice, append an audit record, and refresh the queue. Wire both real widget action ids and persisted table ids into the workflow. Register EVERY workflow entry as an app event before reporting completion — the page-load entry AND each widget-action handler, at least three registrations in total.`,
 		requirements: requirements({
 			minFlowScriptNonWhitespaceChars: 850,
 			minTotalNodes: 9,
@@ -267,7 +267,7 @@ Use tables named exactly "RSS Feeds", "RSS Articles", and "RSS Digests". A sched
 		smoke: false,
 		prompt: `Build an incident-response console page named "Incident Console". Render active incidents with a reusable widget named "Incident Row" that has Acknowledge and Resolve actions, and show the selected incident's timeline.
 
-Use tables named exactly "Incidents" and "Incident Updates". Support creating an incident from an incoming/manual event, loading active incidents, acknowledging once, resolving with a summary, and appending every transition to the timeline. Reject invalid state transitions and make repeated action delivery idempotent. Wire the real page, table, widget, and widget-action ids.`,
+Use tables named exactly "Incidents" and "Incident Updates". Support creating an incident from an incoming/manual event, loading active incidents, acknowledging once, resolving with a summary, and appending every transition to the timeline. Reject invalid state transitions and make repeated action delivery idempotent. Wire the real page, table, widget, and widget-action ids. Register EVERY workflow entry as an app event before reporting completion — the page-load entry AND each widget-action handler, at least three registrations in total.`,
 		requirements: requirements({
 			minFlowScriptNonWhitespaceChars: 850,
 			minTotalNodes: 10,
@@ -284,6 +284,175 @@ Use tables named exactly "Incidents" and "Incident Updates". Support creating an
 					source: "canonical",
 				},
 				{ entity: "widget_action", alias: "resolve", source: "canonical" },
+			],
+		}),
+	},
+	{
+		id: "mail-approval",
+		title: "Email automation with mail-loop human approval",
+		description:
+			"Exercises IMAP/SMTP round-trips and a human-in-the-loop approval cycle carried entirely over email — no pages or widgets.",
+		appName: "Mail Copilot",
+		smoke: false,
+		prompt: `Build an email automation whose human-in-the-loop approval happens entirely over email — this app has NO pages and NO widgets; do not create any UI.
+
+Triage entry (manual/scheduled): connect to the mailbox over IMAP, fetch unseen inbox mail, extract each message's content, draft a reply, and send that draft over SMTP to the approver's address for review — tag the approval mail's subject with a stable draft id so the response can be matched later. Persist each draft (draft id, original sender, subject, draft body, status "awaiting_approval") with database writes into a table named exactly "Mail Drafts", and mark the source mail as seen.
+
+Approval entry (separate manual/scheduled entry): fetch the approver's responses over IMAP and match each response to its pending draft by the tagged draft id, reading the draft back from the table with a database read/filter node. If the response approves (e.g. contains "ok"), send the approved reply over SMTP to the ORIGINAL sender and update the draft row to status "sent". Otherwise treat the response body as improvement feedback: revise the draft with it, send the revised draft back to the approver for another round, and update the row (status stays "awaiting_approval", revision incremented). Never send anything to the original sender without an approval.
+
+Leave every server/credential/approver-address input empty ("") — the user fills them in later; never invent hosts, accounts, or passwords. Handle an empty inbox and an unmatched approval response safely. Register BOTH workflow entries as app events.`,
+		requirements: requirements({
+			minFlowScriptNonWhitespaceChars: 900,
+			minTotalNodes: 10,
+			minPages: 0,
+			minWidgets: 0,
+			minTables: 0,
+			minEvents: 2,
+			requiredNodeCapabilities: [
+				{
+					alias: "imap_fetch",
+					anyOf: ["email_imap_inbox_fetch_mail", "email_imap_connect"],
+				},
+				{ alias: "smtp_send", anyOf: ["email_smtp_send"] },
+				{
+					alias: "database_read",
+					anyOf: [
+						"filter_local_db",
+						"list_local_db",
+						"fts_search_local_db",
+						"vector_search_local_db",
+						"hybrid_search_local_db",
+						"df_sql_query",
+					],
+				},
+				{
+					alias: "database_write",
+					anyOf: [
+						"insert_local_db",
+						"upsert_local_db",
+						"batch_insert_local_db",
+						"batch_upsert_local_db",
+					],
+				},
+			],
+		}),
+	},
+	{
+		id: "doc-compliance",
+		title: "Document compliance pipeline with PII masking",
+		description:
+			"Exercises FlowPath file IO, document text extraction and regex/AI PII masking with an audit trail — no UI.",
+		appName: "Doc Sentinel",
+		smoke: false,
+		prompt: `Build a document compliance pipeline that lives entirely in workflows — this app has NO pages and NO widgets.
+
+One manual/scheduled entry processes a document from the app's upload storage: resolve the file path from the upload directory (leave the concrete file name as an empty string input for the user), read the file content as text, mask personally identifiable information (emails, phone numbers, names) with a PII masking node, and write the cleaned text back to storage under a "cleaned/" prefix. Persist an audit row for every processed document (document name, processed timestamp string, mask count or status) with a database write into a table named exactly "Compliance Audit". Handle a missing or unreadable file safely with a clear log message. Register the entry as an app event.`,
+		requirements: requirements({
+			minFlowScriptNonWhitespaceChars: 700,
+			minTotalNodes: 8,
+			minPages: 0,
+			minWidgets: 0,
+			minTables: 0,
+			minEvents: 1,
+			requiredNodeCapabilities: [
+				{
+					alias: "pii_mask",
+					anyOf: ["processing_pii_mask_regex", "processing_pii_mask_ai"],
+				},
+				{ alias: "file_read", anyOf: ["read_to_string", "read_to_bytes"] },
+				{ alias: "file_write", anyOf: ["write_string", "write_bytes"] },
+				{
+					alias: "database_write",
+					anyOf: [
+						"insert_local_db",
+						"upsert_local_db",
+						"batch_insert_local_db",
+						"batch_upsert_local_db",
+					],
+				},
+			],
+		}),
+	},
+	{
+		id: "webhook-enrichment",
+		title: "Webhook enrichment endpoint",
+		description:
+			"Exercises a Generic Event entry with payload parameters, outbound HTTP enrichment, JSON parsing and a structured event return — no UI.",
+		appName: "Hook Enricher",
+		smoke: false,
+		prompt: `Build a webhook-style enrichment endpoint that lives entirely in workflows — this app has NO pages and NO widgets.
+
+Create ONE Generic Event entry that accepts an inbound payload with parameters "lookupUrl" (string) and "subject" (string). The workflow must validate that both parameters are non-empty, fetch the lookup URL over HTTP, parse the response body as JSON, and build an enriched result struct combining the subject, the parsed response, and a processed-at marker string. Persist each enriched result with a database write into a table named exactly "Enrichment Log", and return the enriched result struct from the event with the generic event return node so the caller receives it. When validation or the fetch fails, return a struct with an "error" field describing the problem instead. Register the entry as an app event.`,
+		requirements: requirements({
+			minFlowScriptNonWhitespaceChars: 700,
+			minTotalNodes: 8,
+			minPages: 0,
+			minWidgets: 0,
+			minTables: 0,
+			minEvents: 1,
+			requiredNodeCapabilities: [
+				{ alias: "generic_event", anyOf: ["events_generic"] },
+				{
+					alias: "web_request",
+					anyOf: ["http_fetch", "http_make_request", "streaming_http_fetch"],
+				},
+				{
+					alias: "json_parse",
+					anyOf: ["val_from_string", "parse_with_schema"],
+				},
+				{ alias: "event_return", anyOf: ["events_generic_return_result"] },
+				{
+					alias: "database_write",
+					anyOf: [
+						"insert_local_db",
+						"upsert_local_db",
+						"batch_insert_local_db",
+						"batch_upsert_local_db",
+					],
+				},
+			],
+		}),
+	},
+	{
+		id: "agent-tools",
+		title: "Chat agent with registered function tools",
+		description:
+			"Exercises the agent framework: agent construction from a model, function-tool registration and agent invocation behind one chat entry — no UI.",
+		appName: "Tool Agent",
+		smoke: false,
+		prompt: `Build a chat assistant powered by the agent framework — this app has NO pages and NO widgets; the chat surface is the whole UI, behind exactly ONE Chat Event entry (eventsChat).
+
+Construct the agent from a model (find the model with the model-preference node and leave concrete preference inputs at their defaults for the user), set a concise system prompt describing the assistant, and register at least TWO function tools the agent can call: (1) a "saveNote" tool function that persists a note text with a database write into a table named exactly "Agent Notes", and (2) a "countNotes" tool function that reads the persisted notes back with a database read/filter node and returns how many exist. Invoke the agent with the incoming chat message and reply through the chat response with the agent's answer. Handle an empty chat message with a clear reply. Register the chat entry as an app event.`,
+		requirements: requirements({
+			minFlowScriptNonWhitespaceChars: 800,
+			minTotalNodes: 10,
+			minPages: 0,
+			minWidgets: 0,
+			minTables: 0,
+			minEvents: 1,
+			requiredNodeCapabilities: [
+				{ alias: "chat_event", anyOf: ["events_chat"] },
+				{ alias: "agent_core", anyOf: ["agent_from_model"] },
+				{
+					alias: "agent_tools",
+					anyOf: [
+						"agent_register_function_tools",
+						"agent_lazy_register_function_tools",
+					],
+				},
+				{
+					alias: "agent_invoke",
+					anyOf: ["agent_invoke", "agent_stream_invoke"],
+				},
+				{
+					alias: "database_write",
+					anyOf: [
+						"insert_local_db",
+						"upsert_local_db",
+						"batch_insert_local_db",
+						"batch_upsert_local_db",
+					],
+				},
 			],
 		}),
 	},
@@ -390,7 +559,7 @@ export function buildCasePrompt(
 		: "- Skip page, widget, and Data Studio scaffolding entirely: go straight to the workflow board and implement every behavior as one compact, valid FlowScript program. Do not substitute command JSON or leave placeholder logic.";
 	const idsLine = needsScaffolding
 		? "- Use ids returned by the created tables, pages, widgets, and actions. Never guess an id. Preserve the requested entity names exactly so the run can resolve their semantic aliases."
-		: "- Database tables are defined by the workflow's first write: use the exact requested table names in the insert/upsert calls instead of pre-creating tables, and never guess entity ids.";
+		: "- Database tables are created automatically by the workflow's first write: use the exact requested table names directly in the insert/upsert calls, and use entity ids that come from real tool results.";
 	const completionLine = needsScaffolding
 		? "- Complete the whole app in this run and do not report success from UI/data scaffolding alone."
 		: "- Complete the whole app in this run; the committed FlowScript program is the deliverable.";

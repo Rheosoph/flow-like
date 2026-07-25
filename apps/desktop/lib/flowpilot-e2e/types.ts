@@ -6,7 +6,11 @@ export type FlowPilotE2ECaseId =
 	| "ops-dashboard"
 	| "expense-approval"
 	| "rss-digest"
-	| "incident-console";
+	| "incident-console"
+	| "mail-approval"
+	| "doc-compliance"
+	| "webhook-enrichment"
+	| "agent-tools";
 
 export type FlowPilotE2EReasoningEffort = "low" | "medium" | "high";
 

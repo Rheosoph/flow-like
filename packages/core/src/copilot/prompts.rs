@@ -571,10 +571,13 @@ Common a2ui calls (confirm exact signatures with `get_declarations`):
 - Containers (grids/lists): clear with `a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef }).element })`,
   then add children with `a2uiPushToContainer({ containerRef, elementRef, position: -1 })` or
   `a2uiPushChild({ containerRef, childRef })`.
-- Widgets: `a2uiInstantiateWidget({ widgetSelector, instanceId, dynPath<Field>: …, dynProp<Id>: …, fnRefs: [handlerFn] })`
+- Widgets: `a2uiInstantiateWidget({ widgetSelector, instanceId, dynPath<Field>: …, dynProp<Id>: …, fnRefs: [handlerEntry] })`
   returns `.elementRef` to push into a container. The `dynPath*`/`dynProp*` input pins for a widget
-  are listed by `ui_inspect` (operation `widget`). `fnRefs` is the list of board function refs that
-  handle the widget's actions (declare them as `function …(…) { … }` and pass the bare function name).
+  are listed by `ui_inspect` (operation `widget`). `fnRefs` entries must be `eventsWidgetAction`
+  ENTRIES (not plain functions): declare one `eventsWidgetAction handlerName(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) { … }`
+  per widget action and pass the bare handler names. A handler serves as catch-all for the
+  widget's actions; branch on the delivered `eventName`/`actionContext` inside the handler when
+  one widget declares several actions.
 - Charts (dashboard data): `a2uiPushCsvToChart({ elementRef, library: "Nivo"|"Plotly", format: "CSV", table: <dfSqlQuery>.table, chartType: "Bar"|"Line"|"Pie"|… })`.
   The `table` pin accepts a DataFusion query result directly — this is the primary way to drive a
   dashboard chart from SQL. Use `format: "JSON"` with a `data` array when you already shaped the
@@ -1189,6 +1192,119 @@ database/index/search node calls where needed. For dashboard work, call `ui_insp
 `a2ui*` element reference and widget selector is real.
 "##;
 
+/// Domain-specific worked examples covering the widely-used catalog areas (mail, LLM invoke,
+/// ingestion/search, struct arithmetic, DataFusion reads). Every fenced block below is compiled
+/// against the real catalog by `prompt_example_validation.rs` — a broken example fails CI.
+pub const FLOWSCRIPT_DOMAIN_EXAMPLES: &str = r##"
+## DOMAIN EXAMPLES (verified against the live catalog)
+
+### Email round-trip: fetch unseen mail, send a tagged draft for approval, persist, mark seen
+Connection nodes take real credentials — leave them as empty strings for the user to fill.
+```ts
+eventsSimple triageInbox() {
+    const imap = emailImapConnect({ host: "", port: 993, username: "", password: "" })
+    const inbox = mailImapInbox({ connection: imap.connection, inbox: "INBOX" })
+    const listed = mailImapList({ inbox: inbox.inboxStruct })
+    const smtp = emailSmtpConnect({ host: "", port: 587, username: "", password: "" })
+    const db = openLocalDb({ name: "Mail Drafts", userScoped: false, batchSize: 1000 })
+    for (const mail of controlForEach({ array: listed.emails })) {
+        const reference = mailImapInboxMailToReference({ mail: mail.value })
+        const full = emailImapInboxFetchMail({ emailRef: reference.reference })
+        const content = emailGetContent({ email: full.email })
+        const headers = emailGetHeaders({ email: full.email })
+        const sender = valToString({ value: headers.from, pretty: false })
+        const draftId = cuid()
+        const tagged = stringFormat({ formatString: "[DRAFT {id}] {subject}", id: draftId.cuid, subject: content.subject })
+        let row = structSet({ structIn: {}, field: "id", value: draftId.cuid }).structOut
+        row = structSet({ structIn: row, field: "sender", value: sender.string }).structOut
+        row = structSet({ structIn: row, field: "subject", value: content.subject }).structOut
+        row = structSet({ structIn: row, field: "status", value: "awaiting_approval" }).structOut
+        // Database writes have (execOut, error) outputs: bind and branch instead of sequencing.
+        const saved = upsertLocalDb({ database: db.database, value: row, idRow: "id" })
+        saved {
+            execOut: {
+                emailSmtpSend({ connection: smtp.connection, from: "", to: "", subject: tagged.formattedString, bodyText: content.plain })
+                // Mark-as-seen takes the EmailRef (connection/inbox/uid), not the fetched mail.
+                emailImapMarkSeen({ email: reference.reference, markAsSeen: true })
+            }
+            error: {
+                logInfo({ message: "draft persist failed; leaving mail unseen for a retry" })
+            }
+        }
+    }
+}
+```
+
+### LLM invoke plus struct-field arithmetic (read the field, coerce, then write it back)
+`row.revision + 1` directly is INVALID: a struct field read is Generic, so coerce first.
+```ts
+function reviseDraft(row: Struct, feedback: string): (updated: Struct) {
+    const llm = aiGenerativeFindModel({})
+    const revised = aiGenerativeInvokeSimple({ model: llm.model, systemPrompt: "Revise the reply draft using the reviewer feedback. Return only the new draft body.", prompt: feedback })
+    let updated = structSet({ structIn: row, field: "body", value: revised.result }).structOut
+    const revision = structGet({ struct: updated, field: "revision" })
+    const parsed = utilsTypesTryTransform({ typeIn: revision.value })
+    const nextRevision = intAdd({ integer1: parsed.typeOut, integer2: 1 })
+    updated = structSet({ structIn: updated, field: "revision", value: nextRevision.sum }).structOut
+    return updated
+}
+```
+
+### Knowledge ingest: extract, chunk, embed, persist searchable rows
+The embedding model loads from a Bit; leave the bit id empty for the user to select.
+```ts
+eventsSimple ingestDocument() {
+    const bit = bitFromString({ bitId: "" })
+    const embedder = loadModel({ bit: bit.outputBit })
+    const db = openLocalDb({ name: "Library Chunks", userScoped: false, batchSize: 1000 })
+    const chunks = chunkText({ model: embedder.model, text: "document text", overlap: 80 })
+    for (const chunk of controlForEach({ array: chunks.chunks })) {
+        const vector = embedDocument({ model: embedder.model, queryString: chunk.value })
+        const id = cuid()
+        let row = structSet({ structIn: {}, field: "id", value: id.cuid }).structOut
+        row = structSet({ structIn: row, field: "text", value: chunk.value }).structOut
+        row = structSet({ structIn: row, field: "vector", value: vector.vector }).structOut
+        upsertLocalDb({ database: db.database, value: row, idRow: "id" })
+    }
+}
+```
+
+### Semantic search with an explicit empty-result path
+Search reads have a single `execOut`; detect emptiness from the values array, not from an arm.
+```ts
+function answerFromLibrary(question: string): (answer: string) {
+    let answer = "No matching knowledge found."
+    const bit = bitFromString({ bitId: "" })
+    const embedder = loadModel({ bit: bit.outputBit })
+    const db = openLocalDb({ name: "Library Chunks", userScoped: false, batchSize: 1000 })
+    const queryVector = embedDocument({ model: embedder.model, queryString: question })
+    const found = vectorSearchLocalDb({ database: db.database, vector: queryVector.vector, limit: 5 })
+    const count = arrayLength({ array: found.values })
+    if (count.length > 0) {
+        answer = valToString({ value: found.values, pretty: true }).string
+    }
+    return answer
+}
+```
+
+### Impure function bodies END on a plain single-output statement so callers can continue
+Every impure `function` must feed its exec_out: close all control flow, then finish the body with
+one plain trailing statement that has a single execution output (a log, a variable set, or a
+simple write). Never end a function body inside a branch/arm block, and never end it on a
+multi-output call — put that call earlier and let a plain statement finish the body.
+```ts
+function persistDecision(row: Struct, approved: bool): (status: string) {
+    let status = "rejected"
+    if (approved) {
+        status = "sent"
+    }
+    const updated = structSet({ structIn: row, field: "status", value: status })
+    logInfo({ message: valToString({ value: updated.structOut, pretty: false }).string })
+    return status
+}
+```
+"##;
+
 /// Build the board/workflow system prompt.
 /// Used by both the rig agent loop and the Copilot SDK path.
 pub fn board_system_prompt(
@@ -1365,7 +1481,7 @@ emit_commands (position-only MoveNode and canvas comments only)
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
         event_guidance = EVENT_ENTRY_GUIDANCE,
-        flowscript_examples = FLOWSCRIPT_FEW_SHOT_EXAMPLES,
+        flowscript_examples = [FLOWSCRIPT_FEW_SHOT_EXAMPLES, FLOWSCRIPT_DOMAIN_EXAMPLES].concat(),
     )
 }
 
@@ -1452,6 +1568,23 @@ Place a widget on the page as a `widgetInstance` component inside `components`, 
 - `inlineWidgetDef` is the widget's OWN component tree (same format as the page) with its own `rootComponentId`. Define it ONCE; to reuse it, add more `widgetInstance` components with the SAME `widgetId` and a fresh `instanceId`.
 - `exposedProps` declares caller-settable parameters: `targetComponentId` (a component id INSIDE the widget) + `propertyPath` (`"content"`, `"style.className"`, `"data"`) + `propType` (`String`, `Number`, `Boolean`, `Color`, `TailwindClass`, `StyleObject`, `BoundValue`). Set them per instance in `exposedPropValues` (keyed by prop id).
 - For DYNAMIC data (a real list of items), bind the widget's inner components to the item with `{{"path": "$.item.field"}}` and drive the list from the app's board — do NOT hand-write one component per row.
+- INTERACTIVE widgets (rows/cards with buttons the user acts on) MUST declare every named action at
+  the WIDGET level in `inlineWidgetDef.actions` — an interactive widget with an empty `actions`
+  list cannot be bound to any workflow. Use the exact requested action names as the action ids:
+  ```json
+  "actions": [
+    {{"id": "approve", "label": "Approve", "contextSchema": [
+      {{"name": "itemId", "label": "Item Id", "fieldType": "string", "defaultPath": "$.item.id"}}
+    ]}},
+    {{"id": "reject", "label": "Reject", "contextSchema": [
+      {{"name": "itemId", "label": "Item Id", "fieldType": "string", "defaultPath": "$.item.id"}}
+    ]}}
+  ]
+  ```
+  Trigger a widget action from a component INSIDE the widget with a component-level `actions`
+  list referencing the action by name, e.g.
+  `{{"id": "pc-approve", "component": {{"type": "button", "label": {{"literalString": "Approve"}}, "actions": [{{"name": "approve"}}]}}}}`.
+  The board workflow binds its `eventsWidgetAction` handlers to these declared action ids.
 
 {component_docs}
 
@@ -1893,7 +2026,7 @@ check_flowscript (compile/validate), commit_flowscript (queue the checked batch)
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
         event_guidance = EVENT_ENTRY_GUIDANCE,
-        flowscript_examples = FLOWSCRIPT_FEW_SHOT_EXAMPLES,
+        flowscript_examples = [FLOWSCRIPT_FEW_SHOT_EXAMPLES, FLOWSCRIPT_DOMAIN_EXAMPLES].concat(),
     )
 }
 

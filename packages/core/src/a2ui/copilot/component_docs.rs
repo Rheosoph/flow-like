@@ -91,6 +91,13 @@ pub const COMPONENT_CATALOG: &str = r##"
 
 ### Widget System
 - `widgetInstance` - Reusable widget component instance
+- An INTERACTIVE widget (rows/cards with buttons the user acts on) MUST declare its named actions
+  at the WIDGET level inside its `inlineWidgetDef` — a widget with an empty `actions` list cannot
+  be bound to any workflow. Use the exact action names the request asks for as the action ids:
+  `"inlineWidgetDef": { ..., "actions": [{ "id": "approve", "label": "Approve", "contextSchema": [{ "name": "itemId", "label": "Item Id", "fieldType": "string", "defaultPath": "$.item.id" }] }] }`
+  Components INSIDE the widget trigger a declared action by id:
+  `"actions": [{ "name": "approve" }]`
+  The board binds `eventsWidgetAction` handlers to these declared widget action ids.
 
 ## Wiring UI to Workflows
 
