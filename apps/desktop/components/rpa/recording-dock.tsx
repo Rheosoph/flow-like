@@ -1,8 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
-import { type UnlistenFn, listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
 	Badge,
 	Button,
@@ -15,6 +12,9 @@ import {
 	TooltipTrigger,
 	cn,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
+import { type UnlistenFn, listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	AlertCircle,
@@ -142,17 +142,21 @@ export function RecordingDock({
 	const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
 	useEffect(() => {
+		let cancelled = false;
 		let unlisten: UnlistenFn | null = null;
 
 		const setupListener = async () => {
-			unlisten = await listen<RecordedAction>("recording:action", (event) => {
+			const stop = await listen<RecordedAction>("recording:action", (event) => {
 				setActions((prev) => [...prev, event.payload]);
 			});
+			if (cancelled) stop();
+			else unlisten = stop;
 		};
 
 		setupListener();
 
 		return () => {
+			cancelled = true;
 			unlisten?.();
 		};
 	}, []);
@@ -208,6 +212,29 @@ export function RecordingDock({
 			} catch (_) {}
 		}
 	}, []);
+
+	// Finalize the session when the user stops recording from the tray
+	useEffect(() => {
+		if (!isRecordingMode) return;
+
+		let cancelled = false;
+		let unlisten: UnlistenFn | null = null;
+
+		const setupListener = async () => {
+			const stop = await listen("recording:stop-from-tray", () => {
+				stopRecording();
+			});
+			if (cancelled) stop();
+			else unlisten = stop;
+		};
+
+		setupListener();
+
+		return () => {
+			cancelled = true;
+			unlisten?.();
+		};
+	}, [isRecordingMode, stopRecording]);
 
 	// Keyboard shortcut listener for stop recording
 	useEffect(() => {

@@ -272,6 +272,7 @@ use std::sync::atomic::AtomicU64;
 #[derive(Clone)]
 pub struct RunData {
     pub start_time: Instant,
+    pub app_id: Option<Arc<str>>,
     pub board_id: Arc<str>,
     pub node_id: Arc<str>,
     pub event_id: Option<Arc<str>>,
@@ -292,6 +293,7 @@ impl RunData {
     ) -> Self {
         RunData {
             start_time: Instant::now(),
+            app_id: None,
             board_id: Arc::from(board_id),
             node_id: Arc::from(node_id),
             event_id: event_id.map(|s| Arc::from(s.as_str())),
@@ -303,7 +305,9 @@ impl RunData {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn with_metadata(
+        app_id: Option<String>,
         board_id: &str,
         node_id: &str,
         event_id: Option<String>,
@@ -314,6 +318,7 @@ impl RunData {
     ) -> Self {
         RunData {
             start_time: Instant::now(),
+            app_id: app_id.map(|s| Arc::from(s.as_str())),
             board_id: Arc::from(board_id),
             node_id: Arc::from(node_id),
             event_id: event_id.map(|s| Arc::from(s.as_str())),
@@ -356,6 +361,7 @@ impl RunData {
     pub fn from_event(event: &Event, cancellation_token: CancellationToken) -> Self {
         RunData {
             start_time: Instant::now(),
+            app_id: None,
             board_id: Arc::from(event.board_id.as_str()),
             node_id: Arc::from(event.node_id.as_str()),
             event_id: Some(Arc::from(event.id.as_str())),
