@@ -402,11 +402,15 @@ function pinPropsAreEqual(
 	if (
 		prevProps.boardId !== nextProps.boardId ||
 		prevProps.boardRef !== nextProps.boardRef ||
-		prevProps.boardRef?.current !== nextProps.boardRef?.current ||
 		prevProps.boardDataVersion !== nextProps.boardDataVersion ||
 		versionKey(prevProps.version) !== versionKey(nextProps.version) ||
 		prevProps.currentLayerId !== nextProps.currentLayerId ||
 		prevProps.node?.id !== nextProps.node?.id ||
+		// Editors such as the remote project/event selectors derive their state
+		// from sibling pins read through boardRef. boardRef is a stable ref, so
+		// comparing it never reports a change — fall back to the node hash, which
+		// covers every pin of this node.
+		prevProps.node?.hash !== nextProps.node?.hash ||
 		prevProps.pin.id !== nextProps.pin.id ||
 		prevProps.pin.index !== nextProps.pin.index ||
 		prevProps.pin.name !== nextProps.pin.name ||

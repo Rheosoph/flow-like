@@ -718,7 +718,7 @@ pub(crate) async fn open_remote_project_database_lease(
 // these helpers only transport the request and collect the streamed outcome.
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct SseOutcome {
     pub(crate) run_id: Option<String>,
     pub(crate) status: Option<String>,
@@ -726,6 +726,8 @@ pub(crate) struct SseOutcome {
     pub(crate) generic_result: Option<Value>,
     pub(crate) chat_out: Option<Value>,
     pub(crate) chat_stream: Option<Value>,
+    pub(crate) chat_local_session: Option<Value>,
+    pub(crate) chat_global_session: Option<Value>,
 }
 
 /// One decoded event from a remote invocation's SSE response. Keeping this
@@ -835,6 +837,12 @@ fn apply_sse_event(event: &RemoteSseEvent, outcome: &mut SseOutcome) -> bool {
         }
         "chat_stream" => {
             outcome.chat_stream = Some(payload.clone());
+        }
+        "chat_local_session" => {
+            outcome.chat_local_session = Some(payload.clone());
+        }
+        "chat_global_session" => {
+            outcome.chat_global_session = Some(payload.clone());
         }
         "error" => {
             outcome.error_message = payload
@@ -950,14 +958,7 @@ where
 {
     use futures::StreamExt;
 
-    let mut outcome = SseOutcome {
-        run_id: None,
-        status: None,
-        error_message: None,
-        generic_result: None,
-        chat_out: None,
-        chat_stream: None,
-    };
+    let mut outcome = SseOutcome::default();
     let mut stream = response.bytes_stream();
     let mut buffer = Vec::new();
     let mut scan_from = 0;
@@ -1100,14 +1101,7 @@ mod tests {
     use flow_like_types::{json::json, reqwest};
 
     fn empty_sse_outcome() -> SseOutcome {
-        SseOutcome {
-            run_id: None,
-            status: None,
-            error_message: None,
-            generic_result: None,
-            chat_out: None,
-            chat_stream: None,
-        }
+        SseOutcome::default()
     }
 
     #[derive(Default)]

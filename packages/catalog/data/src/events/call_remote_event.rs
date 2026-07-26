@@ -177,6 +177,67 @@ fn apply_spec(pin: &mut flow_like::flow::pin::Pin, spec: &PinSpec) {
     pin.options = build_options(spec);
 }
 
+/// Brings a pin that already exists back in line with its spec. Label and
+/// description have to follow too: reusing a pin by name across event types
+/// otherwise leaves, say, the REST "Status Code" label on the string `status`
+/// of a chat event. A changed type also invalidates the stored value, so the
+/// spec default takes over.
+fn refresh_pin(pin: &mut flow_like::flow::pin::Pin, spec: &PinSpec) {
+    let type_changed = pin.data_type != spec.data_type || pin.value_type != spec.value_type;
+
+    pin.friendly_name = spec.friendly.clone();
+    pin.description = spec.description.clone();
+    pin.data_type = spec.data_type.clone();
+    apply_spec(pin, spec);
+
+    if type_changed {
+        pin.default_value = None;
+    }
+    if pin.pin_type == PinType::Input
+        && pin.default_value.is_none()
+        && let Some(default) = &spec.default
+    {
+        pin.set_default_value(Some(default.clone()));
+    }
+}
+
+/// Pin indices drive the vertical layout in the editor, and `add_input_pin`
+/// derives them from the current pin count. Adding and removing dynamic pins
+/// across `on_update` cycles therefore leaves gaps and — once a removal is
+/// followed by an insert — duplicate indices, which make pins overlap and
+/// change order between board loads. Renumber deterministically instead:
+/// reserved pins keep their relative order up front, the desired pins follow in
+/// spec order.
+fn reindex(node: &mut Node, pin_type: PinType, desired: &[PinSpec]) {
+    let mut ordered: Vec<String> = Vec::with_capacity(node.pins.len());
+
+    let mut reserved: Vec<(u16, String, String)> = node
+        .pins
+        .values()
+        .filter(|pin| pin.pin_type == pin_type && !desired.iter().any(|spec| spec.name == pin.name))
+        .map(|pin| (pin.index, pin.name.clone(), pin.id.clone()))
+        .collect();
+    reserved.sort();
+    ordered.extend(reserved.into_iter().map(|(_, _, id)| id));
+
+    for spec in desired {
+        let mut matching: Vec<(u16, String)> = node
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == pin_type && pin.name == spec.name)
+            .map(|pin| (pin.index, pin.id.clone()))
+            .collect();
+        matching.sort();
+        ordered.extend(matching.into_iter().map(|(_, id)| id));
+    }
+
+    for (position, id) in ordered.into_iter().enumerate() {
+        if let Some(pin) = node.pins.get_mut(&id) {
+            pin.index = position as u16 + 1;
+        }
+    }
+}
+
 /// Adds missing input pins, refreshes the type/schema/options of existing pins
 /// in place (preserving the user's value & connections), and removes input pins
 /// that are no longer desired.
@@ -187,15 +248,7 @@ fn reconcile_inputs(node: &mut Node, desired: &[PinSpec]) {
             .values_mut()
             .find(|pin| pin.pin_type == PinType::Input && pin.name == spec.name)
         {
-            pin.data_type = spec.data_type.clone();
-            pin.value_type = spec.value_type.clone();
-            pin.schema = spec.schema.clone();
-            pin.options = build_options(spec);
-            if pin.default_value.is_none()
-                && let Some(default) = &spec.default
-            {
-                pin.set_default_value(Some(default.clone()));
-            }
+            refresh_pin(pin, spec);
         } else {
             let pin = node.add_input_pin(
                 &spec.name,
@@ -218,6 +271,8 @@ fn reconcile_inputs(node: &mut Node, desired: &[PinSpec]) {
             true
         }
     });
+
+    reindex(node, PinType::Input, desired);
 }
 
 fn reconcile_outputs(node: &mut Node, desired: &[PinSpec]) {
@@ -227,8 +282,7 @@ fn reconcile_outputs(node: &mut Node, desired: &[PinSpec]) {
             .values_mut()
             .find(|pin| pin.pin_type == PinType::Output && pin.name == spec.name)
         {
-            pin.data_type = spec.data_type.clone();
-            apply_spec(pin, spec);
+            refresh_pin(pin, spec);
         } else {
             let pin = node.add_output_pin(
                 &spec.name,
@@ -248,6 +302,8 @@ fn reconcile_outputs(node: &mut Node, desired: &[PinSpec]) {
             true
         }
     });
+
+    reindex(node, PinType::Output, desired);
 }
 
 fn timeout_spec() -> PinSpec {
@@ -296,20 +352,15 @@ fn json_schema_type(schema: &Value) -> VariableType {
     }
 }
 
-fn chat_desired(node: &Node) -> (Vec<PinSpec>, Vec<PinSpec>) {
-    let _ = node;
-    let inputs = vec![
-        PinSpec::new(
-            "message",
-            "Message",
-            "User message appended to the conversation",
-            VariableType::String,
-        )
-        .default(json!("")),
+/// Mirror of the `events_chat` entry node's outputs: the conversation is
+/// carried entirely by `history`, so there is no separate message pin — append
+/// the user turn with `Push Message` before calling.
+fn chat_request_inputs() -> Vec<PinSpec> {
+    vec![
         PinSpec::new(
             "history",
             "History",
-            "Prior conversation history",
+            "Conversation to send, including the new user message",
             VariableType::Struct,
         )
         .schema(schema_string::<History>())
@@ -318,87 +369,13 @@ fn chat_desired(node: &Node) -> (Vec<PinSpec>, Vec<PinSpec>) {
         PinSpec::new(
             "local_session",
             "Local Session",
-            "Local session state",
-            VariableType::Struct,
-        )
-        .default(json!({})),
-        PinSpec::new(
-            "global_session",
-            "Global Session",
-            "Global session state",
-            VariableType::Struct,
-        )
-        .default(json!({})),
-        PinSpec::new(
-            "tools",
-            "Tools",
-            "Tool ids the assistant may use",
-            VariableType::String,
-        )
-        .array()
-        .default(json!([])),
-        PinSpec::new(
-            "attachments",
-            "Attachments",
-            "Attachments to include",
-            VariableType::Struct,
-        )
-        .array()
-        .schema(schema_string::<Attachment>())
-        .enforce()
-        .default(json!([])),
-        timeout_spec(),
-    ];
-    let outputs = vec![
-        PinSpec::new(
-            "response",
-            "Response",
-            "Full chat response",
-            VariableType::Generic,
-        ),
-        PinSpec::new(
-            "response_text",
-            "Response Text",
-            "Best-effort final text of the response",
-            VariableType::String,
-        ),
-        PinSpec::new("run_id", "Run ID", "Remote run id", VariableType::String),
-        PinSpec::new("status", "Status", "Final run status", VariableType::String),
-    ];
-    (inputs, outputs)
-}
-
-/// Stable contract for the dedicated remote-chat node. Unlike the legacy
-/// adaptive node, every chat output is present before an event is selected so
-/// the node is useful from both the visual editor and FlowScript.
-fn remote_chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
-    let inputs = vec![
-        PinSpec::new(
-            "message",
-            "Message",
-            "User message appended to the conversation",
-            VariableType::String,
-        )
-        .default(json!("")),
-        PinSpec::new(
-            "history",
-            "History",
-            "Prior conversation history",
-            VariableType::Struct,
-        )
-        .schema(schema_string::<History>())
-        .enforce()
-        .default(json!(History::new(String::new(), Vec::new()))),
-        PinSpec::new(
-            "local_session",
-            "Local State",
             "State local to this chat session",
             VariableType::Struct,
         )
         .default(json!({})),
         PinSpec::new(
             "global_session",
-            "Global State",
+            "Global Session",
             "State shared for the remote chat user",
             VariableType::Struct,
         )
@@ -441,21 +418,18 @@ fn remote_chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
         .enforce()
         .default(Value::Null),
         timeout_spec(),
-    ];
+    ]
+}
 
-    let outputs = vec![
-        PinSpec::new(
-            "chunk",
-            "Chunk",
-            "Latest streamed response chunk",
-            VariableType::Struct,
-        )
-        .schema(schema_string::<ResponseChunk>())
-        .enforce(),
+/// Result of a chat invocation, typed the same way the chat event itself
+/// produces it, so downstream nodes get schema-checked structs instead of a
+/// single opaque blob.
+fn chat_result_outputs() -> Vec<PinSpec> {
+    vec![
         PinSpec::new(
             "response",
             "Response",
-            "Latest complete model response",
+            "Complete model response",
             VariableType::Struct,
         )
         .schema(schema_string::<Response>())
@@ -463,13 +437,13 @@ fn remote_chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
         PinSpec::new(
             "response_text",
             "Response Text",
-            "Text of the latest complete response",
+            "Text of the complete response",
             VariableType::String,
         ),
         PinSpec::new(
             "widgets",
             "Widgets",
-            "Widgets emitted by the remote chat update",
+            "Widgets emitted by the remote chat",
             VariableType::Struct,
         )
         .array()
@@ -478,7 +452,7 @@ fn remote_chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
         PinSpec::new(
             "attachments_out",
             "Attachments",
-            "Attachments emitted by the remote chat update",
+            "Attachments emitted by the remote chat",
             VariableType::Struct,
         )
         .array()
@@ -487,12 +461,56 @@ fn remote_chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
         PinSpec::new(
             "actions_out",
             "Actions",
-            "Actions emitted by the remote chat update",
+            "Actions emitted by the remote chat",
             VariableType::Struct,
         )
         .array()
         .schema(schema_string::<ChatAction>())
         .enforce(),
+        PinSpec::new(
+            "local_session_out",
+            "Local Session",
+            "Latest remote local session state",
+            VariableType::Struct,
+        ),
+        PinSpec::new(
+            "global_session_out",
+            "Global Session",
+            "Latest remote global session state",
+            VariableType::Struct,
+        ),
+        PinSpec::new(
+            "model_id",
+            "Model ID",
+            "Model reported by the remote chat",
+            VariableType::String,
+        ),
+        PinSpec::new("run_id", "Run ID", "Remote run id", VariableType::String),
+        PinSpec::new("status", "Status", "Final run status", VariableType::String),
+    ]
+}
+
+fn chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
+    (chat_request_inputs(), chat_result_outputs())
+}
+
+/// Stable contract for the dedicated remote-chat node. Unlike the legacy
+/// adaptive node, every chat output is present before an event is selected so
+/// the node is useful from both the visual editor and FlowScript. On top of the
+/// shared result pins it exposes the streaming-only updates.
+fn remote_chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
+    let mut outputs = vec![
+        PinSpec::new(
+            "chunk",
+            "Chunk",
+            "Latest streamed response chunk",
+            VariableType::Struct,
+        )
+        .schema(schema_string::<ResponseChunk>())
+        .enforce(),
+    ];
+    outputs.extend(chat_result_outputs());
+    outputs.extend([
         PinSpec::new(
             "plan",
             "Plan",
@@ -502,18 +520,6 @@ fn remote_chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
         .schema(schema_string::<Reasoning>())
         .enforce(),
         PinSpec::new(
-            "local_session_out",
-            "Local State",
-            "Latest remote local session state",
-            VariableType::Struct,
-        ),
-        PinSpec::new(
-            "global_session_out",
-            "Global State",
-            "Latest remote global session state",
-            VariableType::Struct,
-        ),
-        PinSpec::new(
             "usage_stat",
             "Usage Stat",
             "Latest model usage update",
@@ -521,12 +527,6 @@ fn remote_chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
         )
         .schema(schema_string::<ChatUsageStat>())
         .enforce(),
-        PinSpec::new(
-            "model_id",
-            "Model ID",
-            "Model reported by the remote chat",
-            VariableType::String,
-        ),
         PinSpec::new(
             "event_type",
             "Event Type",
@@ -539,11 +539,9 @@ fn remote_chat_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
             "Raw payload of the latest streamed remote event",
             VariableType::Generic,
         ),
-        PinSpec::new("run_id", "Run ID", "Remote run id", VariableType::String),
-        PinSpec::new("status", "Status", "Final run status", VariableType::String),
-    ];
+    ]);
 
-    (inputs, outputs)
+    (chat_request_inputs(), outputs)
 }
 
 fn rest_desired(node: &Node, meta: &EventMeta) -> (Vec<PinSpec>, Vec<PinSpec>) {
@@ -833,7 +831,7 @@ impl NodeLogic for CallRemoteEventNode {
             "Events/Remote",
         );
         node.add_icon("/flow/icons/event.svg");
-        node.set_version(4);
+        node.set_version(5);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         add_remote_event_selector_pins(&mut node, "Event of the selected project to invoke");
@@ -856,7 +854,7 @@ impl NodeLogic for CallRemoteEventNode {
     async fn on_update(&self, node: &mut Node, _board: &Board) {
         let (inputs, outputs) = match parse_meta(node) {
             Some(meta) => match meta.event_type.as_str() {
-                "simple_chat" => chat_desired(node),
+                "simple_chat" => chat_desired(),
                 "rest" => rest_desired(node, &meta),
                 "mcp" => mcp_desired(node, &meta),
                 _ => fallback_desired(),
@@ -972,68 +970,47 @@ impl CallRemoteEventNode {
         session: &RemoteAppSession,
         event_id: &str,
     ) -> flow_like_types::Result<()> {
-        let message: String = context.evaluate_pin("message").await.unwrap_or_default();
-        let history: Value = context.evaluate_pin("history").await.unwrap_or(Value::Null);
-        let local_session: Value = context
-            .evaluate_pin("local_session")
-            .await
-            .unwrap_or(Value::Null);
-        let global_session: Value = context
-            .evaluate_pin("global_session")
-            .await
-            .unwrap_or(Value::Null);
-        let tools: Vec<String> = context.evaluate_pin("tools").await.unwrap_or_default();
-        let attachments: Value = context
-            .evaluate_pin("attachments")
-            .await
-            .unwrap_or(Value::Null);
+        let chat = build_chat_payload(context).await;
         let timeout = self.timeout_secs(context).await;
-
-        let mut messages: Vec<Value> = match &history {
-            Value::Array(items) => items.clone(),
-            Value::Object(obj) => {
-                if let Some(items) = obj.get("messages").and_then(|m| m.as_array()) {
-                    items.clone()
-                } else if obj.contains_key("role") {
-                    vec![history.clone()]
-                } else {
-                    Vec::new()
-                }
-            }
-            _ => Vec::new(),
-        };
-        if !message.trim().is_empty() {
-            messages.push(json!({ "role": "user", "content": message }));
-        }
-
-        let mut chat = json!({ "messages": messages });
-        if !local_session.is_null() {
-            chat["local_session"] = local_session;
-        }
-        if !global_session.is_null() {
-            chat["global_session"] = global_session;
-        }
-        if !tools.is_empty() {
-            chat["tools"] = json!(tools);
-        }
-        if !attachments.is_null() {
-            chat["attachments"] = attachments;
-        }
 
         let url = session.url(&format!("events/{}/invoke", event_id));
         let outcome =
             invoke_and_collect(session, &url, &json!({ "payload": chat }), timeout).await?;
         outcome.ensure_ok()?;
 
-        let response = outcome.chat_result().unwrap_or(Value::Null);
-        let response_text = response
-            .get("response")
-            .map(extract_response_text)
-            .unwrap_or_else(|| extract_response_text(&response));
+        let result = outcome.chat_result().unwrap_or(Value::Null);
+        let response = result.get("response").cloned().unwrap_or(result.clone());
 
         context.set_pin_value("response", response.clone()).await?;
         context
-            .set_pin_value("response_text", json!(response_text))
+            .set_pin_value("response_text", json!(extract_response_text(&response)))
+            .await?;
+        for (pin, field) in [
+            ("widgets", "widgets"),
+            ("attachments_out", "attachments"),
+            ("actions_out", "actions"),
+        ] {
+            context
+                .set_pin_value(pin, result.get(field).cloned().unwrap_or(json!([])))
+                .await?;
+        }
+        context
+            .set_pin_value(
+                "model_id",
+                result.get("model_id").cloned().unwrap_or(json!("")),
+            )
+            .await?;
+        context
+            .set_pin_value(
+                "local_session_out",
+                outcome.chat_local_session.clone().unwrap_or(Value::Null),
+            )
+            .await?;
+        context
+            .set_pin_value(
+                "global_session_out",
+                outcome.chat_global_session.clone().unwrap_or(Value::Null),
+            )
             .await?;
         context
             .set_pin_value("run_id", json!(outcome.run_id.clone().unwrap_or_default()))
@@ -1403,7 +1380,7 @@ impl NodeLogic for CallRemoteChatNode {
             "Events/Remote",
         );
         node.add_icon("/flow/icons/event.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin("exec_in", "Input", "", VariableType::Execution);
         add_remote_event_selector_pins(&mut node, "Chat event of the selected project");
@@ -1453,48 +1430,8 @@ impl NodeLogic for CallRemoteChatNode {
 
         reset_remote_chat_outputs(context).await?;
 
-        let message: String = context.evaluate_pin("message").await.unwrap_or_default();
-        let history: Value = context.evaluate_pin("history").await.unwrap_or(Value::Null);
-        let local_session: Value = context
-            .evaluate_pin("local_session")
-            .await
-            .unwrap_or(Value::Null);
-        let global_session: Value = context
-            .evaluate_pin("global_session")
-            .await
-            .unwrap_or(Value::Null);
-        let tools: Vec<String> = context.evaluate_pin("tools").await.unwrap_or_default();
-        let actions: Value = context.evaluate_pin("actions").await.unwrap_or(Value::Null);
-        let attachments: Value = context
-            .evaluate_pin("attachments")
-            .await
-            .unwrap_or(Value::Null);
-        let user: Value = context.evaluate_pin("user").await.unwrap_or(Value::Null);
+        let chat = build_chat_payload(context).await;
         let timeout = CallRemoteEventNode::new().timeout_secs(context).await;
-
-        let mut messages: Vec<Value> = match &history {
-            Value::Array(items) => items.clone(),
-            Value::Object(obj) => obj
-                .get("messages")
-                .and_then(|messages| messages.as_array())
-                .cloned()
-                .or_else(|| obj.contains_key("role").then(|| vec![history.clone()]))
-                .unwrap_or_default(),
-            _ => Vec::new(),
-        };
-        if !message.trim().is_empty() {
-            messages.push(json!({ "role": "user", "content": message }));
-        }
-
-        let mut chat = json!({ "messages": messages });
-        insert_non_null(&mut chat, "local_session", local_session);
-        insert_non_null(&mut chat, "global_session", global_session);
-        if !tools.is_empty() {
-            chat["tools"] = json!(tools);
-        }
-        insert_non_empty_array(&mut chat, "actions", actions);
-        insert_non_empty_array(&mut chat, "attachments", attachments);
-        insert_non_null(&mut chat, "user", user);
 
         let session = remote_app_session(context, &remote_app_id).await?;
         let url = session.url(&format!("events/{}/invoke", event_id));
@@ -1689,6 +1626,51 @@ fn push_payload_field(
     if let Some(value) = payload.get(field) {
         updates.push((pin, value.clone()));
     }
+}
+
+/// The conversation is fully described by the `history` pin — either a
+/// `History` struct, a bare message array or a single message object.
+fn history_messages(history: &Value) -> Vec<Value> {
+    match history {
+        Value::Array(items) => items.clone(),
+        Value::Object(obj) => obj
+            .get("messages")
+            .and_then(|messages| messages.as_array())
+            .cloned()
+            .or_else(|| obj.contains_key("role").then(|| vec![history.clone()]))
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+async fn build_chat_payload(context: &mut ExecutionContext) -> Value {
+    let history: Value = context.evaluate_pin("history").await.unwrap_or(Value::Null);
+    let local_session: Value = context
+        .evaluate_pin("local_session")
+        .await
+        .unwrap_or(Value::Null);
+    let global_session: Value = context
+        .evaluate_pin("global_session")
+        .await
+        .unwrap_or(Value::Null);
+    let tools: Vec<String> = context.evaluate_pin("tools").await.unwrap_or_default();
+    let actions: Value = context.evaluate_pin("actions").await.unwrap_or(Value::Null);
+    let attachments: Value = context
+        .evaluate_pin("attachments")
+        .await
+        .unwrap_or(Value::Null);
+    let user: Value = context.evaluate_pin("user").await.unwrap_or(Value::Null);
+
+    let mut chat = json!({ "messages": history_messages(&history) });
+    insert_non_null(&mut chat, "local_session", local_session);
+    insert_non_null(&mut chat, "global_session", global_session);
+    if !tools.is_empty() {
+        chat["tools"] = json!(tools);
+    }
+    insert_non_empty_array(&mut chat, "actions", actions);
+    insert_non_empty_array(&mut chat, "attachments", attachments);
+    insert_non_null(&mut chat, "user", user);
+    chat
 }
 
 fn insert_non_null(target: &mut Value, field: &str, value: Value) {
@@ -1905,10 +1887,47 @@ mod tests {
     use flow_like::flow::{node::NodeLogic, pin::PinType};
     use flow_like_types::json::json;
 
+    use flow_like::flow::board::Board;
+    use flow_like::flow::variable::VariableType;
+    use flow_like_types::Value;
+
     use super::{
-        CallRemoteApiNode, CallRemoteChatNode, RemoteSseEvent, encode_path_parameter,
-        is_stream_output_event, remote_chat_pin_updates,
+        CallRemoteApiNode, CallRemoteChatNode, PIN_REMOTE_EVENT_META, RemoteSseEvent,
+        encode_path_parameter, is_stream_output_event, remote_chat_pin_updates,
     };
+
+    fn detached_board() -> Board {
+        Board::new_detached(None, flow_like_storage::Path::from("boards"))
+    }
+
+    fn set_meta(node: &mut flow_like::flow::node::Node, meta: Value) {
+        node.get_pin_mut_by_name(PIN_REMOTE_EVENT_META)
+            .expect("meta pin")
+            .set_default_value(Some(json!(meta.to_string())));
+    }
+
+    fn select_route(node: &mut flow_like::flow::node::Node, route: &str) {
+        node.get_pin_mut_by_name("route")
+            .expect("route pin")
+            .set_default_value(Some(json!(route)));
+    }
+
+    fn assert_indices_are_contiguous(node: &flow_like::flow::node::Node) {
+        for pin_type in [PinType::Input, PinType::Output] {
+            let mut indices = node
+                .pins
+                .values()
+                .filter(|pin| pin.pin_type == pin_type)
+                .map(|pin| pin.index)
+                .collect::<Vec<_>>();
+            indices.sort_unstable();
+            let expected = (1..=indices.len() as u16).collect::<Vec<_>>();
+            assert_eq!(
+                indices, expected,
+                "{pin_type:?} pin indices must be gap-free"
+            );
+        }
+    }
 
     #[test]
     fn remote_rest_path_parameters_stay_in_one_segment() {
@@ -2019,6 +2038,138 @@ mod tests {
         assert_eq!(updates["response_text"], "final answer");
         assert!(!updates.contains_key("local_session_out"));
         assert!(!updates.contains_key("global_session_out"));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn dynamic_route_pins_keep_unique_contiguous_indices() {
+        let board = detached_board();
+        let node_logic = CallRemoteApiNode::new();
+        let mut node = node_logic.get_node();
+        set_meta(
+            &mut node,
+            json!({
+                "event_type": "rest",
+                "rest_routes": [
+                    { "method": "GET", "path": "/plain" },
+                    { "method": "GET", "path": "/items/{a}/{b}" },
+                    { "method": "GET", "path": "/other/{c}" },
+                ],
+            }),
+        );
+
+        // Adding, dropping and re-adding path parameters used to reuse indices
+        // freed by removed pins, producing duplicates that made pins overlap and
+        // reorder nondeterministically between board loads.
+        for route in [
+            "GET /items/{a}/{b}",
+            "GET /plain",
+            "GET /other/{c}",
+            "GET /items/{a}/{b}",
+        ] {
+            select_route(&mut node, route);
+            node_logic.on_update(&mut node, &board).await;
+            assert_indices_are_contiguous(&node);
+        }
+
+        let param_indices = node
+            .pins
+            .values()
+            .filter(|pin| pin.name.starts_with("param_"))
+            .map(|pin| (pin.name.clone(), pin.index))
+            .collect::<HashMap<_, _>>();
+        assert_eq!(param_indices.len(), 2);
+        assert_ne!(param_indices["param_a"], param_indices["param_b"]);
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn on_update_is_idempotent_and_refreshes_reused_pins() {
+        let board = detached_board();
+        let node_logic = super::CallRemoteEventNode::new();
+        let mut node = node_logic.get_node();
+
+        set_meta(
+            &mut node,
+            json!({
+                "event_type": "rest",
+                "rest_routes": [{ "method": "GET", "path": "/items" }],
+            }),
+        );
+        node_logic.on_update(&mut node, &board).await;
+        select_route(&mut node, "GET /items");
+        node_logic.on_update(&mut node, &board).await;
+
+        // `Board::node_updates` re-runs `on_update` until the node hash settles
+        // and gives up after ten passes, so a non-idempotent reconcile leaves the
+        // board churning on every parse.
+        node.hash();
+        let settled = node.hash;
+        for _ in 0..3 {
+            node_logic.on_update(&mut node, &board).await;
+            node.hash();
+            assert_eq!(node.hash, settled, "on_update must converge after one pass");
+        }
+
+        let status = node.get_pin_by_name("status").expect("status pin");
+        assert_eq!(status.friendly_name, "Status Code");
+        assert_eq!(status.data_type, VariableType::Integer);
+
+        // `status` is reused by name across event types. Its label and stored
+        // value have to follow the new spec, not linger from the REST contract.
+        set_meta(&mut node, json!({ "event_type": "simple_chat" }));
+        node_logic.on_update(&mut node, &board).await;
+
+        let status = node.get_pin_by_name("status").expect("status pin");
+        assert_eq!(status.friendly_name, "Status");
+        assert_eq!(status.data_type, VariableType::String);
+        assert_indices_are_contiguous(&node);
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn remote_chat_contract_is_history_driven_and_typed() {
+        let board = detached_board();
+        let node_logic = super::CallRemoteEventNode::new();
+        let mut node = node_logic.get_node();
+        set_meta(&mut node, json!({ "event_type": "simple_chat" }));
+        node_logic.on_update(&mut node, &board).await;
+
+        assert!(
+            node.get_pin_by_name("message").is_none(),
+            "the conversation is carried by the history pin"
+        );
+        let history = node.get_pin_by_name("history").expect("history pin");
+        assert!(history.schema.is_some());
+
+        for name in [
+            "response",
+            "local_session_out",
+            "global_session_out",
+            "widgets",
+            "attachments_out",
+            "actions_out",
+        ] {
+            let pin = node.get_pin_by_name(name).unwrap_or_else(|| {
+                panic!("missing chat output {name}");
+            });
+            assert_eq!(
+                pin.data_type,
+                flow_like::flow::variable::VariableType::Struct,
+                "chat output {name} must be a typed struct"
+            );
+        }
+        assert!(
+            node.get_pin_by_name("response")
+                .and_then(|pin| pin.schema.as_ref())
+                .is_some(),
+            "the response must carry the Response schema"
+        );
+        assert_indices_are_contiguous(&node);
+
+        assert!(
+            CallRemoteChatNode::new()
+                .get_node()
+                .get_pin_by_name("message")
+                .is_none()
+        );
     }
 
     #[test]
