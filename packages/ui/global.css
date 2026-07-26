@@ -46,13 +46,13 @@
 	--m-speech: #7c5cf0;
 	--m-embed: #0891b2;
 	--m-video: #d97706;
-	--m-chat: var(--primary);
+	--m-chat: #2563eb;
 	/* peer standing vs. the median of the same deployment class */
 	--st-back: #b4566a;
 	--st-typ: #5b647a;
 	--st-fore: #16a34a;
 	/* where a model runs */
-	--dep-hosted: var(--primary);
+	--dep-hosted: #0284c7;
 	--dep-local: #5b647a;
 	--dep-remote: #2563eb;
 	--sidebar: oklch(0.9706 0.0057 84.5662);
@@ -147,11 +147,11 @@
 	--m-speech: #9e6bff;
 	--m-embed: #00d3f2;
 	--m-video: #f9a143;
-	--m-chat: var(--primary);
+	--m-chat: #60a5fa;
 	--st-back: #d98a99;
 	--st-typ: #94a3b8;
 	--st-fore: #22c55e;
-	--dep-hosted: var(--primary);
+	--dep-hosted: #38bdf8;
 	--dep-local: #94a3b8;
 	--dep-remote: #5b93ff;
 	--sidebar: oklch(0.1212 0.0304 253.9385);

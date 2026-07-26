@@ -58,6 +58,7 @@ import {
 	SelectValue,
 	Slider,
 	formatContextLength,
+	providerLabel,
 } from "../../ui";
 import { Checkbox } from "../../ui/checkbox";
 import {
@@ -534,6 +535,11 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		return built;
 	}, [filteredModels]);
 
+	const populatedRails = useMemo(
+		() => rails.filter((rail) => rail.items.length > 0),
+		[rails],
+	);
+
 	const profileModels = useMemo(
 		() => filteredModels.filter(isMine),
 		[filteredModels, isMine],
@@ -687,7 +693,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				<ModelCard
 					key={bit.id}
 					bit={bit}
-					variant="grid"
+					variant={viewMode}
 					isCustom={custom}
 					onClick={() => setSelectedModel(bit)}
 					onEdit={custom ? openEditCustomModel : undefined}
@@ -695,7 +701,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				/>
 			);
 		},
-		[customBitIds, openEditCustomModel],
+		[customBitIds, openEditCustomModel, viewMode],
 	);
 
 	const filterContent = (
@@ -820,75 +826,78 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 	return (
 		<main className="flex min-h-0 w-full flex-1 flex-col overflow-y-auto">
-			<div className="sticky top-0 z-30 border-b border-border/60 bg-background/85 backdrop-blur-md backdrop-saturate-150">
+			{/* Transparent + blur: the shell paints its own backdrop, so any tint clashes */}
+			<div className="sticky top-0 z-30 border-b border-border/40 backdrop-blur-xl">
 				<div
-					className={`mx-auto flex w-full max-w-[1240px] flex-wrap items-center gap-3 pt-3 pb-2 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+					className={`mx-auto flex w-full max-w-[1240px] flex-wrap items-center gap-x-3 gap-y-2 pt-3 pb-2.5 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
 				>
 					<div className="mr-auto flex min-w-0 items-center gap-2.5">
-						<span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-tertiary to-primary text-primary-foreground shadow-md shadow-primary/30">
-							<Boxes className="h-[18px] w-[18px]" />
+						<span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border bg-muted text-foreground/70">
+							<Boxes className="h-4.25 w-4.25" />
 						</span>
 						<span className="flex min-w-0 flex-col leading-tight">
-							<span className="text-[15px] font-bold tracking-tight">
-								Model Catalog
+							<span className="text-[15px] font-semibold tracking-tight">
+								Models
 							</span>
-							<span className="text-[11.5px] text-muted-foreground/70">
-								Browse by capability
+							<span className="text-[11.5px] text-muted-foreground">
+								{allBits.length} available &middot; {profileGlyphModels.length}{" "}
+								in your profile
 							</span>
 						</span>
 					</div>
 
-					<ProfileStrip
+					<ProfileToggle
 						models={profileGlyphModels}
 						active={showInProfileOnly}
 						onToggle={() => setShowInProfileOnly((v) => !v)}
 					/>
+
+					<Button
+						onClick={openAddCustomModel}
+						size="sm"
+						className="h-8 shrink-0 gap-1.5 px-3 text-xs"
+					>
+						<Plus className="h-3.5 w-3.5" />
+						<span className="hidden sm:inline">Add custom model</span>
+						<span className="sm:hidden">Add</span>
+					</Button>
 				</div>
 
 				<div
-					className={`mx-auto flex w-full max-w-[1240px] items-center gap-2 pb-2 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+					className={`mx-auto flex w-full max-w-[1240px] items-center gap-2 pb-2.5 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
 				>
 					<div className="relative min-w-0 flex-1">
-						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
+						<Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/60 pointer-events-none" />
 						<Input
-							placeholder="Search…"
+							placeholder="Search models, providers, capabilities…"
 							value={searchTerm}
 							onChange={(e) => {
 								setSearchTerm(e.target.value);
 								search(e.target.value);
 							}}
-							className="pl-11 h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
+							className="h-9 pl-10 text-sm bg-muted/40 border-border/60 focus:bg-background"
 						/>
 						{searchTerm && (
 							<button
 								type="button"
+								aria-label="Clear search"
 								onClick={() => {
 									setSearchTerm("");
 									search("");
 								}}
-								className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-foreground transition-colors"
+								className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground transition-colors"
 							>
 								<X className="h-4 w-4" />
 							</button>
 						)}
 					</div>
 
-					<Button
-						onClick={openAddCustomModel}
-						size="sm"
-						className="h-9 shrink-0 gap-1.5 rounded-full px-3.5 text-xs"
-					>
-						<Plus className="h-3.5 w-3.5" />
-						<span className="hidden sm:inline">Add custom model</span>
-						<span className="sm:hidden">Add</span>
-					</Button>
-
 					<div className="flex items-center gap-1">
 						<Select
 							value={sortBy}
 							onValueChange={(v) => setSortBy(v as SortOption)}
 						>
-							<SelectTrigger className="h-8 w-auto gap-1.5 rounded-full border-transparent bg-transparent text-xs text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30 px-3 focus:ring-0">
+							<SelectTrigger className="h-9 w-auto gap-1.5 rounded-md border-border/60 bg-transparent px-3 text-xs text-muted-foreground hover:text-foreground focus:ring-0">
 								<SelectValue />
 							</SelectTrigger>
 							<SelectContent>
@@ -905,12 +914,12 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
-									variant="ghost"
+									variant="outline"
 									size="icon"
-									className={`h-9 w-9 rounded-full md:h-8 md:w-8 ${
+									className={`h-9 w-9 rounded-md border-border/60 ${
 										viewMode === "list"
-											? "text-foreground/80 bg-muted/40"
-											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+											? "bg-muted text-foreground"
+											: "text-muted-foreground hover:text-foreground"
 									}`}
 									onClick={() =>
 										setViewMode((v) => (v === "grid" ? "list" : "grid"))
@@ -931,12 +940,12 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						<Tooltip>
 							<TooltipTrigger asChild>
 								<Button
-									variant={filtersExpanded ? "secondary" : "ghost"}
+									variant="outline"
 									size="icon"
-									className={`h-9 w-9 rounded-full relative md:h-8 md:w-8 ${
-										filtersExpanded
-											? "text-primary bg-primary/10"
-											: "text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+									className={`relative h-9 w-9 rounded-md border-border/60 ${
+										filtersExpanded || activeFilterCount > 0
+											? "bg-muted text-foreground"
+											: "text-muted-foreground hover:text-foreground"
 									}`}
 									onClick={() => {
 										if (isMobile) {
@@ -961,22 +970,21 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 					</div>
 				</div>
 
-				{/* Jump to a capability */}
-				<nav
-					aria-label="Jump to a capability"
-					className={`mx-auto flex w-full max-w-[1240px] gap-2 overflow-x-auto pb-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
-				>
-					<RailChip
-						icon={Sparkles}
-						label="Your profile"
-						count={profileModels.length}
-						owned={profileModels.length}
-						active={activeRail === "rail-profile"}
-						onClick={() => jumpToRail("rail-profile")}
-					/>
-					{rails
-						.filter((rail) => rail.items.length > 0)
-						.map((rail) => (
+				{/* Jump links earn their row only once the page is long enough to scroll */}
+				{populatedRails.length > 2 && (
+					<nav
+						aria-label="Jump to a capability"
+						className={`mx-auto flex w-full max-w-[1240px] gap-1.5 overflow-x-auto pb-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+					>
+						<RailChip
+							icon={Sparkles}
+							label="Your profile"
+							count={profileModels.length}
+							owned={profileModels.length}
+							active={activeRail === "rail-profile"}
+							onClick={() => jumpToRail("rail-profile")}
+						/>
+						{populatedRails.map((rail) => (
 							<RailChip
 								key={rail.id}
 								icon={rail.icon}
@@ -987,53 +995,62 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 								onClick={() => jumpToRail(rail.id)}
 							/>
 						))}
-				</nav>
+					</nav>
+				)}
 			</div>
 
 			<div
 				className={`mx-auto w-full max-w-[1240px] pt-4 pb-3 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
 			>
-				{/* Quick modality chips */}
-				<div className="flex items-center gap-1.5 flex-wrap">
-					<ModalityChip
-						active={inputModalities.has("text")}
-						onClick={() => toggleInputModality("text")}
-						icon={Type}
-						label="Text"
-					/>
-					<ModalityChip
-						active={inputModalities.has("image")}
-						onClick={() => toggleInputModality("image")}
-						icon={ImageIcon}
-						label="Image"
-					/>
-					<ModalityChip
-						active={inputModalities.has("speech")}
-						onClick={() => toggleInputModality("speech")}
-						icon={Mic}
-						label="Audio"
-					/>
-					<span className="w-px h-4 bg-border/20 mx-0.5" />
-					<ModalityChip
-						active={outputModalities.has("text")}
-						onClick={() => toggleOutputModality("text")}
-						icon={MessageSquare}
-						label="Chat"
-					/>
-					<ModalityChip
-						active={outputModalities.has("embedding")}
-						onClick={() => toggleOutputModality("embedding")}
-						icon={FileSearchIcon}
-						label="Embedding"
-					/>
-					<ModalityChip
-						active={outputModalities.has("speech")}
-						onClick={() => toggleOutputModality("speech")}
-						icon={AudioLines}
-						label="Speech"
-					/>
+				{/* Modality filters, labelled so the two rows of chips can't be confused */}
+				<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+					<div className="flex items-center gap-1.5">
+						<FilterGroupLabel>Accepts</FilterGroupLabel>
+						<ModalityChip
+							active={inputModalities.has("text")}
+							onClick={() => toggleInputModality("text")}
+							icon={Type}
+							label="Text"
+						/>
+						<ModalityChip
+							active={inputModalities.has("image")}
+							onClick={() => toggleInputModality("image")}
+							icon={ImageIcon}
+							label="Image"
+						/>
+						<ModalityChip
+							active={inputModalities.has("speech")}
+							onClick={() => toggleInputModality("speech")}
+							icon={Mic}
+							label="Audio"
+						/>
+					</div>
 
-					<span className="text-xs text-muted-foreground/30 ml-auto">
+					<span className="hidden h-4 w-px bg-border sm:block" />
+
+					<div className="flex items-center gap-1.5">
+						<FilterGroupLabel>Produces</FilterGroupLabel>
+						<ModalityChip
+							active={outputModalities.has("text")}
+							onClick={() => toggleOutputModality("text")}
+							icon={MessageSquare}
+							label="Chat"
+						/>
+						<ModalityChip
+							active={outputModalities.has("embedding")}
+							onClick={() => toggleOutputModality("embedding")}
+							icon={FileSearchIcon}
+							label="Embedding"
+						/>
+						<ModalityChip
+							active={outputModalities.has("speech")}
+							onClick={() => toggleOutputModality("speech")}
+							icon={AudioLines}
+							label="Speech"
+						/>
+					</div>
+
+					<span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">
 						{filteredModels.length} model
 						{filteredModels.length !== 1 ? "s" : ""}
 					</span>
@@ -1058,96 +1075,67 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				</SheetContent>
 			</Sheet>
 
-			{/* Rails */}
+			{/* Catalog */}
 			<div
-				className={`mx-auto flex w-full max-w-[1240px] flex-1 flex-col gap-8 pb-10 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+				className={`mx-auto flex w-full max-w-[1240px] flex-1 flex-col gap-7 pb-12 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
 			>
 				{foundBits.isLoading ? (
 					<ModelCatalogSkeleton />
 				) : filteredModels.length === 0 ? (
-					<div className="flex flex-col items-center justify-center py-32 text-center">
-						<div className="rounded-full bg-muted/30 p-5 mb-5">
-							<Search className="h-7 w-7 text-muted-foreground/40" />
-						</div>
-						<p className="text-sm text-foreground/60 mb-1">
+					<div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-24 text-center">
+						<Search className="mb-3 h-6 w-6 text-muted-foreground/50" />
+						<p className="text-sm font-medium">
 							{searchTerm
-								? `Nothing found for \u201C${searchTerm}\u201D`
-								: "No models found"}
+								? `Nothing matches “${searchTerm}”`
+								: "No models match these filters"}
 						</p>
-						<p className="text-xs text-muted-foreground/60">
-							Try adjusting your filters
+						<p className="mt-1 text-xs text-muted-foreground">
+							Widen the modality or capability filters to see more.
 						</p>
 						{(searchTerm || activeFilterCount > 0) && (
-							<button
-								type="button"
+							<Button
+								variant="outline"
+								size="sm"
+								className="mt-4 h-8 text-xs"
 								onClick={() => {
 									setSearchTerm("");
 									search("");
 									resetFilters();
 								}}
-								className="mt-4 text-xs text-muted-foreground/40 hover:text-foreground transition-colors px-4 py-1.5 rounded-full border border-border/30 hover:border-border/50 hover:bg-muted/30"
 							>
-								Clear all filters
-							</button>
+								Clear search and filters
+							</Button>
 						)}
 					</div>
 				) : (
 					<>
-						{/* What you own outranks the catalog, so it comes first */}
-						<ModelRail
+						{/* State summary first, catalog detail below */}
+						<ProfileSummary
 							id="rail-profile"
-							label="In your profile"
-							icon={Sparkles}
-							color="var(--primary)"
-							items={profileModels}
-							highlight
-							note={
-								profileModels.length
-									? "Available to every flow in this workspace"
-									: undefined
-							}
-							renderCard={renderCard}
-							empty={
-								<div className="flex flex-col items-center gap-2.5 rounded-2xl border border-dashed border-border bg-muted/30 px-6 py-9 text-center">
-									<span className="grid h-11 w-11 place-items-center rounded-xl border border-primary/30 bg-primary/10 text-primary">
-										<Sparkles className="h-5 w-5" />
-									</span>
-									<h3 className="text-[15px] font-bold">
-										{searchTerm || activeFilterCount > 0
-											? "Nothing here matches"
-											: "Your profile is empty"}
-									</h3>
-									<p className="max-w-[42ch] text-[13px] leading-relaxed text-muted-foreground">
-										{searchTerm || activeFilterCount > 0
-											? "No model in your profile matches the current search or filters."
-											: "Add a model and it becomes available to every flow in this workspace. Start with one from the rails below."}
-									</p>
-								</div>
-							}
+							models={profileGlyphModels}
+							onSelect={setSelectedModel}
+							onAdd={openAddCustomModel}
 						/>
 
-						{rails
-							.filter((rail) => rail.items.length > 0)
-							.map((rail) => (
-								<ModelRail
-									key={rail.id}
-									id={rail.id}
-									label={rail.label}
-									icon={rail.icon}
-									color={rail.color}
-									items={rail.items}
-									renderCard={renderCard}
-								/>
-							))}
+						{populatedRails.map((rail) => (
+							<ModelSection
+								key={rail.id}
+								id={rail.id}
+								label={rail.label}
+								icon={rail.icon}
+								color={rail.color}
+								items={rail.items}
+								owned={rail.items.filter(isMine).length}
+								view={viewMode}
+								renderCard={renderCard}
+							/>
+						))}
 
-						<footer className="flex flex-wrap items-center gap-2.5 pt-1 text-xs text-muted-foreground/70">
-							<span>
-								{filteredModels.length} of {allBits.length} models
+						<footer className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/60 pt-4 text-xs text-muted-foreground">
+							<span className="font-mono tabular-nums">
+								{filteredModels.length} of {allBits.length}
 							</span>
-							<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-							<span>{profileGlyphModels.length} in your profile</span>
-							<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
-							<span>On-device, hosted &amp; remote deployments</span>
+							<span>models shown</span>
 						</footer>
 					</>
 				)}
@@ -1190,16 +1178,15 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	);
 }
 
-/** Horizontally scrolling row of model cards, one per capability. */
-function ModelRail({
+/** One capability group of the catalog, as a grid that fills the row. */
+function ModelSection({
 	id,
 	label,
 	icon: Icon,
 	color,
 	items,
-	note,
-	highlight = false,
-	empty,
+	owned,
+	view,
 	renderCard,
 }: Readonly<{
 	id: string;
@@ -1207,65 +1194,132 @@ function ModelRail({
 	icon: LucideIcon;
 	color: string;
 	items: IBit[];
-	note?: string;
-	highlight?: boolean;
-	empty?: React.ReactNode;
+	owned: number;
+	view: ViewMode;
 	renderCard: (bit: IBit) => React.ReactNode;
+}>) {
+	return (
+		<section id={id} aria-labelledby={`${id}-heading`} className="scroll-mt-32">
+			<div className="mb-3 flex items-center gap-2.5 border-b border-border/60 pb-2">
+				<span
+					style={{ "--rc": color } as React.CSSProperties}
+					className="grid h-6 w-6 shrink-0 place-items-center rounded-md bg-[color-mix(in_srgb,var(--rc)_14%,transparent)] text-(--rc)"
+				>
+					<Icon className="h-3.5 w-3.5" />
+				</span>
+				<h2
+					id={`${id}-heading`}
+					className="m-0 text-[12px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
+				>
+					{label}
+				</h2>
+				<span className="font-mono text-[11px] tabular-nums text-muted-foreground/70">
+					{items.length}
+				</span>
+				{owned > 0 && (
+					<span className="ml-auto text-[11px] text-muted-foreground">
+						<span className="font-mono tabular-nums">{owned}</span> in your
+						profile
+					</span>
+				)}
+			</div>
+			<ul
+				className={`m-0 grid list-none p-0 ${view === "list" ? "gap-1.5" : "gap-3"}`}
+				style={{
+					gridTemplateColumns:
+						view === "list"
+							? "minmax(0, 1fr)"
+							: "repeat(auto-fill, minmax(258px, 1fr))",
+				}}
+			>
+				{items.map((bit) => (
+					<li key={bit.id} className="min-w-0">
+						{renderCard(bit)}
+					</li>
+				))}
+			</ul>
+		</section>
+	);
+}
+
+/**
+ * What the profile currently runs on, as a compact strip — the same models
+ * still appear as full cards in their capability group below, so this stays a
+ * summary and never repeats the detail.
+ */
+function ProfileSummary({
+	id,
+	models,
+	onSelect,
+	onAdd,
+}: Readonly<{
+	id: string;
+	models: IBit[];
+	onSelect: (bit: IBit) => void;
+	onAdd: () => void;
 }>) {
 	return (
 		<section
 			id={id}
 			aria-labelledby={`${id}-heading`}
-			className={`scroll-mt-[150px] ${
-				highlight
-					? "rounded-3xl border border-primary/30 bg-gradient-to-br from-primary/[0.07] to-transparent px-4 pt-4 pb-1 sm:px-5"
-					: ""
-			}`}
+			className="scroll-mt-32 rounded-xl border border-border bg-muted/40 p-3.5 dark:border-white/10"
 		>
-			<div className="mb-3 flex items-center justify-between gap-3">
+			<div className="mb-2.5 flex items-center gap-2.5">
+				<Sparkles className="h-3.5 w-3.5 shrink-0 text-primary" />
 				<h2
 					id={`${id}-heading`}
-					className="m-0 flex items-center gap-2.5 text-[17px] font-bold tracking-tight"
+					className="m-0 text-[12px] font-semibold uppercase tracking-[0.12em] text-muted-foreground"
 				>
-					<span
-						style={{ "--rc": color } as React.CSSProperties}
-						className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px] border border-[color-mix(in_srgb,var(--rc)_26%,transparent)] bg-[color-mix(in_srgb,var(--rc)_12%,transparent)] text-[var(--rc)]"
-					>
-						<Icon className="h-4 w-4" />
-					</span>
-					{label}
-					<span className="rounded-full border border-border/60 bg-muted/50 px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-muted-foreground">
-						{items.length}
-					</span>
+					In your profile
 				</h2>
-				{note && (
-					<span className="hidden whitespace-nowrap text-xs text-muted-foreground/70 sm:inline">
-						{note}
-					</span>
-				)}
+				<span className="ml-auto text-[11px] text-muted-foreground">
+					Available to every flow in this workspace
+				</span>
 			</div>
-			{items.length > 0 ? (
-				<ul
-					// biome-ignore lint/a11y/noNoninteractiveTabindex: the rail scrolls horizontally, so keyboard users must be able to focus it
-					tabIndex={0}
-					aria-label={`${label} — scroll horizontally`}
-					className="-mx-1 m-0 flex list-none snap-x snap-proximity gap-3.5 overflow-x-auto px-1 pt-1.5 pb-4 focus-visible:outline-2 focus-visible:outline-primary"
-				>
-					{items.map((bit) => (
-						<li key={bit.id} className="w-[268px] shrink-0 snap-start">
-							{renderCard(bit)}
+
+			{models.length === 0 ? (
+				<div className="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+					<span>
+						No models yet — add one below, or connect your own provider.
+					</span>
+					<Button
+						variant="outline"
+						size="sm"
+						onClick={onAdd}
+						className="h-7 gap-1.5 bg-background text-xs"
+					>
+						<Plus className="h-3.5 w-3.5" />
+						Add custom model
+					</Button>
+				</div>
+			) : (
+				<ul className="m-0 flex list-none flex-wrap gap-1.5 p-0">
+					{models.map((bit) => (
+						<li key={bit.id}>
+							<button
+								type="button"
+								onClick={() => onSelect(bit)}
+								title={`${bit.meta?.en?.name ?? bit.id} — ${providerLabel(bit)}`}
+								className="flex h-8 max-w-60 items-center gap-2 rounded-lg border border-border bg-background pl-1.5 pr-2.5 text-left transition-colors hover:border-primary/40 hover:bg-primary/5 dark:border-white/10"
+							>
+								<ProviderGlyph bit={bit} size={20} className="rounded-[5px]" />
+								<span className="truncate text-[12.5px] font-medium">
+									{bit.meta?.en?.name ?? bit.id}
+								</span>
+								<span className="shrink-0 truncate text-[11px] text-muted-foreground">
+									{providerLabel(bit)}
+								</span>
+							</button>
 						</li>
 					))}
 				</ul>
-			) : (
-				<div className="pb-4">{empty}</div>
 			)}
 		</section>
 	);
 }
 
-/** Sticky "what's in my profile right now" control: glyphs first, count second. */
-function ProfileStrip({
+/** Header control: who is in the profile, and a shortcut to filter down to them. */
+function ProfileToggle({
 	models,
 	active,
 	onToggle,
@@ -1282,45 +1336,36 @@ function ProfileStrip({
 					? "Show the whole catalog"
 					: `Show only the ${models.length} models in your profile`
 			}
-			className={`flex h-[42px] shrink-0 items-center gap-2.5 rounded-xl border py-0 pr-3 pl-2.5 transition-colors ${
+			className={`flex h-8 shrink-0 items-center gap-2 rounded-md border px-2.5 text-xs font-medium transition-colors ${
 				active
-					? "border-transparent bg-primary text-primary-foreground shadow-md shadow-primary/30"
-					: "border-primary/30 bg-primary/10 text-foreground hover:border-primary hover:bg-primary/15"
+					? "border-primary/40 bg-primary/10 text-primary"
+					: "border-border text-muted-foreground hover:bg-muted hover:text-foreground dark:border-white/10"
 			}`}
 		>
-			<Sparkles
-				className={`h-[18px] w-[18px] shrink-0 ${active ? "" : "text-primary"}`}
-			/>
+			<Sparkles className="h-3.5 w-3.5 shrink-0" />
 			{shown.length > 0 && (
-				<span className="flex items-center pl-1.5" aria-hidden="true">
+				<span className="flex items-center pl-1" aria-hidden="true">
 					{shown.map((bit) => (
 						<ProviderGlyph
 							key={bit.id}
 							bit={bit}
-							size={24}
-							className="-ml-1.5 rounded-[7px] ring-2 ring-background"
+							size={18}
+							className="-ml-1 rounded-[5px] ring-2 ring-background"
 						/>
 					))}
 					{rest > 0 && (
-						<span className="-ml-1.5 grid h-6 min-w-6 place-items-center rounded-[7px] bg-muted px-1 font-mono text-[9.5px] font-semibold tabular-nums text-muted-foreground ring-2 ring-background">
+						<span className="-ml-1 grid h-4.5 min-w-4.5 place-items-center rounded-[5px] bg-muted px-1 font-mono text-[9px] font-semibold tabular-nums text-muted-foreground ring-2 ring-background">
 							+{rest}
 						</span>
 					)}
 				</span>
 			)}
-			<span className="flex flex-col text-left leading-tight">
-				<span className="font-mono text-[13px] font-bold tabular-nums">
-					{models.length}
-				</span>
-				<span className="text-[10px] font-semibold uppercase tracking-wider opacity-70">
-					In profile
-				</span>
-			</span>
+			<span className="whitespace-nowrap">In profile</span>
 		</button>
 	);
 }
 
-/** Capability jump chip with a dot when you already own models in that rail. */
+/** Capability jump chip with a dot when you already own models in that group. */
 function RailChip({
 	icon: Icon,
 	label,
@@ -1341,10 +1386,10 @@ function RailChip({
 			type="button"
 			onClick={onClick}
 			aria-pressed={active}
-			className={`flex h-8 shrink-0 snap-start items-center gap-2 whitespace-nowrap rounded-full border px-3.5 text-[13px] font-semibold transition-colors ${
+			className={`flex h-7 shrink-0 snap-start items-center gap-1.5 whitespace-nowrap rounded-md border px-2.5 text-[12px] font-medium transition-colors ${
 				active
-					? "border-transparent bg-primary text-primary-foreground"
-					: "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground"
+					? "border-foreground/20 bg-muted text-foreground"
+					: "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground"
 			}`}
 		>
 			<Icon className="h-3.5 w-3.5" />
@@ -1352,13 +1397,23 @@ function RailChip({
 			{owned > 0 && (
 				<span
 					title={`${owned} in your profile`}
-					className={`h-1.5 w-1.5 rounded-full ${active ? "bg-current" : "bg-primary"}`}
+					className="h-1.5 w-1.5 rounded-full bg-primary"
 				/>
 			)}
-			<span className="font-mono text-[10px] tabular-nums opacity-70">
+			<span className="font-mono text-[10px] tabular-nums opacity-60">
 				{count}
 			</span>
 		</button>
+	);
+}
+
+function FilterGroupLabel({
+	children,
+}: Readonly<{ children: React.ReactNode }>) {
+	return (
+		<span className="text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground/70">
+			{children}
+		</span>
 	);
 }
 
@@ -1377,10 +1432,11 @@ function ModalityChip({
 		<button
 			type="button"
 			onClick={onClick}
-			className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs transition-all ${
+			aria-pressed={active}
+			className={`flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors ${
 				active
-					? "bg-foreground/10 text-foreground"
-					: "text-muted-foreground/40 hover:text-muted-foreground/70 hover:bg-muted/20"
+					? "border-border bg-muted text-foreground dark:border-white/10"
+					: "border-transparent text-muted-foreground/60 hover:bg-muted/50 hover:text-foreground"
 			}`}
 		>
 			<Icon className="h-3 w-3" />
@@ -1417,18 +1473,26 @@ function FilterCheckbox({
 
 function ModelCatalogSkeleton() {
 	return (
-		<div className="space-y-8 pt-2">
-			<div
-				className="grid gap-3"
-				style={{ gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))" }}
-			>
-				{Array.from({ length: 8 }).map((_, i) => (
-					<Skeleton
-						key={`skel-model-${i.toString()}`}
-						className="h-48 rounded-xl"
-					/>
-				))}
-			</div>
+		<div className="flex flex-col gap-7">
+			<Skeleton className="h-19 rounded-xl" />
+			{[0, 1].map((section) => (
+				<div key={`skel-section-${section}`} className="flex flex-col gap-3">
+					<Skeleton className="h-4 w-40" />
+					<div
+						className="grid gap-3"
+						style={{
+							gridTemplateColumns: "repeat(auto-fill, minmax(258px, 1fr))",
+						}}
+					>
+						{Array.from({ length: 4 }).map((_, i) => (
+							<Skeleton
+								key={`skel-model-${section}-${i.toString()}`}
+								className="h-46 rounded-xl"
+							/>
+						))}
+					</div>
+				</div>
+			))}
 		</div>
 	);
 }

@@ -9,6 +9,7 @@ import {
 	HardDriveDownload,
 	Loader2,
 	Plug,
+	ScanEye,
 	ScanSearch,
 	SlidersHorizontal,
 } from "lucide-react";
@@ -574,7 +575,11 @@ export function AddCustomModelDialog({
 	const [hfFileName, setHfFileName] = useState("");
 	const [hfRepo, setHfRepo] = useState("");
 	const [hfSize, setHfSize] = useState("");
+	const [mmprojDownload, setMmprojDownload] = useState("");
+	const [mmprojFileName, setMmprojFileName] = useState("");
+	const [mmprojSize, setMmprojSize] = useState("");
 	const [detectingSize, setDetectingSize] = useState(false);
+	const [detectingMmprojSize, setDetectingMmprojSize] = useState(false);
 	const [saving, setSaving] = useState(false);
 
 	const providerDef = useMemo(
@@ -602,6 +607,9 @@ export function AddCustomModelDialog({
 			setHfFileName("");
 			setHfRepo("");
 			setHfSize("");
+			setMmprojDownload("");
+			setMmprojFileName("");
+			setMmprojSize("");
 			return;
 		}
 
@@ -640,6 +648,14 @@ export function AddCustomModelDialog({
 		setHfFileName(existingBit.file_name ?? "");
 		setHfRepo(existingBit.repository ?? "");
 		setHfSize(existingBit.size ? String(existingBit.size) : "");
+
+		const projection = (providerParams.projection ?? {}) as Record<
+			string,
+			unknown
+		>;
+		setMmprojDownload(String(projection.download_link ?? ""));
+		setMmprojFileName(String(projection.file_name ?? ""));
+		setMmprojSize(projection.size ? String(projection.size) : "");
 	}, [open, existingBit]);
 
 	const setFieldValue = useCallback((key: string, value: string) => {
@@ -682,19 +698,24 @@ export function AddCustomModelDialog({
 		}
 	}, []);
 
-	const detectHfSize = useCallback(
-		async (silent: boolean) => {
-			const url = hfDownload.trim();
-			if (!url) return;
-			setDetectingSize(true);
+	const detectSize = useCallback(
+		async (
+			url: string,
+			apply: (size: string) => void,
+			setBusy: (busy: boolean) => void,
+			silent: boolean,
+		) => {
+			const trimmed = url.trim();
+			if (!trimmed) return;
+			setBusy(true);
 			try {
-				const res = await fetch(url, { method: "HEAD" });
+				const res = await fetch(trimmed, { method: "HEAD" });
 				const len = Number.parseInt(
 					res.headers.get("content-length") ?? "",
 					10,
 				);
 				if (Number.isFinite(len) && len > 0) {
-					setHfSize(String(len));
+					apply(String(len));
 				} else if (!silent) {
 					toast.info("Could not detect the file size — enter it manually.");
 				}
@@ -702,11 +723,35 @@ export function AddCustomModelDialog({
 				if (!silent)
 					toast.info("Could not detect the file size — enter it manually.");
 			} finally {
-				setDetectingSize(false);
+				setBusy(false);
 			}
 		},
-		[hfDownload],
+		[],
 	);
+
+	const detectHfSize = useCallback(
+		(silent: boolean) =>
+			detectSize(hfDownload, setHfSize, setDetectingSize, silent),
+		[detectSize, hfDownload],
+	);
+
+	const detectMmprojSize = useCallback(
+		(silent: boolean) =>
+			detectSize(mmprojDownload, setMmprojSize, setDetectingMmprojSize, silent),
+		[detectSize, mmprojDownload],
+	);
+
+	const applyMmprojUrl = useCallback((url: string) => {
+		const trimmed = url.trim();
+		if (!trimmed) return;
+		try {
+			const segments = new URL(trimmed).pathname.split("/").filter(Boolean);
+			const fileName = decodeURIComponent(segments[segments.length - 1] ?? "");
+			if (fileName) setMmprojFileName((prev) => prev.trim() || fileName);
+		} catch {
+			// Not a parsable URL yet — the user is still typing.
+		}
+	}, []);
 
 	const parsedTags = useMemo(
 		() =>
@@ -730,6 +775,11 @@ export function AddCustomModelDialog({
 			const size = Number.parseInt(hfSize, 10);
 			if (!Number.isFinite(size) || size <= 0)
 				return "File size is required — use Detect or enter it in bytes";
+			if (isVision) {
+				if (!mmprojDownload.trim())
+					return "Vision needs a projector: add the mmproj download link";
+				if (!mmprojFileName.trim()) return "Projector file name is required";
+			}
 			return null;
 		}
 		if (!providerDef) return "Pick a provider first";
@@ -747,6 +797,9 @@ export function AddCustomModelDialog({
 		hfDownload,
 		hfFileName,
 		hfSize,
+		isVision,
+		mmprojDownload,
+		mmprojFileName,
 		providerDef,
 		fieldValues,
 		isEdit,
@@ -802,6 +855,20 @@ export function AddCustomModelDialog({
 					if (field.key === "version") version = value;
 				}
 				if (providerDef.isAzure) params.is_azure = true;
+			}
+
+			// llama.cpp needs the projector as its own artifact; it rides along in
+			// the provider params and is materialised as a Projection bit at load.
+			if (isHf && isVision && mmprojDownload.trim()) {
+				const projectorSize = Number.parseInt(mmprojSize, 10);
+				params.projection = {
+					download_link: mmprojDownload.trim(),
+					file_name: mmprojFileName.trim(),
+					size:
+						Number.isFinite(projectorSize) && projectorSize > 0
+							? projectorSize
+							: undefined,
+				};
 			}
 
 			const bit: IBit = {
@@ -889,6 +956,9 @@ export function AddCustomModelDialog({
 		hfFileName,
 		hfSize,
 		hfRepo,
+		mmprojDownload,
+		mmprojFileName,
+		mmprojSize,
 		backend.bitState,
 		backend.userState,
 		invalidate,
@@ -966,6 +1036,23 @@ export function AddCustomModelDialog({
 								onRepoChange={setHfRepo}
 								onSizeChange={setHfSize}
 								onDetectSize={() => detectHfSize(false)}
+							/>
+						)}
+
+						{source === "huggingface" && isVision && (
+							<ProjectorSection
+								download={mmprojDownload}
+								fileName={mmprojFileName}
+								size={mmprojSize}
+								detecting={detectingMmprojSize}
+								onDownloadChange={setMmprojDownload}
+								onDownloadBlur={(url) => {
+									applyMmprojUrl(url);
+									if (!mmprojSize.trim()) detectMmprojSize(true);
+								}}
+								onFileNameChange={setMmprojFileName}
+								onSizeChange={setMmprojSize}
+								onDetectSize={() => detectMmprojSize(false)}
 							/>
 						)}
 
@@ -1388,6 +1475,106 @@ function HuggingFaceSection({
 					autoComplete="off"
 					spellCheck={false}
 				/>
+			</div>
+		</div>
+	);
+}
+
+/**
+ * The multimodal projector. llama.cpp loads images through a separate mmproj
+ * file, so a local vision model is two artifacts, not one.
+ */
+function ProjectorSection({
+	download,
+	fileName,
+	size,
+	detecting,
+	onDownloadChange,
+	onDownloadBlur,
+	onFileNameChange,
+	onSizeChange,
+	onDetectSize,
+}: Readonly<{
+	download: string;
+	fileName: string;
+	size: string;
+	detecting: boolean;
+	onDownloadChange: (value: string) => void;
+	onDownloadBlur: (value: string) => void;
+	onFileNameChange: (value: string) => void;
+	onSizeChange: (value: string) => void;
+	onDetectSize: () => void;
+}>) {
+	const parsedSize = Number.parseInt(size, 10);
+	return (
+		<div className="space-y-3">
+			<SectionHeading
+				icon={ScanEye}
+				label="Vision projector"
+				hint="Vision runs through a separate mmproj file — usually next to the model in the same repo."
+			/>
+			<div className="space-y-1.5">
+				<Label htmlFor="custom-model-mmproj-download" className="text-xs">
+					Projector link (mmproj)<span className="text-destructive"> *</span>
+				</Label>
+				<Input
+					id="custom-model-mmproj-download"
+					value={download}
+					onChange={(e) => onDownloadChange(e.target.value)}
+					onBlur={(e) => onDownloadBlur(e.target.value)}
+					placeholder="https://huggingface.co/<owner>/<repo>/resolve/main/mmproj-F16.gguf"
+					autoComplete="off"
+					spellCheck={false}
+				/>
+			</div>
+			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+				<div className="space-y-1.5">
+					<Label htmlFor="custom-model-mmproj-file" className="text-xs">
+						File name<span className="text-destructive"> *</span>
+					</Label>
+					<Input
+						id="custom-model-mmproj-file"
+						value={fileName}
+						onChange={(e) => onFileNameChange(e.target.value)}
+						placeholder="mmproj-F16.gguf"
+						autoComplete="off"
+						spellCheck={false}
+					/>
+				</div>
+				<div className="space-y-1.5">
+					<Label htmlFor="custom-model-mmproj-size" className="text-xs">
+						File size (bytes)
+					</Label>
+					<div className="flex items-center gap-2">
+						<Input
+							id="custom-model-mmproj-size"
+							value={size}
+							onChange={(e) => onSizeChange(e.target.value.replace(/\D/g, ""))}
+							placeholder="0"
+							inputMode="numeric"
+							autoComplete="off"
+						/>
+						<Button
+							variant="outline"
+							size="sm"
+							onClick={onDetectSize}
+							disabled={detecting || !download.trim()}
+							className="shrink-0"
+						>
+							{detecting ? (
+								<Loader2 className="h-3.5 w-3.5 animate-spin" />
+							) : (
+								<ScanSearch className="h-3.5 w-3.5" />
+							)}
+							Detect
+						</Button>
+					</div>
+					{Number.isFinite(parsedSize) && parsedSize > 0 && (
+						<p className="text-xs text-muted-foreground/60">
+							≈ {humanFileSize(parsedSize)}
+						</p>
+					)}
+				</div>
 			</div>
 		</div>
 	);

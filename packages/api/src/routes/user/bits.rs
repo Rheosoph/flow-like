@@ -306,6 +306,14 @@ fn validate_user_bit(bit: &Bit) -> Result<BitType, ApiError> {
         ));
     }
 
+    // llama.cpp only sees images when it is started with `--mmproj`, so a local
+    // vision model without a projector would advertise vision it cannot do.
+    if is_local && bit.bit_type == BitTypes::Vlm && bit.projection_bit().is_none() {
+        return Err(ApiError::bad_request(
+            "Local vision models require a projector: set provider.params.projection with a download_link and file_name for the mmproj file",
+        ));
+    }
+
     Ok(bit_type)
 }
 

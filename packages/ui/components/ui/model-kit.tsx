@@ -98,13 +98,43 @@ export function ModalityToken({
 export function ModalityFlow({
 	type,
 	compact = false,
+	plain = false,
 	className,
 }: Readonly<{
 	type: IBitTypes;
 	compact?: boolean;
+	/** Icons and labels in running text — for dense lists where chips shout. */
+	plain?: boolean;
 	className?: string;
 }>) {
 	const flow = useMemo(() => bitModalities(type), [type]);
+
+	if (plain) {
+		return (
+			<span className={cn("inline-flex items-center gap-1", className)}>
+				{flow.inputs.map((modality, index) => {
+					const info = MODALITY[modality];
+					const Icon = info.icon;
+					return (
+						<span key={modality} className="inline-flex items-center gap-1">
+							{index > 0 && <span aria-hidden="true">+</span>}
+							<Icon className="h-3 w-3 shrink-0" />
+							{info.label}
+						</span>
+					);
+				})}
+				<ArrowRightIcon className="h-3 w-3 shrink-0 opacity-60" />
+				<span className="inline-flex items-center gap-1">
+					{(() => {
+						const Icon = MODALITY[flow.output].icon;
+						return <Icon className="h-3 w-3 shrink-0" />;
+					})()}
+					{MODALITY[flow.output].label}
+				</span>
+			</span>
+		);
+	}
+
 	return (
 		<span
 			className={cn("inline-flex items-center gap-1.5 flex-wrap", className)}
@@ -148,6 +178,26 @@ export function DeploymentBadge({
 			)}
 		>
 			<Icon className="h-3 w-3 shrink-0" />
+			{info.label}
+		</span>
+	);
+}
+
+/** Where a model runs, as a coloured dot plus running text. */
+export function DeploymentLabel({
+	kind,
+	className,
+}: Readonly<{ kind: Deployment; className?: string }>) {
+	const info = DEPLOYMENT[kind];
+	return (
+		<span
+			style={{ "--dc": info.color } as React.CSSProperties}
+			className={cn("inline-flex items-center gap-1.5", className)}
+		>
+			<span
+				aria-hidden="true"
+				className="h-1.5 w-1.5 shrink-0 rounded-full bg-(--dc)"
+			/>
 			{info.label}
 		</span>
 	);
@@ -231,6 +281,34 @@ export function ProviderGlyph({
 	);
 }
 
+/** Providers write their own names — title-casing them reads as a typo. */
+const PROVIDER_NAMES: Record<string, string> = {
+	anthropic: "Anthropic",
+	azure: "Azure OpenAI",
+	bedrock: "Amazon Bedrock",
+	cohere: "Cohere",
+	deepseek: "DeepSeek",
+	galadriel: "Galadriel",
+	gemini: "Google Gemini",
+	groq: "Groq",
+	huggingface: "Hugging Face",
+	hyperbolic: "Hyperbolic",
+	lmstudio: "LM Studio",
+	local: "On-device",
+	mira: "Mira",
+	mistral: "Mistral",
+	moonshot: "Moonshot",
+	mozilla: "Mozilla",
+	ollama: "Ollama",
+	openai: "OpenAI",
+	openrouter: "OpenRouter",
+	perplexity: "Perplexity",
+	together: "Together AI",
+	vertex: "Vertex AI",
+	voyageai: "Voyage AI",
+	xai: "xAI",
+};
+
 /** Human-readable provider label for the byline under a model name. */
 export function providerLabel(bit: IBit): string {
 	const params = bit.parameters as
@@ -238,7 +316,13 @@ export function providerLabel(bit: IBit): string {
 		| undefined;
 	const raw = params?.provider?.provider_name;
 	if (!raw) return "Unknown provider";
-	const cleaned = raw.replace(/^custom:/i, "").replace(/^hosted:?/i, "");
+	const cleaned = raw
+		.replace(/^custom:/i, "")
+		.replace(/^hosted:?/i, "")
+		.trim();
 	if (!cleaned) return "Hosted";
-	return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
+	return (
+		PROVIDER_NAMES[cleaned.toLowerCase()] ??
+		cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
+	);
 }

@@ -46,7 +46,7 @@ import {
 import { IntelligenceIndexBadge } from "./model-benchmarks";
 import type { IModelEvaluation } from "./model-benchmarks";
 import {
-	DeploymentBadge,
+	DeploymentLabel,
 	ModalityFlow,
 	ProviderGlyph,
 	providerLabel,
@@ -357,25 +357,19 @@ function ModelCardGridVariant({
 	const meta = bit.meta.en;
 	if (!meta) return null;
 
+	const description = meta.description?.trim();
+
 	return (
 		<article
 			onClick={onCardClick}
 			onKeyDown={(e) => e.key === "Enter" && onCardClick()}
-			className={`group relative flex h-full cursor-pointer flex-col gap-2.5 overflow-hidden rounded-2xl border bg-card py-4 pr-4 pl-[18px] shadow-sm transition-all hover:-translate-y-[3px] hover:border-primary/30 hover:shadow-lg ${
-				isInProfile ? "border-primary/35" : ""
+			className={`group relative flex h-full cursor-pointer flex-col gap-3 overflow-hidden rounded-xl border bg-card p-3.5 transition-colors hover:border-foreground/25 hover:bg-muted/30 dark:border-white/10 dark:hover:border-white/20 ${
+				isInProfile ? "border-primary/40 dark:border-primary/40" : ""
 			}`}
 		>
-			{/* Membership spine — readable across a whole scrolling rail */}
-			<span
-				aria-hidden="true"
-				className={`absolute inset-y-0 left-0 w-1 origin-left bg-primary transition-transform duration-200 ${
-					isInProfile ? "scale-x-100" : "scale-x-0"
-				}`}
-			/>
-
 			{/* Download Overlay */}
 			{progress !== undefined && !isVirtualBit && (
-				<div className="absolute inset-0 z-30 flex items-center justify-center rounded-2xl bg-background/90 backdrop-blur-sm">
+				<div className="absolute inset-0 z-30 flex items-center justify-center rounded-xl bg-background/90 backdrop-blur-sm">
 					{isQueuedState ? (
 						<div className="flex items-center gap-2">
 							<ClockIcon className="h-4 w-4 animate-pulse text-primary" />
@@ -392,32 +386,22 @@ function ModelCardGridVariant({
 				</div>
 			)}
 
-			<div className="flex items-center gap-3">
-				<span className="relative shrink-0">
-					<ProviderGlyph bit={bit} size={40} />
-					{isInProfile && (
-						<span
-							title="In your profile"
-							className="absolute -right-1 -bottom-1 grid h-[17px] w-[17px] place-items-center rounded-full bg-primary text-primary-foreground ring-[2.5px] ring-card"
-						>
-							<CheckIcon className="h-2.5 w-2.5" strokeWidth={3} />
-						</span>
-					)}
-				</span>
+			<div className="flex items-start gap-2.5">
+				<ProviderGlyph bit={bit} size={32} className="shrink-0" />
 				<div className="min-w-0 flex-1">
 					<div
-						className="truncate text-[14.5px] font-bold tracking-tight"
+						className="truncate text-[14px] font-semibold tracking-tight"
 						title={meta.name}
 					>
 						{meta.name}
 					</div>
-					<div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground/70">
+					<div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
 						<span className="truncate">{providerLabel(bit)}</span>
 						{isCustom && (
-							<span className="inline-flex h-4 shrink-0 items-center gap-1 rounded border border-primary/30 px-1 text-[9.5px] font-bold uppercase tracking-wide text-primary">
-								<LockIcon className="h-2.5 w-2.5" />
-								Private
-							</span>
+							<LockIcon
+								className="h-3 w-3 shrink-0"
+								aria-label="Private to you"
+							/>
 						)}
 					</div>
 				</div>
@@ -429,113 +413,76 @@ function ModelCardGridVariant({
 					onToggleDownload={onToggleDownload}
 					onToggleProfile={onToggleProfile}
 					onOpenRepository={onOpenRepository}
+					onEdit={onEdit}
+					onDelete={onDelete}
 				/>
 			</div>
 
-			{/* What goes in, what comes out */}
-			<div className="flex min-h-[52px] items-center rounded-xl border border-border/60 bg-muted/40 px-2.5 py-2">
-				<ModalityFlow type={bit.type} />
-			</div>
+			{description && (
+				<p className="line-clamp-2 text-[12.5px] leading-relaxed text-muted-foreground">
+					{description}
+				</p>
+			)}
 
-			<p className="line-clamp-2 min-h-[36px] text-[12.5px] leading-relaxed text-muted-foreground">
-				{meta.description}
-			</p>
-
-			<div className="flex min-h-[22px] flex-wrap items-center gap-1.5">
-				<IntelligenceIndexBadge
-					evaluation={bit.model_evaluation as IModelEvaluation | undefined}
-				/>
+			{/* One quiet spec line: what it takes in, what it returns, how big, where it runs */}
+			<div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-muted-foreground">
+				<ModalityFlow type={bit.type} plain />
+				<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
 				{contextLength ? (
-					<span className="inline-flex h-[22px] items-center rounded-md border border-border/60 bg-muted/50 px-2 font-mono text-[11px] tabular-nums text-muted-foreground">
-						{formatContextLength(contextLength)}
-					</span>
+					<>
+						<span className="font-mono tabular-nums">
+							{formatContextLength(contextLength)}
+						</span>
+						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+					</>
 				) : null}
-				<DeploymentBadge
+				<DeploymentLabel
 					kind={isHosted ? "hosted" : canRunRemotely ? "remote" : "local"}
 				/>
 				{!isHosted && isInstalled && (
-					<span className="inline-flex h-[22px] items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 font-mono text-[11px] tabular-nums text-emerald-600 dark:text-emerald-400">
-						<CheckIcon className="h-3 w-3" />
-						{humanFileSize(bitSize)}
-					</span>
-				)}
-				{isEmbeddingModel && !canRunRemotely && !isHosted && (
-					<span className="inline-flex h-[22px] items-center rounded-md border border-border/60 bg-muted/50 px-2 text-[10.5px] font-semibold text-muted-foreground">
-						Local only
-					</span>
+					<>
+						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+						<span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+							{humanFileSize(bitSize)} on disk
+						</span>
+					</>
 				)}
 				{isRestricted && requiredTier && (
-					<span className="inline-flex h-[22px] items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-2 text-[10.5px] font-semibold text-amber-600 dark:text-amber-400">
-						{requiredTier}
-					</span>
+					<>
+						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+						<span className="font-semibold text-amber-600 dark:text-amber-400">
+							{requiredTier} plan
+						</span>
+					</>
 				)}
 			</div>
 
-			<div className="mt-auto flex gap-1.5 pt-1">
-				<Button
-					variant={isInProfile ? "secondary" : "outline"}
-					size="sm"
-					onClick={(e) => {
-						e.stopPropagation();
-						onToggleProfile();
-					}}
-					className={`h-8 flex-1 gap-1.5 rounded-lg text-xs font-semibold ${
-						isInProfile
-							? "border border-primary/30 bg-primary/10 text-primary hover:bg-primary/15"
-							: ""
-					}`}
-				>
-					{isInProfile ? (
-						<CheckIcon className="h-3.5 w-3.5" />
-					) : (
-						<PlusIcon className="h-3.5 w-3.5" />
-					)}
-					{isInProfile ? "In profile" : "Add"}
-				</Button>
-				{isCustom && onEdit && (
-					<Button
-						variant="outline"
-						size="icon"
-						title="Edit model"
-						onClick={(e) => {
-							e.stopPropagation();
-							onEdit();
-						}}
-						className="h-8 w-8 shrink-0 rounded-lg"
-					>
-						<PencilIcon className="h-3.5 w-3.5" />
-						<span className="sr-only">Edit model</span>
-					</Button>
+			{bit.model_evaluation ? (
+				<IntelligenceIndexBadge
+					evaluation={bit.model_evaluation as IModelEvaluation | undefined}
+				/>
+			) : null}
+
+			<Button
+				variant="outline"
+				size="sm"
+				onClick={(e) => {
+					e.stopPropagation();
+					onToggleProfile();
+				}}
+				className={`h-8 w-full gap-1.5 rounded-lg text-xs font-semibold ${
+					isInProfile
+						? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
+						: ""
+				}`}
+			>
+				{isInProfile ? (
+					<CheckIcon className="h-3.5 w-3.5" />
+				) : (
+					<PlusIcon className="h-3.5 w-3.5" />
 				)}
-				{isCustom && onDelete && (
-					<Button
-						variant="outline"
-						size="icon"
-						title="Delete model"
-						onClick={(e) => {
-							e.stopPropagation();
-							onDelete();
-						}}
-						className="h-8 w-8 shrink-0 rounded-lg text-destructive hover:text-destructive"
-					>
-						<TrashIcon className="h-3.5 w-3.5" />
-						<span className="sr-only">Delete model</span>
-					</Button>
-				)}
-				<Button
-					variant="outline"
-					size="icon"
-					title="Details"
-					onClick={(e) => {
-						e.stopPropagation();
-						onCardClick();
-					}}
-					className="h-8 w-8 shrink-0 rounded-lg"
-				>
-					<ArrowRightIcon className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
-					<span className="sr-only">Details for {meta.name}</span>
-				</Button>
-			</div>
+				{isInProfile ? "In profile" : "Add to profile"}
+			</Button>
 		</article>
 	);
 }
@@ -670,6 +617,9 @@ interface ModelCardDropdownProps {
 	onToggleDownload: () => void;
 	onToggleProfile: () => void;
 	onOpenRepository: () => void;
+	/** Present only for user-owned models. */
+	onEdit?: () => void;
+	onDelete?: () => void;
 }
 
 function ModelCardDropdown({
@@ -680,6 +630,8 @@ function ModelCardDropdown({
 	onToggleDownload,
 	onToggleProfile,
 	onOpenRepository,
+	onEdit,
+	onDelete,
 }: Readonly<ModelCardDropdownProps>) {
 	return (
 		<DropdownMenu>
@@ -687,13 +639,14 @@ function ModelCardDropdown({
 				<Button
 					size="sm"
 					variant="ghost"
-					className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+					aria-label="Model actions"
+					className="h-7 w-7 shrink-0 p-0 text-muted-foreground/60 transition-colors hover:text-foreground"
 					onClick={(e) => e.stopPropagation()}
 				>
 					<MoreVerticalIcon className="h-4 w-4" />
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="w-44">
+			<DropdownMenuContent align="end" className="w-48">
 				<DropdownMenuItem
 					onClick={(e) => {
 						e.stopPropagation();
@@ -743,6 +696,30 @@ function ModelCardDropdown({
 							View Repository
 						</DropdownMenuItem>
 					</>
+				)}
+				{(onEdit || onDelete) && <DropdownMenuSeparator />}
+				{onEdit && (
+					<DropdownMenuItem
+						onClick={(e) => {
+							e.stopPropagation();
+							onEdit();
+						}}
+					>
+						<PencilIcon className="h-4 w-4 mr-2" />
+						Edit model
+					</DropdownMenuItem>
+				)}
+				{onDelete && (
+					<DropdownMenuItem
+						variant="destructive"
+						onClick={(e) => {
+							e.stopPropagation();
+							onDelete();
+						}}
+					>
+						<TrashIcon className="h-4 w-4 mr-2" />
+						Delete model
+					</DropdownMenuItem>
 				)}
 			</DropdownMenuContent>
 		</DropdownMenu>

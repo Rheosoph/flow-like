@@ -400,15 +400,17 @@ pub(crate) async fn load_user_profile_opt(
 
     let mut profile = profile_model_to_core(model);
 
-    // Hydrate the custom bits THIS profile activated, with decrypted provider
+    // Hydrate the user's WHOLE custom-bit library, with decrypted provider
     // secrets — the profile only lives inside this request's copilot invocation.
-    let custom_bits =
-        crate::routes::user::bits::load_custom_bits_for_profile(state, sub, &profile.bits, true)
-            .await
-            .unwrap_or_else(|err| {
-                tracing::warn!(sub = %sub, "Failed to load custom bits for profile: {err:?}");
-                vec![]
-            });
+    // The model pickers offer the library independent of profile membership, so
+    // an explicitly selected model must resolve here; automatic "best model"
+    // selection stays scoped to the profile's `bits` inside `Profile`.
+    let custom_bits = crate::routes::user::bits::load_custom_bits_for_user(state, sub, true)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(sub = %sub, "Failed to load custom bits for profile: {err:?}");
+            vec![]
+        });
     profile.custom_bits = custom_bits
         .into_iter()
         .map(flow_like::profile::ProfileCustomBit)

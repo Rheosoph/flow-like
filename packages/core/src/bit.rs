@@ -934,9 +934,67 @@ impl Bit {
     }
 
     pub async fn pack(&self, state: Arc<FlowLikeState>) -> flow_like_types::Result<BitPack> {
-        let mut dependencies = self.dependencies(state).await?;
+        // A bit that declares no dependencies has none to fetch — and user-owned
+        // bits have no hub entry to ask, so the round trip would only 404.
+        let mut dependencies = if self.dependencies.is_empty() {
+            BitPack { bits: vec![] }
+        } else {
+            self.dependencies(state).await?
+        };
         dependencies.bits.push(self.clone());
+        if let Some(projection) = self.projection_bit() {
+            dependencies.bits.push(projection);
+        }
         Ok(dependencies)
+    }
+
+    /// The multimodal projector a user-configured local model carries inline.
+    ///
+    /// Curated vision models ship their `mmproj` file as a `Projection` bit in
+    /// their dependency tree. User bits have no dependency tree of their own, so
+    /// they describe the projector under `provider.params.projection`, and it is
+    /// materialised here — downloaded, cached and handed to `--mmproj` through
+    /// exactly the same paths as a curated one.
+    pub fn projection_bit(&self) -> Option<Bit> {
+        let projection = self
+            .try_to_provider()?
+            .params?
+            .get("projection")
+            .cloned()
+            .filter(|value| !value.is_null())?;
+
+        let download_link = projection
+            .get("download_link")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|link| !link.is_empty())?
+            .to_string();
+        let file_name = projection
+            .get("file_name")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|name| !name.is_empty())?
+            .to_string();
+        let size = projection.get("size").and_then(|value| value.as_u64());
+
+        let id = format!("{}-mmproj", self.id);
+        Some(Bit {
+            // `hash == id` marks an artifact whose checksum is not known upfront —
+            // the same trust-on-first-use contract the parent bit uses.
+            hash: id.clone(),
+            dependency_tree_hash: id.clone(),
+            id,
+            bit_type: BitTypes::Projection,
+            download_link: Some(download_link),
+            file_name: Some(file_name),
+            size,
+            hub: self.hub.clone(),
+            version: self.version.clone(),
+            license: self.license.clone(),
+            created: self.created.clone(),
+            updated: self.updated.clone(),
+            ..Bit::default()
+        })
     }
 
     pub async fn is_installed(&self, state: Arc<FlowLikeState>) -> flow_like_types::Result<bool> {
@@ -1011,6 +1069,100 @@ mod tests {
     use flow_like_storage::files::store::local_store::LocalObjectStore;
     use flow_like_types::Value;
     use flow_like_types::{sync::Mutex, tokio};
+
+    fn local_vlm_bit(projection: Value) -> Bit {
+        let mut params = std::collections::HashMap::new();
+        params.insert("projection".to_string(), projection);
+        let parameters = VLMParameters {
+            context_length: 8192,
+            provider: ModelProvider {
+                provider_name: "Local".to_string(),
+                model_id: None,
+                version: None,
+                params: Some(params),
+            },
+            model_classification: BitModelClassification::default(),
+        };
+
+        Bit {
+            id: "my-vlm".into(),
+            bit_type: BitTypes::Vlm,
+            hash: "my-vlm".into(),
+            dependency_tree_hash: "my-vlm".into(),
+            hub: "https://api.flow-like.com".into(),
+            download_link: Some("https://example.com/model.gguf".into()),
+            file_name: Some("model.gguf".into()),
+            size: Some(4_000),
+            parameters: flow_like_types::json::to_value(parameters).unwrap(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn projection_bit_materialises_an_inline_projector() {
+        let bit = local_vlm_bit(flow_like_types::json::json!({
+            "download_link": " https://example.com/mmproj-F16.gguf ",
+            "file_name": "mmproj-F16.gguf",
+            "size": 700,
+        }));
+
+        let projector = bit.projection_bit().expect("projector");
+        assert_eq!(projector.id, "my-vlm-mmproj");
+        assert_eq!(projector.bit_type, BitTypes::Projection);
+        // hash == id keeps the trust-on-first-use download contract
+        assert_eq!(projector.hash, projector.id);
+        assert_eq!(
+            projector.download_link.as_deref(),
+            Some("https://example.com/mmproj-F16.gguf")
+        );
+        assert_eq!(projector.file_name.as_deref(), Some("mmproj-F16.gguf"));
+        assert_eq!(projector.size, Some(700));
+        assert_eq!(projector.hub, bit.hub);
+    }
+
+    #[test]
+    fn projection_bit_ignores_incomplete_specs() {
+        assert!(local_vlm_bit(Value::Null).projection_bit().is_none());
+        assert!(
+            local_vlm_bit(flow_like_types::json::json!({ "file_name": "mmproj.gguf" }))
+                .projection_bit()
+                .is_none()
+        );
+        assert!(
+            local_vlm_bit(flow_like_types::json::json!({
+                "download_link": "   ",
+                "file_name": "mmproj.gguf",
+            }))
+            .projection_bit()
+            .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn pack_carries_the_projector_without_asking_a_hub() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config: FlowLikeConfig = FlowLikeConfig::new();
+        let store = LocalObjectStore::new(temp_dir.path().to_path_buf()).unwrap();
+        config.stores.bits_store = Some(FlowLikeStore::Local(store.into()));
+        let http_client = crate::utils::http::HTTPClient::new_without_refetch();
+        let state = Arc::new(FlowLikeState::new(config, http_client));
+
+        let bit = local_vlm_bit(flow_like_types::json::json!({
+            "download_link": "https://example.com/mmproj-F16.gguf",
+            "file_name": "mmproj-F16.gguf",
+            "size": 700,
+        }));
+
+        // No dependency ids, so this must resolve offline — a user bit has no hub entry.
+        let pack = bit.pack(state).await.unwrap();
+        assert_eq!(pack.bits.len(), 2);
+        assert!(pack.bits.iter().any(|b| b.id == "my-vlm"));
+        assert!(
+            pack.bits
+                .iter()
+                .any(|b| b.bit_type == BitTypes::Projection && b.id == "my-vlm-mmproj")
+        );
+    }
 
     #[tokio::test]
     async fn test_download_skips_and_succeeds_without_links() {

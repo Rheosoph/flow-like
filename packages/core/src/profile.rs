@@ -259,7 +259,7 @@ impl Profile {
     ) -> Result<Bit> {
         let mut best_bit = (0.0, None);
 
-        for bit in self.custom_bits.iter().map(|custom| &custom.0) {
+        for bit in self.activated_custom_bits() {
             if only_hosted && Self::is_local_model(bit) {
                 continue;
             }
@@ -343,7 +343,9 @@ impl Profile {
         }
     }
 
-    /// Looks up a user-owned custom bit carried on this profile by id.
+    /// Looks up a user-owned custom bit carried on this profile by id. Resolves
+    /// against everything hydrated into `custom_bits`, activated or not: picking
+    /// a model explicitly is the activation.
     pub fn custom_bit(&self, bit_id: &str) -> Option<Bit> {
         self.custom_bits
             .iter()
@@ -352,10 +354,31 @@ impl Profile {
             .cloned()
     }
 
-    fn custom_bits_matching(&self, query: &BitSearchQuery) -> Vec<Bit> {
+    /// The custom bits this profile activated through its `bits` references.
+    /// Hosts may hydrate `custom_bits` with the user's whole library so an
+    /// explicitly selected model always resolves; discovery — best-model
+    /// scoring and search — stays scoped to the profile's own line-up.
+    fn activated_custom_bits(&self) -> Vec<&Bit> {
+        let activated: HashSet<&str> = self
+            .bits
+            .iter()
+            .map(|reference| {
+                reference
+                    .rsplit_once(':')
+                    .map_or(reference.as_str(), |(_, id)| id)
+            })
+            .collect();
+
         self.custom_bits
             .iter()
             .map(|custom| &custom.0)
+            .filter(|bit| activated.contains(bit.id.as_str()))
+            .collect()
+    }
+
+    fn custom_bits_matching(&self, query: &BitSearchQuery) -> Vec<Bit> {
+        self.activated_custom_bits()
+            .into_iter()
             .filter(|bit| {
                 query
                     .bit_types
@@ -422,12 +445,15 @@ impl Profile {
 
         let hubs = self.get_available_hubs(http_client).await?;
         for hub in hubs {
-            let bit = hub.get_bit(&bit).await;
-            if let Ok(bit) = bit {
-                return Ok(bit);
+            let found = hub.get_bit(&bit).await;
+            if let Ok(found) = found {
+                return Ok(found);
             }
         }
-        Err(flow_like_types::anyhow!("Bit not found"))
+        Err(flow_like_types::anyhow!(
+            "Bit not found: {bit} (not in profile {} or any of its hubs)",
+            self.id
+        ))
     }
 
     pub async fn find_bit(&self, bit_id: &str, http_client: Arc<HTTPClient>) -> Result<Bit> {
@@ -442,7 +468,10 @@ impl Profile {
                 return Ok(bit);
             }
         }
-        Err(flow_like_types::anyhow!("Bit not found"))
+        Err(flow_like_types::anyhow!(
+            "Bit not found: {bit_id} (not in profile {} or any of its hubs)",
+            self.id
+        ))
     }
 
     async fn get_profile_bit(&self, bit_ref: &str, http_client: Arc<HTTPClient>) -> Result<Bit> {
@@ -584,6 +613,36 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.to_string(), "No Model found");
+    }
+
+    #[test]
+    fn custom_bits_resolve_by_id_but_stay_profile_scoped_for_discovery() {
+        let custom_bit = |id: &str| {
+            super::ProfileCustomBit(crate::bit::Bit {
+                id: id.to_string(),
+                bit_type: BitTypes::Llm,
+                ..crate::bit::Bit::default()
+            })
+        };
+
+        let profile = Profile {
+            bits: vec!["https://api.flow-like.com:activated".to_string()],
+            custom_bits: vec![custom_bit("activated"), custom_bit("library-only")],
+            ..Profile::default()
+        };
+
+        assert!(profile.custom_bit("activated").is_some());
+        assert!(
+            profile.custom_bit("library-only").is_some(),
+            "an explicitly selected library model must resolve"
+        );
+
+        let activated: Vec<&str> = profile
+            .activated_custom_bits()
+            .iter()
+            .map(|bit| bit.id.as_str())
+            .collect();
+        assert_eq!(activated, vec!["activated"]);
     }
 
     #[test]
