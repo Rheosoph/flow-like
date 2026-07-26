@@ -8394,7 +8394,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serenity",
- "sysinfo 0.37.2",
  "tauri",
  "tauri-build",
  "tauri-plugin",

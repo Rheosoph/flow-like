@@ -209,6 +209,25 @@ export function RecordingDock({
 		}
 	}, []);
 
+	// Finalize the session when the user stops recording from the tray
+	useEffect(() => {
+		if (!isRecordingMode) return;
+
+		let unlisten: UnlistenFn | null = null;
+
+		const setupListener = async () => {
+			unlisten = await listen("recording:stop-from-tray", () => {
+				stopRecording();
+			});
+		};
+
+		setupListener();
+
+		return () => {
+			unlisten?.();
+		};
+	}, [isRecordingMode, stopRecording]);
+
 	// Keyboard shortcut listener for stop recording
 	useEffect(() => {
 		if (!isRecordingMode) return;
