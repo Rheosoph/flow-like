@@ -70,56 +70,45 @@ impl Default for Metadata {
     }
 }
 
+const MEDIA_URL_TTL: std::time::Duration = std::time::Duration::from_secs(60 * 60 * 24);
+
+/// Signs one `.webp` media asset stored under `prefix`, leaving values that are
+/// already absolute URLs untouched.
+///
+/// Uses the cached signer so repeated calls return a byte-identical URL: the
+/// media referenced here ends up in `<img src>` attributes, and a URL that
+/// changes on every request defeats the browser cache and makes otherwise
+/// unchanged metadata compare unequal on the client.
+async fn presign_media_asset(name: &str, prefix: &Path, store: &FlowLikeStore) -> Option<String> {
+    if name.starts_with("http://") || name.starts_with("https://") {
+        return None;
+    }
+
+    let path = prefix.child(format!("{name}.webp"));
+    store
+        .sign_cached("GET", &path, MEDIA_URL_TTL)
+        .await
+        .ok()
+        .map(|url| url.to_string())
+}
+
 impl Metadata {
     pub async fn presign(&mut self, prefix: Path, store: &FlowLikeStore) {
         if let Some(icon) = &self.icon
-            && !icon.starts_with("http://")
-            && !icon.starts_with("https://")
+            && let Some(url) = presign_media_asset(icon, &prefix, store).await
         {
-            let icon_path = prefix.child(format!("{icon}.webp"));
-            if let Ok(url) = store
-                .sign(
-                    "GET",
-                    &icon_path,
-                    std::time::Duration::from_secs(60 * 60 * 24),
-                )
-                .await
-            {
-                self.icon = Some(url.to_string());
-            }
+            self.icon = Some(url);
         }
 
         if let Some(thumbnail) = &self.thumbnail
-            && !thumbnail.starts_with("http://")
-            && !thumbnail.starts_with("https://")
+            && let Some(url) = presign_media_asset(thumbnail, &prefix, store).await
         {
-            let thumbnail_path = prefix.child(format!("{thumbnail}.webp"));
-            if let Ok(url) = store
-                .sign(
-                    "GET",
-                    &thumbnail_path,
-                    std::time::Duration::from_secs(60 * 60 * 24),
-                )
-                .await
-            {
-                self.thumbnail = Some(url.to_string());
-            }
+            self.thumbnail = Some(url);
         }
 
         for media in &mut self.preview_media {
-            if media.starts_with("http://") || media.starts_with("https://") {
-                continue;
-            }
-            let media_path = prefix.child(format!("{media}.webp"));
-            if let Ok(url) = store
-                .sign(
-                    "GET",
-                    &media_path,
-                    std::time::Duration::from_secs(60 * 60 * 24),
-                )
-                .await
-            {
-                *media = url.to_string();
+            if let Some(url) = presign_media_asset(media, &prefix, store).await {
+                *media = url;
             }
         }
     }

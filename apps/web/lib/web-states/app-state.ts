@@ -25,6 +25,10 @@ import type {
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import {
+	stabilizeMetadata,
+	stabilizeMetadataEntries,
+} from "@flow-like/flow-like-ui/lib/stable-asset-url";
 import type { IMediaItem } from "@flow-like/flow-like-ui/state/backend-state/app-state";
 import { createId } from "@paralleldrive/cuid2";
 import {
@@ -138,9 +142,11 @@ export class WebAppState implements IAppState {
 		}
 
 		try {
-			return await apiGet<[IApp, IMetadata | undefined][]>(
-				`apps/search?${params}`,
-				this.backend.auth,
+			return stabilizeMetadataEntries(
+				await apiGet<[IApp, IMetadata | undefined][]>(
+					`apps/search?${params}`,
+					this.backend.auth,
+				),
 			);
 		} catch {
 			return [];
@@ -175,9 +181,11 @@ export class WebAppState implements IAppState {
 
 	async getApps(): Promise<[IApp, IMetadata | undefined][]> {
 		try {
-			return await apiGet<[IApp, IMetadata | undefined][]>(
-				"apps",
-				this.backend.auth,
+			return stabilizeMetadataEntries(
+				await apiGet<[IApp, IMetadata | undefined][]>(
+					"apps",
+					this.backend.auth,
+				),
 			);
 		} catch {
 			return [];
@@ -194,7 +202,9 @@ export class WebAppState implements IAppState {
 
 	async getAppMeta(appId: string, language?: string): Promise<IMetadata> {
 		const params = language ? `?language=${language}` : "";
-		return apiGet<IMetadata>(`apps/${appId}/meta${params}`, this.backend.auth);
+		return stabilizeMetadata(
+			await apiGet<IMetadata>(`apps/${appId}/meta${params}`, this.backend.auth),
+		);
 	}
 
 	async pushAppMeta(

@@ -8,7 +8,11 @@ use futures::StreamExt;
 use local_store::LocalObjectStore;
 use object_store::{ObjectMeta, ObjectStore, path::Path, signer::Signer};
 use serde::{Deserialize, Serialize};
-use std::{sync::Arc, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
+};
 use urlencoding::{decode, encode};
 mod helper;
 pub mod local_store;
@@ -48,6 +52,60 @@ impl From<Path> for StorageItem {
             is_dir: true,
         }
     }
+}
+
+/// A signature is reused only while at least this share of its lifetime is
+/// left, so a client never receives a URL that is about to expire.
+const SIGNATURE_REUSE_RATIO: u32 = 2;
+const SIGNATURE_CACHE_CAPACITY: usize = 4096;
+
+struct SignedUrl {
+    url: Url,
+    minted_at: Instant,
+    lifetime: Duration,
+}
+
+impl SignedUrl {
+    fn is_reusable(&self) -> bool {
+        self.minted_at.elapsed() < self.lifetime / SIGNATURE_REUSE_RATIO
+    }
+}
+
+static SIGNATURE_CACHE: LazyLock<Mutex<HashMap<String, SignedUrl>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn signature_cache_get(key: &str) -> Option<Url> {
+    let mut cache = SIGNATURE_CACHE.lock().ok()?;
+    let entry = cache.get(key)?;
+    if entry.is_reusable() {
+        return Some(entry.url.clone());
+    }
+    cache.remove(key);
+    None
+}
+
+fn signature_cache_put(key: String, url: Url, lifetime: Duration) {
+    let Ok(mut cache) = SIGNATURE_CACHE.lock() else {
+        return;
+    };
+
+    if cache.len() >= SIGNATURE_CACHE_CAPACITY {
+        cache.retain(|_, entry| entry.is_reusable());
+        // Every entry still had life left, so nothing above is stale enough to
+        // drop. Start over rather than let the map grow without bound.
+        if cache.len() >= SIGNATURE_CACHE_CAPACITY {
+            cache.clear();
+        }
+    }
+
+    cache.insert(
+        key,
+        SignedUrl {
+            url,
+            minted_at: Instant::now(),
+            lifetime,
+        },
+    );
 }
 
 #[derive(Clone, Debug)]
@@ -162,6 +220,57 @@ impl FlowLikeStore {
             FlowLikeStore::Other(_) => bail!("Sign not implemented for this store"),
         };
 
+        Ok(url)
+    }
+
+    /// Stable identity of the *bucket* this store points at, used to keep
+    /// signature cache entries from bleeding between buckets/containers.
+    /// Only cloud stores qualify: local and in-memory stores already produce a
+    /// deterministic URL for a given object, so they never need caching.
+    fn signature_scope(&self) -> Option<String> {
+        match self {
+            FlowLikeStore::AWS(store) => Some(store.to_string()),
+            FlowLikeStore::Azure(store) => Some(store.to_string()),
+            FlowLikeStore::Google(store) => Some(store.to_string()),
+            _ => None,
+        }
+    }
+
+    /// Like [`FlowLikeStore::sign`], but reuses a previously minted signature
+    /// while a comfortable share of its lifetime remains.
+    ///
+    /// Cloud signers stamp the current time into every signature, so signing
+    /// the same object twice yields two different URL strings. Consumers treat
+    /// those as two different resources: browsers re-download an image they
+    /// already hold, and cached API payloads compare unequal and churn. Handing
+    /// back the same string keeps both caches warm.
+    ///
+    /// The cache is keyed by bucket, method, path and requested lifetime — but
+    /// *not* by credentials, so a URL signed for one caller can be handed to
+    /// another caller reading the same object from the same bucket. Use this
+    /// only for assets the caller has already been authorized to read.
+    pub async fn sign_cached(
+        &self,
+        method: &str,
+        path: &Path,
+        expires_after: Duration,
+    ) -> Result<Url> {
+        let Some(scope) = self.signature_scope() else {
+            return self.sign(method, path, expires_after).await;
+        };
+
+        let key = format!(
+            "{scope}|{}|{path}|{}",
+            method.to_uppercase(),
+            expires_after.as_secs()
+        );
+
+        if let Some(url) = signature_cache_get(&key) {
+            return Ok(url);
+        }
+
+        let url = self.sign(method, path, expires_after).await?;
+        signature_cache_put(key, url.clone(), expires_after);
         Ok(url)
     }
 

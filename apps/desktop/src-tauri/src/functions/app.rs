@@ -346,6 +346,12 @@ pub async fn push_app_meta(
     app_id: String,
     mut metadata: Metadata,
     language: Option<String>,
+    // Mirroring already-timestamped metadata (a remote sync) must keep the
+    // caller's `updated_at` — stamping `now()` there overwrites the real
+    // last-modified time with "whenever this sync happened", which happens on
+    // nearly every app load and made recency sort meaningless. A genuine local
+    // edit has no authoritative timestamp yet, so that path still wants `now()`.
+    preserve_updated_at: Option<bool>,
 ) -> Result<(), TauriFunctionError> {
     let state = TauriFlowLikeState::construct(&app_handle).await?;
     let old_meta = App::get_meta(app_id.clone(), state.clone(), language.clone(), None)
@@ -357,7 +363,9 @@ pub async fn push_app_meta(
         metadata.thumbnail = old_meta.thumbnail;
         metadata.preview_media = old_meta.preview_media;
         metadata.created_at = old_meta.created_at;
-        metadata.updated_at = SystemTime::now();
+        if !preserve_updated_at.unwrap_or(false) {
+            metadata.updated_at = SystemTime::now();
+        }
     }
 
     App::push_meta(app_id, metadata, state, language, None).await?;

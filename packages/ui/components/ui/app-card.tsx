@@ -23,6 +23,16 @@ import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 
 const MotionLink = motion.create(Link);
 
+/**
+ * Radix hides an avatar image until its load event fires, so a cached icon
+ * still paints the initials fallback for a frame on every mount — across a
+ * grid of cards that reads as the whole library flickering. Holding the
+ * fallback back for a moment lets cached icons appear directly, while a genuinely
+ * slow load still gets its placeholder. Safe here because these cards always
+ * pass a src.
+ */
+const ICON_FALLBACK_DELAY_MS = 400;
+
 interface AppCardProps {
 	app: IApp;
 	metadata?: IMetadata;
@@ -307,7 +317,10 @@ function SmallAppCard({
 								className="rounded-xl"
 							/>
 						</motion.div>
-						<AvatarFallback className="rounded-xl text-xs font-semibold bg-gradient-to-br from-primary/20 to-primary/10">
+						<AvatarFallback
+							delayMs={ICON_FALLBACK_DELAY_MS}
+							className="rounded-xl text-xs font-semibold bg-gradient-to-br from-primary/20 to-primary/10"
+						>
 							{(metadata?.name ?? app.id).substring(0, 2).toUpperCase()}
 						</AvatarFallback>
 					</Avatar>
@@ -549,7 +562,10 @@ function ExtendedAppCard({
 									className="rounded-xl"
 								/>
 							</motion.div>
-							<AvatarFallback className="rounded-xl bg-white/15 text-sm font-bold text-white">
+							<AvatarFallback
+								delayMs={ICON_FALLBACK_DELAY_MS}
+								className="rounded-xl bg-white/15 text-sm font-bold text-white"
+							>
 								{appName.substring(0, 2).toUpperCase()}
 							</AvatarFallback>
 						</Avatar>
@@ -701,7 +717,10 @@ export function SpotlightCard({
 									alt={`${appName} icon`}
 									className="rounded-2xl"
 								/>
-								<AvatarFallback className="rounded-2xl bg-white/15 text-lg font-bold text-white">
+								<AvatarFallback
+									delayMs={ICON_FALLBACK_DELAY_MS}
+									className="rounded-2xl bg-white/15 text-lg font-bold text-white"
+								>
 									{appName.substring(0, 2).toUpperCase()}
 								</AvatarFallback>
 							</Avatar>

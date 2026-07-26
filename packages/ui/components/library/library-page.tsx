@@ -41,7 +41,12 @@ import {
 } from "./library-sub-components";
 import { SuiteShelf } from "./library-suite-shelf";
 import type { LibraryItem, SortMode } from "./library-types";
-import { CATEGORY_COLORS, sortItems } from "./library-types";
+import {
+	CATEGORY_COLORS,
+	sortItems,
+	sortItemsByRank,
+	toLibraryItem,
+} from "./library-types";
 
 export interface LibraryPageProps {
 	onAppClick?: (appId: string) => void;
@@ -93,23 +98,22 @@ export function LibraryPage({
 	}, [sortMode]);
 	const isMobile = useIsMobile();
 
+	// Navigating away used to invalidate the entire query cache. The library is
+	// still mounted while the router transitions, so it immediately refetched
+	// its own app list and reshuffled the grid under the pointer. The target
+	// route refetches what it needs on mount anyway.
 	const handleAppClick = useCallback(
 		(appId: string) => {
 			if (onAppClickProp) {
 				onAppClickProp(appId);
-			} else {
-				queryClient.invalidateQueries();
-				router.push(`/use?id=${appId}`);
+				return;
 			}
+			router.push(`/use?id=${appId}`);
 		},
-		[onAppClickProp, queryClient, router],
+		[onAppClickProp, router],
 	);
 
 	const appHref = useCallback((appId: string) => `/use?id=${appId}`, []);
-
-	const handleSettingsClick = useCallback(() => {
-		queryClient.invalidateQueries();
-	}, [queryClient]);
 
 	const appSettingsHref = useCallback(
 		(appId: string) => `/library/config?id=${appId}`,
@@ -148,7 +152,7 @@ export function LibraryPage({
 	const allAvailableItems = useMemo(() => {
 		const map = new Map<string, LibraryItem>();
 		for (const [app, meta] of apps.data ?? []) {
-			if (meta) map.set(app.id, { ...meta, id: app.id, app });
+			if (meta) map.set(app.id, toLibraryItem(app, meta));
 		}
 		return Array.from(map.values());
 	}, [apps.data]);
@@ -203,29 +207,25 @@ export function LibraryPage({
 		[currentProfile, profileAppMap, backend.userState],
 	);
 
-	const pinnedItems = useMemo(() => {
-		const sorted = sortItems(
-			allItems.filter((item) => profileAppMap.get(item.id)?.pinned),
-			sortMode,
-		);
-		return [...sorted].sort((a, b) => {
-			const orderA = profileAppMap.get(a.id)?.pinned_order ?? 999;
-			const orderB = profileAppMap.get(b.id)?.pinned_order ?? 999;
-			return orderA - orderB;
-		});
-	}, [allItems, profileAppMap, sortMode]);
+	const pinnedItems = useMemo(
+		() =>
+			sortItemsByRank(
+				allItems.filter((item) => profileAppMap.get(item.id)?.pinned),
+				(id) => profileAppMap.get(id)?.pinned_order,
+				sortMode,
+			),
+		[allItems, profileAppMap, sortMode],
+	);
 
-	const favoriteItems = useMemo(() => {
-		const favs = allItems.filter(
-			(item) => profileAppMap.get(item.id)?.favorite,
-		);
-		return [...favs].sort((a, b) => {
-			const orderA = profileAppMap.get(a.id)?.favorite_order ?? 999;
-			const orderB = profileAppMap.get(b.id)?.favorite_order ?? 999;
-			if (orderA !== orderB) return orderA - orderB;
-			return (a.name ?? "").localeCompare(b.name ?? "");
-		});
-	}, [allItems, profileAppMap]);
+	const favoriteItems = useMemo(
+		() =>
+			sortItemsByRank(
+				allItems.filter((item) => profileAppMap.get(item.id)?.favorite),
+				(id) => profileAppMap.get(id)?.favorite_order,
+				sortMode,
+			),
+		[allItems, profileAppMap, sortMode],
+	);
 
 	const recentItems = useMemo(
 		() => sortItems(itemsForDisplay, "recent").slice(0, 10),
@@ -583,7 +583,6 @@ export function LibraryPage({
 						items={(searchResults as LibraryItem[]) ?? []}
 						query={searchQuery}
 						onAppClick={handleAppClick}
-						onSettingsClick={handleSettingsClick}
 						settingsHref={appSettingsHref}
 						visibilityMode={visibilityMode}
 						activeAppIds={activeAppIds}
@@ -597,7 +596,6 @@ export function LibraryPage({
 							<PinnedHero
 								items={pinnedItems}
 								onAppClick={handleAppClick}
-								onSettingsClick={handleSettingsClick}
 								settingsHref={appSettingsHref}
 								appHref={appHref}
 								isMobile={isMobile}
@@ -608,7 +606,6 @@ export function LibraryPage({
 							<FavoritesSection
 								items={favoriteItems}
 								onAppClick={handleAppClick}
-								onSettingsClick={handleSettingsClick}
 								settingsHref={appSettingsHref}
 								onReorder={handleFavoriteReorder}
 								appHref={appHref}
@@ -629,7 +626,6 @@ export function LibraryPage({
 								}
 								items={recentItems}
 								onAppClick={handleAppClick}
-								onSettingsClick={handleSettingsClick}
 								settingsHref={appSettingsHref}
 								visibilityMode={visibilityMode}
 								activeAppIds={activeAppIds}
@@ -644,7 +640,6 @@ export function LibraryPage({
 							<SuiteShelf
 								suites={suiteGroups}
 								onAppClick={handleAppClick}
-								onSettingsClick={handleSettingsClick}
 								settingsHref={appSettingsHref}
 								appHref={appHref}
 								visibilityMode={visibilityMode}
@@ -664,7 +659,6 @@ export function LibraryPage({
 								title={label}
 								items={items}
 								onAppClick={handleAppClick}
-								onSettingsClick={handleSettingsClick}
 								settingsHref={appSettingsHref}
 								visibilityMode={visibilityMode}
 								activeAppIds={activeAppIds}

@@ -8,8 +8,6 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
-	useNetworkStatus,
-	useQueryClient,
 } from "@flow-like/flow-like-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -24,8 +22,6 @@ import { isMobileDevice as detectMobileDevice } from "./../../lib/platform";
 import ImportEncryptedDialog from "./components/ImportEncryptedDialog";
 
 export default function DesktopLibraryPage() {
-	const isOnline = useNetworkStatus();
-	const queryClient = useQueryClient();
 	const router = useRouter();
 	const auth = useAuth();
 	const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -131,12 +127,14 @@ export default function DesktopLibraryPage() {
 		};
 	}, [importApp]);
 
+	// No cache invalidation here: the library is still mounted while the router
+	// transitions, so wiping the cache made it refetch and reorder its own grid
+	// under the pointer. The app route refetches what it needs on mount.
 	const handleAppClick = useCallback(
 		(appId: string) => {
-			if (isOnline) queryClient.invalidateQueries();
 			router.push(`/use?id=${appId}`);
 		},
-		[isOnline, queryClient, router],
+		[router],
 	);
 
 	const importButton = useMemo(

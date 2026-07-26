@@ -23,6 +23,10 @@ import type {
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
+import {
+	stabilizeMetadata,
+	stabilizeMetadataEntries,
+} from "@flow-like/flow-like-ui/lib/stable-asset-url";
 import type { IMediaItem } from "@flow-like/flow-like-ui/state/backend-state/app-state";
 import { createId } from "@paralleldrive/cuid2";
 import { invoke } from "@tauri-apps/api/core";
@@ -31,6 +35,19 @@ import { mkdir, open as openFile } from "@tauri-apps/plugin-fs";
 import { fetcher, put } from "../../lib/api";
 import { appsDB } from "../../lib/apps-db";
 import type { TauriBackend } from "../tauri-provider";
+
+/**
+ * Orders app entries by id so the local listing and the remote-merged listing
+ * agree. Without it the two produce the same apps in different orders, which
+ * reads as a change to the query cache and reshuffles the library on every sync.
+ */
+function sortAppEntries(
+	entries: [IApp, IMetadata | undefined][],
+): [IApp, IMetadata | undefined][] {
+	return stabilizeMetadataEntries(entries).sort(([a], [b]) =>
+		a.id.localeCompare(b.id),
+	);
+}
 
 export class AppState implements IAppState {
 	constructor(private readonly backend: TauriBackend) {}
@@ -86,18 +103,24 @@ export class AppState implements IAppState {
 			throw new Error("Profile not set. Cannot get app meta.");
 		}
 
-		const remoteMeta = await fetcher<IMetadata>(
-			this.backend.profile,
-			`apps/${appId}/meta?language=${language ?? "en"}`,
-			undefined,
-			this.getRemoteAuth(),
+		const remoteMeta = stabilizeMetadata(
+			await fetcher<IMetadata>(
+				this.backend.profile,
+				`apps/${appId}/meta?language=${language ?? "en"}`,
+				undefined,
+				this.getRemoteAuth(),
+			),
 		);
 
 		try {
+			// This mirrors metadata we just read from the server, not a local
+			// edit — keep its real `updated_at` rather than stamping the sync
+			// time, or "recent" sort would reorder on every background refresh.
 			await invoke("push_app_meta", {
 				appId,
 				metadata: remoteMeta,
 				language,
+				preserveUpdatedAt: true,
 			});
 		} catch (error) {
 			console.warn("Failed to cache remote app metadata locally:", error);
@@ -266,11 +289,13 @@ export class AppState implements IAppState {
 		}
 
 		try {
-			return await fetcher(
-				this.backend.profile,
-				`apps/search?${new URLSearchParams(queryParams)}`,
-				undefined,
-				this.backend.auth,
+			return stabilizeMetadataEntries(
+				await fetcher<[IApp, IMetadata | undefined][]>(
+					this.backend.profile,
+					`apps/search?${new URLSearchParams(queryParams)}`,
+					undefined,
+					this.backend.auth,
+				),
 			);
 		} catch (error) {
 			console.error("Failed to search apps:", error);
@@ -318,7 +343,9 @@ export class AppState implements IAppState {
 	}
 
 	async getApps(): Promise<[IApp, IMetadata | undefined][]> {
-		const localApps = await invoke<[IApp, IMetadata | undefined][]>("get_apps");
+		const localApps = sortAppEntries(
+			await invoke<[IApp, IMetadata | undefined][]>("get_apps"),
+		);
 
 		if (
 			!this?.backend?.queryClient ||
@@ -340,7 +367,6 @@ export class AppState implements IAppState {
 			);
 
 			for (const [app, meta] of remoteData) {
-				mergedData.set(app.id, [app, meta]);
 				appsDB.visibility
 					.put({
 						visibility: app.visibility ?? IAppVisibility.Private,
@@ -350,22 +376,41 @@ export class AppState implements IAppState {
 
 				const exists = localApps.find(([localApp]) => localApp.id === app.id);
 				if (exists) {
+					// Prefer the local metadata even though the remote copy may be
+					// newer. Both sides presign their media independently, so
+					// adopting the remote copy here would swap every icon's URL
+					// from the local asset:// form to an https:// one and make the
+					// browser re-download artwork it already has. The remote
+					// metadata is pushed to local storage below, so the next read
+					// picks it up from a single consistent source. Apps that have
+					// no local metadata yet still fall back to the remote copy,
+					// since the library skips entries without it.
+					mergedData.set(app.id, [app, exists[1] ?? meta]);
 					invoke("update_app", { app }).catch(() => {});
 					if (meta)
 						invoke("push_app_meta", {
 							appId: app.id,
 							metadata: meta,
+							preserveUpdatedAt: true,
 						}).catch(() => {});
 					continue;
 				}
 
-				if (meta)
+				mergedData.set(app.id, [app, meta]);
+
+				if (meta) {
 					await invoke("create_app", {
 						metadata: meta,
 						bits: app.bits,
 						template: "",
 						id: app.id,
 					});
+					// create_app stamps a brand-new manifest with the current time,
+					// which would make every app pulled down for the first time look
+					// freshly updated on the next local-first paint. Write the remote
+					// record over it so the stored timestamps match the server's.
+					await invoke("update_app", { app }).catch(() => {});
+				}
 			}
 
 			localApps.forEach(([app, meta]) => {
@@ -374,7 +419,7 @@ export class AppState implements IAppState {
 				}
 			});
 
-			return Array.from(mergedData.values());
+			return sortAppEntries(Array.from(mergedData.values()));
 		};
 
 		if (localApps.length === 0) {
@@ -479,10 +524,12 @@ export class AppState implements IAppState {
 		let meta: IMetadata | undefined = undefined;
 
 		try {
-			meta = await invoke<IMetadata>("get_app_meta", {
-				appId: appId,
-				language,
-			});
+			meta = stabilizeMetadata(
+				await invoke<IMetadata>("get_app_meta", {
+					appId: appId,
+					language,
+				}),
+			);
 			if (isOffline) {
 				return meta;
 			}
