@@ -7,6 +7,7 @@ import { listen } from "@tauri-apps/api/event";
 import { check } from "@tauri-apps/plugin-updater";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo } from "react";
+import { TauriBackend } from "./tauri-provider";
 
 interface TraySyncStatus {
 	status: string;
@@ -54,19 +55,23 @@ const TrayProvider: React.FC = () => {
 
 		const updateTrayMeta = async () => {
 			try {
-				const [overview, userInfo] = await Promise.all([
-					backend.userState.getNotifications().catch(() => null),
-					backend.userState.getInfo().catch(() => null),
-				]);
+				const overview = await backend.userState
+					.getNotifications()
+					.catch(() => null);
 
 				if (!mounted) return;
 
 				// Only report facts we positively know: a failed fetch must not
-				// flip the tray to signed-out/zero-unread (offline is a normal
-				// state for a signed-in user).
+				// flip the tray to zero-unread (offline is a normal state for a
+				// signed-in user). Auth state comes from the local OIDC context,
+				// not from network-call success, so it also resets on sign-out.
 				const update: TrayUpdate = {};
 				if (overview) update.unreadCount = overview.unread_count ?? 0;
-				if (userInfo) update.signedIn = true;
+				if (backend instanceof TauriBackend) {
+					update.signedIn = Boolean(
+						backend.auth?.isAuthenticated && backend.auth?.user?.access_token,
+					);
+				}
 				if (Object.keys(update).length > 0) await pushTrayUpdate(update);
 			} catch {
 				// Backend not ready yet (fallback state throws synchronously)
