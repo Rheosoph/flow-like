@@ -362,6 +362,7 @@ fn profile_model_to_core(model: profile::Model) -> Profile {
             .and_then(|value| serde_json::from_value(value).ok()),
         theme: model.theme,
         bits: model.bit_ids.unwrap_or_default(),
+        custom_bits: vec![],
         settings: model
             .settings
             .and_then(|value| serde_json::from_value(value).ok())
@@ -393,7 +394,29 @@ pub(crate) async fn load_user_profile_opt(
         .await
         .map_err(|e| ApiError::internal(format!("Failed to load profile: {e}")))?;
 
-    Ok(model.map(|model| Arc::new(profile_model_to_core(model))))
+    let Some(model) = model else {
+        return Ok(None);
+    };
+
+    let mut profile = profile_model_to_core(model);
+
+    // Hydrate the user's WHOLE custom-bit library, with decrypted provider
+    // secrets — the profile only lives inside this request's copilot invocation.
+    // The model pickers offer the library independent of profile membership, so
+    // an explicitly selected model must resolve here; automatic "best model"
+    // selection stays scoped to the profile's `bits` inside `Profile`.
+    let custom_bits = crate::routes::user::bits::load_custom_bits_for_user(state, sub, true)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(sub = %sub, "Failed to load custom bits for profile: {err:?}");
+            vec![]
+        });
+    profile.custom_bits = custom_bits
+        .into_iter()
+        .map(flow_like::profile::ProfileCustomBit)
+        .collect();
+
+    Ok(Some(Arc::new(profile)))
 }
 
 // ---------------------------------------------------------------------------------------------

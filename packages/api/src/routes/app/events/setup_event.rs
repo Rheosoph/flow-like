@@ -298,7 +298,7 @@ pub(crate) async fn run_event_setup(
     let credentials_json = serde_json::to_string(&shared_credentials)
         .map_err(|e| ApiError::internal_error(flow_like_types::anyhow!(e)))?;
     let profile =
-        fetch_profile_for_dispatch(&state.db, &sub, body.profile_id.as_deref(), &app_id).await;
+        fetch_profile_for_dispatch(&state, &sub, body.profile_id.as_deref(), &app_id, true).await;
     let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
 
     // Persist a run record. Setup runs are tracked as `Http` mode runs

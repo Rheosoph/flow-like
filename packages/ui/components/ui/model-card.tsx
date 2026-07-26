@@ -11,8 +11,10 @@ import {
 	ExternalLinkIcon,
 	FileSearch,
 	ImageIcon,
+	LockIcon,
 	MicIcon,
 	MoreVerticalIcon,
+	PencilIcon,
 	PlusIcon,
 	ScanEyeIcon,
 	SparklesIcon,
@@ -43,6 +45,12 @@ import {
 } from "./dropdown-menu";
 import { IntelligenceIndexBadge } from "./model-benchmarks";
 import type { IModelEvaluation } from "./model-benchmarks";
+import {
+	DeploymentLabel,
+	ModalityFlow,
+	ProviderGlyph,
+	providerLabel,
+} from "./model-kit";
 import { Progress } from "./progress";
 
 export type ModelCardVariant = "grid" | "list";
@@ -51,12 +59,19 @@ export interface ModelCardProps {
 	bit: IBit;
 	variant?: ModelCardVariant;
 	onClick?: (bit: IBit) => void;
+	/** Marks the model as user-owned, enabling the private badge + edit/delete. */
+	isCustom?: boolean;
+	onEdit?: (bit: IBit) => void;
+	onDelete?: (bit: IBit) => void;
 }
 
 export function ModelCard({
 	bit,
 	variant = "grid",
 	onClick,
+	isCustom = false,
+	onEdit,
+	onDelete,
 }: Readonly<ModelCardProps>) {
 	const backend = useBackend();
 	const { hub } = useHub();
@@ -282,10 +297,13 @@ export function ModelCard({
 			progress={progress}
 			isQueuedState={isQueuedState}
 			isVirtualBit={isVirtualBit}
+			isCustom={isCustom}
 			onCardClick={() => onClick?.(bit)}
 			onToggleDownload={toggleDownload}
 			onToggleProfile={toggleProfile}
 			onOpenRepository={openRepository}
+			onEdit={onEdit ? () => onEdit(bit) : undefined}
+			onDelete={onDelete ? () => onDelete(bit) : undefined}
 		/>
 	);
 }
@@ -305,15 +323,17 @@ interface ModelCardVariantProps {
 	progress?: number;
 	isQueuedState: boolean;
 	isVirtualBit: boolean;
+	isCustom?: boolean;
 	onCardClick: () => void;
 	onToggleDownload: () => void;
 	onToggleProfile: () => void;
 	onOpenRepository: () => void;
+	onEdit?: () => void;
+	onDelete?: () => void;
 }
 
 function ModelCardGridVariant({
 	bit,
-	modality,
 	contextLength,
 	canRunRemotely,
 	isEmbeddingModel,
@@ -326,32 +346,39 @@ function ModelCardGridVariant({
 	progress,
 	isQueuedState,
 	isVirtualBit,
+	isCustom,
 	onCardClick,
 	onToggleDownload,
 	onToggleProfile,
 	onOpenRepository,
+	onEdit,
+	onDelete,
 }: Readonly<ModelCardVariantProps>) {
 	const meta = bit.meta.en;
 	if (!meta) return null;
 
+	const description = meta.description?.trim();
+
 	return (
-		<div
+		<article
 			onClick={onCardClick}
 			onKeyDown={(e) => e.key === "Enter" && onCardClick()}
-			className="group relative flex flex-col rounded-lg border bg-card p-3 cursor-pointer transition-all hover:bg-accent/50 hover:border-primary/30 h-35"
+			className={`group relative flex h-full cursor-pointer flex-col gap-3 overflow-hidden rounded-xl border bg-card p-3.5 transition-colors hover:border-foreground/25 hover:bg-muted/30 dark:border-white/10 dark:hover:border-white/20 ${
+				isInProfile ? "border-primary/40 dark:border-primary/40" : ""
+			}`}
 		>
 			{/* Download Overlay */}
 			{progress !== undefined && !isVirtualBit && (
-				<div className="absolute inset-0 bg-background/90 backdrop-blur-sm z-30 flex items-center justify-center rounded-lg">
+				<div className="absolute inset-0 z-30 flex items-center justify-center rounded-xl bg-background/90 backdrop-blur-sm">
 					{isQueuedState ? (
 						<div className="flex items-center gap-2">
-							<ClockIcon className="h-4 w-4 text-primary animate-pulse" />
+							<ClockIcon className="h-4 w-4 animate-pulse text-primary" />
 							<span className="text-sm text-muted-foreground">Queued</span>
 						</div>
 					) : (
 						<div className="flex items-center gap-3">
-							<Progress value={progress} className="w-24 h-1.5" />
-							<span className="text-sm text-muted-foreground tabular-nums">
+							<Progress value={progress} className="h-1.5 w-24" />
+							<span className="text-sm tabular-nums text-muted-foreground">
 								{progress}%
 							</span>
 						</div>
@@ -359,22 +386,24 @@ function ModelCardGridVariant({
 				</div>
 			)}
 
-			{/* Header: Icon + Name + Menu */}
 			<div className="flex items-start gap-2.5">
-				<Avatar className="h-9 w-9 shrink-0 border border-border/50">
-					<AvatarImage src={meta.icon ?? "/app-logo.webp"} />
-					<AvatarFallback className="bg-muted text-xs">
-						<ModelTypeIcon type={bit.type} className="h-4 w-4" />
-					</AvatarFallback>
-				</Avatar>
-				<div className="flex-1 min-w-0">
-					<div className="flex items-center gap-1.5">
-						<span className="font-medium text-sm truncate">{meta.name}</span>
-						{isInProfile && (
-							<SparklesIcon className="h-3.5 w-3.5 text-primary shrink-0" />
+				<ProviderGlyph bit={bit} size={32} className="shrink-0" />
+				<div className="min-w-0 flex-1">
+					<div
+						className="truncate text-[14px] font-semibold tracking-tight"
+						title={meta.name}
+					>
+						{meta.name}
+					</div>
+					<div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground">
+						<span className="truncate">{providerLabel(bit)}</span>
+						{isCustom && (
+							<LockIcon
+								className="h-3 w-3 shrink-0"
+								aria-label="Private to you"
+							/>
 						)}
 					</div>
-					<ModalityIcons type={bit.type} />
 				</div>
 				<ModelCardDropdown
 					isInstalled={isInstalled}
@@ -384,55 +413,77 @@ function ModelCardGridVariant({
 					onToggleDownload={onToggleDownload}
 					onToggleProfile={onToggleProfile}
 					onOpenRepository={onOpenRepository}
+					onEdit={onEdit}
+					onDelete={onDelete}
 				/>
 			</div>
 
-			{/* Description */}
-			<p className="text-xs text-muted-foreground line-clamp-2 mt-2 h-8 overflow-hidden">
-				{meta.description}
-			</p>
+			{description && (
+				<p className="line-clamp-2 text-[12.5px] leading-relaxed text-muted-foreground">
+					{description}
+				</p>
+			)}
 
-			{/* Footer: Badges */}
-			<div className="flex items-center gap-1.5 flex-wrap mt-auto pt-2">
-				<ModelStatusBadge
-					isInstalled={isInstalled}
-					isHosted={isHosted}
-					bitSize={bitSize}
+			{/* One quiet spec line: what it takes in, what it returns, how big, where it runs */}
+			<div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-muted-foreground">
+				<ModalityFlow type={bit.type} plain />
+				<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+				{contextLength ? (
+					<>
+						<span className="font-mono tabular-nums">
+							{formatContextLength(contextLength)}
+						</span>
+						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+					</>
+				) : null}
+				<DeploymentLabel
+					kind={isHosted ? "hosted" : canRunRemotely ? "remote" : "local"}
 				/>
+				{!isHosted && isInstalled && (
+					<>
+						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+						<span className="font-mono tabular-nums text-emerald-600 dark:text-emerald-400">
+							{humanFileSize(bitSize)} on disk
+						</span>
+					</>
+				)}
+				{isRestricted && requiredTier && (
+					<>
+						<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+						<span className="font-semibold text-amber-600 dark:text-amber-400">
+							{requiredTier} plan
+						</span>
+					</>
+				)}
+			</div>
+
+			{bit.model_evaluation ? (
 				<IntelligenceIndexBadge
 					evaluation={bit.model_evaluation as IModelEvaluation | undefined}
 				/>
-				{contextLength && (
-					<Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">
-						{formatContextLength(contextLength)}
-					</Badge>
+			) : null}
+
+			<Button
+				variant="outline"
+				size="sm"
+				onClick={(e) => {
+					e.stopPropagation();
+					onToggleProfile();
+				}}
+				className={`h-8 w-full gap-1.5 rounded-lg text-xs font-semibold ${
+					isInProfile
+						? "border-primary/40 bg-primary/10 text-primary hover:bg-primary/15 hover:text-primary"
+						: ""
+				}`}
+			>
+				{isInProfile ? (
+					<CheckIcon className="h-3.5 w-3.5" />
+				) : (
+					<PlusIcon className="h-3.5 w-3.5" />
 				)}
-				{canRunRemotely && (
-					<Badge
-						variant="outline"
-						className="text-[10px] px-1.5 py-0 h-5 bg-cyan-500/10 text-cyan-700 border-cyan-500/30"
-					>
-						Remote
-					</Badge>
-				)}
-				{isEmbeddingModel && !canRunRemotely && (
-					<Badge
-						variant="outline"
-						className="text-[10px] px-1.5 py-0 h-5 bg-zinc-500/10 text-zinc-600 border-zinc-500/30"
-					>
-						Local only
-					</Badge>
-				)}
-				{isRestricted && requiredTier && (
-					<Badge
-						variant="outline"
-						className="text-[10px] px-1.5 py-0 h-5 bg-amber-500/10 text-amber-600 border-amber-500/30"
-					>
-						{requiredTier}
-					</Badge>
-				)}
-			</div>
-		</div>
+				{isInProfile ? "In profile" : "Add to profile"}
+			</Button>
+		</article>
 	);
 }
 
@@ -566,6 +617,9 @@ interface ModelCardDropdownProps {
 	onToggleDownload: () => void;
 	onToggleProfile: () => void;
 	onOpenRepository: () => void;
+	/** Present only for user-owned models. */
+	onEdit?: () => void;
+	onDelete?: () => void;
 }
 
 function ModelCardDropdown({
@@ -576,6 +630,8 @@ function ModelCardDropdown({
 	onToggleDownload,
 	onToggleProfile,
 	onOpenRepository,
+	onEdit,
+	onDelete,
 }: Readonly<ModelCardDropdownProps>) {
 	return (
 		<DropdownMenu>
@@ -583,13 +639,14 @@ function ModelCardDropdown({
 				<Button
 					size="sm"
 					variant="ghost"
-					className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+					aria-label="Model actions"
+					className="h-7 w-7 shrink-0 p-0 text-muted-foreground/60 transition-colors hover:text-foreground"
 					onClick={(e) => e.stopPropagation()}
 				>
 					<MoreVerticalIcon className="h-4 w-4" />
 				</Button>
 			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="w-44">
+			<DropdownMenuContent align="end" className="w-48">
 				<DropdownMenuItem
 					onClick={(e) => {
 						e.stopPropagation();
@@ -639,6 +696,30 @@ function ModelCardDropdown({
 							View Repository
 						</DropdownMenuItem>
 					</>
+				)}
+				{(onEdit || onDelete) && <DropdownMenuSeparator />}
+				{onEdit && (
+					<DropdownMenuItem
+						onClick={(e) => {
+							e.stopPropagation();
+							onEdit();
+						}}
+					>
+						<PencilIcon className="h-4 w-4 mr-2" />
+						Edit model
+					</DropdownMenuItem>
+				)}
+				{onDelete && (
+					<DropdownMenuItem
+						variant="destructive"
+						onClick={(e) => {
+							e.stopPropagation();
+							onDelete();
+						}}
+					>
+						<TrashIcon className="h-4 w-4 mr-2" />
+						Delete model
+					</DropdownMenuItem>
 				)}
 			</DropdownMenuContent>
 		</DropdownMenu>

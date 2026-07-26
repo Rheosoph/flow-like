@@ -2772,6 +2772,27 @@ fn resolve_copilot_app_id(
     Ok(resolved.map(str::to_string))
 }
 
+/// The active profile, with the user's WHOLE custom-model library hydrated
+/// instead of only the bits the profile activated. The model pickers offer that
+/// library independent of profile membership, so an explicitly selected model
+/// must resolve; automatic "best model" selection stays scoped to the profile's
+/// `bits` inside `Profile`.
+async fn copilot_profile(app_handle: &AppHandle) -> Option<Arc<flow_like::profile::Profile>> {
+    let mut profile = TauriSettingsState::current_profile(app_handle).await.ok()?;
+
+    if let Ok(settings) = TauriSettingsState::construct(app_handle).await {
+        let settings = settings.lock().await;
+        profile.hub_profile.custom_bits = settings
+            .custom_bits
+            .iter()
+            .cloned()
+            .map(flow_like::profile::ProfileCustomBit)
+            .collect();
+    }
+
+    Some(Arc::new(profile.hub_profile))
+}
+
 /// Unified copilot chat command that handles both board and UI generation
 #[tauri::command]
 pub async fn copilot_chat(
@@ -2982,10 +3003,7 @@ pub async fn copilot_chat(
 
     let state_clone = state.0.clone();
 
-    let profile = TauriSettingsState::current_profile(&app_handle)
-        .await
-        .ok()
-        .map(|p| Arc::new(p.hub_profile));
+    let profile = copilot_profile(&app_handle).await;
 
     let attribution_app_id = resolve_copilot_app_id(
         app_id.as_deref(),
@@ -3509,10 +3527,7 @@ pub async fn global_chat(
         (!images.is_empty()).then_some(images)
     };
 
-    let profile = TauriSettingsState::current_profile(&app_handle)
-        .await
-        .ok()
-        .map(|p| Arc::new(p.hub_profile));
+    let profile = copilot_profile(&app_handle).await;
 
     // Profile-scoped semantic memory, enabled only when the user selected an embedding model.
     // Shared by every backend so recall and the memory tools behave identically regardless of

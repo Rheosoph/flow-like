@@ -58,6 +58,7 @@ pub async fn sign_avatar(
 }
 
 pub mod billing;
+pub mod bits;
 pub mod bootstrap;
 pub mod get_invites;
 pub mod groups;
@@ -76,6 +77,11 @@ pub mod widgets;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/bootstrap", get(bootstrap::bootstrap))
+        .route("/bits", get(bits::list_user_bits))
+        .route(
+            "/bits/{bit_id}",
+            axum::routing::put(bits::upsert_user_bit).delete(bits::delete_user_bit),
+        )
         .route(
             "/pat",
             get(pat::get_pats::get_pats).put(pat::create_pat::create_pat),

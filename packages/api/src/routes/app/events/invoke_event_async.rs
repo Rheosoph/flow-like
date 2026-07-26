@@ -322,7 +322,7 @@ pub async fn invoke_event_async(
     })?;
 
     let profile =
-        fetch_profile_for_dispatch(&state.db, &sub, params.profile_id.as_deref(), &app_id).await;
+        fetch_profile_for_dispatch(&state, &sub, params.profile_id.as_deref(), &app_id, true).await;
 
     let wasm_packages = resolve_wasm_packages(&state, &app_id).await;
 

@@ -17,8 +17,14 @@ import {
 } from "@flow-like/flow-like-ui";
 import type { IBitSearchQuery } from "@flow-like/flow-like-ui/lib/schema/hub/bit-search-query";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
-import { type WebBackendRef, apiGet, apiPost } from "./api-utils";
 import { WebApiState } from "./api-state";
+import {
+	type WebBackendRef,
+	apiDelete,
+	apiGet,
+	apiPost,
+	apiPut,
+} from "./api-utils";
 
 export class WebBitState implements IBitState {
 	constructor(private readonly backend: WebBackendRef) {}
@@ -209,6 +215,29 @@ export class WebBitState implements IBitState {
 		} catch {
 			return [];
 		}
+	}
+
+	async listCustomBits(): Promise<IBit[]> {
+		try {
+			return (await apiGet<IBit[]>("user/bits", this.backend.auth)) ?? [];
+		} catch {
+			return [];
+		}
+	}
+
+	async upsertCustomBit(
+		bit: IBit,
+		secrets?: Record<string, unknown>,
+	): Promise<IBit> {
+		return await apiPut<IBit>(
+			`user/bits/${bit.id}`,
+			{ bit, secrets },
+			this.backend.auth,
+		);
+	}
+
+	async deleteCustomBit(bitId: string): Promise<void> {
+		await apiDelete(`user/bits/${bitId}`, this.backend.auth);
 	}
 
 	async repairTtsBitAssets(bit: IBit, force = false): Promise<IBitPack> {

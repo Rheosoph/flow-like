@@ -16,7 +16,7 @@ pub mod wasm_resolve;
 pub use crate::backend_jwt::TokenType;
 pub use dispatch::{
     ByteStream, DispatchConfig, DispatchError, DispatchRequest, DispatchResponse, Dispatcher,
-    ExecutionBackend, StreamChunk, fetch_profile_for_dispatch,
+    ExecutionBackend, StreamChunk, fetch_profile_for_dispatch, hydrate_profile_custom_bit_secrets,
 };
 pub use interaction_jwt::{
     InteractionClaims, InteractionJwtError, InteractionJwtParams,

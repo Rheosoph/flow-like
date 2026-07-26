@@ -2,12 +2,13 @@ pub mod local;
 
 use crate::{bit::Bit, state::FlowLikeState};
 use flow_like_model_provider::llm::{
-    ModelLogic, anthropic::AnthropicModel, cohere::CohereModel, deepseek::DeepseekModel,
-    galadriel::GaladrielModel, gemini::GeminiModel, groq::GroqModel, huggingface::HuggingfaceModel,
-    hyperbolic::HyperbolicModel, lmstudio::LMStudioModel, mira::MiraModel, mistral::MistralModel,
-    moonshot::MoonshotModel, mozilla::MozillaModel, ollama::OllamaModel, openai::OpenAIModel,
-    openrouter::OpenRouterModel, perplexity::PerplexityModel, together::TogetherModel,
-    vertex::VertexModel, voyageai::VoyageAIModel, xai::XAIModel,
+    ModelLogic, anthropic::AnthropicModel, bedrock::BedrockModel, cohere::CohereModel,
+    deepseek::DeepseekModel, galadriel::GaladrielModel, gemini::GeminiModel, groq::GroqModel,
+    huggingface::HuggingfaceModel, hyperbolic::HyperbolicModel, lmstudio::LMStudioModel,
+    mira::MiraModel, mistral::MistralModel, moonshot::MoonshotModel, mozilla::MozillaModel,
+    ollama::OllamaModel, openai::OpenAIModel, openrouter::OpenRouterModel,
+    perplexity::PerplexityModel, together::TogetherModel, vertex::VertexModel,
+    voyageai::VoyageAIModel, xai::XAIModel,
 };
 use flow_like_types::{Result, json, sync::Mutex, tokio::time::interval};
 use local::LocalModel;
@@ -190,6 +191,7 @@ impl ModelFactory {
 
         let model: Arc<dyn ModelLogic> = match provider {
             "custom:openai" => Arc::new(OpenAIModel::from_provider(model_provider).await?),
+            "custom:bedrock" => Arc::new(BedrockModel::from_provider(model_provider).await?),
             "custom:anthropic" => Arc::new(AnthropicModel::from_provider(model_provider).await?),
             "custom:gemini" => Arc::new(GeminiModel::from_provider(model_provider).await?),
             "custom:groq" => Arc::new(GroqModel::from_provider(model_provider).await?),

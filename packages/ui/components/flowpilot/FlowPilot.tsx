@@ -1087,6 +1087,16 @@ function FlowPilotImpl({
 		[profile.data?.hub_profile.id],
 	);
 
+	// User-owned custom bits are always selectable, independent of profile
+	// membership.
+	const customBits = useInvoke(
+		backendContext.bitState.listCustomBits,
+		backendContext.bitState,
+		[],
+		!!profile.data,
+		[profile.data?.hub_profile.id],
+	);
+
 	// Filter bits models to those in the user's profile, dropping local-only
 	// models on hosts that cannot run llama.cpp (e.g. iOS).
 	const canHostLlamaCPP = backendContext.capabilities().canHostLlamaCPP;
@@ -1096,8 +1106,22 @@ function FlowPilotImpl({
 		const profileModels = foundBits.data.filter((model) =>
 			profileBitIds.has(`${model.hub}:${model.id}`),
 		);
-		return filterHostableLlmModels(profileModels, canHostLlamaCPP);
-	}, [foundBits.data, profile.data?.hub_profile.bits, canHostLlamaCPP]);
+		const seen = new Set(profileModels.map((model) => model.id));
+		const ownModels = (customBits.data ?? []).filter(
+			(model) =>
+				!seen.has(model.id) &&
+				(model.type === IBitTypes.Llm || model.type === IBitTypes.Vlm),
+		);
+		return filterHostableLlmModels(
+			[...ownModels, ...profileModels],
+			canHostLlamaCPP,
+		);
+	}, [
+		foundBits.data,
+		customBits.data,
+		profile.data?.hub_profile.bits,
+		canHostLlamaCPP,
+	]);
 
 	const openFrontendToolDialog = useCallback(
 		(dialog: FrontendToolDialogState, resolve: (value: any) => void) => {

@@ -196,6 +196,11 @@ pub struct Settings {
     #[serde(default)]
     pub log_retention: LogRetentionSettings,
     pub profiles: HashMap<String, UserProfile>,
+    /// User-wide library of custom model bits. Definitions (and their
+    /// credentials) are configured once here; each profile activates the ones
+    /// it wants through its own `bits` list, exactly like public bits.
+    #[serde(default)]
+    pub custom_bits: Vec<flow_like::bit::Bit>,
     pub updated: SystemTime,
     pub created: SystemTime,
 
@@ -260,6 +265,7 @@ impl Settings {
             user_dir,
             log_retention: LogRetentionSettings::default(),
             profiles: HashMap::new(),
+            custom_bits: Vec::new(),
             created: SystemTime::now(),
             updated: SystemTime::now(),
             config: None,
@@ -271,12 +277,16 @@ impl Settings {
     }
 
     pub fn get_current_profile(&self) -> anyhow::Result<UserProfile> {
-        let profile = self
+        let mut profile = self
             .profiles
             .get(&self.current_profile)
             .or_else(|| self.profiles.values().next())
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("No profiles found"))?;
+
+        // Resolve the custom bits this profile activated out of the user-wide
+        // library, so model lookups see exactly the profile's line-up.
+        profile.hub_profile.custom_bits = self.profile_custom_bits(&profile);
 
         // Proxied model calls resolve their endpoint from a process-wide base
         // URL. The desktop only learns it from the active profile, and the
@@ -286,6 +296,31 @@ impl Settings {
         );
 
         Ok(profile)
+    }
+
+    /// The subset of the custom-bit library a profile has activated, matched
+    /// against its `bits` references (`hub:id` or bare id).
+    pub fn profile_custom_bits(
+        &self,
+        profile: &UserProfile,
+    ) -> Vec<flow_like::profile::ProfileCustomBit> {
+        let wanted: std::collections::HashSet<&str> = profile
+            .hub_profile
+            .bits
+            .iter()
+            .map(|reference| {
+                reference
+                    .rsplit_once(':')
+                    .map_or(reference.as_str(), |(_, id)| id)
+            })
+            .collect();
+
+        self.custom_bits
+            .iter()
+            .filter(|bit| wanted.contains(bit.id.as_str()))
+            .cloned()
+            .map(flow_like::profile::ProfileCustomBit)
+            .collect()
     }
 
     pub async fn set_current_profile(

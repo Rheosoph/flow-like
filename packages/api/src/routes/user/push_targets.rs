@@ -10,12 +10,10 @@ use crate::{
     routes::user::ensure_user_exists,
     state::AppState,
 };
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
 use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
-use base64::Engine;
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder,
@@ -584,17 +582,7 @@ where
 }
 
 fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
-    let cipher = Aes256Gcm::new_from_slice(key).expect("Invalid key length");
-    let mut nonce_bytes = [0u8; 12];
-    getrandom::fill(&mut nonce_bytes).expect("Failed to generate random nonce");
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let ciphertext = cipher
-        .encrypt(nonce, token.as_bytes())
-        .expect("Encryption failed");
-
-    let mut combined = nonce_bytes.to_vec();
-    combined.extend(ciphertext);
-    base64::engine::general_purpose::STANDARD.encode(combined)
+    crate::utils::crypto::encrypt_secret(token, key)
 }
 
 #[cfg(test)]

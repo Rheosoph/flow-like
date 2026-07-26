@@ -251,7 +251,7 @@ pub async fn invoke_board_async(
         use flow_like_types::tokio;
         tokio::join!(
             state.scoped_credentials(&sub, &app_id, access),
-            fetch_profile_for_dispatch(&state.db, &sub, params.profile_id.as_deref(), &app_id),
+            fetch_profile_for_dispatch(&state, &sub, params.profile_id.as_deref(), &app_id, true),
             resolve_wasm_packages(&state, &app_id),
         )
     };

@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    hash::{Hash, Hasher},
     sync::Arc,
 };
 
@@ -84,6 +85,34 @@ pub struct ProfileShortcut {
     pub created_at: String,
 }
 
+/// A user-owned private bit carried inline on the profile (custom provider
+/// configs or private HuggingFace models). `Bit` cannot derive `Hash`/`Eq`
+/// (untyped `parameters`), so equality and hashing go through the canonical
+/// JSON serialization.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+#[serde(transparent)]
+pub struct ProfileCustomBit(pub Bit);
+
+impl ProfileCustomBit {
+    fn canonical(&self) -> String {
+        flow_like_types::json::to_string(&self.0).unwrap_or_default()
+    }
+}
+
+impl PartialEq for ProfileCustomBit {
+    fn eq(&self, other: &Self) -> bool {
+        self.canonical() == other.canonical()
+    }
+}
+
+impl Eq for ProfileCustomBit {}
+
+impl Hash for ProfileCustomBit {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.canonical().hash(state);
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Profile {
     #[serde(default = "flow_like_types::create_id")]
@@ -110,6 +139,16 @@ pub struct Profile {
     #[serde(default)]
     pub theme: Option<Value>,
     pub bits: Vec<String>, // hub:id
+    /// User-owned private bits, hydrated per trust boundary: with decrypted
+    /// provider secrets only server-side per request/run and on the owner's
+    /// desktop; never in the browser client or the server profile row.
+    /// Schema-wise these are plain `Bit`s (the wrapper is serde-transparent);
+    /// `schemars(with)` keeps the generated schema referencing `Bit` instead
+    /// of minting a duplicate inline type, which would cascade renames through
+    /// the quicktype-generated TS.
+    #[serde(default)]
+    #[schemars(with = "Vec<Bit>")]
+    pub custom_bits: Vec<ProfileCustomBit>,
     #[serde(default)]
     pub settings: Settings,
     pub updated: String,
@@ -127,6 +166,7 @@ impl Default for Profile {
             secure: true,
             hubs: vec![],
             bits: vec![],
+            custom_bits: vec![],
             icon: Some("".to_string()),
             interests: vec![],
             tags: vec![],
@@ -219,6 +259,20 @@ impl Profile {
     ) -> Result<Bit> {
         let mut best_bit = (0.0, None);
 
+        for bit in self.activated_custom_bits() {
+            if only_hosted && Self::is_local_model(bit) {
+                continue;
+            }
+            if multimodal && !bit.is_multimodal() {
+                continue;
+            }
+            if let Ok(score) = bit.score(preference)
+                && (best_bit.1.is_none() || score > best_bit.0)
+            {
+                best_bit = (score, Some(bit.clone()));
+            }
+        }
+
         if !remote {
             for bit_ref in &self.bits {
                 let bit = match self.get_profile_bit(bit_ref, http_client.clone()).await {
@@ -289,6 +343,61 @@ impl Profile {
         }
     }
 
+    /// Looks up a user-owned custom bit carried on this profile by id. Resolves
+    /// against everything hydrated into `custom_bits`, activated or not: picking
+    /// a model explicitly is the activation.
+    pub fn custom_bit(&self, bit_id: &str) -> Option<Bit> {
+        self.custom_bits
+            .iter()
+            .map(|custom| &custom.0)
+            .find(|bit| bit.id == bit_id)
+            .cloned()
+    }
+
+    /// The custom bits this profile activated through its `bits` references.
+    /// Hosts may hydrate `custom_bits` with the user's whole library so an
+    /// explicitly selected model always resolves; discovery — best-model
+    /// scoring and search — stays scoped to the profile's own line-up.
+    fn activated_custom_bits(&self) -> Vec<&Bit> {
+        let activated: HashSet<&str> = self
+            .bits
+            .iter()
+            .map(|reference| {
+                reference
+                    .rsplit_once(':')
+                    .map_or(reference.as_str(), |(_, id)| id)
+            })
+            .collect();
+
+        self.custom_bits
+            .iter()
+            .map(|custom| &custom.0)
+            .filter(|bit| activated.contains(bit.id.as_str()))
+            .collect()
+    }
+
+    fn custom_bits_matching(&self, query: &BitSearchQuery) -> Vec<Bit> {
+        self.activated_custom_bits()
+            .into_iter()
+            .filter(|bit| {
+                query
+                    .bit_types
+                    .as_ref()
+                    .is_none_or(|types| types.contains(&bit.bit_type))
+            })
+            .filter(|bit| {
+                query.search.as_ref().is_none_or(|search| {
+                    let search = search.to_lowercase();
+                    bit.meta.values().any(|meta| {
+                        meta.name.to_lowercase().contains(&search)
+                            || meta.description.to_lowercase().contains(&search)
+                    })
+                })
+            })
+            .cloned()
+            .collect()
+    }
+
     pub async fn search_bits(
         &self,
         query: &BitSearchQuery,
@@ -296,6 +405,9 @@ impl Profile {
     ) -> Result<Vec<Bit>> {
         let hubs = self.get_available_hubs(http_client).await?;
         let mut bits: HashMap<String, Bit> = HashMap::new();
+        for bit in self.custom_bits_matching(query) {
+            bits.insert(bit.id.clone(), bit);
+        }
         for hub in hubs {
             let hub_bits = hub.search_bit(query).await;
             let hub_bits = match hub_bits {
@@ -321,6 +433,10 @@ impl Profile {
         hub: Option<String>,
         http_client: Arc<HTTPClient>,
     ) -> Result<Bit> {
+        if let Some(custom) = self.custom_bit(&bit) {
+            return Ok(custom);
+        }
+
         if let Some(hub) = hub {
             let hub = Hub::new(&hub, http_client).await?;
             let bit = hub.get_bit(&bit).await?;
@@ -329,15 +445,22 @@ impl Profile {
 
         let hubs = self.get_available_hubs(http_client).await?;
         for hub in hubs {
-            let bit = hub.get_bit(&bit).await;
-            if let Ok(bit) = bit {
-                return Ok(bit);
+            let found = hub.get_bit(&bit).await;
+            if let Ok(found) = found {
+                return Ok(found);
             }
         }
-        Err(flow_like_types::anyhow!("Bit not found"))
+        Err(flow_like_types::anyhow!(
+            "Bit not found: {bit} (not in profile {} or any of its hubs)",
+            self.id
+        ))
     }
 
     pub async fn find_bit(&self, bit_id: &str, http_client: Arc<HTTPClient>) -> Result<Bit> {
+        if let Some(custom) = self.custom_bit(bit_id) {
+            return Ok(custom);
+        }
+
         let hubs = self.get_available_hubs(http_client).await?;
         for hub in hubs {
             let bit = hub.get_bit(bit_id).await;
@@ -345,7 +468,10 @@ impl Profile {
                 return Ok(bit);
             }
         }
-        Err(flow_like_types::anyhow!("Bit not found"))
+        Err(flow_like_types::anyhow!(
+            "Bit not found: {bit_id} (not in profile {} or any of its hubs)",
+            self.id
+        ))
     }
 
     async fn get_profile_bit(&self, bit_ref: &str, http_client: Arc<HTTPClient>) -> Result<Bit> {
@@ -354,6 +480,9 @@ impl Profile {
         }
 
         if let Some((hub, bit_id)) = split_profile_bit_reference(bit_ref) {
+            if let Some(custom) = self.custom_bit(bit_id) {
+                return Ok(custom);
+            }
             let hub = Hub::new(hub, http_client).await?;
             return hub.get_bit(bit_id).await;
         }
@@ -484,6 +613,36 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err.to_string(), "No Model found");
+    }
+
+    #[test]
+    fn custom_bits_resolve_by_id_but_stay_profile_scoped_for_discovery() {
+        let custom_bit = |id: &str| {
+            super::ProfileCustomBit(crate::bit::Bit {
+                id: id.to_string(),
+                bit_type: BitTypes::Llm,
+                ..crate::bit::Bit::default()
+            })
+        };
+
+        let profile = Profile {
+            bits: vec!["https://api.flow-like.com:activated".to_string()],
+            custom_bits: vec![custom_bit("activated"), custom_bit("library-only")],
+            ..Profile::default()
+        };
+
+        assert!(profile.custom_bit("activated").is_some());
+        assert!(
+            profile.custom_bit("library-only").is_some(),
+            "an explicitly selected library model must resolve"
+        );
+
+        let activated: Vec<&str> = profile
+            .activated_custom_bits()
+            .iter()
+            .map(|bit| bit.id.as_str())
+            .collect();
+        assert_eq!(activated, vec!["activated"]);
     }
 
     #[test]

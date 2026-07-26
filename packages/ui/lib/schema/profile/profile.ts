@@ -1,7 +1,15 @@
+import type { IBit } from "../bit/bit";
+
 export interface IProfile {
 	apps?: IProfileApp[] | null;
 	bits: string[];
 	created: string;
+	/**
+	 * User-owned private bits (custom providers / local HF models). Hydrated
+	 * with provider secrets only server-side and on the owner's desktop —
+	 * never in the browser client.
+	 */
+	custom_bits?: IBit[];
 	description?: null | string;
 	hub?: string;
 	secure?: boolean;

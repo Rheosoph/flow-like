@@ -223,10 +223,19 @@ pub async fn get_bits_in_current_profile(
     }
 
     let results = join_all(tasks).await;
-    let found_bits: Vec<Bit> = results
+    let mut found_bits: Vec<Bit> = results
         .into_iter()
         .filter_map(|res| res.ok().flatten())
         .collect();
+
+    // Custom bits this profile activated resolve locally, not over a hub.
+    found_bits.extend(
+        profile
+            .hub_profile
+            .custom_bits
+            .into_iter()
+            .map(|custom| custom.0),
+    );
 
     Ok(found_bits)
 }
@@ -266,6 +275,14 @@ pub async fn upsert_profile(
 ) -> Result<UserProfile, TauriFunctionError> {
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let mut settings = settings.lock().await;
+
+    // Custom bits are managed only through upsert_custom_bit/remove_custom_bit;
+    // a client-provided profile copy must never wipe them.
+    let mut profile = profile;
+    if let Some(existing) = settings.profiles.get(&profile.hub_profile.id) {
+        profile.hub_profile.custom_bits = existing.hub_profile.custom_bits.clone();
+    }
+
     settings
         .profiles
         .insert(profile.hub_profile.id.clone(), profile.clone());
@@ -379,6 +396,85 @@ pub async fn remove_bit(
     profile.updated = now;
     settings.serialize();
     Ok(())
+}
+
+/// Creates or updates a bit in the user-wide custom-model library. Works fully
+/// offline — this is the desktop's local store for private model bits; the
+/// frontend additionally syncs to the API when a session exists. Which
+/// profiles use the bit is decided separately via `add_bit`/`remove_bit`.
+#[instrument(skip_all)]
+#[tauri::command(async)]
+pub async fn upsert_custom_bit(app_handle: AppHandle, bit: Bit) -> Result<(), TauriFunctionError> {
+    // Same normalization the API applies: user bits don't know their artifact
+    // hash upfront; `hash == id` is the trust-on-first-use download sentinel
+    // and doubles as the local storage path.
+    let mut bit = bit;
+    if bit.hash.is_empty() {
+        bit.hash = bit.id.clone();
+    }
+    if bit.dependency_tree_hash.is_empty() {
+        bit.dependency_tree_hash = bit.id.clone();
+    }
+
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let mut settings = settings.lock().await;
+
+    match settings
+        .custom_bits
+        .iter_mut()
+        .find(|existing| existing.id == bit.id)
+    {
+        Some(existing) => *existing = bit,
+        None => settings.custom_bits.push(bit),
+    }
+
+    settings.serialize();
+    Ok(())
+}
+
+/// Deletes a bit from the library and drops it from every profile that used it.
+#[instrument(skip_all)]
+#[tauri::command(async)]
+pub async fn remove_custom_bit(
+    app_handle: AppHandle,
+    bit_id: String,
+) -> Result<(), TauriFunctionError> {
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let mut settings = settings.lock().await;
+
+    settings.custom_bits.retain(|bit| bit.id != bit_id);
+
+    let now = now_iso();
+    for profile in settings.profiles.values_mut() {
+        let before = profile.hub_profile.bits.len();
+        profile.hub_profile.bits.retain(|reference| {
+            reference
+                .rsplit_once(':')
+                .map_or(reference.as_str(), |(_, id)| id)
+                != bit_id
+        });
+        profile
+            .hub_profile
+            .custom_bits
+            .retain(|existing| existing.0.id != bit_id);
+        if profile.hub_profile.bits.len() != before {
+            profile.hub_profile.updated = now.clone();
+            profile.updated = now.clone();
+        }
+    }
+
+    settings.serialize();
+    Ok(())
+}
+
+/// The user's whole custom-model library, independent of profile membership —
+/// this is what the catalog lists so credentials are only ever entered once.
+#[instrument(skip_all)]
+#[tauri::command(async)]
+pub async fn get_custom_bits(app_handle: AppHandle) -> Result<Vec<Bit>, TauriFunctionError> {
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let settings = settings.lock().await;
+    Ok(settings.custom_bits.clone())
 }
 
 #[instrument(skip_all)]
