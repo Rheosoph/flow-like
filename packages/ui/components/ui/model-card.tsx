@@ -11,8 +11,10 @@ import {
 	ExternalLinkIcon,
 	FileSearch,
 	ImageIcon,
+	LockIcon,
 	MicIcon,
 	MoreVerticalIcon,
+	PencilIcon,
 	PlusIcon,
 	ScanEyeIcon,
 	SparklesIcon,
@@ -43,6 +45,12 @@ import {
 } from "./dropdown-menu";
 import { IntelligenceIndexBadge } from "./model-benchmarks";
 import type { IModelEvaluation } from "./model-benchmarks";
+import {
+	DeploymentBadge,
+	ModalityFlow,
+	ProviderGlyph,
+	providerLabel,
+} from "./model-kit";
 import { Progress } from "./progress";
 
 export type ModelCardVariant = "grid" | "list";
@@ -51,12 +59,19 @@ export interface ModelCardProps {
 	bit: IBit;
 	variant?: ModelCardVariant;
 	onClick?: (bit: IBit) => void;
+	/** Marks the model as user-owned, enabling the private badge + edit/delete. */
+	isCustom?: boolean;
+	onEdit?: (bit: IBit) => void;
+	onDelete?: (bit: IBit) => void;
 }
 
 export function ModelCard({
 	bit,
 	variant = "grid",
 	onClick,
+	isCustom = false,
+	onEdit,
+	onDelete,
 }: Readonly<ModelCardProps>) {
 	const backend = useBackend();
 	const { hub } = useHub();
@@ -282,10 +297,13 @@ export function ModelCard({
 			progress={progress}
 			isQueuedState={isQueuedState}
 			isVirtualBit={isVirtualBit}
+			isCustom={isCustom}
 			onCardClick={() => onClick?.(bit)}
 			onToggleDownload={toggleDownload}
 			onToggleProfile={toggleProfile}
 			onOpenRepository={openRepository}
+			onEdit={onEdit ? () => onEdit(bit) : undefined}
+			onDelete={onDelete ? () => onDelete(bit) : undefined}
 		/>
 	);
 }
@@ -305,15 +323,17 @@ interface ModelCardVariantProps {
 	progress?: number;
 	isQueuedState: boolean;
 	isVirtualBit: boolean;
+	isCustom?: boolean;
 	onCardClick: () => void;
 	onToggleDownload: () => void;
 	onToggleProfile: () => void;
 	onOpenRepository: () => void;
+	onEdit?: () => void;
+	onDelete?: () => void;
 }
 
 function ModelCardGridVariant({
 	bit,
-	modality,
 	contextLength,
 	canRunRemotely,
 	isEmbeddingModel,
@@ -326,32 +346,45 @@ function ModelCardGridVariant({
 	progress,
 	isQueuedState,
 	isVirtualBit,
+	isCustom,
 	onCardClick,
 	onToggleDownload,
 	onToggleProfile,
 	onOpenRepository,
+	onEdit,
+	onDelete,
 }: Readonly<ModelCardVariantProps>) {
 	const meta = bit.meta.en;
 	if (!meta) return null;
 
 	return (
-		<div
+		<article
 			onClick={onCardClick}
 			onKeyDown={(e) => e.key === "Enter" && onCardClick()}
-			className="group relative flex flex-col rounded-lg border bg-card p-3 cursor-pointer transition-all hover:bg-accent/50 hover:border-primary/30 h-35"
+			className={`group relative flex h-full cursor-pointer flex-col gap-2.5 overflow-hidden rounded-2xl border bg-card py-4 pr-4 pl-[18px] shadow-sm transition-all hover:-translate-y-[3px] hover:border-primary/30 hover:shadow-lg ${
+				isInProfile ? "border-primary/35" : ""
+			}`}
 		>
+			{/* Membership spine — readable across a whole scrolling rail */}
+			<span
+				aria-hidden="true"
+				className={`absolute inset-y-0 left-0 w-1 origin-left bg-primary transition-transform duration-200 ${
+					isInProfile ? "scale-x-100" : "scale-x-0"
+				}`}
+			/>
+
 			{/* Download Overlay */}
 			{progress !== undefined && !isVirtualBit && (
-				<div className="absolute inset-0 bg-background/90 backdrop-blur-sm z-30 flex items-center justify-center rounded-lg">
+				<div className="absolute inset-0 z-30 flex items-center justify-center rounded-2xl bg-background/90 backdrop-blur-sm">
 					{isQueuedState ? (
 						<div className="flex items-center gap-2">
-							<ClockIcon className="h-4 w-4 text-primary animate-pulse" />
+							<ClockIcon className="h-4 w-4 animate-pulse text-primary" />
 							<span className="text-sm text-muted-foreground">Queued</span>
 						</div>
 					) : (
 						<div className="flex items-center gap-3">
-							<Progress value={progress} className="w-24 h-1.5" />
-							<span className="text-sm text-muted-foreground tabular-nums">
+							<Progress value={progress} className="h-1.5 w-24" />
+							<span className="text-sm tabular-nums text-muted-foreground">
 								{progress}%
 							</span>
 						</div>
@@ -359,22 +392,34 @@ function ModelCardGridVariant({
 				</div>
 			)}
 
-			{/* Header: Icon + Name + Menu */}
-			<div className="flex items-start gap-2.5">
-				<Avatar className="h-9 w-9 shrink-0 border border-border/50">
-					<AvatarImage src={meta.icon ?? "/app-logo.webp"} />
-					<AvatarFallback className="bg-muted text-xs">
-						<ModelTypeIcon type={bit.type} className="h-4 w-4" />
-					</AvatarFallback>
-				</Avatar>
-				<div className="flex-1 min-w-0">
-					<div className="flex items-center gap-1.5">
-						<span className="font-medium text-sm truncate">{meta.name}</span>
-						{isInProfile && (
-							<SparklesIcon className="h-3.5 w-3.5 text-primary shrink-0" />
+			<div className="flex items-center gap-3">
+				<span className="relative shrink-0">
+					<ProviderGlyph bit={bit} size={40} />
+					{isInProfile && (
+						<span
+							title="In your profile"
+							className="absolute -right-1 -bottom-1 grid h-[17px] w-[17px] place-items-center rounded-full bg-primary text-primary-foreground ring-[2.5px] ring-card"
+						>
+							<CheckIcon className="h-2.5 w-2.5" strokeWidth={3} />
+						</span>
+					)}
+				</span>
+				<div className="min-w-0 flex-1">
+					<div
+						className="truncate text-[14.5px] font-bold tracking-tight"
+						title={meta.name}
+					>
+						{meta.name}
+					</div>
+					<div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-muted-foreground/70">
+						<span className="truncate">{providerLabel(bit)}</span>
+						{isCustom && (
+							<span className="inline-flex h-4 shrink-0 items-center gap-1 rounded border border-primary/30 px-1 text-[9.5px] font-bold uppercase tracking-wide text-primary">
+								<LockIcon className="h-2.5 w-2.5" />
+								Private
+							</span>
 						)}
 					</div>
-					<ModalityIcons type={bit.type} />
 				</div>
 				<ModelCardDropdown
 					isInstalled={isInstalled}
@@ -387,52 +432,111 @@ function ModelCardGridVariant({
 				/>
 			</div>
 
-			{/* Description */}
-			<p className="text-xs text-muted-foreground line-clamp-2 mt-2 h-8 overflow-hidden">
+			{/* What goes in, what comes out */}
+			<div className="flex min-h-[52px] items-center rounded-xl border border-border/60 bg-muted/40 px-2.5 py-2">
+				<ModalityFlow type={bit.type} />
+			</div>
+
+			<p className="line-clamp-2 min-h-[36px] text-[12.5px] leading-relaxed text-muted-foreground">
 				{meta.description}
 			</p>
 
-			{/* Footer: Badges */}
-			<div className="flex items-center gap-1.5 flex-wrap mt-auto pt-2">
-				<ModelStatusBadge
-					isInstalled={isInstalled}
-					isHosted={isHosted}
-					bitSize={bitSize}
-				/>
+			<div className="flex min-h-[22px] flex-wrap items-center gap-1.5">
 				<IntelligenceIndexBadge
 					evaluation={bit.model_evaluation as IModelEvaluation | undefined}
 				/>
-				{contextLength && (
-					<Badge variant="outline" className="text-[10px] px-1.5 py-0 h-5">
+				{contextLength ? (
+					<span className="inline-flex h-[22px] items-center rounded-md border border-border/60 bg-muted/50 px-2 font-mono text-[11px] tabular-nums text-muted-foreground">
 						{formatContextLength(contextLength)}
-					</Badge>
+					</span>
+				) : null}
+				<DeploymentBadge
+					kind={isHosted ? "hosted" : canRunRemotely ? "remote" : "local"}
+				/>
+				{!isHosted && isInstalled && (
+					<span className="inline-flex h-[22px] items-center gap-1 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 font-mono text-[11px] tabular-nums text-emerald-600 dark:text-emerald-400">
+						<CheckIcon className="h-3 w-3" />
+						{humanFileSize(bitSize)}
+					</span>
 				)}
-				{canRunRemotely && (
-					<Badge
-						variant="outline"
-						className="text-[10px] px-1.5 py-0 h-5 bg-cyan-500/10 text-cyan-700 border-cyan-500/30"
-					>
-						Remote
-					</Badge>
-				)}
-				{isEmbeddingModel && !canRunRemotely && (
-					<Badge
-						variant="outline"
-						className="text-[10px] px-1.5 py-0 h-5 bg-zinc-500/10 text-zinc-600 border-zinc-500/30"
-					>
+				{isEmbeddingModel && !canRunRemotely && !isHosted && (
+					<span className="inline-flex h-[22px] items-center rounded-md border border-border/60 bg-muted/50 px-2 text-[10.5px] font-semibold text-muted-foreground">
 						Local only
-					</Badge>
+					</span>
 				)}
 				{isRestricted && requiredTier && (
-					<Badge
-						variant="outline"
-						className="text-[10px] px-1.5 py-0 h-5 bg-amber-500/10 text-amber-600 border-amber-500/30"
-					>
+					<span className="inline-flex h-[22px] items-center rounded-md border border-amber-500/30 bg-amber-500/10 px-2 text-[10.5px] font-semibold text-amber-600 dark:text-amber-400">
 						{requiredTier}
-					</Badge>
+					</span>
 				)}
 			</div>
-		</div>
+
+			<div className="mt-auto flex gap-1.5 pt-1">
+				<Button
+					variant={isInProfile ? "secondary" : "outline"}
+					size="sm"
+					onClick={(e) => {
+						e.stopPropagation();
+						onToggleProfile();
+					}}
+					className={`h-8 flex-1 gap-1.5 rounded-lg text-xs font-semibold ${
+						isInProfile
+							? "border border-primary/30 bg-primary/10 text-primary hover:bg-primary/15"
+							: ""
+					}`}
+				>
+					{isInProfile ? (
+						<CheckIcon className="h-3.5 w-3.5" />
+					) : (
+						<PlusIcon className="h-3.5 w-3.5" />
+					)}
+					{isInProfile ? "In profile" : "Add"}
+				</Button>
+				{isCustom && onEdit && (
+					<Button
+						variant="outline"
+						size="icon"
+						title="Edit model"
+						onClick={(e) => {
+							e.stopPropagation();
+							onEdit();
+						}}
+						className="h-8 w-8 shrink-0 rounded-lg"
+					>
+						<PencilIcon className="h-3.5 w-3.5" />
+						<span className="sr-only">Edit model</span>
+					</Button>
+				)}
+				{isCustom && onDelete && (
+					<Button
+						variant="outline"
+						size="icon"
+						title="Delete model"
+						onClick={(e) => {
+							e.stopPropagation();
+							onDelete();
+						}}
+						className="h-8 w-8 shrink-0 rounded-lg text-destructive hover:text-destructive"
+					>
+						<TrashIcon className="h-3.5 w-3.5" />
+						<span className="sr-only">Delete model</span>
+					</Button>
+				)}
+				<Button
+					variant="outline"
+					size="icon"
+					title="Details"
+					onClick={(e) => {
+						e.stopPropagation();
+						onCardClick();
+					}}
+					className="h-8 w-8 shrink-0 rounded-lg"
+				>
+					<ArrowRightIcon className="h-3.5 w-3.5 transition-transform group-hover:translate-x-0.5" />
+					<span className="sr-only">Details for {meta.name}</span>
+				</Button>
+			</div>
+		</article>
 	);
 }
 

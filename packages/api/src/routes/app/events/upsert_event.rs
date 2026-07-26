@@ -115,11 +115,13 @@ pub async fn upsert_event(
     app.save().await?;
 
     // Fetch the updater's profile for the sink (so triggers can use their bits/hubs)
+    // Persisted in the sink row — never embed decrypted custom-bit secrets.
     let profile_json = crate::execution::fetch_profile_for_dispatch(
-        &state.db,
+        &state,
         &sub,
         params.profile_id.as_deref(),
         &app_id,
+        false,
     )
     .await;
 

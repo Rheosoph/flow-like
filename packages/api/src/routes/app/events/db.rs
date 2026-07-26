@@ -408,44 +408,13 @@ pub async fn sync_event_with_sink_tokens(
 /// Encrypt a token using AES-256-GCM
 /// Returns base64-encoded ciphertext with prepended nonce
 pub fn encrypt_token(token: &str, key: &[u8; 32]) -> String {
-    use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-    use base64::Engine;
-
-    let cipher = Aes256Gcm::new_from_slice(key).expect("Invalid key length");
-
-    let mut nonce_bytes = [0u8; 12];
-    getrandom::fill(&mut nonce_bytes).expect("Failed to generate random nonce");
-    let nonce = Nonce::from_slice(&nonce_bytes);
-
-    let ciphertext = cipher
-        .encrypt(nonce, token.as_bytes())
-        .expect("Encryption failed");
-
-    let mut combined = nonce_bytes.to_vec();
-    combined.extend(ciphertext);
-    base64::engine::general_purpose::STANDARD.encode(combined)
+    crate::utils::crypto::encrypt_secret(token, key)
 }
 
 /// Decrypt a token using AES-256-GCM
 /// Expects base64-encoded ciphertext with prepended nonce
 pub fn decrypt_token(encrypted: &str, key: &[u8; 32]) -> Option<String> {
-    use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-    use base64::Engine;
-
-    let cipher = Aes256Gcm::new_from_slice(key).ok()?;
-
-    let combined = base64::engine::general_purpose::STANDARD
-        .decode(encrypted)
-        .ok()?;
-
-    if combined.len() < 12 {
-        return None;
-    }
-    let (nonce_bytes, ciphertext) = combined.split_at(12);
-    let nonce = Nonce::from_slice(nonce_bytes);
-
-    let plaintext = cipher.decrypt(nonce, ciphertext).ok()?;
-    String::from_utf8(plaintext).ok()
+    crate::utils::crypto::decrypt_secret(encrypted, key)
 }
 
 /// Extract cron expression from event config bytes

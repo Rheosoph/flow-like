@@ -356,6 +356,17 @@ fn flow_path_value(path: &str) -> serde_json::Value {
     })
 }
 
+/// Loads the sink's persisted profile and re-hydrates decrypted custom-bit
+/// secrets (persisted profile JSON never contains them).
+async fn hydrated_sink_profile(
+    state: &AppState,
+    sink: &event_sink::Model,
+) -> Option<serde_json::Value> {
+    let mut profile = sink.profile_json.clone()?;
+    crate::execution::hydrate_profile_custom_bit_secrets(state, &mut profile).await;
+    Some(profile)
+}
+
 async fn parse_multipart_payload(
     request: Request<Body>,
     query: serde_json::Map<String, serde_json::Value>,
@@ -735,7 +746,7 @@ pub async fn trigger_event(
         ))),
         runtime_variables: None,
         user_context: None, // Sink triggers don't have user context
-        profile: sink.profile_json.clone(),
+        profile: hydrated_sink_profile(state, &sink).await,
         wasm_packages,
     };
 
@@ -1037,7 +1048,7 @@ pub async fn trigger_http(
         ))),
         runtime_variables: None,
         user_context: None, // HTTP sink triggers don't have user context
-        profile: sink.profile_json.clone(),
+        profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
     };
 
@@ -1439,7 +1450,7 @@ pub async fn trigger_telegram(
         ))),
         runtime_variables: None,
         user_context: None, // Telegram webhook triggers don't have user context
-        profile: sink.profile_json.clone(),
+        profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
     };
 
@@ -1776,7 +1787,7 @@ pub async fn trigger_discord(
         ))),
         runtime_variables: None,
         user_context: None, // Discord webhook triggers don't have user context
-        profile: sink.profile_json.clone(),
+        profile: hydrated_sink_profile(&state, &sink).await,
         wasm_packages,
     };
 

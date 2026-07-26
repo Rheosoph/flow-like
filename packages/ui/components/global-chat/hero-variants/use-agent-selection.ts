@@ -80,6 +80,13 @@ export function useAgentSelection() {
 		!!settingsProfile.data,
 		[settingsProfile.data?.hub_profile.id],
 	);
+	const customBits = useInvoke(
+		backend.bitState.listCustomBits,
+		backend.bitState,
+		[],
+		!!settingsProfile.data,
+		[settingsProfile.data?.hub_profile.id],
+	);
 	const canHostLlamaCPP = backend.capabilities().canHostLlamaCPP;
 	const bitsModels = useMemo(() => {
 		const profileBits = settingsProfile.data?.hub_profile.bits;
@@ -88,8 +95,22 @@ export function useAgentSelection() {
 		const profileModels = llmBits.data.filter((bit) =>
 			ids.has(`${bit.hub}:${bit.id}`),
 		);
-		return filterHostableLlmModels(profileModels, canHostLlamaCPP);
-	}, [llmBits.data, settingsProfile.data?.hub_profile.bits, canHostLlamaCPP]);
+		const seen = new Set(profileModels.map((bit) => bit.id));
+		const ownModels = (customBits.data ?? []).filter(
+			(bit) =>
+				!seen.has(bit.id) &&
+				(bit.type === IBitTypes.Llm || bit.type === IBitTypes.Vlm),
+		);
+		return filterHostableLlmModels(
+			[...ownModels, ...profileModels],
+			canHostLlamaCPP,
+		);
+	}, [
+		llmBits.data,
+		customBits.data,
+		settingsProfile.data?.hub_profile.bits,
+		canHostLlamaCPP,
+	]);
 
 	const normalizedProvider = normalizeAIProvider(provider);
 	const isAgent = isAgentBackendProvider(normalizedProvider);

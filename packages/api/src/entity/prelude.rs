@@ -76,6 +76,7 @@ pub use super::usage_alert::Entity as UsageAlert;
 pub use super::usage_invocation::Entity as UsageInvocation;
 pub use super::usage_limit_audit_log::Entity as UsageLimitAuditLog;
 pub use super::user::Entity as User;
+pub use super::user_bit::Entity as UserBit;
 pub use super::user_challenge_attempt::Entity as UserChallengeAttempt;
 pub use super::user_course_enrollment::Entity as UserCourseEnrollment;
 pub use super::user_lesson_progress::Entity as UserLessonProgress;

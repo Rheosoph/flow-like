@@ -376,7 +376,17 @@ async fn process_download_bit(
     let _rem = remove_download(bit, &app_state).await;
 
     let file_hash = hasher.finalize().to_hex().to_string().to_lowercase();
-    if file_hash != bit.hash.to_lowercase() {
+    // User-created custom bits don't know their artifact hash upfront and use
+    // `hash == id` as a trust-on-first-use sentinel (curated downloadable bits
+    // always carry a real blake3 hash; link-less bits never reach this path).
+    let unverified_user_bit = bit.hash == bit.id;
+    if unverified_user_bit {
+        println!(
+            "Skipping hash verification for user bit {} (computed blake3: {})",
+            bit.id, file_hash
+        );
+    }
+    if !unverified_user_bit && file_hash != bit.hash.to_lowercase() {
         println!(
             "Error downloading file, hash does not match, deleting __ {} != {}",
             file_hash, bit.hash

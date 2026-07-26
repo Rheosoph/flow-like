@@ -22,8 +22,8 @@ use super::{
     response_chunk::ResponseChunk,
 };
 
-// pub mod bedrock;
 pub mod anthropic;
+pub mod bedrock;
 pub mod cohere;
 pub mod deepseek;
 pub mod galadriel;

@@ -79,6 +79,7 @@ pub mod usage_alert;
 pub mod usage_invocation;
 pub mod usage_limit_audit_log;
 pub mod user;
+pub mod user_bit;
 pub mod user_challenge_attempt;
 pub mod user_course_enrollment;
 pub mod user_lesson_progress;

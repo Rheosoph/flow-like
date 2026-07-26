@@ -1086,14 +1086,23 @@ fn wrap_as_apigw_v2_event(path: &str, body: serde_json::Value) -> serde_json::Va
 /// 1. If `profile_id` is provided, fetch that specific profile (must belong to user)
 /// 2. Otherwise find the first profile whose `apps` list contains the given `app_id`
 /// 3. Fallback to the first profile for the user
+///
+/// The user's private custom bits are inlined as `custom_bits`. Pass
+/// `include_secrets = true` only when the resulting JSON stays inside an
+/// ephemeral dispatch (encrypted payload storage / in-memory); persisted
+/// copies (event rows) must use `false` and re-hydrate at trigger time via
+/// [`hydrate_profile_custom_bit_secrets`].
 pub async fn fetch_profile_for_dispatch(
-    db: &sea_orm::DatabaseConnection,
+    state: &crate::state::AppState,
     user_id: &str,
     profile_id: Option<&str>,
     app_id: &str,
+    include_secrets: bool,
 ) -> Option<serde_json::Value> {
     use crate::entity::profile;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let db = &state.db;
 
     let model = if let Some(pid) = profile_id {
         profile::Entity::find()
@@ -1143,6 +1152,20 @@ pub async fn fetch_profile_for_dispatch(
 
     let model = model?;
 
+    let profile_bit_ids = model.bit_ids.clone().unwrap_or_default();
+    let custom_bits = crate::routes::user::bits::load_custom_bits_for_profile(
+        state,
+        user_id,
+        &profile_bit_ids,
+        include_secrets,
+    )
+    .await
+    .unwrap_or_else(|err| {
+        tracing::warn!(user_id = %user_id, "Failed to load custom bits for dispatch: {err:?}");
+        vec![]
+    });
+    let custom_bits = serde_json::to_value(custom_bits).unwrap_or_else(|_| serde_json::json!([]));
+
     Some(serde_json::json!({
         "id": model.id,
         "name": model.name,
@@ -1158,8 +1181,48 @@ pub async fn fetch_profile_for_dispatch(
         "shortcuts": model.shortcuts,
         "theme": model.theme,
         "bits": model.bit_ids.unwrap_or_default(),
+        "custom_bits": custom_bits,
         "settings": model.settings.unwrap_or_else(|| serde_json::json!({"connection_mode": "simplebezier"})),
         "updated": model.updated_at.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
         "created": model.created_at.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string(),
     }))
+}
+
+/// Re-hydrates decrypted provider secrets into the `custom_bits` of a
+/// persisted profile JSON (event/sink rows store profiles WITHOUT secrets).
+/// Bits are looked up by id — the ids were placed server-side from the owner's
+/// profile at setup time, so they act as unforgeable references.
+pub async fn hydrate_profile_custom_bit_secrets(
+    state: &crate::state::AppState,
+    profile_json: &mut serde_json::Value,
+) {
+    use crate::entity::user_bit;
+    use sea_orm::EntityTrait;
+
+    let Some(custom_bits) = profile_json
+        .get_mut("custom_bits")
+        .and_then(|bits| bits.as_array_mut())
+    else {
+        return;
+    };
+
+    for bit in custom_bits {
+        let Some(bit_id) = bit.get("id").and_then(|id| id.as_str()) else {
+            continue;
+        };
+
+        let row = match user_bit::Entity::find_by_id(bit_id).one(&state.db).await {
+            Ok(Some(row)) => row,
+            Ok(None) => continue,
+            Err(err) => {
+                tracing::warn!(bit_id = %bit_id, "Failed to load custom bit for hydration: {err:?}");
+                continue;
+            }
+        };
+
+        let hydrated = crate::routes::user::bits::user_bit_to_core(row, state, true);
+        if let Ok(hydrated) = serde_json::to_value(&hydrated) {
+            *bit = hydrated;
+        }
+    }
 }

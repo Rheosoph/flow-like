@@ -2,6 +2,7 @@
 
 import {
 	AudioLines,
+	Boxes,
 	Brain,
 	Code2,
 	Cpu,
@@ -17,6 +18,7 @@ import {
 	MessageSquare,
 	Mic,
 	PackageCheck,
+	Plus,
 	Search,
 	Shield,
 	Sparkles,
@@ -25,9 +27,10 @@ import {
 	X,
 	Zap,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useMiniSearch } from "react-minisearch";
-import { useInvoke } from "../../../hooks/index";
+import { toast } from "sonner";
+import { useInvalidateInvoke, useInvoke } from "../../../hooks/index";
 import { useIsMobile } from "../../../hooks/use-mobile";
 import { Bit } from "../../../lib/bit/bit";
 import type { IBit } from "../../../lib/schema/bit/bit";
@@ -35,10 +38,19 @@ import { IBitTypes } from "../../../lib/schema/bit/bit";
 import type { ILlmParameters } from "../../../lib/schema/bit/bit/llm-parameters";
 import { useBackend } from "../../../state/backend-state";
 import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
 	Button,
 	Input,
 	ModelCard,
 	ModelDetailSheet,
+	ProviderGlyph,
 	Select,
 	SelectContent,
 	SelectItem,
@@ -57,6 +69,7 @@ import {
 } from "../../ui/sheet";
 import { Skeleton } from "../../ui/skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import { AddCustomModelDialog } from "./add-custom-model-dialog";
 
 type SortOption =
 	| "name"
@@ -136,12 +149,18 @@ interface AIModelPageProps {
 
 export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	const backend = useBackend();
+	const invalidate = useInvalidateInvoke();
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
 		[],
 	);
 	const isMobile = useIsMobile();
+	const [customDialogOpen, setCustomDialogOpen] = useState(false);
+	const [editingCustomBit, setEditingCustomBit] = useState<IBit | null>(null);
+	const [deleteCustomTarget, setDeleteCustomTarget] = useState<IBit | null>(
+		null,
+	);
 	const [searchTerm, setSearchTerm] = useState("");
 	const [blacklist, setBlacklist] = useState(new Set<string>());
 	const [viewMode, setViewMode] = useState<ViewMode>("grid");
@@ -203,6 +222,26 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		[profile.data?.id ?? ""],
 	);
 
+	const customBits = useInvoke(
+		backend.bitState.listCustomBits,
+		backend.bitState,
+		[],
+		typeof profile.data !== "undefined",
+		[profile.data?.id ?? ""],
+	);
+
+	const customBitIds = useMemo(
+		() => new Set((customBits.data ?? []).map((bit) => bit.id)),
+		[customBits.data],
+	);
+
+	const allBits = useMemo(() => {
+		const merged = new Map<string, IBit>();
+		for (const bit of foundBits.data ?? []) merged.set(bit.id, bit);
+		for (const bit of customBits.data ?? []) merged.set(bit.id, bit);
+		return Array.from(merged.values());
+	}, [foundBits.data, customBits.data]);
+
 	const imageBlacklist = useCallback(async () => {
 		if (!foundBits.data) return;
 		const dependencies = await Promise.all(
@@ -251,62 +290,71 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	}, [foundBits.data, imageBlacklist]);
 
 	useEffect(() => {
-		if (!foundBits.data || !profile.data || !checkInstalled) return;
+		if (allBits.length === 0 || !profile.data || !checkInstalled) return;
 		const checkInstalledAll = async () => {
 			const installedSet = new Set<string>();
-			for (const bit of foundBits.data) {
+			for (const bit of allBits) {
 				const isInstalled = await checkInstalled(bit);
 				if (isInstalled) installedSet.add(bit.id);
 			}
 			setInstalledBits(installedSet);
 		};
 		checkInstalledAll();
-	}, [foundBits.data, profile.data, checkInstalled]);
+	}, [allBits, profile.data, checkInstalled]);
 
 	useEffect(() => {
-		if (!foundBits.data) return;
+		if (allBits.length === 0) return;
 		removeAll();
 		addAllAsync(
-			foundBits.data.map((item) => ({
+			allBits.map((item) => ({
 				...item,
 				name: item.meta?.en?.name,
 				long_description: item.meta?.en?.long_description,
 				description: item.meta?.en?.description,
 			})),
 		);
-	}, [foundBits.data, addAllAsync, removeAll]);
+	}, [allBits, addAllAsync, removeAll]);
 
 	const providers = useMemo(() => {
-		if (!foundBits.data) return [];
 		const providerSet = new Set<string>();
-		for (const model of foundBits.data) {
+		for (const model of allBits) {
 			const params = model.parameters as ILlmParameters | undefined;
 			if (params?.provider?.provider_name) {
 				providerSet.add(params.provider.provider_name);
 			}
 		}
 		return Array.from(providerSet).sort();
-	}, [foundBits.data]);
+	}, [allBits]);
 
 	const maxContextLength = useMemo(() => {
-		if (!foundBits.data) return 2000000;
+		if (allBits.length === 0) return 2000000;
 		return Math.max(
-			...foundBits.data.map(
+			...allBits.map(
 				(m) =>
 					(m.parameters as ILlmParameters | undefined)?.context_length ?? 0,
 			),
 			128000,
 		);
-	}, [foundBits.data]);
+	}, [allBits]);
 
 	const profileBitIds = useMemo(() => {
 		return new Set(profile.data?.bits?.map((id) => id.split(":").pop()) ?? []);
 	}, [profile.data]);
 
+	/**
+	 * Custom bits are a user-owned library — the whole catalog lists them so
+	 * credentials are entered once — but a model only counts as "mine" once it
+	 * is added to the active profile, exactly like a public bit.
+	 */
+	const isMine = useCallback(
+		(bit: IBit) => profileBitIds.has(bit.id),
+		[profileBitIds],
+	);
+
 	const filteredModels = useMemo(() => {
 		let models = searchTerm.trim()
 			? ((searchResults as IBit[]) ?? [])
-			: (foundBits.data ?? []);
+			: allBits;
 		models = models.filter((bit) => !blacklist.has(bit.id));
 		models = models.filter((bit) => bit.meta?.en !== undefined);
 
@@ -408,7 +456,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 		return models;
 	}, [
-		foundBits.data,
+		allBits,
 		searchResults,
 		searchTerm,
 		inputModalities,
@@ -425,10 +473,114 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		webMode,
 	]);
 
+	const rails = useMemo(() => {
+		const defs: {
+			id: string;
+			label: string;
+			icon: LucideIcon;
+			color: string;
+			match: (bit: IBit) => boolean;
+		}[] = [
+			{
+				id: "rail-chat",
+				label: "Chat & reasoning",
+				icon: MessageSquare,
+				color: "var(--m-chat)",
+				match: (b) => LLM_LIKE_TYPES.has(b.type),
+			},
+			{
+				id: "rail-stt",
+				label: "Speech-to-text",
+				icon: Mic,
+				color: "var(--m-audio)",
+				match: (b) => b.type === IBitTypes.Stt,
+			},
+			{
+				id: "rail-tts",
+				label: "Text-to-speech",
+				icon: AudioLines,
+				color: "var(--m-speech)",
+				match: (b) => b.type === IBitTypes.Tts,
+			},
+			{
+				id: "rail-embed",
+				label: "Embeddings",
+				icon: FileSearchIcon,
+				color: "var(--m-embed)",
+				match: (b) =>
+					b.type === IBitTypes.Embedding || b.type === IBitTypes.ImageEmbedding,
+			},
+		];
+		const claimed = new Set<string>();
+		const built = defs.map((def) => {
+			const items = filteredModels.filter((bit) => {
+				if (!def.match(bit)) return false;
+				claimed.add(bit.id);
+				return true;
+			});
+			return { ...def, items };
+		});
+		const rest = filteredModels.filter((bit) => !claimed.has(bit.id));
+		if (rest.length > 0) {
+			built.push({
+				id: "rail-other",
+				label: "Other models",
+				icon: Sparkles,
+				color: "var(--m-video)",
+				match: () => true,
+				items: rest,
+			});
+		}
+		return built;
+	}, [filteredModels]);
+
+	const profileModels = useMemo(
+		() => filteredModels.filter(isMine),
+		[filteredModels, isMine],
+	);
+
+	const profileGlyphModels = useMemo(
+		() => allBits.filter(isMine),
+		[allBits, isMine],
+	);
+
+	const [activeRail, setActiveRail] = useState<string>("rail-profile");
+	const railIds = useMemo(
+		() => [
+			"rail-profile",
+			...rails.filter((r) => r.items.length).map((r) => r.id),
+		],
+		[rails],
+	);
+
+	useEffect(() => {
+		const sections = railIds
+			.map((id) => document.getElementById(id))
+			.filter((el): el is HTMLElement => el !== null);
+		if (sections.length === 0) return;
+		const observer = new IntersectionObserver(
+			(entries) => {
+				for (const entry of entries) {
+					if (entry.isIntersecting) setActiveRail(entry.target.id);
+				}
+			},
+			{ rootMargin: "-140px 0px -58% 0px", threshold: 0 },
+		);
+		for (const section of sections) observer.observe(section);
+		return () => observer.disconnect();
+	}, [railIds]);
+
+	const jumpToRail = useCallback((id: string) => {
+		setActiveRail(id);
+		document.getElementById(id)?.scrollIntoView({
+			behavior: "smooth",
+			block: "start",
+		});
+	}, []);
+
 	const modalityCounts = useMemo(() => {
 		const counts = { text: 0, image: 0, embedding: 0, speech: 0, total: 0 };
-		if (!foundBits.data) return counts;
-		const validBits = foundBits.data.filter((bit) => !blacklist.has(bit.id));
+		const validBits = allBits.filter((bit) => !blacklist.has(bit.id));
 		counts.total = validBits.length;
 		for (const bit of validBits) {
 			const modality = getBitModality(bit.type);
@@ -439,7 +591,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			if (modality.output === "speech") counts.speech++;
 		}
 		return counts;
-	}, [foundBits.data, blacklist]);
+	}, [allBits, blacklist]);
 
 	const activeFilterCount = useMemo(() => {
 		let count = 0;
@@ -497,6 +649,54 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			factuality: 0,
 		});
 	}, [maxContextLength]);
+
+	const openAddCustomModel = useCallback(() => {
+		setEditingCustomBit(null);
+		setCustomDialogOpen(true);
+	}, []);
+
+	const openEditCustomModel = useCallback((bit: IBit) => {
+		setEditingCustomBit(bit);
+		setCustomDialogOpen(true);
+	}, []);
+
+	const confirmDeleteCustomModel = useCallback(async () => {
+		const target = deleteCustomTarget;
+		if (!target) return;
+		setDeleteCustomTarget(null);
+		try {
+			await backend.bitState.deleteCustomBit(target.id);
+			await Promise.all([
+				invalidate(backend.bitState.listCustomBits, []),
+				invalidate(backend.bitState.getProfileBits, []),
+			]);
+			toast.success("Custom model deleted");
+		} catch (error) {
+			toast.error(
+				`Failed to delete model: ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+			);
+		}
+	}, [deleteCustomTarget, backend.bitState, invalidate]);
+
+	const renderCard = useCallback(
+		(bit: IBit) => {
+			const custom = customBitIds.has(bit.id);
+			return (
+				<ModelCard
+					key={bit.id}
+					bit={bit}
+					variant="grid"
+					isCustom={custom}
+					onClick={() => setSelectedModel(bit)}
+					onEdit={custom ? openEditCustomModel : undefined}
+					onDelete={custom ? setDeleteCustomTarget : undefined}
+				/>
+			);
+		},
+		[customBitIds, openEditCustomModel],
+	);
 
 	const filterContent = (
 		<div className="space-y-5">
@@ -619,12 +819,36 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	);
 
 	return (
-		<main className="flex flex-col w-full flex-1 min-h-0">
-			<div
-				className={`pt-5 pb-3 space-y-3 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
-			>
-				<div className="flex items-center gap-2">
-					<div className="relative flex-1 max-w-lg">
+		<main className="flex min-h-0 w-full flex-1 flex-col overflow-y-auto">
+			<div className="sticky top-0 z-30 border-b border-border/60 bg-background/85 backdrop-blur-md backdrop-saturate-150">
+				<div
+					className={`mx-auto flex w-full max-w-[1240px] flex-wrap items-center gap-3 pt-3 pb-2 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+				>
+					<div className="mr-auto flex min-w-0 items-center gap-2.5">
+						<span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-tertiary to-primary text-primary-foreground shadow-md shadow-primary/30">
+							<Boxes className="h-[18px] w-[18px]" />
+						</span>
+						<span className="flex min-w-0 flex-col leading-tight">
+							<span className="text-[15px] font-bold tracking-tight">
+								Model Catalog
+							</span>
+							<span className="text-[11.5px] text-muted-foreground/70">
+								Browse by capability
+							</span>
+						</span>
+					</div>
+
+					<ProfileStrip
+						models={profileGlyphModels}
+						active={showInProfileOnly}
+						onToggle={() => setShowInProfileOnly((v) => !v)}
+					/>
+				</div>
+
+				<div
+					className={`mx-auto flex w-full max-w-[1240px] items-center gap-2 pb-2 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+				>
+					<div className="relative min-w-0 flex-1">
 						<Search className="absolute left-4 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/40 pointer-events-none" />
 						<Input
 							placeholder="Search…"
@@ -648,6 +872,16 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 							</button>
 						)}
 					</div>
+
+					<Button
+						onClick={openAddCustomModel}
+						size="sm"
+						className="h-9 shrink-0 gap-1.5 rounded-full px-3.5 text-xs"
+					>
+						<Plus className="h-3.5 w-3.5" />
+						<span className="hidden sm:inline">Add custom model</span>
+						<span className="sm:hidden">Add</span>
+					</Button>
 
 					<div className="flex items-center gap-1">
 						<Select
@@ -727,6 +961,38 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 					</div>
 				</div>
 
+				{/* Jump to a capability */}
+				<nav
+					aria-label="Jump to a capability"
+					className={`mx-auto flex w-full max-w-[1240px] gap-2 overflow-x-auto pb-2.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+				>
+					<RailChip
+						icon={Sparkles}
+						label="Your profile"
+						count={profileModels.length}
+						owned={profileModels.length}
+						active={activeRail === "rail-profile"}
+						onClick={() => jumpToRail("rail-profile")}
+					/>
+					{rails
+						.filter((rail) => rail.items.length > 0)
+						.map((rail) => (
+							<RailChip
+								key={rail.id}
+								icon={rail.icon}
+								label={rail.label}
+								count={rail.items.length}
+								owned={rail.items.filter(isMine).length}
+								active={activeRail === rail.id}
+								onClick={() => jumpToRail(rail.id)}
+							/>
+						))}
+				</nav>
+			</div>
+
+			<div
+				className={`mx-auto w-full max-w-[1240px] pt-4 pb-3 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+			>
 				{/* Quick modality chips */}
 				<div className="flex items-center gap-1.5 flex-wrap">
 					<ModalityChip
@@ -792,9 +1058,9 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				</SheetContent>
 			</Sheet>
 
-			{/* Model grid */}
+			{/* Rails */}
 			<div
-				className={`flex-1 overflow-auto pb-8 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+				className={`mx-auto flex w-full max-w-[1240px] flex-1 flex-col gap-8 pb-10 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
 			>
 				{foundBits.isLoading ? (
 					<ModelCatalogSkeleton />
@@ -826,26 +1092,64 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						)}
 					</div>
 				) : (
-					<div
-						className={viewMode === "grid" ? "grid gap-3" : "space-y-2"}
-						style={
-							viewMode === "grid"
-								? {
-										gridTemplateColumns:
-											"repeat(auto-fill, minmax(280px, 1fr))",
-									}
-								: undefined
-						}
-					>
-						{filteredModels.map((bit) => (
-							<ModelCard
-								key={bit.id}
-								bit={bit}
-								variant={viewMode}
-								onClick={() => setSelectedModel(bit)}
-							/>
-						))}
-					</div>
+					<>
+						{/* What you own outranks the catalog, so it comes first */}
+						<ModelRail
+							id="rail-profile"
+							label="In your profile"
+							icon={Sparkles}
+							color="var(--primary)"
+							items={profileModels}
+							highlight
+							note={
+								profileModels.length
+									? "Available to every flow in this workspace"
+									: undefined
+							}
+							renderCard={renderCard}
+							empty={
+								<div className="flex flex-col items-center gap-2.5 rounded-2xl border border-dashed border-border bg-muted/30 px-6 py-9 text-center">
+									<span className="grid h-11 w-11 place-items-center rounded-xl border border-primary/30 bg-primary/10 text-primary">
+										<Sparkles className="h-5 w-5" />
+									</span>
+									<h3 className="text-[15px] font-bold">
+										{searchTerm || activeFilterCount > 0
+											? "Nothing here matches"
+											: "Your profile is empty"}
+									</h3>
+									<p className="max-w-[42ch] text-[13px] leading-relaxed text-muted-foreground">
+										{searchTerm || activeFilterCount > 0
+											? "No model in your profile matches the current search or filters."
+											: "Add a model and it becomes available to every flow in this workspace. Start with one from the rails below."}
+									</p>
+								</div>
+							}
+						/>
+
+						{rails
+							.filter((rail) => rail.items.length > 0)
+							.map((rail) => (
+								<ModelRail
+									key={rail.id}
+									id={rail.id}
+									label={rail.label}
+									icon={rail.icon}
+									color={rail.color}
+									items={rail.items}
+									renderCard={renderCard}
+								/>
+							))}
+
+						<footer className="flex flex-wrap items-center gap-2.5 pt-1 text-xs text-muted-foreground/70">
+							<span>
+								{filteredModels.length} of {allBits.length} models
+							</span>
+							<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+							<span>{profileGlyphModels.length} in your profile</span>
+							<span className="h-1 w-1 rounded-full bg-muted-foreground/40" />
+							<span>On-device, hosted &amp; remote deployments</span>
+						</footer>
+					</>
 				)}
 			</div>
 
@@ -855,7 +1159,206 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				onOpenChange={(open) => !open && setSelectedModel(null)}
 				webMode={webMode}
 			/>
+
+			<AddCustomModelDialog
+				open={customDialogOpen}
+				onOpenChange={setCustomDialogOpen}
+				existingBit={editingCustomBit}
+				webMode={webMode}
+			/>
+
+			<AlertDialog
+				open={deleteCustomTarget !== null}
+				onOpenChange={(open) => !open && setDeleteCustomTarget(null)}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle>Delete custom model?</AlertDialogTitle>
+						<AlertDialogDescription>
+							{`"${deleteCustomTarget?.meta?.en?.name ?? "This model"}" and its stored credentials will be removed. Flows using it will no longer resolve this model.`}
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<AlertDialogFooter>
+						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogAction onClick={confirmDeleteCustomModel}>
+							Delete
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</main>
+	);
+}
+
+/** Horizontally scrolling row of model cards, one per capability. */
+function ModelRail({
+	id,
+	label,
+	icon: Icon,
+	color,
+	items,
+	note,
+	highlight = false,
+	empty,
+	renderCard,
+}: Readonly<{
+	id: string;
+	label: string;
+	icon: LucideIcon;
+	color: string;
+	items: IBit[];
+	note?: string;
+	highlight?: boolean;
+	empty?: React.ReactNode;
+	renderCard: (bit: IBit) => React.ReactNode;
+}>) {
+	return (
+		<section
+			id={id}
+			aria-labelledby={`${id}-heading`}
+			className={`scroll-mt-[150px] ${
+				highlight
+					? "rounded-3xl border border-primary/30 bg-gradient-to-br from-primary/[0.07] to-transparent px-4 pt-4 pb-1 sm:px-5"
+					: ""
+			}`}
+		>
+			<div className="mb-3 flex items-center justify-between gap-3">
+				<h2
+					id={`${id}-heading`}
+					className="m-0 flex items-center gap-2.5 text-[17px] font-bold tracking-tight"
+				>
+					<span
+						style={{ "--rc": color } as React.CSSProperties}
+						className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[9px] border border-[color-mix(in_srgb,var(--rc)_26%,transparent)] bg-[color-mix(in_srgb,var(--rc)_12%,transparent)] text-[var(--rc)]"
+					>
+						<Icon className="h-4 w-4" />
+					</span>
+					{label}
+					<span className="rounded-full border border-border/60 bg-muted/50 px-2 py-0.5 font-mono text-[11px] font-semibold tabular-nums text-muted-foreground">
+						{items.length}
+					</span>
+				</h2>
+				{note && (
+					<span className="hidden whitespace-nowrap text-xs text-muted-foreground/70 sm:inline">
+						{note}
+					</span>
+				)}
+			</div>
+			{items.length > 0 ? (
+				<ul
+					// biome-ignore lint/a11y/noNoninteractiveTabindex: the rail scrolls horizontally, so keyboard users must be able to focus it
+					tabIndex={0}
+					aria-label={`${label} — scroll horizontally`}
+					className="-mx-1 m-0 flex list-none snap-x snap-proximity gap-3.5 overflow-x-auto px-1 pt-1.5 pb-4 focus-visible:outline-2 focus-visible:outline-primary"
+				>
+					{items.map((bit) => (
+						<li key={bit.id} className="w-[268px] shrink-0 snap-start">
+							{renderCard(bit)}
+						</li>
+					))}
+				</ul>
+			) : (
+				<div className="pb-4">{empty}</div>
+			)}
+		</section>
+	);
+}
+
+/** Sticky "what's in my profile right now" control: glyphs first, count second. */
+function ProfileStrip({
+	models,
+	active,
+	onToggle,
+}: Readonly<{ models: IBit[]; active: boolean; onToggle: () => void }>) {
+	const shown = models.slice(0, 4);
+	const rest = models.length - shown.length;
+	return (
+		<button
+			type="button"
+			onClick={onToggle}
+			aria-pressed={active}
+			aria-label={
+				active
+					? "Show the whole catalog"
+					: `Show only the ${models.length} models in your profile`
+			}
+			className={`flex h-[42px] shrink-0 items-center gap-2.5 rounded-xl border py-0 pr-3 pl-2.5 transition-colors ${
+				active
+					? "border-transparent bg-primary text-primary-foreground shadow-md shadow-primary/30"
+					: "border-primary/30 bg-primary/10 text-foreground hover:border-primary hover:bg-primary/15"
+			}`}
+		>
+			<Sparkles
+				className={`h-[18px] w-[18px] shrink-0 ${active ? "" : "text-primary"}`}
+			/>
+			{shown.length > 0 && (
+				<span className="flex items-center pl-1.5" aria-hidden="true">
+					{shown.map((bit) => (
+						<ProviderGlyph
+							key={bit.id}
+							bit={bit}
+							size={24}
+							className="-ml-1.5 rounded-[7px] ring-2 ring-background"
+						/>
+					))}
+					{rest > 0 && (
+						<span className="-ml-1.5 grid h-6 min-w-6 place-items-center rounded-[7px] bg-muted px-1 font-mono text-[9.5px] font-semibold tabular-nums text-muted-foreground ring-2 ring-background">
+							+{rest}
+						</span>
+					)}
+				</span>
+			)}
+			<span className="flex flex-col text-left leading-tight">
+				<span className="font-mono text-[13px] font-bold tabular-nums">
+					{models.length}
+				</span>
+				<span className="text-[10px] font-semibold uppercase tracking-wider opacity-70">
+					In profile
+				</span>
+			</span>
+		</button>
+	);
+}
+
+/** Capability jump chip with a dot when you already own models in that rail. */
+function RailChip({
+	icon: Icon,
+	label,
+	count,
+	owned,
+	active,
+	onClick,
+}: Readonly<{
+	icon: LucideIcon;
+	label: string;
+	count: number;
+	owned: number;
+	active: boolean;
+	onClick: () => void;
+}>) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			aria-pressed={active}
+			className={`flex h-8 shrink-0 snap-start items-center gap-2 whitespace-nowrap rounded-full border px-3.5 text-[13px] font-semibold transition-colors ${
+				active
+					? "border-transparent bg-primary text-primary-foreground"
+					: "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground"
+			}`}
+		>
+			<Icon className="h-3.5 w-3.5" />
+			<span>{label}</span>
+			{owned > 0 && (
+				<span
+					title={`${owned} in your profile`}
+					className={`h-1.5 w-1.5 rounded-full ${active ? "bg-current" : "bg-primary"}`}
+				/>
+			)}
+			<span className="font-mono text-[10px] tabular-nums opacity-70">
+				{count}
+			</span>
+		</button>
 	);
 }
 
@@ -899,9 +1402,13 @@ function FilterCheckbox({
 	iconColor: string;
 	label: string;
 }) {
+	const id = useId();
 	return (
-		<label className="flex items-center gap-2.5 text-sm cursor-pointer text-muted-foreground/70 hover:text-foreground transition-colors">
-			<Checkbox checked={checked} onCheckedChange={onCheckedChange} />
+		<label
+			htmlFor={id}
+			className="flex items-center gap-2.5 text-sm cursor-pointer text-muted-foreground/70 hover:text-foreground transition-colors"
+		>
+			<Checkbox id={id} checked={checked} onCheckedChange={onCheckedChange} />
 			<Icon className={`h-3.5 w-3.5 ${iconColor}`} />
 			<span>{label}</span>
 		</label>

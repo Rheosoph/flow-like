@@ -148,6 +148,21 @@
       "description": "Where this event runs (Local/offline vs Remote/server). Inherited from\nthe board's `execution_mode` when that mode is not Hybrid.",
       "$ref": "#/$defs/EventExecutionMode",
       "default": "Local"
+    },
+    "exposure": {
+      "description": "Whether the event is publicly reachable or only callable by connected\napps via the app-connection proxy. Only meaningful for REST/MCP events.",
+      "$ref": "#/$defs/EventExposure",
+      "default": "PUBLIC"
+    },
+    "correlation_mappings": {
+      "description": "Process-mining case-key mappings: business key name → dot-path into\nthe invocation payload (e.g. `order_id` → `order.id`). Extracted on\nevery run so cases group by business object automatically.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": {
+        "type": "string"
+      }
     }
   },
   "required": [
@@ -444,6 +459,21 @@
           "description": "Runs on the server (cloud endpoint, cron worker, sink service).",
           "type": "string",
           "const": "Remote"
+        }
+      ]
+    },
+    "EventExposure": {
+      "description": "Where an event is reachable from. `Public` events with a REST/MCP surface\nare served on the public inbound routers with their configured auth.\n`Internal` events are only callable by connected apps through the\napp-connection proxy (gated by the connection role) and are never exposed\npublicly — so a public secret can never be bypassed via the proxy.",
+      "oneOf": [
+        {
+          "description": "Public HTTP surface (REST/MCP), protected by the event's own auth.",
+          "type": "string",
+          "const": "PUBLIC"
+        },
+        {
+          "description": "Reachable only via app connections, never publicly.",
+          "type": "string",
+          "const": "INTERNAL"
         }
       ]
     }
