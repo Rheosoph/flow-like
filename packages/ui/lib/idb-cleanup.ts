@@ -86,7 +86,16 @@ async function pruneOldViewports(maxAgeDays: number): Promise<number> {
 async function pruneOldOfflineSync(maxAgeDays: number): Promise<number> {
 	const cutoff = new Date(Date.now() - maxAgeDays * DAY_MS);
 	const old = await offlineSyncDB.commands
-		.filter((c) => c.createdAt < cutoff)
+		.filter(
+			(c) =>
+				c.createdAt < cutoff &&
+				(c.commands?.length ?? 0) === 0 &&
+				(c.chunks?.length ?? 0) === 0 &&
+				!c.pendingReceiptAck &&
+				(c.deferredReceiptAcks?.length ?? 0) === 0 &&
+				!c.blockedReason &&
+				!c.idempotencyKey?.startsWith("flowpilot-board-edit:"),
+		)
 		.primaryKeys();
 	if (old.length > 0) await offlineSyncDB.commands.bulkDelete(old);
 	return old.length;

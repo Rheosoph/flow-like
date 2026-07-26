@@ -733,6 +733,18 @@ pub async fn global_chat(
                     }
                 }
                 result = &mut done_rx => {
+                    // Drain any buffered frames the task produced before completing so
+                    // trailing incremental tokens are not dropped by the select! race.
+                    while let Ok(frame) = frames_rx.try_recv() {
+                        match frame {
+                            GlobalChatFrame::Token(token) => {
+                                yield Ok::<Event, Infallible>(Event::default().event("token").data(token));
+                            }
+                            GlobalChatFrame::ToolRequest(request) => {
+                                yield Ok::<Event, Infallible>(Event::default().event("tool_request").data(request.to_string()));
+                            }
+                        }
+                    }
                     match result {
                         Ok(Ok(resp)) => {
                             let json = serde_json::to_string(&resp).unwrap_or_else(|_| "{}".to_string());

@@ -9,6 +9,8 @@ export interface IHistoryStacks {
 	 * disables staleness enforcement until the next stamped operation.
 	 */
 	boardStamp?: string;
+	/** Legacy stack-local receipt ids; new durable markers live in a separate IndexedDB table. */
+	deliveryIds?: string[];
 }
 
 export interface HistoryTakeResult {
@@ -40,6 +42,7 @@ export const boardFingerprint = (
 export const emptyStacks = (): IHistoryStacks => ({
 	undoStack: [],
 	redoStack: [],
+	deliveryIds: [],
 });
 
 export const isHistoryStale = (
@@ -76,6 +79,7 @@ export const pushBatch = (
 	return {
 		undoStack: capUndoStack(newUndoStack),
 		redoStack: [],
+		deliveryIds: stacks.deliveryIds,
 	};
 };
 

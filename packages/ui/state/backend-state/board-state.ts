@@ -16,6 +16,9 @@ import type {
 } from "../../lib";
 import type { IJwks, IRealtimeAccess } from "../../lib";
 import type {
+	BoardEditJob,
+	BoardEditJobDeliveryClaim,
+	BoardEditJobResolution,
 	ChatImage,
 	CopilotScope,
 	CopilotToolContext,
@@ -43,6 +46,10 @@ export interface IApplyFlowIrCommitResponse extends IApplyFlowScriptResponse {
 	status: "applied" | "stale" | "error";
 	code?: string;
 	message: string;
+	/** True when native Apply returned a persisted receipt without mutating now. */
+	replayed?: boolean;
+	/** True only after durable remote/outbox sync and idempotent renderer history recording. */
+	delivery_complete?: boolean;
 }
 
 export interface IFlowScriptDiagnostic {
@@ -52,6 +59,15 @@ export interface IFlowScriptDiagnostic {
 	/** 1-based column number. */
 	col: number;
 	severity: "error" | "warning";
+}
+
+export interface ICheckFlowScriptReconcileResponse {
+	parse_valid: boolean;
+	reconcile_valid: boolean;
+	idempotent: boolean;
+	command_count: number;
+	corrections: string[];
+	diagnostics: string[];
 }
 
 export interface IBoardState {
@@ -182,6 +198,16 @@ export interface IBoardState {
 	 */
 	lintFlowScript?(flowscript: string): Promise<IFlowScriptDiagnostic[]>;
 
+	/**
+	 * Compile FlowScript against the authoritative live board and app-scoped catalog without
+	 * applying it. Desktop-only; intended for post-generation validation and diagnostics.
+	 */
+	checkFlowScriptReconcile?(
+		appId: string,
+		boardId: string,
+		flowscript: string,
+	): Promise<ICheckFlowScriptReconcileResponse>;
+
 	getExecutionElements(
 		appId: string,
 		boardId: string,
@@ -242,7 +268,41 @@ export interface IBoardState {
 	applyFlowIrCommit?(
 		appId: string,
 		token: FlowIrCommitToken,
+		/** Stable native job id used to deduplicate renderer/server receipt replay. */
+		deliveryId?: string,
 	): Promise<IApplyFlowIrCommitResponse>;
+
+	/** Create/recover a provider-neutral host review for an exact compiled workflow batch. */
+	createBoardEditJob?(
+		appId: string,
+		requestId: string | undefined,
+		token: FlowIrCommitToken,
+	): Promise<BoardEditJob>;
+
+	/** Rehydrate unresolved reviews after a panel navigation or renderer reload. */
+	listBoardEditJobs?(
+		appId?: string,
+		boardId?: string,
+		includeTerminal?: boolean,
+	): Promise<BoardEditJob[]>;
+
+	/** Read one native review job, primarily for idempotent resolution polling. */
+	getBoardEditJob?(jobId: string): Promise<BoardEditJob | undefined>;
+
+	/** Apply or deny the exact retained batch owned by the native job. */
+	resolveBoardEditJob?(
+		jobId: string,
+		approved: boolean,
+	): Promise<BoardEditJobResolution>;
+
+	/** Claim one renderer delivery of an already-applied native receipt. */
+	claimBoardEditJobDelivery?(jobId: string): Promise<BoardEditJobDeliveryClaim>;
+
+	/** Mark renderer sync/history replay complete for the exact delivery lease. */
+	ackBoardEditJobDelivery?(
+		jobId: string,
+		deliveryLeaseId: string,
+	): Promise<BoardEditJob>;
 
 	/** Pre-run analysis: get required runtime variables and OAuth for a board */
 	prerunBoard?(

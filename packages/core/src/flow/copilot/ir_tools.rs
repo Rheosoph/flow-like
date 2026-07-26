@@ -35,7 +35,7 @@ use super::provider::{CatalogProvider, metadata_to_signature};
 use super::tools::{
     FlowScriptCandidateProfile, FlowScriptCandidateRegression, board_has_no_nodes,
     detect_flowscript_candidate_regression, flowscript_workspace_tag, profile_flowscript_candidate,
-    render_edit_flowscript_result,
+    render_committed_flowscript_result,
 };
 use super::types::{BoardCommand, FlowIrCommitToken, NodeMetadata, PinMetadata};
 use crate::flow::ast::{
@@ -1602,12 +1602,17 @@ impl FlowIrDraftStore {
             );
         }
         if retained.evaluation.commands.is_empty() {
-            let mut response = FlowScriptDraftResponse::for_draft(
-                "no_changes",
-                "FlowScript is valid but derives no board changes.",
-                args.draft_id,
-                &retained,
-            );
+            // On a non-empty board this is the SUCCESS shape of a repair round: everything the
+            // source describes is already applied. Without saying so, hosts and models read
+            // "no changes" as "nothing was accomplished" and burn their remaining budget
+            // rewriting an already-correct board.
+            let message = if board.nodes.is_empty() {
+                "FlowScript is valid but derives no board changes."
+            } else {
+                "FlowScript is valid and derives no board changes: everything this source describes is already applied and persisted on the live board. Treat this as success — do not rewrite or repair further; continue with registration/summary."
+            };
+            let mut response =
+                FlowScriptDraftResponse::for_draft("no_changes", message, args.draft_id, &retained);
             response.code = Some("FLOWSCRIPT_NO_CHANGES".to_string());
             return response;
         }
@@ -1750,6 +1755,45 @@ impl FlowIrDraftStore {
         if board_fingerprint(board) != snapshot.base_fingerprint {
             self.reopen_request_acceptance_contract(binding, &snapshot);
             return flowscript_base_revision_conflict_response(args.draft_id, &snapshot);
+        }
+        // An unchecked head used to bounce with FLOWSCRIPT_CHECK_REQUIRED — a full model round
+        // spent asking for work the store can do right here. Run the same check inline: the
+        // committed batch is exactly what this evaluation derives, so the checked-commit
+        // guarantee is unchanged, and a failing inline check returns the same validation_errors
+        // response a separate check would have.
+        let head_is_checked = snapshot.checked.as_ref().is_some_and(|checked| {
+            checked.revision == snapshot.revision
+                && checked.board_fingerprint == snapshot.base_fingerprint
+        });
+        if !head_is_checked {
+            let catalog_fingerprint = flowscript_catalog_fingerprint(catalog);
+            if snapshot.evaluation_catalog_fingerprint != catalog_fingerprint {
+                snapshot.evaluation = self.evaluate_flowscript(
+                    board,
+                    catalog,
+                    &snapshot.source,
+                    snapshot.mode,
+                    Some(&snapshot.request_acceptance_contract),
+                );
+                snapshot.evaluation_catalog_fingerprint = catalog_fingerprint.clone();
+            }
+            if !snapshot.evaluation.is_valid() {
+                // Shape this exactly like a failing check_flowscript: a special code here reads
+                // as a mechanical "you must call check" failure and makes models/orchestrators
+                // stop instead of repairing the listed diagnostics.
+                return FlowScriptDraftResponse::for_draft(
+                    "validation_errors",
+                    "Commit ran the required check inline and it failed; nothing was queued. Apply a unique text patch to this retained revision, then commit again.",
+                    args.draft_id,
+                    &snapshot,
+                );
+            }
+            snapshot.checked = Some(CheckedFlowScriptRevision {
+                revision: snapshot.revision,
+                board_fingerprint: snapshot.base_fingerprint.clone(),
+                catalog_fingerprint,
+                commands: snapshot.evaluation.commands.clone(),
+            });
         }
         let Some(checked) = snapshot.checked.as_ref().filter(|checked| {
             checked.revision == snapshot.revision
@@ -3642,6 +3686,55 @@ impl FlowIrDraftStore {
                     && draft.pending_claim_id.as_deref() == Some(claim_id)
                     && draft.pending_commands.is_some())
                 .then_some(draft.mode == FlowIrDraftMode::Replace)
+            })
+        })
+    }
+
+    /// Atomically clone the exact retained batch and its host-derived replacement policy when the
+    /// live board and every claim field still match. Hosts persisting a review for cross-process
+    /// delivery must read these together so a concurrent disposition can never pair commands from
+    /// one claim state with policy from another.
+    pub fn pending_commit_payload_if_current(
+        &self,
+        board: &Board,
+        draft_id: &str,
+        revision: u64,
+        base_fingerprint: &str,
+        claim_id: &str,
+    ) -> Option<(Vec<BoardCommand>, bool)> {
+        if board_fingerprint(board) != base_fingerprint {
+            return None;
+        }
+        let typed = self.drafts.lock().ok().and_then(|drafts| {
+            let draft = drafts.get(draft_id.trim())?;
+            (draft.revision == revision
+                && draft.committed_revision == Some(revision)
+                && draft.pending_revision == Some(revision)
+                && draft.base_fingerprint == base_fingerprint
+                && draft.pending_claim_id.as_deref() == Some(claim_id))
+            .then(|| {
+                draft
+                    .pending_commands
+                    .clone()
+                    .map(|commands| (commands, draft.mode == FlowIrDraftMode::Replace))
+            })
+            .flatten()
+        });
+        typed.or_else(|| {
+            self.source_drafts.lock().ok().and_then(|drafts| {
+                let draft = drafts.get(draft_id.trim())?;
+                (draft.revision == revision
+                    && draft.committed_revision == Some(revision)
+                    && draft.pending_revision == Some(revision)
+                    && draft.base_fingerprint == base_fingerprint
+                    && draft.pending_claim_id.as_deref() == Some(claim_id))
+                .then(|| {
+                    draft
+                        .pending_commands
+                        .clone()
+                        .map(|commands| (commands, draft.mode == FlowIrDraftMode::Replace))
+                })
+                .flatten()
             })
         })
     }
@@ -8922,7 +9015,10 @@ fn module_scope_items(module: &FlowIrModule) -> HashMap<String, usize> {
     items
 }
 
-fn board_fingerprint(board: &Board) -> String {
+/// Stable semantic board fingerprint shared by retained compiler claims and provider-neutral
+/// session manifests. Keeping one implementation prevents an adapter from auditing a different
+/// base than the exact CAS token used at Apply time.
+pub fn board_fingerprint(board: &Board) -> String {
     let source = board_to_flowscript(
         board,
         &RenderOptions {
@@ -9260,8 +9356,12 @@ impl FlowScriptDraftResponse {
                 corrections: self.corrections.clone(),
                 diagnostics: Vec::new(),
             };
-            let legacy =
-                render_edit_flowscript_result(source, &result, board_has_no_nodes(board), true);
+            let legacy = render_committed_flowscript_result(
+                source,
+                &result,
+                board_has_no_nodes(board),
+                true,
+            );
             let envelope = self.model_envelope();
             return format!(
                 "{legacy}\n<flowscript_commit_result>{envelope}</flowscript_commit_result>"
@@ -9623,7 +9723,7 @@ impl FlowIrCommitResult {
                 corrections: Vec::new(),
                 diagnostics: Vec::new(),
             };
-            let legacy = render_edit_flowscript_result(
+            let legacy = render_committed_flowscript_result(
                 flowscript,
                 &result,
                 board_has_no_nodes(board),
@@ -10394,6 +10494,7 @@ mod tests {
             log_level: LogLevel::Info,
             execution_mode: ExecutionMode::Hybrid,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             layers: HashMap::new(),
             page_ids: Vec::new(),
             hash: None,
@@ -14130,6 +14231,28 @@ eventsSimple() {
                 &claim_id,
             ),
             Some(true),
+        );
+        let (retained_commands, replacement_mode) = store
+            .pending_commit_payload_if_current(
+                &board,
+                "replacement-review",
+                0,
+                &base_fingerprint,
+                &claim_id,
+            )
+            .expect("batch and policy are read from one claim state");
+        assert!(!retained_commands.is_empty());
+        assert!(replacement_mode);
+        assert!(
+            store
+                .pending_commit_payload_if_current(
+                    &board,
+                    "replacement-review",
+                    0,
+                    &base_fingerprint,
+                    "forged-claim",
+                )
+                .is_none()
         );
         assert!(
             store

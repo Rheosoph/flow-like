@@ -31,6 +31,15 @@ use tracing::instrument;
 pub mod cleanup;
 pub mod commands;
 
+/// Reserved board-ref namespace for host bookkeeping that must be persisted atomically with a
+/// board mutation but must never participate in FlowScript, semantic fingerprints, or user-facing
+/// context. Values under this prefix are opaque to the workflow engine.
+pub const INTERNAL_BOARD_REF_PREFIX: &str = "__flow_like_internal_v1/";
+
+pub fn is_internal_board_ref(key: &str) -> bool {
+    key.starts_with(INTERNAL_BOARD_REF_PREFIX)
+}
+
 #[derive(Debug, Clone)]
 pub enum BoardParent {
     App(Weak<Mutex<App>>),
@@ -203,6 +212,11 @@ pub struct Board {
     pub log_level: LogLevel,
     pub execution_mode: ExecutionMode,
     pub refs: HashMap<String, String>,
+    /// Persisted host bookkeeping, intentionally excluded from Board JSON and all semantic
+    /// workflow surfaces. External crates can only access this map through the prefix-validating
+    /// methods on `Board`.
+    #[serde(skip)]
+    pub(crate) internal_refs: HashMap<String, String>,
     pub layers: HashMap<String, Layer>,
     pub page_ids: Vec<String>,
     pub hash: Option<u64>,
@@ -261,6 +275,14 @@ impl Board {
     /// Create a new board with a unique ID
     /// The board is created in the base directory appended with the ID
     pub fn new(id: Option<String>, base_dir: Path, app_state: Arc<FlowLikeState>) -> Self {
+        let mut board = Self::new_detached(id, base_dir);
+        board.app_state = Some(app_state);
+        board
+    }
+
+    /// Create a board without runtime state. Deterministic transforms, importers, and fixtures can
+    /// use this constructor and attach credentials before calling storage or execution methods.
+    pub fn new_detached(id: Option<String>, base_dir: Path) -> Self {
         let id = id.unwrap_or(create_id());
         let board_dir = base_dir;
 
@@ -282,10 +304,11 @@ impl Board {
             page_ids: Vec::new(),
             hash: None,
             refs: HashMap::new(),
+            internal_refs: HashMap::new(),
             parent: None,
             board_dir,
             logic_nodes: HashMap::new(),
-            app_state: Some(app_state.clone()),
+            app_state: None,
         };
         board.hash();
         board
@@ -294,6 +317,74 @@ impl Board {
     pub fn mark_changed(&mut self) {
         self.updated_at = SystemTime::now();
         self.hash();
+    }
+
+    /// Read one host-owned board reference. Public workflow refs are deliberately inaccessible
+    /// through this API, and a non-reserved key can never alias into the internal namespace.
+    pub fn internal_ref(&self, key: &str) -> Option<&str> {
+        is_internal_board_ref(key)
+            .then(|| self.internal_refs.get(key).map(String::as_str))
+            .flatten()
+    }
+
+    /// Persist one host-owned board reference after enforcing the reserved namespace boundary.
+    pub fn insert_internal_ref(
+        &mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> flow_like_types::Result<Option<String>> {
+        let key = key.into();
+        if !is_internal_board_ref(&key) {
+            return Err(flow_like_types::anyhow!(
+                "internal board reference keys must start with '{INTERNAL_BOARD_REF_PREFIX}'"
+            ));
+        }
+        Ok(self.internal_refs.insert(key, value.into()))
+    }
+
+    /// Remove one host-owned board reference. Non-reserved keys are never removed by this API.
+    pub fn remove_internal_ref(&mut self, key: &str) -> Option<String> {
+        is_internal_board_ref(key)
+            .then(|| self.internal_refs.remove(key))
+            .flatten()
+    }
+
+    /// Iterate over one reserved sub-namespace without exposing the backing map for mutation.
+    pub fn internal_refs_with_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+    ) -> impl Iterator<Item = (&'a str, &'a str)> + 'a {
+        let valid_prefix = is_internal_board_ref(prefix);
+        self.internal_refs.iter().filter_map(move |(key, value)| {
+            (valid_prefix && key.starts_with(prefix)).then_some((key.as_str(), value.as_str()))
+        })
+    }
+
+    /// Retain selected values in one reserved sub-namespace while leaving every other host-owned
+    /// namespace untouched.
+    pub fn retain_internal_refs_with_prefix<F>(
+        &mut self,
+        prefix: &str,
+        mut retain: F,
+    ) -> flow_like_types::Result<()>
+    where
+        F: FnMut(&str, &str) -> bool,
+    {
+        if !is_internal_board_ref(prefix) {
+            return Err(flow_like_types::anyhow!(
+                "internal board reference prefixes must start with '{INTERNAL_BOARD_REF_PREFIX}'"
+            ));
+        }
+        self.internal_refs
+            .retain(|key, value| !key.starts_with(prefix) || retain(key.as_str(), value.as_str()));
+        self.internal_refs.shrink_to_fit();
+        Ok(())
+    }
+
+    /// Remove all host bookkeeping before a board is copied into a semantic artifact such as a
+    /// template, immutable published version, or fork.
+    pub fn clear_internal_refs(&mut self) {
+        self.internal_refs.clear();
     }
 
     /// Derives a governed ontology action's parameter schema from the start
@@ -386,7 +477,11 @@ impl Board {
         hasher.append(&[self.log_level.to_u8()]);
         hasher.append(&[execution_mode_marker(&self.execution_mode)]);
 
-        let mut refs = self.refs.iter().collect::<Vec<_>>();
+        let mut refs = self
+            .refs
+            .iter()
+            .filter(|(key, _)| !is_internal_board_ref(key))
+            .collect::<Vec<_>>();
         refs.sort_by_key(|(key, _)| *key);
         for (key, value) in refs {
             hasher.append(key.as_bytes());
@@ -831,6 +926,7 @@ impl Board {
         // this while the floating draft still points at its previous version.
         let mut published = self.clone();
         published.version = version;
+        published.clear_internal_refs();
         published.hash();
 
         let board_version_path = self
@@ -1750,7 +1846,9 @@ impl Board {
         let to = self.board_dir.child(format!("{}.template", self.id));
         let store = self.get_store(store).await?;
 
-        let board = self.to_proto();
+        let mut template = self.clone();
+        template.clear_internal_refs();
+        let board = template.to_proto();
         compress_to_file(store.clone(), to, &board).await?;
 
         for page_id in &self.page_ids {
@@ -1780,7 +1878,9 @@ impl Board {
                 version.0, version.1, version.2
             ));
 
-        let board = self.to_proto();
+        let mut template = self.clone();
+        template.clear_internal_refs();
+        let board = template.to_proto();
         compress_to_file(store.clone(), to, &board).await?;
 
         for page_id in &self.page_ids {
@@ -1819,6 +1919,8 @@ impl Board {
                     "{}_{}_{}.template",
                     version.0, version.1, version.2
                 ));
+            let mut old_template = old_template.clone();
+            old_template.clear_internal_refs();
             compress_to_file(store.clone(), to, &old_template.to_proto()).await?;
 
             for page_id in &old_template.page_ids {
@@ -2106,6 +2208,54 @@ mod tests {
             super::Board::from_proto(flow_like_types::proto::Board::decode(&buf[..]).unwrap());
 
         assert_eq!(board.id, deser_board.id);
+    }
+
+    #[tokio::test]
+    async fn internal_refs_roundtrip_in_proto_but_not_board_json_or_semantic_hash() {
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+        let original_hash = board.content_hash();
+        let key = format!("{}test-receipt", super::INTERNAL_BOARD_REF_PREFIX);
+        board
+            .insert_internal_ref(key.clone(), "opaque")
+            .expect("reserved key");
+
+        assert_eq!(board.content_hash(), original_hash);
+        let json = serde_json::to_value(&board).expect("board JSON");
+        assert!(json.get("internal_refs").is_none());
+        assert!(
+            json.get("refs")
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|refs| !refs.contains_key(&key))
+        );
+
+        let proto = board.to_proto();
+        assert_eq!(
+            proto.internal_refs.get(&key).map(String::as_str),
+            Some("opaque")
+        );
+        let restored = super::Board::from_proto(proto);
+        assert_eq!(restored.internal_ref(&key), Some("opaque"));
+        assert!(!restored.refs.contains_key(&key));
+    }
+
+    #[tokio::test]
+    async fn legacy_prefixed_refs_migrate_to_internal_proto_storage() {
+        let state = flow_state().await;
+        let board = super::Board::new(None, Path::from("boards"), state);
+        let mut proto = board.to_proto();
+        let key = format!("{}legacy", super::INTERNAL_BOARD_REF_PREFIX);
+        proto.refs.insert(key.clone(), "receipt".to_string());
+
+        let restored = super::Board::from_proto(proto);
+        assert_eq!(restored.internal_ref(&key), Some("receipt"));
+        assert!(!restored.refs.contains_key(&key));
+        let migrated = restored.to_proto();
+        assert!(!migrated.refs.contains_key(&key));
+        assert_eq!(
+            migrated.internal_refs.get(&key).map(String::as_str),
+            Some("receipt")
+        );
     }
 
     #[tokio::test]

@@ -84,4 +84,8 @@ message Board {
   repeated string page_ids = 19;
   ExecutionMode execution_mode = 20;
   optional uint64 hash = 21;
+  // Host-owned durable bookkeeping. This is persisted with the board so a
+  // mutation and its receipt share one object-store commit, but it is not part
+  // of the workflow schema and must never be exposed through Board JSON.
+  map<string, string> internal_refs = 22;
 }

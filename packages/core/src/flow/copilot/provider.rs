@@ -1,9 +1,12 @@
 use async_trait::async_trait;
 use flow_like_ast::model::{Container, TypeRef};
 use flow_like_ast::{SigParam, Signature, to_camel_case};
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use super::declarations::{render_declaration_matches, search_declarations};
+use super::declarations::{
+    declaration_semantic_evidence, render_declaration_matches, search_declarations,
+};
 use super::search::score_catalog_metadata;
 use super::types::{NodeMetadata, PinMetadata};
 use crate::flow::node::Node;
@@ -18,6 +21,57 @@ pub(crate) const MAX_DECLARATION_PRIORITY_BLOCK_BYTES: usize = 630;
 
 pub(crate) const DECLARATION_PRIORITY_BEGIN: &str = "// <flowpilot-declaration-priority>\n";
 pub(crate) const DECLARATION_PRIORITY_END: &str = "// </flowpilot-declaration-priority>\n";
+pub(crate) const DECLARATION_RESOLUTION_PREFIX: &str = "// flowpilot.declaration-resolution/v1 ";
+
+const MIN_DECLARATION_RESOLUTION_SCORE: i32 = 90;
+const STRONG_DECLARATION_RESOLUTION_SCORE: i32 = 180;
+const MIN_DECLARATION_RESOLUTION_MARGIN: i32 = 20;
+const MAX_DECLARATION_RESOLUTION_CANDIDATES: usize = 5;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum DeclarationResolutionStatus {
+    Exact,
+    Resolved,
+    Ambiguous,
+    Unresolved,
+}
+
+impl DeclarationResolutionStatus {
+    pub(crate) fn is_confident(self) -> bool {
+        matches!(self, Self::Exact | Self::Resolved)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DeclarationResolutionCandidate {
+    pub function_name: String,
+    pub node_type: String,
+    pub score: i32,
+    pub confidence_basis_points: u16,
+    pub accepted: bool,
+    pub reason_codes: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct DeclarationResolutionMetadata {
+    pub query: String,
+    pub status: DeclarationResolutionStatus,
+    pub top_score: Option<i32>,
+    pub runner_up_score: Option<i32>,
+    pub margin: Option<i32>,
+    pub reason_codes: Vec<String>,
+    pub candidates: Vec<DeclarationResolutionCandidate>,
+}
+
+pub(crate) fn parse_declaration_resolution_metadata(
+    rendered: &str,
+) -> Option<DeclarationResolutionMetadata> {
+    rendered.lines().find_map(|line| {
+        line.strip_prefix(DECLARATION_RESOLUTION_PREFIX)
+            .and_then(|payload| serde_json::from_str(payload).ok())
+    })
+}
 
 const IMAP_CHAIN_NOTE: &str = "// IMAP: `mailImapInbox({ connection: connection, inbox: \"INBOX\" })` -> `mailImapList({ inbox: inbox, filter: \"UNSEEN\" })`; loop `controlForEach({ array: refs })`, then `emailImapInboxFetchMail({ emailRef: item.value })`; read with `emailGetContent`, `emailGetHeaders`, and `mailAddressFields`; after success use `emailImapMarkSeen({ email: item.value, markAsSeen: true })`.";
 
@@ -126,6 +180,172 @@ impl DeclarationCatalogSnapshot {
     }
 }
 
+#[derive(Debug, Clone)]
+struct AssessedDeclarationCandidate {
+    metadata_index: usize,
+    function_name: String,
+    score: i32,
+    confidence_basis_points: u16,
+    accepted: bool,
+    exact_symbol: bool,
+    reason_codes: Vec<String>,
+}
+
+fn assess_declaration_candidate(
+    query: &str,
+    metadata_index: usize,
+    snapshot: &DeclarationCatalogSnapshot,
+) -> AssessedDeclarationCandidate {
+    let metadata = &snapshot.all_metadata[metadata_index];
+    let function_name = snapshot.function_names[metadata_index].clone();
+    let evidence = declaration_semantic_evidence(
+        query,
+        &function_name,
+        &metadata.name,
+        &metadata.friendly_name,
+        &metadata.description,
+        metadata.category.as_deref(),
+        &metadata.capability_tags,
+    );
+    let lexical_score = score_catalog_metadata(metadata, query).max(0);
+    let mut score = lexical_score
+        .saturating_add((evidence.strong_matched_token_count as i32).saturating_mul(40))
+        .saturating_add(
+            (evidence
+                .matched_token_count
+                .saturating_sub(evidence.strong_matched_token_count) as i32)
+                .saturating_mul(15),
+        );
+    if evidence.exact_symbol {
+        score = 100_000;
+    }
+
+    let lexical_component = ((score.clamp(0, 200) as u32) * 2_000 / 200) as u16;
+    let confidence_basis_points = if evidence.exact_symbol {
+        10_000
+    } else {
+        (((evidence.coverage_basis_points as u32) * 5_000 / 10_000)
+            + ((evidence.strong_coverage_basis_points as u32) * 3_000 / 10_000)
+            + lexical_component as u32)
+            .min(10_000) as u16
+    };
+    let mut reason_codes = evidence.reason_codes.clone();
+    let evidence_accepts = evidence.accepts();
+    let score_accepts = score >= MIN_DECLARATION_RESOLUTION_SCORE;
+    if score_accepts {
+        reason_codes.push("calibrated_score_threshold".to_string());
+    } else if !evidence.exact_symbol {
+        reason_codes.push("lexical_score_below_threshold".to_string());
+    }
+    let accepted = evidence.exact_symbol || (evidence_accepts && score_accepts);
+
+    AssessedDeclarationCandidate {
+        metadata_index,
+        function_name,
+        score,
+        confidence_basis_points,
+        accepted,
+        exact_symbol: evidence.exact_symbol,
+        reason_codes,
+    }
+}
+
+fn declaration_resolution_metadata(
+    query: &str,
+    assessments: &[AssessedDeclarationCandidate],
+    has_ambiguous_live_symbol: bool,
+    snapshot: &DeclarationCatalogSnapshot,
+) -> DeclarationResolutionMetadata {
+    let mut ranked = assessments.to_vec();
+    ranked.sort_by(|left, right| {
+        right
+            .accepted
+            .cmp(&left.accepted)
+            .then_with(|| right.exact_symbol.cmp(&left.exact_symbol))
+            .then_with(|| {
+                right
+                    .score
+                    .cmp(&left.score)
+                    .then_with(|| left.function_name.cmp(&right.function_name))
+            })
+    });
+    let top_score = ranked.first().map(|candidate| candidate.score);
+    let runner_up_score = ranked.get(1).map(|candidate| candidate.score);
+    let margin = top_score.map(|top| top.saturating_sub(runner_up_score.unwrap_or_default()));
+    let accepted = ranked
+        .iter()
+        .filter(|candidate| candidate.accepted)
+        .collect::<Vec<_>>();
+    let exact = accepted.iter().any(|candidate| candidate.exact_symbol);
+    let weak_low_margin = accepted.first().is_some_and(|candidate| {
+        candidate.score < STRONG_DECLARATION_RESOLUTION_SCORE
+            && accepted.get(1).is_some()
+            && margin.unwrap_or_default() < MIN_DECLARATION_RESOLUTION_MARGIN
+    });
+    let status = if exact {
+        DeclarationResolutionStatus::Exact
+    } else if accepted.is_empty() {
+        if has_ambiguous_live_symbol {
+            DeclarationResolutionStatus::Ambiguous
+        } else {
+            DeclarationResolutionStatus::Unresolved
+        }
+    } else if weak_low_margin {
+        DeclarationResolutionStatus::Ambiguous
+    } else {
+        DeclarationResolutionStatus::Resolved
+    };
+    let mut reason_codes = ranked
+        .first()
+        .map(|candidate| candidate.reason_codes.clone())
+        .unwrap_or_else(|| vec!["no_live_catalog_candidate".to_string()]);
+    match status {
+        DeclarationResolutionStatus::Exact => {
+            reason_codes.push("unique_live_exact_symbol".to_string())
+        }
+        DeclarationResolutionStatus::Resolved => {
+            reason_codes.push("confident_live_resolution".to_string())
+        }
+        DeclarationResolutionStatus::Ambiguous => {
+            reason_codes.push("selection_ambiguous".to_string())
+        }
+        DeclarationResolutionStatus::Unresolved => {
+            reason_codes.push("resolver_abstained".to_string())
+        }
+    }
+    reason_codes.sort();
+    reason_codes.dedup();
+
+    DeclarationResolutionMetadata {
+        query: query.to_string(),
+        status,
+        top_score,
+        runner_up_score,
+        margin,
+        reason_codes,
+        candidates: ranked
+            .into_iter()
+            .take(MAX_DECLARATION_RESOLUTION_CANDIDATES)
+            .map(|candidate| DeclarationResolutionCandidate {
+                function_name: candidate.function_name,
+                node_type: snapshot.all_metadata[candidate.metadata_index].name.clone(),
+                score: candidate.score,
+                confidence_basis_points: candidate.confidence_basis_points,
+                accepted: candidate.accepted,
+                reason_codes: candidate.reason_codes,
+            })
+            .collect(),
+    }
+}
+
+fn render_declaration_resolution_header(metadata: &DeclarationResolutionMetadata) -> String {
+    let payload = serde_json::to_string(metadata).unwrap_or_else(|_| {
+        r#"{"status":"unresolved","reason_codes":["resolution_metadata_serialization_failed"]}"#
+            .to_string()
+    });
+    format!("{DECLARATION_RESOLUTION_PREFIX}{payload}\n")
+}
+
 fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogSnapshot) -> String {
     let embedded_matches = search_declarations(query);
     if query.trim().is_empty() {
@@ -138,8 +358,9 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
         .collect();
     let mut unavailable_function_names = Vec::new();
     let mut ambiguous_function_names = Vec::new();
+    let mut assessments = Vec::new();
     let mut live_signature_override_count = 0usize;
-    let declaration_matches = embedded_matches
+    let mut declaration_matches = embedded_matches
         .into_iter()
         .filter_map(
             |mut matched| match snapshot.metadata_by_function.get(&matched.function_name) {
@@ -148,7 +369,15 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
                     None
                 }
                 Some(indices) if indices.len() == 1 => {
-                    let metadata = &snapshot.all_metadata[indices[0]];
+                    let metadata_index = indices[0];
+                    let metadata = &snapshot.all_metadata[metadata_index];
+                    let assessment = assess_declaration_candidate(query, metadata_index, snapshot);
+                    let accepted = assessment.accepted;
+                    matched.score = assessment.score;
+                    assessments.push(assessment);
+                    if !accepted {
+                        return None;
+                    }
                     let signature = metadata_to_signature(metadata);
                     matched.signature_line = signature
                         .render_declaration()
@@ -168,6 +397,12 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
             },
         )
         .collect::<Vec<_>>();
+    declaration_matches.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.function_name.cmp(&right.function_name))
+    });
     unavailable_function_names.sort();
     unavailable_function_names.dedup();
     ambiguous_function_names.sort();
@@ -177,7 +412,7 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
         .all_metadata
         .iter()
         .enumerate()
-        .filter_map(|(index, meta)| {
+        .filter_map(|(index, _meta)| {
             let function_name = &snapshot.function_names[index];
             if embedded_function_names.contains(function_name)
                 || snapshot
@@ -187,8 +422,14 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
             {
                 return None;
             }
-            let score = score_catalog_metadata(meta, query);
-            (score > 0).then_some((score, index))
+            let assessment = assess_declaration_candidate(query, index, snapshot);
+            let score = assessment.score;
+            let considered = score > 0;
+            let accepted = assessment.accepted;
+            if considered {
+                assessments.push(assessment);
+            }
+            (considered && accepted).then_some((score, index))
         })
         .collect();
     live_matches.sort_by(|left, right| {
@@ -198,17 +439,35 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
                 .cmp(&snapshot.all_metadata[right.1].name)
         })
     });
-    let live_matches: Vec<NodeMetadata> = live_matches
+    let mut live_matches: Vec<NodeMetadata> = live_matches
         .into_iter()
         .take(12)
         .map(|(_, index)| snapshot.all_metadata[index].clone())
         .collect();
 
+    let resolution = declaration_resolution_metadata(
+        query,
+        &assessments,
+        !ambiguous_function_names.is_empty(),
+        snapshot,
+    );
+    let resolution_header = render_declaration_resolution_header(&resolution);
+    if !resolution.status.is_confident() {
+        declaration_matches.clear();
+        live_matches.clear();
+        live_signature_override_count = 0;
+    }
+
     if declaration_matches.is_empty() && live_matches.is_empty() {
         let mut out = render_declaration_matches(query, &[]);
+        out.push_str(&format!(
+            "\n// Calibrated resolver status: {:?}. No declaration is authorized for this query; refine the operation/service words or use an exact live function symbol.\n",
+            resolution.status
+        ));
+        append_low_confidence_candidate_note(&mut out, &assessments);
         append_unavailable_declaration_note(&mut out, &unavailable_function_names);
         append_ambiguous_declaration_note(&mut out, &ambiguous_function_names);
-        return out;
+        return format!("{resolution_header}{out}");
     }
 
     let mut out = if declaration_matches.is_empty() {
@@ -284,8 +543,17 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
         }
     }
 
-    let top_signature = declaration_matches
-        .first()
+    let resolved_top_function = resolution
+        .candidates
+        .iter()
+        .find(|candidate| candidate.accepted)
+        .map(|candidate| candidate.function_name.as_str());
+    let top_signature = resolved_top_function
+        .and_then(|function_name| {
+            declaration_matches
+                .iter()
+                .find(|matched| matched.function_name == function_name)
+        })
         .map(|matched| {
             if matched.impure {
                 format!("{}  // impure", matched.signature_line)
@@ -294,23 +562,19 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
             }
         })
         .or_else(|| {
-            live_matches
-                .first()
+            resolved_top_function
+                .and_then(|function_name| {
+                    live_matches
+                        .iter()
+                        .find(|metadata| metadata_to_signature(metadata).display == function_name)
+                })
                 .map(metadata_to_signature)
                 .map(|signature| metadata_signature_line(&signature))
         });
-    let top_function_name = declaration_matches
-        .first()
-        .map(|matched| matched.function_name.clone())
-        .or_else(|| {
-            live_matches
-                .first()
-                .map(|metadata| metadata_to_signature(metadata).display)
-        });
-    let priority_metadata_index = top_function_name.as_ref().and_then(|top_function_name| {
+    let priority_metadata_index = resolved_top_function.and_then(|top_function_name| {
         usage_metadata
             .iter()
-            .position(|metadata| metadata_to_signature(metadata).display == *top_function_name)
+            .position(|metadata| metadata_to_signature(metadata).display == top_function_name)
     });
     let priority_metadata = priority_metadata_index.and_then(|index| usage_metadata.get(index));
     let priority_block = top_signature
@@ -339,7 +603,51 @@ fn render_declarations_from_snapshot(query: &str, snapshot: &DeclarationCatalogS
         out.push('\n');
         out.push_str(&usage_notes);
     }
-    out
+    format!("{resolution_header}{out}")
+}
+
+/// A bare abstention is a discovery dead end in authoring runs (catalog browse tools are hidden
+/// there): the model either rephrases the query indefinitely or guesses function names into
+/// unknown-declaration diagnostics. Surface the nearest rejected candidates as bare symbols with
+/// their rejection reason — never as authorized signatures — so the model can verify one with an
+/// exact-symbol follow-up lookup, which always resolves. check_flowscript stays the hard gate
+/// against a wrong pick.
+fn append_low_confidence_candidate_note(
+    out: &mut String,
+    assessments: &[AssessedDeclarationCandidate],
+) {
+    let mut rejected: Vec<&AssessedDeclarationCandidate> = assessments
+        .iter()
+        .filter(|assessment| !assessment.accepted && assessment.score > 0)
+        .collect();
+    rejected.sort_by(|left, right| {
+        right
+            .score
+            .cmp(&left.score)
+            .then_with(|| left.function_name.cmp(&right.function_name))
+    });
+    rejected.dedup_by(|left, right| left.function_name == right.function_name);
+    if rejected.is_empty() {
+        return;
+    }
+    out.push_str(
+        "// Nearest UNVERIFIED candidates the calibrated resolver rejected for this query. They are\n\
+         // NOT resolved signatures: to use one, first confirm it with a follow-up get_declarations\n\
+         // call on the exact symbol below, and let check_flowscript diagnostics arbitrate.\n",
+    );
+    for assessment in rejected.into_iter().take(3) {
+        let reason = assessment
+            .reason_codes
+            .iter()
+            .find(|code| code.starts_with("missing_strong_anchor:"))
+            .or_else(|| assessment.reason_codes.first())
+            .map(String::as_str)
+            .unwrap_or("below_calibrated_threshold");
+        out.push_str(&format!(
+            "//   ? {} (score {}; not accepted: {reason})\n",
+            assessment.function_name, assessment.score
+        ));
+    }
 }
 
 fn append_unavailable_declaration_note(out: &mut String, function_names: &[String]) {
@@ -1204,6 +1512,245 @@ mod tests {
         assert!(declarations[1].contains("declare function customPackageDatabaseExport("));
         assert!(!declarations[2].contains("declare function stringReplace("));
         assert!(declarations[2].contains("Ambiguous live catalog declarations omitted"));
+    }
+
+    #[tokio::test]
+    async fn calibrated_resolution_abstains_on_incident_false_mappings() {
+        let incidents = [
+            (
+                "datafusion create session",
+                "df_sql_query",
+                "Runs a SQL query inside an existing DataFusion session.",
+                "dfSqlQuery",
+                "create",
+            ),
+            (
+                "register Lance",
+                "open_local_db",
+                "Opens a Lance database that can later be registered in another engine.",
+                "openLocalDb",
+                "register",
+            ),
+            (
+                "hybrid search",
+                "open_local_db",
+                "Opens a Lance database that can later participate in hybrid search.",
+                "openLocalDb",
+                "hybrid",
+            ),
+            (
+                "upsert",
+                "set_insert_ref",
+                "Upsert-style insertion into a mutable set reference.",
+                "setInsertRef",
+                "upsert",
+            ),
+            (
+                "chunk",
+                "embed_document",
+                "Chunks a document internally and returns its embedding.",
+                "embedDocument",
+                "chunk",
+            ),
+            (
+                "integer compare",
+                "faker_integer",
+                "Generates integer values for comparison tests.",
+                "fakerInteger",
+                "compare",
+            ),
+            (
+                "markdown",
+                "ai_audio_text_to_speech",
+                "Reads Markdown-flavored text aloud with speech synthesis.",
+                "aiAudioTextToSpeech",
+                "markdown",
+            ),
+            (
+                "notifications",
+                "browser_clear_console_logs",
+                "Clears browser console logs used while debugging notifications.",
+                "browserClearConsoleLogs",
+                "notification",
+            ),
+        ];
+
+        for (query, node_type, description, wrong_function, missing_anchor) in incidents {
+            let mut decoy = metadata(node_type, Vec::new(), Vec::new());
+            decoy.description = description.to_string();
+            let provider = LiveOnlyProvider { nodes: vec![decoy] };
+
+            let declarations = provider.get_declarations(query).await;
+            let resolution = parse_declaration_resolution_metadata(&declarations)
+                .expect("every non-empty live lookup returns machine-readable resolution data");
+
+            assert_eq!(
+                resolution.status,
+                DeclarationResolutionStatus::Unresolved,
+                "{query:?} must abstain: {declarations}"
+            );
+            assert!(resolution.top_score.is_some(), "{query:?}: {declarations}");
+            assert!(resolution.margin.is_some(), "{query:?}: {declarations}");
+            assert!(
+                resolution
+                    .reason_codes
+                    .iter()
+                    .any(|reason| reason == &format!("missing_strong_anchor:{missing_anchor}")),
+                "{query:?} did not explain its abstention: {resolution:?}"
+            );
+            assert!(
+                !declarations.contains(&format!("declare function {wrong_function}(")),
+                "{query:?} leaked the incident decoy: {declarations}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn calibrated_resolution_prefers_the_semantic_operation_over_incident_decoys() {
+        let cases = [
+            (
+                "datafusion create session",
+                "df_create_session",
+                "Creates a new DataFusion session.",
+                "df_sql_query",
+                "Runs SQL against an existing DataFusion session.",
+                "dfCreateSession",
+                "dfSqlQuery",
+            ),
+            (
+                "register Lance",
+                "df_register_lance",
+                "Registers a Lance table in DataFusion.",
+                "open_local_db",
+                "Opens a Lance database that may later be registered.",
+                "dfRegisterLance",
+                "openLocalDb",
+            ),
+            (
+                "hybrid search",
+                "hybrid_search_local_db",
+                "Runs hybrid search against a local database.",
+                "open_local_db",
+                "Opens a database used by later hybrid search calls.",
+                "hybridSearchLocalDb",
+                "openLocalDb",
+            ),
+            (
+                "upsert",
+                "upsert_local_db",
+                "Upserts one row in a local database.",
+                "set_insert_ref",
+                "Upsert-style insertion into a mutable set.",
+                "upsertLocalDb",
+                "setInsertRef",
+            ),
+            (
+                "chunk",
+                "chunk_text",
+                "Chunks input text into bounded pieces.",
+                "embed_document",
+                "Chunks a document internally before embedding.",
+                "chunkText",
+                "embedDocument",
+            ),
+            (
+                "integer compare",
+                "int_equal",
+                "Compares two integers for equality.",
+                "faker_integer",
+                "Generates integer values for comparison tests.",
+                "intEqual",
+                "fakerInteger",
+            ),
+            (
+                "markdown",
+                "ai_processing_pages_to_markdown",
+                "Converts document pages to Markdown.",
+                "ai_audio_text_to_speech",
+                "Reads Markdown-flavored text aloud.",
+                "aiProcessingPagesToMarkdown",
+                "aiAudioTextToSpeech",
+            ),
+            (
+                "notifications",
+                "data_microsoft_copilot_subscribe_notifications",
+                "Subscribes to Microsoft Copilot notifications.",
+                "browser_clear_console_logs",
+                "Clears browser logs used to debug notifications.",
+                "dataMicrosoftCopilotSubscribeNotifications",
+                "browserClearConsoleLogs",
+            ),
+        ];
+
+        for (
+            query,
+            correct_type,
+            correct_description,
+            decoy_type,
+            decoy_description,
+            correct_function,
+            decoy_function,
+        ) in cases
+        {
+            let mut correct = metadata(correct_type, Vec::new(), Vec::new());
+            correct.description = correct_description.to_string();
+            let mut decoy = metadata(decoy_type, Vec::new(), Vec::new());
+            decoy.description = decoy_description.to_string();
+            let provider = LiveOnlyProvider {
+                nodes: vec![correct, decoy],
+            };
+
+            let declarations = provider.get_declarations(query).await;
+            let resolution = parse_declaration_resolution_metadata(&declarations).unwrap();
+
+            assert_eq!(
+                resolution.status,
+                DeclarationResolutionStatus::Resolved,
+                "{query:?}: {declarations}"
+            );
+            assert_eq!(
+                resolution
+                    .candidates
+                    .iter()
+                    .find(|candidate| candidate.accepted)
+                    .map(|candidate| candidate.function_name.as_str()),
+                Some(correct_function),
+                "{query:?}: {resolution:?}"
+            );
+            assert!(
+                declarations.contains(&format!("declare function {correct_function}(")),
+                "{query:?}: {declarations}"
+            );
+            assert!(
+                !declarations.contains(&format!("declare function {decoy_function}(")),
+                "{query:?}: {declarations}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn exact_unique_live_symbol_is_machine_classified_as_exact() {
+        let provider = LiveOnlyProvider {
+            nodes: vec![metadata(
+                "df_sql_query",
+                vec![pin("session", "Struct", "Normal", None, None)],
+                vec![pin("rows", "Struct", "Array", None, None)],
+            )],
+        };
+
+        let declarations = provider
+            .get_declarations("dfSqlQuery exact live signature")
+            .await;
+        let resolution = parse_declaration_resolution_metadata(&declarations).unwrap();
+
+        assert_eq!(resolution.status, DeclarationResolutionStatus::Exact);
+        assert_eq!(resolution.top_score, Some(100_000));
+        assert!(
+            resolution
+                .reason_codes
+                .contains(&"unique_live_exact_symbol".to_string())
+        );
+        assert!(declarations.contains("declare function dfSqlQuery("));
     }
 
     #[tokio::test]

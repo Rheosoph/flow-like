@@ -7,7 +7,6 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::flow::event::Event;
-use flow_like_types::anyhow;
 use serde::Deserialize;
 use utoipa::ToSchema;
 
@@ -58,21 +57,11 @@ pub async fn get_event(
     let sub = permission.sub()?;
     let has_read = permission.has_permission(RolePermissions::ReadEvents);
 
-    let version_opt = if let Some(ver_str) = query.version {
-        let parts = ver_str
-            .split('_')
-            .map(str::parse::<u32>)
-            .collect::<Result<Vec<u32>, _>>()?;
-        match parts.as_slice() {
-            [maj, min, pat] => Some((*maj, *min, *pat)),
-            _ => {
-                return Err(ApiError::internal_error(anyhow!(
-                    "version must be in MAJOR_MINOR_PATCH format"
-                )));
-            }
-        }
-    } else {
-        None
+    let version_opt = match query.version.as_deref() {
+        Some(ver_str) => Some(super::parse_version_tuple(ver_str).ok_or_else(|| {
+            ApiError::bad_request("version must be in MAJOR_MINOR_PATCH format")
+        })?),
+        None => None,
     };
 
     // For current version, use database lookup

@@ -30,6 +30,13 @@ import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime
 import { IBitTypes, filterHostableLlmModels, isFreeLlmModel } from "../../lib";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { flowPilotCommandApplyDiagnostics } from "../../lib/flowpilot-command-apply";
+import { buildFlowPilotBoardContextAugmentation } from "../../lib/flowpilot/board-context-manifest";
+import {
+	DIRECT_FLOWPILOT_BOARD_EDIT_REQUEST_PREFIX,
+	boardEditJobResolutionHistoryMode,
+	deliverBoardEditJobReceipt,
+	isDirectFlowPilotBoardEditJob,
+} from "../../lib/flowpilot/board-edit-job-delivery";
 import {
 	type IFlowPilotConversation,
 	addMessage,
@@ -134,6 +141,7 @@ import {
 } from "./validateComponents";
 
 import type {
+	BoardEditJob,
 	CanvasSettings,
 	CopilotScope,
 	FlowIrCommitDisposition,
@@ -157,8 +165,13 @@ const DESTRUCTIVE_FLOWSCRIPT_DIAGNOSTIC_PREFIX =
 	"FlowScript edit would delete ";
 const FLOW_IR_DISMISS_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000] as const;
 const FLOWSCRIPT_DRAFT_PREVIEW_INTERVAL_MS = 80;
+const BOARD_EDIT_JOB_POLL_INTERVAL_MS = 2_500;
 const HOST_BOARD_APPLY_FEEDBACK_PREFIX = "Host board apply result:";
 const HOST_BOARD_APPLY_FAILURE_PREFIX = `${HOST_BOARD_APPLY_FEEDBACK_PREFIX}\nThe queued board change was not fully applied.`;
+
+function isSettledBoardEditJob(job: BoardEditJob): boolean {
+	return ["applied", "denied", "stale", "cancelled"].includes(job.phase);
+}
 
 function isHostBoardApplyFeedbackMessage(message: CopilotMessage): boolean {
 	return (
@@ -550,9 +563,12 @@ function FlowPilotImpl({
 	const [pendingCommands, setPendingCommands] = useState<BoardCommand[]>([]);
 	const [pendingFlowIrCommit, setPendingFlowIrCommit] =
 		useState<FlowIrCommitToken>();
+	const [pendingBoardEditJob, setPendingBoardEditJob] =
+		useState<BoardEditJob>();
 	const pendingFlowIrCommitRef = useRef<FlowIrCommitToken | undefined>(
 		undefined,
 	);
+	const pendingBoardEditJobRef = useRef<BoardEditJob | undefined>(undefined);
 	const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
 	const [currentToolCall, setCurrentToolCall] = useState<string | null>(null);
 	const [flowscriptWorkspace, setFlowscriptWorkspace] = useState("");
@@ -679,6 +695,41 @@ function FlowPilotImpl({
 		},
 		[],
 	);
+	const settleAuthoritativeBoardEditJob = useCallback(
+		(job: BoardEditJob) => {
+			if (!isSettledBoardEditJob(job)) return false;
+			const ownsLocalReview =
+				pendingBoardEditJobRef.current?.jobId === job.jobId ||
+				pendingFlowIrCommitRef.current?.claim_id === job.token.claim_id;
+			if (!ownsLocalReview) return false;
+
+			settleGenerationReview(
+				job.phase === "applied"
+					? "applied"
+					: job.phase === "stale"
+						? "stale"
+						: "dismissed",
+				job.token,
+				job.result?.final_board_node_count,
+			);
+			if (pendingBoardEditJobRef.current?.jobId === job.jobId) {
+				pendingBoardEditJobRef.current = undefined;
+			}
+			if (pendingFlowIrCommitRef.current?.claim_id === job.token.claim_id) {
+				pendingFlowIrCommitRef.current = undefined;
+			}
+			setPendingBoardEditJob((current) =>
+				current?.jobId === job.jobId ? undefined : current,
+			);
+			setPendingFlowIrCommit((current) =>
+				current?.claim_id === job.token.claim_id ? undefined : current,
+			);
+			setPendingCommands([]);
+			if (job.phase === "stale") setFlowscriptWorkspaceStatus("stale");
+			return true;
+		},
+		[settleGenerationReview],
+	);
 
 	// Refs
 	const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -749,12 +800,38 @@ function FlowPilotImpl({
 	);
 	const dismissPendingFlowIrCommit = useCallback(async () => {
 		if (!pendingFlowIrCommit) return true;
+		if (
+			pendingBoardEditJob?.token.claim_id === pendingFlowIrCommit.claim_id &&
+			backendContext.boardState.resolveBoardEditJob
+		) {
+			try {
+				const resolution = await backendContext.boardState.resolveBoardEditJob(
+					pendingBoardEditJob.jobId,
+					false,
+				);
+				if (settleAuthoritativeBoardEditJob(resolution.job)) return true;
+				setValidationWarnings([
+					resolution.job.error ||
+						"The native board-edit review could not be denied safely.",
+				]);
+				return false;
+			} catch (error) {
+				setValidationWarnings([
+					error instanceof Error
+						? error.message
+						: "The native board-edit review could not be denied safely.",
+				]);
+				return false;
+			}
+		}
 		const result = await dismissFlowIrCommitWithRetry(pendingFlowIrCommit);
 		if (
 			result.status === "dismissed" ||
 			result.code === "IR_COMMIT_TOKEN_INVALID"
 		) {
 			settleGenerationReview("dismissed", pendingFlowIrCommit);
+			pendingBoardEditJobRef.current = undefined;
+			setPendingBoardEditJob(undefined);
 			pendingFlowIrCommitRef.current = undefined;
 			setPendingFlowIrCommit(undefined);
 			return true;
@@ -766,12 +843,18 @@ function FlowPilotImpl({
 		return false;
 	}, [
 		dismissFlowIrCommitWithRetry,
+		backendContext.boardState,
+		pendingBoardEditJob,
 		pendingFlowIrCommit,
+		settleAuthoritativeBoardEditJob,
 		settleGenerationReview,
 	]);
 	useEffect(() => {
 		pendingFlowIrCommitRef.current = pendingFlowIrCommit;
 	}, [pendingFlowIrCommit]);
+	useEffect(() => {
+		pendingBoardEditJobRef.current = pendingBoardEditJob;
+	}, [pendingBoardEditJob]);
 	useEffect(() => {
 		const previousBoardId = previousBoardIdRef.current;
 		previousBoardIdRef.current = board?.id;
@@ -791,12 +874,15 @@ function FlowPilotImpl({
 		}
 
 		const pendingToken = pendingFlowIrCommitRef.current;
+		const pendingJob = pendingBoardEditJobRef.current;
+		pendingBoardEditJobRef.current = undefined;
 		pendingFlowIrCommitRef.current = undefined;
 		lastBoardApplyFeedbackRef.current = "";
 		setMessages((previous) =>
 			previous.filter((message) => !isHostBoardApplyFeedbackMessage(message)),
 		);
 		setPendingFlowIrCommit(undefined);
+		setPendingBoardEditJob(undefined);
 		setPendingCommands([]);
 		setDestructiveApplyRequest(null);
 		setFlowscriptWorkspaceStatus((status) =>
@@ -809,7 +895,7 @@ function FlowPilotImpl({
 				generationMetricsRunRef.current = undefined;
 			}
 		}
-		if (pendingToken) {
+		if (pendingToken && pendingJob?.token.claim_id !== pendingToken.claim_id) {
 			void dismissFlowIrCommitWithRetry(pendingToken).then((result) => {
 				if (
 					result.status !== "dismissed" &&
@@ -845,7 +931,11 @@ function FlowPilotImpl({
 					);
 			}
 			const pendingToken = pendingFlowIrCommitRef.current;
-			if (pendingToken) {
+			const pendingJob = pendingBoardEditJobRef.current;
+			if (
+				pendingToken &&
+				pendingJob?.token.claim_id !== pendingToken.claim_id
+			) {
 				void dismissFlowIrCommitWithRetry(pendingToken).then((result) => {
 					if (
 						result.status !== "dismissed" &&
@@ -859,7 +949,7 @@ function FlowPilotImpl({
 						settleGenerationReview("stale", pendingToken);
 					}
 				});
-			} else {
+			} else if (!pendingJob) {
 				const metricsRun = generationMetricsRunRef.current;
 				metricsRun?.abandon("cancelled");
 				if (generationMetricsRunRef.current === metricsRun) {
@@ -873,6 +963,96 @@ function FlowPilotImpl({
 		settleGenerationReview,
 	]);
 	const activeAppId = appId ?? runContext?.app_id;
+	useEffect(() => {
+		const listJobs = backendContext.boardState.listBoardEditJobs;
+		if (!listJobs || !activeAppId || !board?.id) return;
+		let cancelled = false;
+		let pollTimer: ReturnType<typeof setTimeout> | undefined;
+		const pollJobs = async () => {
+			try {
+				const jobs = await listJobs.call(
+					backendContext.boardState,
+					activeAppId,
+					board.id,
+					false,
+				);
+				if (cancelled) return;
+				const direct = jobs
+					.filter(
+						(job) =>
+							isDirectFlowPilotBoardEditJob(job) &&
+							(job.phase === "awaiting_approval" ||
+								job.phase === "failed" ||
+								job.phase === "applied_pending_delivery"),
+					)
+					.toSorted(
+						(left, right) =>
+							left.createdAtMs - right.createdAtMs ||
+							left.jobId.localeCompare(right.jobId),
+					);
+				const current = pendingBoardEditJobRef.current;
+				let pending = current
+					? direct.find((job) => job.jobId === current.jobId)
+					: undefined;
+				if (!pending && !pendingFlowIrCommitRef.current) pending = direct[0];
+				if (!pending) return;
+
+				if (
+					pending.phase === "applied_pending_delivery" &&
+					onApplyFlowIrCommit
+				) {
+					const delivery = await deliverBoardEditJobReceipt({
+						boardState: backendContext.boardState,
+						job: pending,
+						replayReceipt: onApplyFlowIrCommit,
+						historyMode: "invalidate",
+					});
+					if (cancelled) return;
+					if (
+						delivery.status === "delivered" ||
+						delivery.status === "settled"
+					) {
+						settleAuthoritativeBoardEditJob(delivery.job);
+						return;
+					}
+					pending = delivery.job;
+				}
+
+				const newlyAdopted = current?.jobId !== pending.jobId;
+				pendingBoardEditJobRef.current = pending;
+				setPendingBoardEditJob(pending);
+				pendingFlowIrCommitRef.current = pending.token;
+				setPendingFlowIrCommit(pending.token);
+				setPendingCommands(
+					(pending.result?.board_commands ?? []) as BoardCommand[],
+				);
+				if (newlyAdopted) {
+					setValidationWarnings((warnings) => [
+						...warnings,
+						...(pending.error ? [pending.error] : []),
+						`Recovered a compiled workflow review with ${pending.review.commandCount} exact board command(s).`,
+					]);
+				}
+			} catch (error) {
+				console.warn("Failed to rehydrate FlowPilot board-edit review:", error);
+			} finally {
+				if (!cancelled) {
+					pollTimer = setTimeout(pollJobs, BOARD_EDIT_JOB_POLL_INTERVAL_MS);
+				}
+			}
+		};
+		void pollJobs();
+		return () => {
+			cancelled = true;
+			if (pollTimer) clearTimeout(pollTimer);
+		};
+	}, [
+		activeAppId,
+		backendContext.boardState,
+		board?.id,
+		onApplyFlowIrCommit,
+		settleAuthoritativeBoardEditJob,
+	]);
 	const executeRuntimeTool = useFrontendRuntimeToolExecutor({
 		defaultAppId: activeAppId,
 		defaultBoardId: board?.id,
@@ -1121,11 +1301,7 @@ function FlowPilotImpl({
 				};
 			}
 		},
-		[
-			executeRuntimeTool,
-			requestFrontendToolApproval,
-			requestFrontendUserInput,
-		],
+		[executeRuntimeTool, requestFrontendToolApproval, requestFrontendUserInput],
 	);
 	const executeFrontendToolRequestRef = useRef(executeFrontendToolRequest);
 
@@ -1658,6 +1834,40 @@ function FlowPilotImpl({
 
 	const preflightPendingFlowIrCommit = useCallback(async () => {
 		if (!pendingFlowIrCommit) return true;
+		if (
+			pendingBoardEditJob?.token.claim_id === pendingFlowIrCommit.claim_id &&
+			backendContext.boardState.getBoardEditJob
+		) {
+			try {
+				const latestJob = await backendContext.boardState.getBoardEditJob(
+					pendingBoardEditJob.jobId,
+				);
+				if (latestJob) {
+					if (settleAuthoritativeBoardEditJob(latestJob)) return false;
+					if (pendingBoardEditJobRef.current?.jobId === latestJob.jobId) {
+						pendingBoardEditJobRef.current = latestJob;
+						setPendingBoardEditJob(latestJob);
+					}
+					// Native mutation already passed its CAS preflight. The only remaining work is
+					// idempotent renderer receipt delivery under the job's delivery lease.
+					if (latestJob.phase === "applied_pending_delivery") return true;
+					// The durable native job owns the exact command batch and rechecks its original
+					// board fingerprint inside the board write lock. This remains authoritative after
+					// a process restart where the ephemeral compiler-store claim no longer exists.
+					if (
+						latestJob.phase === "awaiting_approval" ||
+						latestJob.phase === "failed"
+					) {
+						return true;
+					}
+				}
+			} catch (error) {
+				console.warn(
+					"Failed to refresh the native board-edit review before apply:",
+					error,
+				);
+			}
+		}
 		const result = await resolveFlowIrCommit(pendingFlowIrCommit, "preflight");
 		if (result.status === "current") return true;
 
@@ -1680,9 +1890,12 @@ function FlowPilotImpl({
 		}
 		return false;
 	}, [
+		backendContext.boardState,
+		pendingBoardEditJob,
 		pendingFlowIrCommit,
 		recordBoardApplyFailure,
 		resolveFlowIrCommit,
+		settleAuthoritativeBoardEditJob,
 		settleGenerationReview,
 	]);
 
@@ -1732,7 +1945,61 @@ function FlowPilotImpl({
 					flowIrApplyInFlightRef.current = true;
 					let compiledResult: Awaited<ReturnType<typeof onApplyFlowIrCommit>>;
 					try {
-						compiledResult = await onApplyFlowIrCommit(token);
+						if (
+							pendingBoardEditJob?.token.claim_id === token.claim_id &&
+							backendContext.boardState.resolveBoardEditJob
+						) {
+							const resolution =
+								await backendContext.boardState.resolveBoardEditJob(
+									pendingBoardEditJob.jobId,
+									true,
+								);
+							if (isSettledBoardEditJob(resolution.job)) {
+								if (resolution.job.phase !== "applied") {
+									recordBoardApplyFailure([
+										resolution.job.error ||
+											resolution.job.result?.message ||
+											"The native board-edit job settled without applying.",
+									]);
+								}
+								settleAuthoritativeBoardEditJob(resolution.job);
+								return;
+							}
+							if (resolution.job.phase !== "applied_pending_delivery") {
+								recordBoardApplyFailure([
+									resolution.job.error ||
+										resolution.job.result?.message ||
+										"The native board-edit job did not reach receipt delivery.",
+								]);
+								return;
+							}
+							const delivery = await deliverBoardEditJobReceipt({
+								boardState: backendContext.boardState,
+								job: resolution.job,
+								replayReceipt: onApplyFlowIrCommit,
+								historyMode: boardEditJobResolutionHistoryMode(resolution),
+							});
+							if (delivery.status === "settled") {
+								settleAuthoritativeBoardEditJob(delivery.job);
+								return;
+							}
+							if (delivery.status === "busy") {
+								setValidationWarnings([delivery.message]);
+								return;
+							}
+							if (delivery.status !== "delivered") {
+								recordBoardApplyFailure([
+									delivery.message,
+									...(delivery.status === "replay_failed"
+										? delivery.receipt.diagnostics
+										: []),
+								]);
+								return;
+							}
+							compiledResult = delivery.receipt;
+						} else {
+							compiledResult = await onApplyFlowIrCommit(token);
+						}
 					} finally {
 						flowIrApplyInFlightRef.current = false;
 					}
@@ -1761,7 +2028,15 @@ function FlowPilotImpl({
 					}
 					pendingFlowIrCommitRef.current = undefined;
 					setPendingFlowIrCommit(undefined);
+					pendingBoardEditJobRef.current = undefined;
+					setPendingBoardEditJob(undefined);
 				} else if (shouldApplyFlowScript && onApplyFlowScript) {
+					if (backendContext.boardState.createBoardEditJob) {
+						recordBoardApplyFailure([
+							"This desktop review contains only legacy FlowScript source and has no durable compiled receipt. It was not applied; regenerate the review so it can use crash-safe atomic delivery.",
+						]);
+						return;
+					}
 					applyResult = await onApplyFlowScript(flowscriptWorkspace, {
 						suppressBlockedToast: true,
 					});
@@ -1832,13 +2107,16 @@ function FlowPilotImpl({
 		onApplyFlowScript,
 		onExecuteCommands,
 		pendingCommands,
+		pendingBoardEditJob,
 		pendingFlowIrCommit,
+		backendContext.boardState,
 		preflightPendingFlowIrCommit,
 		dismissPendingFlowIrCommit,
 		onApplyFlowIrCommit,
 		recordExecutedBoardCommands,
 		recordBoardApplyFailure,
 		recordBoardApplySuccess,
+		settleAuthoritativeBoardEditJob,
 		settleGenerationReview,
 	]);
 	const handleExecuteCommands = useCallback(
@@ -2201,6 +2479,7 @@ function FlowPilotImpl({
 			let pendingDraftingPreview: InlineFlowScriptPreviewValue | undefined;
 			let hasAuthoritativeFlowScriptWorkspace = false;
 			let generationMetricsRun: FlowPilotGenerationMetricsRun | undefined;
+			let ownedCopilotRequestId: string | undefined;
 			try {
 				let currentMessageContent = "";
 				let lastUpdateTime = 0;
@@ -2416,9 +2695,9 @@ function FlowPilotImpl({
 								toolName.includes("search") ||
 								toolName.includes("catalog") ||
 								toolName === "get_declarations" ||
-									toolName === "internet_search" ||
-									toolName === "open_url" ||
-									toolName === "archive_lookup"
+								toolName === "internet_search" ||
+								toolName === "open_url" ||
+								toolName === "archive_lookup"
 							) {
 								setLoadingPhase("searching");
 							} else if (
@@ -2785,56 +3064,69 @@ function FlowPilotImpl({
 					selectedModelId,
 				);
 
-				const nativeRequestId = `flowpilot:${createId()}`;
+				const nativeRequestId = `${DIRECT_FLOWPILOT_BOARD_EDIT_REQUEST_PREFIX}${createId()}`;
+				ownedCopilotRequestId = nativeRequestId;
 				generationMetricsRun = new FlowPilotGenerationMetricsRun(
 					nativeRequestId,
 				);
 				generationMetricsRunRef.current = generationMetricsRun;
+				// Own the generation before frontend context collection begins. Stop, unmount, or a
+				// board change can now revoke this id while the bounded collector is awaiting IO.
 				activeCopilotRequestIdRef.current = nativeRequestId;
+				const boardContextManifest =
+					(agentMode === "board" || agentMode === "both") &&
+					activeAppId &&
+					board?.id
+						? await buildFlowPilotBoardContextAugmentation(
+								executeRuntimeTool,
+								activeAppId,
+								board.id,
+								`${board.id}:${Object.keys(board.nodes ?? {}).length}:${Object.keys(board.layers ?? {}).length}`,
+							)
+						: undefined;
+				if (activeCopilotRequestIdRef.current !== nativeRequestId) {
+					throw new Error(
+						"FlowPilot request was cancelled before model generation because its board or session changed.",
+					);
+				}
 				let response: Awaited<
 					ReturnType<typeof backendContext.boardState.copilot_chat>
 				>;
-				let responseBelongsToActiveRequest = false;
-				try {
-					response = await backendContext.boardState.copilot_chat(
-						scope,
-						board ?? null,
-						catalogNodes,
-						selectedNodeIds,
-						currentComponents,
-						selectedComponentIds,
-						userMsg,
-						chatHistory,
-						requestImages,
-						onToken,
-						effectiveModelId,
-						selectedReasoningEffort || undefined,
-						undefined,
-						backendRunContext,
-						undefined, // actionContext - can be added later
-						undefined, // nested
-						undefined, // readOnly
-						activeAppId
-							? {
-									appId: activeAppId,
-									boardId: board?.id,
-									conversationId: flowPilotPanelConversationId(
-										board?.id ?? activeAppId,
-									),
-									sourceUserPrompt: currentInput,
-								}
-							: undefined,
-						nativeRequestId,
-						currentInput,
-						activeAppId,
-					);
-					responseBelongsToActiveRequest =
-						activeCopilotRequestIdRef.current === nativeRequestId;
-				} finally {
-					if (activeCopilotRequestIdRef.current === nativeRequestId) {
-						activeCopilotRequestIdRef.current = undefined;
-					}
-				}
+				response = await backendContext.boardState.copilot_chat(
+					scope,
+					board ?? null,
+					catalogNodes,
+					selectedNodeIds,
+					currentComponents,
+					selectedComponentIds,
+					userMsg,
+					chatHistory,
+					requestImages,
+					onToken,
+					effectiveModelId,
+					selectedReasoningEffort || undefined,
+					undefined,
+					backendRunContext,
+					undefined, // actionContext - can be added later
+					undefined, // nested
+					undefined, // Auto intent: native host resolves question vs authoring once for every backend.
+					activeAppId
+						? {
+								appId: activeAppId,
+								boardId: board?.id,
+								conversationId: flowPilotPanelConversationId(
+									board?.id ?? activeAppId,
+								),
+								sourceUserPrompt: currentInput,
+								boardContextManifest,
+							}
+						: undefined,
+					nativeRequestId,
+					currentInput,
+					activeAppId,
+				);
+				const responseBelongsToActiveRequest =
+					activeCopilotRequestIdRef.current === nativeRequestId;
 				const staleDismissal =
 					await releaseReturnedFlowIrCommitBeforeStaleResponse(
 						responseBelongsToActiveRequest,
@@ -2910,6 +3202,53 @@ function FlowPilotImpl({
 
 				const finalAssistantContent =
 					currentMessageContent || response.message || "";
+				if (
+					response.flow_ir_commit &&
+					activeAppId &&
+					backendContext.boardState.createBoardEditJob
+				) {
+					let createdJob: BoardEditJob | undefined;
+					try {
+						createdJob = await backendContext.boardState.createBoardEditJob(
+							activeAppId,
+							nativeRequestId,
+							response.flow_ir_commit,
+						);
+						if (
+							activeCopilotRequestIdRef.current !== nativeRequestId ||
+							currentBoardIdRef.current !== createdJob.boardId
+						) {
+							throw new Error(
+								"FlowPilot detached after creating a durable board-edit review. Reopen its board to continue the review.",
+							);
+						}
+						pendingBoardEditJobRef.current = createdJob;
+						setPendingBoardEditJob(createdJob);
+					} catch (error) {
+						if (
+							activeCopilotRequestIdRef.current !== nativeRequestId ||
+							currentBoardIdRef.current !== response.flow_ir_commit.board_id
+						) {
+							// A successfully created native job owns the exact token and will rehydrate on
+							// its board. Only release the claim if native job creation itself failed.
+							if (!createdJob) {
+								await dismissFlowIrCommitWithRetry(response.flow_ir_commit);
+							}
+							throw error;
+						}
+						// Compatibility fallback: the exact commit token still uses the existing native
+						// Apply/Dismiss path on hosts that predate resumable review jobs.
+						console.warn(
+							"Failed to create resumable FlowPilot board-edit review:",
+							error,
+						);
+						pendingBoardEditJobRef.current = undefined;
+						setPendingBoardEditJob(undefined);
+					}
+				} else if (!response.flow_ir_commit) {
+					pendingBoardEditJobRef.current = undefined;
+					setPendingBoardEditJob(undefined);
+				}
 				pendingFlowIrCommitRef.current = response.flow_ir_commit;
 				setPendingFlowIrCommit(response.flow_ir_commit);
 				if (response.flowscript_workspace) {
@@ -3086,7 +3425,11 @@ function FlowPilotImpl({
 				// preflight.
 				if (agentMode === "board" || agentMode === "both") {
 					const transferredToken = pendingFlowIrCommitRef.current;
-					if (transferredToken) {
+					const transferredJob = pendingBoardEditJobRef.current;
+					if (
+						transferredToken &&
+						transferredJob?.token.claim_id !== transferredToken.claim_id
+					) {
 						const dismissal = await resolveFlowIrCommit(
 							transferredToken,
 							"dismissed",
@@ -3104,9 +3447,11 @@ function FlowPilotImpl({
 						}
 					}
 					setPendingCommands([]);
-					setFlowscriptWorkspaceStatus((status) =>
-						status === "queued" ? "stale" : status,
-					);
+					if (!transferredJob) {
+						setFlowscriptWorkspaceStatus((status) =>
+							status === "queued" ? "stale" : status,
+						);
+					}
 				}
 				setMessages((prev) => {
 					const newMessages = [...prev];
@@ -3133,6 +3478,12 @@ function FlowPilotImpl({
 					return newMessages;
 				});
 			} finally {
+				if (
+					ownedCopilotRequestId &&
+					activeCopilotRequestIdRef.current === ownedCopilotRequestId
+				) {
+					activeCopilotRequestIdRef.current = undefined;
+				}
 				if (phaseTimer) clearTimeout(phaseTimer);
 				if (draftingPreviewTimer) clearTimeout(draftingPreviewTimer);
 				if (pendingDraftingPreview && !hasAuthoritativeFlowScriptWorkspace) {
@@ -3322,6 +3673,11 @@ function FlowPilotImpl({
 		Boolean(pendingFlowIrCommit) &&
 		visiblePendingCommands.length === 0 &&
 		flowscriptWorkspaceStatus === "stale";
+	const pendingJobRequiresExplicitApproval = Boolean(
+		pendingBoardEditJob &&
+			(pendingBoardEditJob.review.replacementMode ||
+				pendingBoardEditJob.review.destructiveEffects.length > 0),
+	);
 
 	// Auto mode applies a settled review as soon as generation finishes, mirroring the exact
 	// condition that renders the review card. The attempt stamp makes this fire once per
@@ -3333,12 +3689,18 @@ function FlowPilotImpl({
 		!autoMode ||
 		loading ||
 		destructiveApplyRequest !== null ||
+		pendingJobRequiresExplicitApproval ||
 		hasDismissOnlyStaleReview ||
 		!(agentMode === "board" || agentMode === "both") ||
-		!(visiblePendingCommands.length > 0 || hasUnappliedFlowScriptWorkspace)
+		!(
+			visiblePendingCommands.length > 0 ||
+			hasUnappliedFlowScriptWorkspace ||
+			pendingBoardEditJob
+		)
 			? null
 			: [
 					pendingFlowIrCommit?.claim_id ?? "",
+					pendingBoardEditJob?.jobId ?? "",
 					hasUnappliedFlowScriptWorkspace ? flowscriptWorkspace : "",
 					visiblePendingCommands
 						.map((command) => JSON.stringify(command))
@@ -3528,12 +3890,14 @@ function FlowPilotImpl({
 						(agentMode === "board" || agentMode === "both") &&
 						(visiblePendingCommands.length > 0 ||
 							hasUnappliedFlowScriptWorkspace ||
+							Boolean(pendingBoardEditJob) ||
 							hasDismissOnlyStaleReview) && (
 							<div className="px-3 pb-2">
 								<PendingCommandsView
 									commands={visiblePendingCommands}
 									flowscriptReady={hasUnappliedFlowScriptWorkspace}
 									dismissOnly={hasDismissOnlyStaleReview}
+									retainedReview={pendingBoardEditJob?.review}
 									onExecute={handleExecuteCommands}
 									onExecuteSingle={handleExecuteSingle}
 									onDismiss={handleDismissCommands}

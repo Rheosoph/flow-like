@@ -63,29 +63,13 @@ fn all_nodes() -> Vec<(String, Node)> {
 }
 
 fn empty_board() -> Board {
-    Board {
-        id: "lint-board".to_string(),
-        name: "Lint Board".to_string(),
-        description: String::new(),
-        nodes: HashMap::new(),
-        variables: HashMap::new(),
-        comments: HashMap::new(),
-        viewport: (0.0, 0.0, 0.0),
-        version: (0, 0, 1),
-        stage: ExecutionStage::Dev,
-        log_level: LogLevel::Info,
-        execution_mode: ExecutionMode::Hybrid,
-        refs: HashMap::new(),
-        layers: HashMap::new(),
-        page_ids: Vec::new(),
-        hash: None,
-        created_at: SystemTime::UNIX_EPOCH,
-        updated_at: SystemTime::UNIX_EPOCH,
-        parent: None,
-        board_dir: Path::default(),
-        logic_nodes: HashMap::new(),
-        app_state: None,
-    }
+    let mut board = Board::new_detached(Some("lint-board".to_string()), Path::default());
+    board.name = "Lint Board".to_string();
+    board.description.clear();
+    board.hash = None;
+    board.created_at = SystemTime::UNIX_EPOCH;
+    board.updated_at = SystemTime::UNIX_EPOCH;
+    board
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────

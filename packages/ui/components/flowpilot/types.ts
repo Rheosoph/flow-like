@@ -329,6 +329,8 @@ export interface FlowPilotProps {
 	/** Atomically apply the exact retained compiled workflow batch and record undo/refetch state. */
 	onApplyFlowIrCommit?: (
 		token: FlowIrCommitToken,
+		deliveryId?: string,
+		historyMode?: "append" | "invalidate",
 	) => Promise<IApplyFlowIrCommitResponse>;
 
 	/** Callback to focus on a specific node (board mode) */

@@ -23,7 +23,17 @@ import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-cap
 import { getErrorMessage } from "../../lib/error-message";
 import { EVENT_CONFIG, isChatEventType } from "../../lib/event-config";
 import { flowPilotDebugLog } from "../../lib/flowpilot-debug";
-import type { FlowIrCommitToken } from "../../lib/schema/copilot";
+import { buildFlowPilotBoardContextAugmentation } from "../../lib/flowpilot/board-context-manifest";
+import {
+	boardEditJobResolutionHistoryMode,
+	deliverBoardEditJobReceipt,
+	isDirectFlowPilotBoardEditJob,
+} from "../../lib/flowpilot/board-edit-job-delivery";
+import {
+	createFlowScriptGenerationTrace,
+	updateFlowScriptGenerationRunReceipt,
+} from "../../lib/flowpilot/flowscript-generation-receipt";
+import type { BoardEditJob, FlowIrCommitToken } from "../../lib/schema/copilot";
 import {
 	convertJsonToUint8Array,
 	parseUint8ArrayToJson,
@@ -51,6 +61,7 @@ import {
 	type GlobalToolPrompt,
 	type GlobalToolPromptResolution,
 	SUB_STEP_PREFIX,
+	getGlobalChatTurnSelection,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import { registerGlobalChatToolExecutor } from "../../state/global-chat/global-chat-tool-registry";
@@ -122,6 +133,8 @@ const GLOBAL_FRONTEND_TOOL_LIFECYCLE_EVENT =
 const DELETION_DIAGNOSTIC_PREFIX = "FlowScript edit would delete ";
 const FLOW_IR_DISMISS_RETRY_DELAYS_MS = [0, 250, 1_000, 3_000] as const;
 const FLOWSCRIPT_DRAFT_PREVIEW_INTERVAL_MS = 80;
+const BOARD_EDIT_JOB_POLL_INTERVAL_MS = 2_500;
+const BOARD_EDIT_JOB_REPRESENT_DELAY_MS = 15_000;
 const activeFlowIrDismissals = new Map<string, Promise<boolean>>();
 
 function dismissFlowIrCommitWithRetry(
@@ -794,7 +807,9 @@ export function GlobalToolBridge() {
 	useEffect(() => {
 		authRef.current = auth;
 	}, [auth]);
-	const openOverlay = useGlobalChatStore((s) => s.openOverlay);
+	const openOverlayIfAllowed = useGlobalChatStore(
+		(s) => s.openOverlayIfAllowed,
+	);
 	const addInlineAppChat = useGlobalChatStore((s) => s.addInlineAppChat);
 	const setToolPrompt = useGlobalChatStore((s) => s.setToolPrompt);
 
@@ -811,8 +826,8 @@ export function GlobalToolBridge() {
 		// Dock the conversation alongside the destination view so the user keeps chatting there.
 		// Deferred to the navigation moment (not fired when the tool ran) so the dock never pops
 		// open over the full /chat page mid-stream — /chat renders the conversation itself.
-		if (!target.startsWith("/chat")) openOverlay();
-	}, [isStreaming, pendingNavigation, router, openOverlay]);
+		if (!target.startsWith("/chat")) openOverlayIfAllowed();
+	}, [isStreaming, pendingNavigation, router, openOverlayIfAllowed]);
 
 	// The full /chat page already renders the conversation — only dock the overlay elsewhere.
 	const pathnameRef = useRef(pathname);
@@ -820,8 +835,8 @@ export function GlobalToolBridge() {
 		pathnameRef.current = pathname;
 	}, [pathname]);
 	const showConversation = useCallback(() => {
-		if (pathnameRef.current !== "/chat") openOverlay();
-	}, [openOverlay]);
+		if (pathnameRef.current !== "/chat") openOverlayIfAllowed();
+	}, [openOverlayIfAllowed]);
 	const resolverRef = useRef<{
 		request: FrontendToolRequest;
 		promptId: string;
@@ -1084,6 +1099,353 @@ export function GlobalToolBridge() {
 			}),
 		[recordRequestDebug, setToolPrompt, showConversation],
 	);
+
+	// Native jobs outlive any one renderer request. Versioned presentation state prevents duplicate
+	// dialogs while polling, while a changed Failed job becomes retryable without a reload.
+	const presentedBoardEditJobsRef = useRef<
+		Map<string, { updatedAtMs: number; retryAfterMs: number }>
+	>(new Map());
+	const presentingBoardEditJobsRef = useRef<Set<string>>(new Set());
+	const deliverNativeBoardEditJob = useCallback(
+		async (
+			job: BoardEditJob,
+			historyMode: "append" | "invalidate" = "invalidate",
+		) => {
+			const surface = useAssistantSurface.getState().boardSurface;
+			if (surface?.appId !== job.appId || surface.boardId !== job.boardId) {
+				const applyDetached = backend.boardState.applyFlowIrCommit;
+				if (!applyDetached) {
+					return {
+						status: "not_ready" as const,
+						job,
+						message:
+							"Open the edited board to durably record its undo history and finish receipt delivery.",
+					};
+				}
+				// No board surface means there is no live renderer history stack to append to.
+				// Replay through the detached backend to finish remote/outbox delivery, then
+				// acknowledge the durable job. A later board mount starts from the persisted
+				// snapshot, so it cannot expose stale canvas state or stale undo entries.
+				return await deliverBoardEditJobReceipt({
+					boardState: backend.boardState,
+					job,
+					replayReceipt: (token, deliveryId) =>
+						applyDetached.call(
+							backend.boardState,
+							job.appId,
+							token,
+							deliveryId,
+						),
+					historyMode: "invalidate",
+				});
+			}
+			return await deliverBoardEditJobReceipt({
+				boardState: backend.boardState,
+				job,
+				replayReceipt: (token, deliveryId) =>
+					surface.applyFlowIrCommit(token, deliveryId, historyMode),
+				historyMode,
+			});
+		},
+		[backend.boardState],
+	);
+	const recordSettledGenerationReceipt = useCallback(
+		async (job: BoardEditJob) => {
+			if (!job.requestId) return;
+			const applied =
+				job.phase === "applied" || job.phase === "applied_pending_delivery";
+			let persistedReadbackVerified = false;
+			if (applied) {
+				try {
+					const persisted = await backend.boardState.getFlowScript(
+						job.appId,
+						job.boardId,
+						undefined,
+						true,
+					);
+					persistedReadbackVerified = persisted.trim().length > 0;
+				} catch {
+					persistedReadbackVerified = false;
+				}
+			}
+			updateFlowScriptGenerationRunReceipt(
+				{
+					appId: job.appId,
+					boardId: job.boardId,
+					parentRequestId: job.requestId,
+				},
+				{
+					outcome:
+						applied && persistedReadbackVerified
+							? "ok"
+							: applied
+								? "readback_mismatch"
+								: job.phase,
+					appliedCommands:
+						job.result?.commands.length ??
+						(job.result?.status === "applied" ? job.review.commandCount : 0),
+					persistedReadbackVerified,
+				},
+			);
+		},
+		[backend.boardState],
+	);
+	const presentBoardEditJob = useCallback(
+		async (job: BoardEditJob) => {
+			// Direct FlowPilot owns its inline approval card. Global polling may recover its
+			// post-apply receipt, but must never duplicate or auto-authorize that earlier gate.
+			if (
+				isDirectFlowPilotBoardEditJob(job) &&
+				job.phase !== "applied_pending_delivery"
+			) {
+				presentedBoardEditJobsRef.current.delete(job.jobId);
+				return;
+			}
+			if (
+				job.phase !== "awaiting_approval" &&
+				job.phase !== "failed" &&
+				job.phase !== "applied_pending_delivery"
+			) {
+				presentedBoardEditJobsRef.current.delete(job.jobId);
+				return;
+			}
+			const previousPresentation = presentedBoardEditJobsRef.current.get(
+				job.jobId,
+			);
+			if (
+				presentingBoardEditJobsRef.current.has(job.jobId) ||
+				(previousPresentation?.updatedAtMs === job.updatedAtMs &&
+					previousPresentation.retryAfterMs > Date.now())
+			) {
+				return;
+			}
+
+			presentingBoardEditJobsRef.current.add(job.jobId);
+			presentedBoardEditJobsRef.current.set(job.jobId, {
+				updatedAtMs: job.updatedAtMs,
+				retryAfterMs: Number.POSITIVE_INFINITY,
+			});
+			try {
+				const recordDeliveryOutcome = async (
+					deliveryJob: BoardEditJob,
+					historyMode: "append" | "invalidate" = "invalidate",
+				) => {
+					await recordSettledGenerationReceipt(deliveryJob);
+					const delivery = await deliverNativeBoardEditJob(
+						deliveryJob,
+						historyMode,
+					);
+					if (delivery.status === "delivered") {
+						presentedBoardEditJobsRef.current.delete(job.jobId);
+						void queryClient.invalidateQueries({
+							predicate: (query) => query.queryKey.includes(job.appId),
+						});
+						return;
+					}
+					if (delivery.status === "settled") {
+						presentedBoardEditJobsRef.current.delete(job.jobId);
+						return;
+					}
+					presentedBoardEditJobsRef.current.set(job.jobId, {
+						updatedAtMs: delivery.job.updatedAtMs,
+						retryAfterMs: Date.now() + BOARD_EDIT_JOB_REPRESENT_DELAY_MS,
+					});
+					if (
+						delivery.status === "replay_failed" ||
+						delivery.status === "unsupported"
+					) {
+						console.warn(
+							"[global-tool-bridge] board-edit receipt delivery deferred",
+							delivery.message,
+						);
+					}
+				};
+
+				if (job.phase === "applied_pending_delivery") {
+					await recordDeliveryOutcome(job);
+					return;
+				}
+
+				const destructive =
+					job.review.replacementMode ||
+					job.review.destructiveEffects.length > 0;
+				const commandBreakdown = Object.entries(job.review.commandCounts)
+					.sort(([left], [right]) => left.localeCompare(right))
+					.map(([kind, count]) => `${count} ${kind}`)
+					.join(", ");
+				const retainedSummaries = job.review.commandSummaries.slice(0, 8);
+				const commandSummary = retainedSummaries.length
+					? ` Reviewed changes: ${retainedSummaries.join("; ")}${
+							job.review.commandSummaries.length > retainedSummaries.length
+								? "; …"
+								: ""
+						}`
+					: "";
+				const syntheticRequest: FrontendToolRequest = {
+					requestId: `board-edit-job:${job.jobId}`,
+					toolName: "flowpilot_board_apply",
+					arguments: { app_id: job.appId, board_id: job.boardId },
+					approval: {
+						kind: job.approval.kind,
+						title: job.approval.title,
+						description: job.approval.description,
+						sessionKey: job.approval.sessionKey,
+					},
+				};
+				const approvalSessionKey =
+					job.approval.sessionKey ||
+					`${syntheticRequest.toolName}:${job.approval.kind}`;
+				const needsApproval =
+					destructive ||
+					((job.approval.kind === "mutating" ||
+						job.approval.kind === "execute") &&
+						!useGlobalChatStore.getState().autoMode &&
+						!approvedKeysRef.current.has(approvalSessionKey));
+				const resolution = !needsApproval
+					? { approved: true, remember: false }
+					: await openDialog({
+							type: "approval",
+							request: syntheticRequest,
+							override: {
+								title:
+									job.approval.title ||
+									(destructive
+										? "Approve destructive workflow change"
+										: "Apply compiled workflow"),
+								description: `${job.approval.description ? `${job.approval.description} ` : ""}${
+									job.error
+										? `The previous apply attempt failed: ${job.error} `
+										: ""
+								}${job.review.commandCount} exact compiled board command(s) are ready${
+									commandBreakdown ? `: ${commandBreakdown}` : "."
+								}${commandSummary}${
+									job.review.destructiveEffects.length > 0
+										? ` Destructive effects: ${job.review.destructiveEffects.join("; ")}`
+										: " The live board will be checked again before the atomic apply."
+								}`,
+								destructive,
+							},
+						});
+				if (!resolution || !("approved" in resolution)) {
+					// Keep the durable review, but allow this presenter to offer it again later.
+					presentedBoardEditJobsRef.current.set(job.jobId, {
+						updatedAtMs: job.updatedAtMs,
+						retryAfterMs: Date.now() + BOARD_EDIT_JOB_REPRESENT_DELAY_MS,
+					});
+					return;
+				}
+				if (
+					resolution.approved &&
+					resolution.remember &&
+					!destructive &&
+					job.approval.kind !== "none"
+				) {
+					approvedKeysRef.current.add(approvalSessionKey);
+				}
+				const resolveJob = backend.boardState.resolveBoardEditJob;
+				if (!resolveJob) {
+					presentedBoardEditJobsRef.current.set(job.jobId, {
+						updatedAtMs: job.updatedAtMs,
+						retryAfterMs: Date.now() + BOARD_EDIT_JOB_REPRESENT_DELAY_MS,
+					});
+					return;
+				}
+				const resolved = await resolveJob.call(
+					backend.boardState,
+					job.jobId,
+					resolution.approved,
+				);
+				if (
+					[
+						"applied_pending_delivery",
+						"applied",
+						"denied",
+						"stale",
+						"failed",
+						"cancelled",
+					].includes(resolved.job.phase)
+				) {
+					await recordSettledGenerationReceipt(resolved.job);
+				}
+				if (resolved.job.phase === "applied_pending_delivery") {
+					await recordDeliveryOutcome(
+						resolved.job,
+						boardEditJobResolutionHistoryMode(resolved),
+					);
+					return;
+				}
+				if (
+					["applied", "denied", "stale", "cancelled"].includes(
+						resolved.job.phase,
+					)
+				) {
+					presentedBoardEditJobsRef.current.delete(job.jobId);
+				} else {
+					presentedBoardEditJobsRef.current.set(job.jobId, {
+						updatedAtMs: resolved.job.updatedAtMs,
+						retryAfterMs: Date.now() + BOARD_EDIT_JOB_REPRESENT_DELAY_MS,
+					});
+				}
+			} catch (error) {
+				presentedBoardEditJobsRef.current.set(job.jobId, {
+					updatedAtMs: job.updatedAtMs,
+					retryAfterMs: Date.now() + BOARD_EDIT_JOB_REPRESENT_DELAY_MS,
+				});
+				console.warn(
+					"[global-tool-bridge] board-edit job presentation failed",
+					error,
+				);
+			} finally {
+				presentingBoardEditJobsRef.current.delete(job.jobId);
+			}
+		},
+		[
+			backend.boardState,
+			deliverNativeBoardEditJob,
+			openDialog,
+			queryClient,
+			recordSettledGenerationReceipt,
+		],
+	);
+
+	useEffect(() => {
+		let cancelled = false;
+		let pollTimer: ReturnType<typeof setTimeout> | undefined;
+		const listJobs = backend.boardState.listBoardEditJobs;
+		if (!listJobs) return;
+		const pollJobs = async () => {
+			try {
+				const jobs = await listJobs.call(
+					backend.boardState,
+					undefined,
+					undefined,
+					false,
+				);
+				if (cancelled) return;
+				const retainedJobIds = new Set(jobs.map((job) => job.jobId));
+				for (const presentedJobId of presentedBoardEditJobsRef.current.keys()) {
+					if (!retainedJobIds.has(presentedJobId)) {
+						presentedBoardEditJobsRef.current.delete(presentedJobId);
+					}
+				}
+				for (const job of jobs) void presentBoardEditJob(job);
+			} catch (error) {
+				console.warn(
+					"[global-tool-bridge] failed to rehydrate board-edit jobs",
+					error,
+				);
+			} finally {
+				if (!cancelled) {
+					pollTimer = setTimeout(pollJobs, BOARD_EDIT_JOB_POLL_INTERVAL_MS);
+				}
+			}
+		};
+		void pollJobs();
+		return () => {
+			cancelled = true;
+			if (pollTimer) clearTimeout(pollTimer);
+		};
+	}, [backend.boardState, presentBoardEditJob]);
 
 	const cancelRequestDialogs = useCallback(
 		(requestId: string, reason: string) => {
@@ -2008,7 +2370,7 @@ export function GlobalToolBridge() {
 					const overlayId =
 						argString(args, "overlay_id") || argString(args, "overlayId");
 
-					const chat = useGlobalChatStore.getState();
+					const turnSelection = getGlobalChatTurnSelection();
 					const owningUserPrompt = sourceUserPrompt(request);
 					const owningConversationId = conversationScopeId(request);
 					const rawSpecialistPrompt = composeDelegatedRawUserPrompt(
@@ -2016,8 +2378,8 @@ export function GlobalToolBridge() {
 						instruction,
 					);
 					const modelId = flowPilotModelIdForProvider(
-						normalizeAIProvider(chat.provider),
-						chat.selectedModelId,
+						normalizeAIProvider(turnSelection.provider),
+						turnSelection.selectedModelId,
 					);
 
 					const nestedRunRequestId = `${request.requestId}:agent`;
@@ -2067,6 +2429,9 @@ export function GlobalToolBridge() {
 							stage: "started",
 							input: {
 								scope: "DataStudio",
+								provider: normalizeAIProvider(turnSelection.provider),
+								model_id: modelId,
+								reasoning_effort: turnSelection.reasoningEffort || undefined,
 								app_id: appId,
 								overlay_id: overlayId,
 								instruction,
@@ -2088,7 +2453,7 @@ export function GlobalToolBridge() {
 							undefined /* images */,
 							onToken,
 							modelId,
-							chat.reasoningEffort || undefined,
+							turnSelection.reasoningEffort || undefined,
 							undefined /* token */,
 							undefined /* runContext */,
 							undefined /* actionContext */,
@@ -2195,6 +2560,13 @@ export function GlobalToolBridge() {
 						| FlowScriptWorkspaceCandidate
 						| undefined;
 					let draftingWorkspaceTimer: ReturnType<typeof setTimeout> | undefined;
+					let generationTrace:
+						| ReturnType<typeof createFlowScriptGenerationTrace>
+						| undefined;
+					let generationOutcome = "interrupted";
+					let generationFinalWorkspaceStatus: string | undefined;
+					let generationAppliedCommands: number | undefined;
+					let generationPersistedReadbackVerified: boolean | undefined;
 					try {
 						assertRequestActive(request, "serialized board snapshot");
 						let createdBoard = false;
@@ -2311,6 +2683,15 @@ export function GlobalToolBridge() {
 						]);
 						const baselineFingerprint =
 							flowScriptSnapshotFingerprint(baselineFlowScript);
+						const boardContextManifest = readOnly
+							? undefined
+							: await buildFlowPilotBoardContextAugmentation(
+									executeRuntimeTool,
+									appId,
+									boardId,
+									baselineFingerprint,
+								);
+						assertRequestActive(request, "board context collection");
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
 							key: boardRecoveryKey,
 							baselineFingerprint,
@@ -2340,7 +2721,7 @@ export function GlobalToolBridge() {
 						);
 
 						// Run the board copilot as a sub-agent, using the global chat's selected model.
-						const chat = useGlobalChatStore.getState();
+						const turnSelection = getGlobalChatTurnSelection();
 						const owningUserPrompt = sourceUserPrompt(request);
 						const owningConversationId = conversationScopeId(request);
 						const rawSpecialistPrompt = composeDelegatedRawUserPrompt(
@@ -2348,8 +2729,8 @@ export function GlobalToolBridge() {
 							instruction,
 						);
 						const modelId = flowPilotModelIdForProvider(
-							normalizeAIProvider(chat.provider),
-							chat.selectedModelId,
+							normalizeAIProvider(turnSelection.provider),
+							turnSelection.selectedModelId,
 						);
 						flowPilotDebugLog(
 							"[global-tool-bridge] flowpilot_board: starting nested copilot_chat",
@@ -2360,6 +2741,20 @@ export function GlobalToolBridge() {
 						// previews. External agents also return their last validated workspace in the
 						// final nested response so a detached board can apply it safely.
 						const nestedRunRequestId = `${request.requestId}:agent`;
+						if (!readOnly) {
+							generationTrace = createFlowScriptGenerationTrace({
+								conversationId:
+									owningConversationId ??
+									useGlobalChatStore.getState().activeConversationId,
+								requestId: nestedRunRequestId,
+								parentRequestId: request.requestId,
+								appId,
+								boardId,
+								provider: normalizeAIProvider(turnSelection.provider),
+								modelId: modelId ?? "",
+								reasoningEffort: turnSelection.reasoningEffort,
+							});
+						}
 						const {
 							pushSubRunChunk,
 							flushSubRunStream,
@@ -2413,6 +2808,7 @@ export function GlobalToolBridge() {
 										event.raw,
 									);
 									if (candidate) {
+										generationTrace?.recordCandidate(candidate);
 										if (candidate.status === "drafting") {
 											// Incomplete source is useful to watch, but it is not a repair
 											// candidate and must never become durable board recovery state.
@@ -2470,6 +2866,7 @@ export function GlobalToolBridge() {
 									continue;
 								}
 								if (event.type === "tool_end") {
+									generationTrace?.recordToolEnd(event.data);
 									const evidence = extractNestedFlowScriptValidationEvidence(
 										event.data,
 									);
@@ -2508,6 +2905,7 @@ export function GlobalToolBridge() {
 						let returnedCommandCount = 0;
 						let flowIrCommit: FlowIrCommitToken | undefined;
 						let staleSnapshotBlocked = false;
+						let deliveryFailed = false;
 						let persistedReadbackFailed = false;
 						let persistedReadbackVerified = false;
 						let appliedSourceCorrections = 0;
@@ -2555,6 +2953,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 								stage: "started",
 								input: {
 									scope: "Board",
+									provider: normalizeAIProvider(turnSelection.provider),
+									model_id: modelId,
+									reasoning_effort: turnSelection.reasoningEffort || undefined,
 									app_id: appId,
 									board_id: boardId,
 									instruction,
@@ -2586,7 +2987,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								undefined /* images */,
 								onToken,
 								modelId,
-								chat.reasoningEffort || undefined,
+								turnSelection.reasoningEffort || undefined,
 								undefined /* token */,
 								surfaceRunContext,
 								undefined /* actionContext */,
@@ -2598,6 +2999,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									parentRequestId: request.requestId,
 									conversationId: owningConversationId,
 									sourceUserPrompt: owningUserPrompt,
+									boardContextManifest,
 								},
 								nestedRunRequestId,
 								rawSpecialistPrompt,
@@ -2666,6 +3068,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								hadReturnedCommands,
 							);
 							if (selectedWorkspace) {
+								generationTrace?.recordCandidate(selectedWorkspace);
 								workspaceCandidates = rememberFlowScriptWorkspaceCandidate(
 									workspaceCandidates,
 									selectedWorkspace,
@@ -2686,6 +3089,147 @@ Completion contract: build complete helper logic first and add the Event entry l
 								isPartialFlowScriptWorkspace(selectedWorkspace);
 							const applicable =
 								isFlowScriptWorkspaceApplicable(selectedWorkspace);
+
+							if (
+								flowIrCommit &&
+								backend.boardState.createBoardEditJob &&
+								backend.boardState.resolveBoardEditJob
+							) {
+								assertRequestActive(
+									request,
+									"compiled workflow review creation",
+								);
+								const token = flowIrCommit;
+								const job = await backend.boardState.createBoardEditJob(
+									appId,
+									request.requestId,
+									token,
+								);
+								// Ownership has moved from this ephemeral tool request to the native job.
+								flowIrCommit = undefined;
+								const destructive =
+									job.review.replacementMode ||
+									job.review.destructiveEffects.length > 0;
+								if (useGlobalChatStore.getState().autoMode && !destructive) {
+									// Auto mode already authorizes safe mutations. Settle the durable
+									// job before replying so the parent agent receives the applied board's
+									// Event ids and can finish app-level wiring in the same turn.
+									const resolved = await backend.boardState.resolveBoardEditJob(
+										job.jobId,
+										true,
+									);
+									const resolvedJob = resolved.job;
+									const resolvedResult = resolvedJob.result;
+									diagnostics = resolvedResult?.diagnostics ?? [];
+									if (
+										resolvedJob.phase === "applied_pending_delivery" ||
+										resolvedJob.phase === "applied"
+									) {
+										appliedCommands =
+											resolvedResult?.commands.length ??
+											job.review.commandCount;
+										const delivery = await deliverNativeBoardEditJob(
+											resolvedJob,
+											boardEditJobResolutionHistoryMode(resolved),
+										);
+										if (
+											delivery.status === "delivered" ||
+											delivery.status === "settled"
+										) {
+											await recordSettledGenerationReceipt(delivery.job);
+											await queryClient.invalidateQueries({
+												predicate: (query) => query.queryKey.includes(appId),
+											});
+										} else {
+											deliveryFailed = true;
+											diagnostics = [
+												`BOARD_EDIT_RECEIPT_DELIVERY_FAILED: ${delivery.message}`,
+												...diagnostics,
+											];
+										}
+										try {
+											const persistedFlowScript =
+												await backend.boardState.getFlowScript(
+													appId,
+													boardId,
+													undefined,
+													true,
+												);
+											persistedReadbackVerified = flowScriptSnapshotChanged(
+												baselineFlowScript,
+												persistedFlowScript,
+											);
+											if (!persistedReadbackVerified) {
+												persistedReadbackFailed = true;
+												diagnostics = [
+													"PERSISTED_FLOWSCRIPT_MISMATCH: Atomic apply reported success but the persisted board snapshot did not advance.",
+													...diagnostics,
+												];
+											}
+										} catch (error) {
+											persistedReadbackFailed = true;
+											diagnostics = [
+												`PERSISTED_FLOWSCRIPT_READBACK_FAILED: Atomic apply succeeded, but verification could not reload the board: ${error instanceof Error ? error.message : String(error)}`,
+												...diagnostics,
+											];
+										}
+									} else if (resolvedJob.phase === "stale") {
+										staleSnapshotBlocked = true;
+										diagnostics = [
+											resolvedResult?.message ??
+												"The compiled workflow became stale before apply.",
+											...diagnostics,
+										];
+									} else {
+										diagnostics = [
+											resolvedJob.error ??
+												resolvedResult?.message ??
+												`The compiled workflow job ended in ${resolvedJob.phase}.`,
+											...diagnostics,
+										];
+									}
+									recordNestedDebug(
+										request,
+										agentGenerationReviewDispositionEvent({
+											requestId: nestedRunRequestId,
+											parentRequestId: request.requestId,
+											disposition:
+												resolvedJob.phase === "applied_pending_delivery" ||
+												resolvedJob.phase === "applied"
+													? "applied"
+													: resolvedJob.phase === "stale"
+														? "stale"
+														: "error",
+											draftId: token.draft_id,
+											revision: token.revision,
+											claimId: token.claim_id,
+										}),
+									);
+								} else {
+									// Returning now lets the outer agent finish while the user reviews the
+									// exact compiler batch; navigation merely detaches this presenter.
+									generationOutcome = "awaiting_approval";
+									generationFinalWorkspaceStatus = workspaceStatus;
+									generationAppliedCommands = job.review.commandCount;
+									nestedRunSettled = true;
+									void presentBoardEditJob(job).catch((error) =>
+										console.warn(
+											"[global-tool-bridge] board-edit job presenter failed",
+											error,
+										),
+									);
+									return {
+										status: "awaiting_approval",
+										job_id: job.jobId,
+										board_id: boardId,
+										command_count: job.review.commandCount,
+										requires_destructive_approval: destructive,
+										message:
+											"The complete workflow compiled successfully and is awaiting review at Apply time. The native job remains available if this chat surface is closed or reloaded.",
+										...(createdBoard ? { created_board_id: boardId } : {}),
+									};
+								}
+							}
 
 							if (flowIrCommit) {
 								assertRequestActive(request, "atomic compiled workflow apply");
@@ -2788,6 +3332,13 @@ Completion contract: build complete helper logic first and add the Event entry l
 								const flowscript = source;
 								const applyOnce = async (allowDeletions: boolean) => {
 									assertRequestActive(request, "FlowScript apply");
+									if (backend.boardState.createBoardEditJob) {
+										appliedCommands = 0;
+										diagnostics = [
+											"This desktop review contains only legacy FlowScript source and has no durable compiled receipt. Nothing was applied; regenerate the review for crash-safe atomic delivery.",
+										];
+										return false;
+									}
 									const currentFlowScript =
 										await backend.boardState.getFlowScript(
 											appId,
@@ -3058,6 +3609,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								message: errorMessage,
 								candidate: retainedCandidate,
 							});
+							generationOutcome = interruptedResult.status;
 							if (!readOnly) {
 								boardZeroProgressRetryRef.current.recordRunOutcome(
 									zeroProgressOwnerId,
@@ -3100,6 +3652,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							workspaceStatus !== "no_changes";
 						const applyFailed =
 							staleSnapshotBlocked ||
+							deliveryFailed ||
 							persistedReadbackFailed ||
 							(appliedCommands === 0 &&
 								diagnostics.length > 0 &&
@@ -3322,6 +3875,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 									}
 								: {}),
 						};
+						generationOutcome = resultStatus;
+						generationFinalWorkspaceStatus = workspaceStatus;
+						generationAppliedCommands = appliedCommands;
+						generationPersistedReadbackVerified = persistedReadbackVerified;
 						if (
 							resultStatus === "ok" &&
 							!partialWorkingSlice &&
@@ -3357,6 +3914,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 						nestedRunSettled = true;
 						return result;
 					} finally {
+						generationTrace?.finish({
+							outcome: generationOutcome,
+							finalWorkspaceStatus: generationFinalWorkspaceStatus,
+							appliedCommands: generationAppliedCommands,
+							persistedReadbackVerified: generationPersistedReadbackVerified,
+						});
 						if (draftingWorkspaceTimer) clearTimeout(draftingWorkspaceTimer);
 						draftingWorkspaceTimer = undefined;
 						pendingDraftingWorkspace = undefined;
@@ -3372,6 +3935,19 @@ Completion contract: build complete helper logic first and add the Event entry l
 							status: "error",
 							message: "flowpilot_widget requires an instruction.",
 						};
+					const requestedWidgetNames = [
+						argString(args, "widget_name"),
+						...(Array.isArray(args.widget_names)
+							? args.widget_names.filter(
+									(name): name is string =>
+										typeof name === "string" && name.trim().length > 0,
+								)
+							: []),
+					]
+						.map((name) => name.trim())
+						.filter(
+							(name, index, names) => name && names.indexOf(name) === index,
+						);
 					// Edit mode targets the OPEN builder surface. When none is open we create a NEW
 					// board-scoped page from scratch (mirrors how flowpilot_board bootstraps a board).
 					const widgetSurface = useAssistantSurface.getState().widgetSurface;
@@ -3424,6 +4000,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 								widgets: (journaledPage.artifacts.widgetIds ?? []).map(
 									(id) => ({ id }),
 								),
+								specialist_scope: "ui_only",
+								board_logic_built_by_this_tool: false,
+								workflow_logic_handoff: "flowpilot_board",
 								note: "A page for this exact request was already created earlier in this conversation; its ids are returned instead of creating a duplicate. Wire or edit that page instead. Only if the user truly wants a second, separate page, call flowpilot_widget again with a distinct `idempotency_key`.",
 							};
 						}
@@ -3434,7 +4013,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					}
 
 					// Run the widget copilot as a sub-agent, using the global chat's selected model.
-					const chat = useGlobalChatStore.getState();
+					const turnSelection = getGlobalChatTurnSelection();
 					const owningUserPrompt = sourceUserPrompt(request);
 					const owningConversationId = conversationScopeId(request);
 					const rawSpecialistPrompt = composeDelegatedRawUserPrompt(
@@ -3442,8 +4021,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 						instruction,
 					);
 					const modelId = flowPilotModelIdForProvider(
-						normalizeAIProvider(chat.provider),
-						chat.selectedModelId,
+						normalizeAIProvider(turnSelection.provider),
+						turnSelection.selectedModelId,
 					);
 
 					const nestedRunRequestId = `${request.requestId}:agent`;
@@ -3518,6 +4097,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 							stage: "started",
 							input: {
 								scope: "Frontend",
+								provider: normalizeAIProvider(turnSelection.provider),
+								model_id: modelId,
+								reasoning_effort: turnSelection.reasoningEffort || undefined,
 								app_id: appId,
 								board_id: boardId,
 								instruction,
@@ -3534,6 +4116,15 @@ Completion contract: build complete helper logic first and add the Event entry l
 						result: T,
 					) => {
 						const status = String(result.status ?? "error");
+						const scopedResult =
+							status === "ok"
+								? {
+										...result,
+										specialist_scope: "ui_only",
+										board_logic_built_by_this_tool: false,
+										workflow_logic_handoff: "flowpilot_board",
+									}
+								: result;
 						recordNestedDebug(
 							request,
 							nestedAgentRunEvent({
@@ -3542,7 +4133,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								toolName: "flowpilot_widget",
 								stage: "finished",
 								status,
-								output: result,
+								output: scopedResult,
 								summary:
 									status === "ok"
 										? "Delegated UI build finished."
@@ -3551,7 +4142,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						);
 						widgetRunSettled = true;
 						if (status !== "ok") failProgressSteps();
-						return result;
+						return scopedResult;
 					};
 					try {
 						response = await backend.boardState.copilot_chat(
@@ -3566,7 +4157,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							undefined /* images */,
 							onToken,
 							modelId,
-							chat.reasoningEffort || undefined,
+							turnSelection.reasoningEffort || undefined,
 							undefined /* token */,
 							undefined /* runContext */,
 							undefined /* actionContext */,
@@ -3662,16 +4253,67 @@ Completion contract: build complete helper logic first and add the Event entry l
 							for (const iw of inlineWidgets) {
 								let realId = realIdByCopilotId.get(iw.copilotWidgetId);
 								if (!realId) {
-									realId = createId();
 									const widgetName =
-										typeof iw.inlineDef.name === "string"
-											? iw.inlineDef.name
-											: "Widget";
-									const widget = await backend.widgetState.createWidget(
-										targetAppId,
-										realId,
-										widgetName,
-									);
+										requestedWidgetNames[createdWidgets.length] ||
+										(typeof iw.inlineDef.name === "string" &&
+										iw.inlineDef.name.trim()
+											? iw.inlineDef.name.trim()
+											: "Widget");
+									// Specialist retries re-emit the same inline widget definition.
+									// Reuse the app's existing widget with this exact name instead of
+									// minting a duplicate: a second "Incident Row" makes the name
+									// ambiguous for the board specialist and is never cleaned up.
+									// The latest definition wins either way.
+									let widget:
+										| Awaited<
+												ReturnType<typeof backend.widgetState.getWidget>
+										  >
+										| undefined;
+									try {
+										// Tuple metadata is often absent for local apps, so fall
+										// back to fetching each widget and comparing its real name.
+										const entries =
+											await backend.widgetState.getWidgets(targetAppId);
+										for (const [, widgetId, metadata] of entries) {
+											if (metadata?.name?.trim() === widgetName) {
+												realId = widgetId;
+												break;
+											}
+										}
+										if (!realId) {
+											for (const [, widgetId] of entries) {
+												try {
+													const candidate =
+														await backend.widgetState.getWidget(
+															targetAppId,
+															widgetId,
+														);
+													if (candidate?.name?.trim() === widgetName) {
+														realId = widgetId;
+														widget = candidate;
+														break;
+													}
+												} catch {
+													// Skip unreadable widgets.
+												}
+											}
+										} else if (realId) {
+											widget = await backend.widgetState.getWidget(
+												targetAppId,
+												realId,
+											);
+										}
+									} catch {
+										// Reuse is best-effort; fall through to creation.
+									}
+									if (!realId || !widget) {
+										realId = createId();
+										widget = await backend.widgetState.createWidget(
+											targetAppId,
+											realId,
+											widgetName,
+										);
+									}
 									widget.components = ensureRootId(
 										collectComponents(iw.inlineDef.components),
 									);
@@ -3769,7 +4411,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							page: { id: pageId, name: pageName, route },
 							widgets: createdWidgets,
 							...(createdBoard ? { created_board_id: boardId } : {}),
-							note: "Created a new page (and any reusable widgets it needs), applied the UI, and scheduled the page builder to open after this agent turn. To wire the logic, call flowpilot_board with this app_id and reference the page (route) and these widgets/action_ids in the instruction.",
+							note: "Created and applied UI only; no workflow logic was built. If the user's request includes behavior, wiring, data loading, actions, nodes, connections, or events, the next required step is flowpilot_board with this app_id and the returned page route plus widget/action_ids. Do not report the overall build complete until that board specialist succeeds.",
 						});
 					}
 
@@ -4086,8 +4728,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 			queryClient,
 			showConversation,
 			addInlineAppChat,
+			deliverNativeBoardEditJob,
 			openDialog,
+			presentBoardEditJob,
 			recordNestedDebug,
+			recordSettledGenerationReceipt,
 			assertRequestActive,
 			isRequestExpired,
 			markRequestExpired,

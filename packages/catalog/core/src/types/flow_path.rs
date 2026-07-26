@@ -117,10 +117,12 @@ impl FlowPath {
         &self,
         context: &mut ExecutionContext,
     ) -> flow_like_types::Result<FlowLikeStore> {
-        let store = context
-            .get_cache(&self.store_ref)
-            .await
-            .ok_or(anyhow!("Failed to get Store from Cache"))?;
+        let store = context.get_cache(&self.store_ref).await.ok_or_else(|| {
+            anyhow!(
+                "Failed to resolve FlowPath store '{}' in the current run. store_ref is a per-run cache key, so a FlowPath produced by another app or run cannot be resolved here — pass a signed URL across the boundary instead of the FlowPath.",
+                self.store_ref
+            )
+        })?;
         let down_casted: &FlowLikeStore = store
             .downcast_ref()
             .ok_or(anyhow!("Failed to downcast Store"))?;
@@ -139,10 +141,12 @@ impl FlowPath {
         }
 
         let store_ref = cache_store_ref.unwrap();
-        let store = context
-            .get_cache(&store_ref)
-            .await
-            .ok_or(anyhow!("Failed to get Store from Cache"))?;
+        let store = context.get_cache(&store_ref).await.ok_or_else(|| {
+            anyhow!(
+                "Failed to resolve FlowPath cache store '{}' in the current run. cache_store_ref is a per-run cache key; a FlowPath from another app or run is not transferable — use a signed URL across the boundary.",
+                store_ref
+            )
+        })?;
         let down_casted: &FlowLikeStore = store
             .downcast_ref()
             .ok_or(anyhow!("Failed to downcast Store"))?;

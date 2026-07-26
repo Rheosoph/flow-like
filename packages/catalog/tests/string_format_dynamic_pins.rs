@@ -19,29 +19,14 @@ use flow_like_storage::object_store::path::Path;
 use flow_like_types::json::json;
 
 fn empty_board() -> Board {
-    Board {
-        id: "string-format-test".to_string(),
-        name: "String Format Test".to_string(),
-        description: String::new(),
-        nodes: HashMap::new(),
-        variables: HashMap::new(),
-        comments: HashMap::new(),
-        viewport: (0.0, 0.0, 1.0),
-        version: (0, 0, 1),
-        stage: ExecutionStage::Dev,
-        log_level: LogLevel::Info,
-        execution_mode: ExecutionMode::Hybrid,
-        refs: HashMap::new(),
-        layers: HashMap::new(),
-        page_ids: Vec::new(),
-        hash: None,
-        created_at: SystemTime::UNIX_EPOCH,
-        updated_at: SystemTime::UNIX_EPOCH,
-        parent: None,
-        board_dir: Path::default(),
-        logic_nodes: HashMap::new(),
-        app_state: None,
-    }
+    let mut board = Board::new_detached(Some("string-format-test".to_string()), Path::default());
+    board.name = "String Format Test".to_string();
+    board.description.clear();
+    board.viewport = (0.0, 0.0, 1.0);
+    board.hash = None;
+    board.created_at = SystemTime::UNIX_EPOCH;
+    board.updated_at = SystemTime::UNIX_EPOCH;
+    board
 }
 
 fn string_format_logic() -> std::sync::Arc<dyn NodeLogic> {

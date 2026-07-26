@@ -1,5 +1,7 @@
 use super::copilot_sdk_tools::{
-    SideEffectCommandQueue, retained_flow_ir_draft_store, retained_flow_ir_draft_store_for_board,
+    SideEffectCommandQueue, flow_ir_draft_snapshot_dir, persist_recovery_snapshot,
+    retained_flow_ir_draft_store, retained_flow_ir_draft_store_for_board,
+    schedule_flow_ir_draft_snapshot,
 };
 use super::frontend_tool_bridge::FrontendToolContext;
 use crate::state::{TauriFlowLikeState, TauriSettingsState};
@@ -17,13 +19,18 @@ use flow_like::flow::board::commands::GenericCommand;
 use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
 use flow_like::flow::copilot::platform::PlatformToolBridge;
 use flow_like::flow::copilot::{
-    AttachmentManifestEntry, BoardCommand, CatalogProvider, EmitCommandsArgs,
+    AttachmentManifestEntry, BoardCommand, BoardContextManifest, CatalogProvider, EmitCommandsArgs,
     FlowScriptCandidateRegression, FlowScriptPendingDelivery, FlowScriptRepairTracker,
-    GlobalDataStudioContext, GlobalOpenBoardContext, GraphContext, NodeMetadata, PinMetadata,
-    PlatformContextInput, RunContext, build_platform_context, emit_validation_requires_flowscript,
-    enrich_node_metadata, flowscript_workspace_envelope, global_assistant_system_prompt,
-    profile_flowscript_candidate, render_flowscript_modular_partial_result, run_platform_chat,
-    score_catalog_metadata, validate_model_facing_emit_commands_scope,
+    GlobalDataStudioContext, GlobalOpenBoardContext, GraphContext, ManifestAudit,
+    ManifestAugmentations, ManifestSource, ManifestSourceStatus, NodeMetadata, PinMetadata,
+    PlatformContextInput, RunContext, WorkflowArtifactKind, WorkflowSession, WorkflowSessionPolicy,
+    WorkflowSessionSnapshot, board_fingerprint, build_platform_context,
+    default_flowscript_module_templates, emit_validation_requires_flowscript, enrich_node_metadata,
+    flowscript_workspace_envelope, global_assistant_system_prompt, profile_flowscript_candidate,
+    render_flowscript_modular_partial_result, run_platform_chat, score_catalog_metadata,
+    validate_model_facing_emit_commands_scope, workflow_authoring_defers_runtime_tool,
+    workflow_authoring_tool_allowed, workflow_runtime_verification_deferred_payload,
+    workflow_strategy_fingerprint, workflow_tool_result_succeeded,
 };
 use flow_like::flow::node::Node;
 use flow_like::flow::pin::{Pin, PinType};
@@ -33,14 +40,14 @@ use flow_like_catalog::get_catalog;
 use flow_like_types::tokio_util::sync::CancellationToken;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{
         Arc, LazyLock, Mutex as StdMutex,
         atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering},
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
     AppHandle, Manager, State,
@@ -57,9 +64,10 @@ const EXTERNAL_AGENT_MESSAGE_STATE_MAX_ENTRIES: usize = 256;
 const MCP_TOOL_PROGRESS_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 const SDK_CONTROL_RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const SDK_CHAT_ABORT_TIMEOUT: Duration = Duration::from_secs(5);
-// A direct SDK session previously waited forever when the CLI/event transport disappeared after a
-// tool start. This is deliberately longer than the frontend bridge's 120-second approval/tool
-// deadline, and resets after every received event.
+// A direct SDK session previously waited forever when the CLI/event transport disappeared. This
+// baseline resets after every received event. Handler-side activity below extends it only to the
+// earliest active tool deadline because protocol-v3 invokes custom handlers before publishing
+// their request events to session subscribers, and independent handlers may overlap.
 const SDK_EVENT_INACTIVITY_TIMEOUT: Duration = Duration::from_secs(180);
 const SDK_RESPONSE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const SDK_USAGE_CALLS_MAX_ENTRIES: usize = 256;
@@ -72,6 +80,130 @@ struct ActiveCopilotRun {
 
 static ACTIVE_COPILOT_RUNS: LazyLock<DashMap<String, ActiveCopilotRun>> =
     LazyLock::new(DashMap::new);
+
+#[derive(Default)]
+struct SdkToolActivityState {
+    next_id: u64,
+    active_deadlines: HashMap<u64, tokio::time::Instant>,
+    last_change_at: Option<tokio::time::Instant>,
+}
+
+struct SdkToolActivityRegistry {
+    state: StdMutex<SdkToolActivityState>,
+    generation: watch::Sender<u64>,
+}
+
+impl Default for SdkToolActivityRegistry {
+    fn default() -> Self {
+        let (generation, _receiver) = watch::channel(0);
+        Self {
+            state: StdMutex::new(SdkToolActivityState::default()),
+            generation,
+        }
+    }
+}
+
+impl SdkToolActivityRegistry {
+    fn subscribe(&self) -> watch::Receiver<u64> {
+        self.generation.subscribe()
+    }
+
+    fn begin(self: &Arc<Self>, tool_name: &str) -> SdkToolActivityGuard {
+        let now = tokio::time::Instant::now();
+        let deadline = now + sdk_tool_handler_watchdog_timeout(tool_name);
+        let id = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            state.next_id = state.next_id.wrapping_add(1).max(1);
+            let id = state.next_id;
+            state.active_deadlines.insert(id, deadline);
+            state.last_change_at = Some(now);
+            id
+        };
+        self.bump_generation();
+        SdkToolActivityGuard {
+            id,
+            registry: self.clone(),
+        }
+    }
+
+    fn finish(&self, id: u64) {
+        let changed = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let changed = state.active_deadlines.remove(&id).is_some();
+            if changed {
+                state.last_change_at = Some(tokio::time::Instant::now());
+            }
+            changed
+        };
+        if changed {
+            self.bump_generation();
+        }
+    }
+
+    fn inactivity_deadline(&self, last_sdk_event_at: tokio::time::Instant) -> tokio::time::Instant {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let baseline = last_sdk_event_at + SDK_EVENT_INACTIVITY_TIMEOUT;
+        let response_grace = state
+            .last_change_at
+            .map(|changed_at| changed_at + SDK_CONTROL_RPC_TIMEOUT)
+            .unwrap_or(baseline);
+        if let Some(active_deadline) = state.active_deadlines.values().copied().min() {
+            // Every handler has its own absolute bound. A concurrent longer call must not hide a
+            // stuck shorter call; when the shorter lease drops, its watch update exposes the next
+            // active deadline immediately.
+            active_deadline
+        } else {
+            baseline.max(response_grace)
+        }
+    }
+
+    fn bump_generation(&self) {
+        self.generation
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
+    }
+}
+
+struct SdkToolActivityGuard {
+    id: u64,
+    registry: Arc<SdkToolActivityRegistry>,
+}
+
+impl Drop for SdkToolActivityGuard {
+    fn drop(&mut self) {
+        self.registry.finish(self.id);
+    }
+}
+
+fn sdk_tool_handler_watchdog_timeout(tool_name: &str) -> Duration {
+    let configured = flow_like::flow::copilot::tool_spec::find_global_tool_spec(tool_name)
+        .or_else(|| {
+            flow_like::flow::copilot::tool_spec::find_runtime_execution_tool_spec(tool_name)
+        })
+        .or_else(|| {
+            flow_like::flow::copilot::tool_spec::data_studio_tool_specs()
+                .into_iter()
+                .find(|spec| spec.name == tool_name)
+        })
+        .map(|spec| Duration::from_secs(spec.timeout_secs))
+        .or_else(|| {
+            (tool_name == "ui_inspect").then_some(super::copilot_sdk_tools::UI_INSPECT_TOOL_TIMEOUT)
+        });
+
+    configured
+        .map(|timeout| timeout.saturating_add(SDK_CONTROL_RPC_TIMEOUT))
+        .map_or(SDK_EVENT_INACTIVITY_TIMEOUT, |timeout| {
+            SDK_EVENT_INACTIVITY_TIMEOUT.max(timeout)
+        })
+}
 
 struct ActiveCopilotRunGuard {
     request_id: Option<String>,
@@ -154,9 +286,13 @@ pub struct FlowIrCommitDispositionResult {
     pub message: String,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct ApplyFlowIrCommitResult {
     pub status: String,
+    /// True when no mutation occurred in this invocation and the exact durable success receipt was
+    /// replayed. Renderers must invalidate/reload history instead of appending this older batch.
+    #[serde(default)]
+    pub replayed: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code: Option<String>,
     pub message: String,
@@ -167,8 +303,1194 @@ pub struct ApplyFlowIrCommitResult {
     pub final_board_node_count: Option<usize>,
 }
 
+/// Provider-neutral lifecycle for an exact compiled board edit. The model transport stops at
+/// `AwaitingApproval`; only the native host can advance the retained token through Apply/Deny.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BoardEditJobPhase {
+    Preparing,
+    AwaitingApproval,
+    Applying,
+    /// Native board mutation succeeded, but the renderer has not yet acknowledged replaying the
+    /// exact receipt into its sync/history layer. This remains durable and listable across reload.
+    AppliedPendingDelivery,
+    Applied,
+    Denied,
+    Stale,
+    Failed,
+    Cancelled,
+}
+
+impl BoardEditJobPhase {
+    fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Applied | Self::Denied | Self::Stale | Self::Cancelled
+        )
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardEditJobReview {
+    pub command_count: usize,
+    pub command_counts: BTreeMap<String, usize>,
+    pub command_summaries: Vec<String>,
+    pub replacement_mode: bool,
+    pub destructive_effects: Vec<String>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardEditJob {
+    pub schema_version: String,
+    pub job_id: String,
+    pub app_id: String,
+    pub board_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_profile_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_principal_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_hub: Option<String>,
+    pub phase: BoardEditJobPhase,
+    pub created_at_ms: u64,
+    pub updated_at_ms: u64,
+    pub expires_at_ms: u64,
+    pub token: FlowIrCommitToken,
+    pub approval: flow_like::flow::copilot::tool_spec::ResolvedToolApproval,
+    pub review: BoardEditJobReview,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<ApplyFlowIrCommitResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardEditJobResolution {
+    pub job: BoardEditJob,
+    /// False for an idempotent replay of a previously settled job. Callers use this to avoid
+    /// repeating host-side synchronization work.
+    pub transitioned: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BoardEditJobDeliveryClaim {
+    pub job: BoardEditJob,
+    pub claimed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_lease_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct BoardEditJobDeliveryLease {
+    lease_id: String,
+    expires_at: Instant,
+}
+
+#[derive(Clone)]
+struct BoardEditJobRecord {
+    job: BoardEditJob,
+    /// The exact host-compiled batch reviewed by the user. Unlike the retained FlowScript draft
+    /// store, this is persisted with the job so an approved review remains applicable after a
+    /// desktop restart.
+    board_commands: Vec<BoardCommand>,
+    /// The compiler's replacement policy is part of the reviewed artifact, not something that may
+    /// be inferred from a later/re-hydrated draft.
+    replacement_mode: bool,
+    touched_at: Instant,
+    /// Serialize Apply/Deny for this exact retained claim without holding the global registry
+    /// mutex across board IO or a native confirmation dialog. Duplicate presenters wait here and
+    /// then observe the first resolver's terminal result.
+    resolution_lock: Arc<tokio::sync::Mutex<()>>,
+    delivery_lease: Option<BoardEditJobDeliveryLease>,
+}
+
+const BOARD_EDIT_JOB_SCHEMA_VERSION: &str = "flowpilot.board-edit-job/v1";
+const BOARD_EDIT_JOB_TTL: Duration = Duration::from_secs(2 * 60 * 60);
+const BOARD_EDIT_DELIVERY_DISPLAY_TTL_MS: u64 = 10 * 365 * 24 * 60 * 60 * 1_000;
+const BOARD_EDIT_JOB_MAX_ENTRIES: usize = 256;
+const BOARD_EDIT_JOB_DELIVERY_LEASE: Duration = Duration::from_secs(60);
+const BOARD_EDIT_JOB_SNAPSHOT_FILE: &str = "board-edit-jobs-v1.json";
+/// Keep one pathological compiler artifact from monopolizing the recovery registry. The lower
+/// executed-command transport cap is checked after apply, because undo metadata can change size.
+const BOARD_EDIT_JOB_MAX_BATCH_BYTES: usize = 8 * 1024 * 1024;
+/// Hard cap for the complete persisted registry, including applied delivery receipts. Entry count
+/// alone is insufficient because command payloads vary by orders of magnitude.
+const BOARD_EDIT_JOB_MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024;
+/// Mirrors the renderer's atomic command envelope. A compiler command such as RemoveNode can
+/// expand to an undo command containing an entire large node, so this is checked on the actual
+/// executed GenericCommand before persistence. The shared validator also checks JSON-string
+/// escaping for the Lambda request event and echoed command response.
+const BOARD_EDIT_JOB_MAX_REMOTE_COMMAND_BYTES: usize =
+    crate::functions::flow::board::REMOTE_BOARD_COMMAND_BATCH_MAX_BYTES;
+/// Bound the full durable replay payload independently from compact BoardCommand input size.
+const BOARD_EDIT_JOB_MAX_APPLY_RECEIPT_BYTES: usize = 32 * 1024 * 1024;
+
+#[derive(Deserialize, Serialize)]
+struct BoardEditJobSnapshot {
+    schema_version: String,
+    jobs: Vec<PersistedBoardEditJobEntry>,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct PersistedBoardEditJobRecord {
+    job: BoardEditJob,
+    #[serde(default)]
+    board_commands: Vec<BoardCommand>,
+    #[serde(default)]
+    replacement_mode: bool,
+}
+
+/// Accept the original v1 snapshot shape during migration. Such a record has no recoverable exact
+/// batch and is therefore made stale below instead of being unsafely reconstructed.
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum PersistedBoardEditJobEntry {
+    Current(PersistedBoardEditJobRecord),
+    Legacy(BoardEditJob),
+}
+
+fn board_edit_job_snapshot_path() -> Option<PathBuf> {
+    Some(flow_ir_draft_snapshot_dir()?.join(BOARD_EDIT_JOB_SNAPSHOT_FILE))
+}
+
+fn board_edit_job_record_from_persisted(
+    persisted: PersistedBoardEditJobEntry,
+) -> Option<BoardEditJobRecord> {
+    let (mut job, board_commands, replacement_mode) = match persisted {
+        PersistedBoardEditJobEntry::Current(record) => {
+            (record.job, record.board_commands, record.replacement_mode)
+        }
+        PersistedBoardEditJobEntry::Legacy(job) => (job, Vec::new(), false),
+    };
+    if job.schema_version != BOARD_EDIT_JOB_SCHEMA_VERSION
+        || job.job_id.trim().is_empty()
+        || job.app_id.trim().is_empty()
+        || job.board_id.trim().is_empty()
+    {
+        return None;
+    }
+    let now = Instant::now();
+    let now_ms = wall_clock_ms();
+    if matches!(
+        job.phase,
+        BoardEditJobPhase::Preparing | BoardEditJobPhase::Applying
+    ) {
+        job.phase = BoardEditJobPhase::Failed;
+        job.updated_at_ms = now_ms;
+        job.error = Some(
+            "The desktop process restarted during the native apply transition. Retry this exact retained review; a durable board receipt prevents duplicate mutation if persistence already completed."
+                .to_string(),
+        );
+    }
+    if board_commands.is_empty()
+        && matches!(
+            job.phase,
+            BoardEditJobPhase::Preparing
+                | BoardEditJobPhase::AwaitingApproval
+                | BoardEditJobPhase::Applying
+                | BoardEditJobPhase::Failed
+        )
+    {
+        job.phase = BoardEditJobPhase::Stale;
+        job.updated_at_ms = now_ms;
+        job.error = Some(
+            "This review predates crash-durable exact batches and cannot be applied safely after restart. Regenerate it against the current board."
+                .to_string(),
+        );
+    }
+    if !board_commands.is_empty() {
+        // Display metadata is never an authority boundary. Recompute it from the exact persisted
+        // host batch so a partial/corrupt snapshot cannot pair benign review text with a different
+        // apply artifact.
+        job.review = board_command_review(&board_commands, replacement_mode);
+    }
+    if job.phase == BoardEditJobPhase::AppliedPendingDelivery {
+        job.expires_at_ms = now_ms.saturating_add(BOARD_EDIT_DELIVERY_DISPLAY_TTL_MS);
+    }
+    let age_ms = now_ms.saturating_sub(job.updated_at_ms);
+    let touched_at = now
+        .checked_sub(Duration::from_millis(age_ms))
+        .unwrap_or(now);
+    Some(BoardEditJobRecord {
+        job,
+        board_commands,
+        replacement_mode,
+        touched_at,
+        resolution_lock: Arc::new(tokio::sync::Mutex::new(())),
+        delivery_lease: None,
+    })
+}
+
+fn load_board_edit_jobs() -> HashMap<String, BoardEditJobRecord> {
+    let Some(path) = board_edit_job_snapshot_path() else {
+        return HashMap::new();
+    };
+    if std::fs::metadata(&path)
+        .is_ok_and(|metadata| metadata.len() > BOARD_EDIT_JOB_MAX_SNAPSHOT_BYTES as u64)
+    {
+        tracing::warn!(
+            "ignoring oversized FlowPilot board-edit recovery snapshot at {}",
+            path.display()
+        );
+        return HashMap::new();
+    }
+    let Ok(encoded) = std::fs::read(path) else {
+        return HashMap::new();
+    };
+    let Ok(snapshot) = serde_json::from_slice::<BoardEditJobSnapshot>(&encoded) else {
+        return HashMap::new();
+    };
+    if snapshot.schema_version != BOARD_EDIT_JOB_SCHEMA_VERSION {
+        return HashMap::new();
+    }
+    let jobs = snapshot
+        .jobs
+        .into_iter()
+        .filter_map(|persisted| {
+            let id = match &persisted {
+                PersistedBoardEditJobEntry::Current(record) => record.job.job_id.clone(),
+                PersistedBoardEditJobEntry::Legacy(job) => job.job_id.clone(),
+            };
+            board_edit_job_record_from_persisted(persisted).map(|record| (id, record))
+        })
+        .collect::<HashMap<_, _>>();
+    // Hydration may convert an interrupted Applying transition to retryable Failed, migrate a
+    // legacy entry to fail-closed Stale, or recompute review metadata. Persist that normalized
+    // state immediately so repeated restarts cannot resurrect the pre-normalized lifecycle.
+    if let Err(error) = persist_board_edit_jobs(&jobs) {
+        tracing::error!("could not persist normalized FlowPilot review jobs: {error}");
+    }
+    jobs
+}
+
+fn persist_board_edit_jobs(jobs: &HashMap<String, BoardEditJobRecord>) -> Result<(), String> {
+    let Some(path) = board_edit_job_snapshot_path() else {
+        return Err("The FlowPilot review snapshot directory is unavailable.".to_string());
+    };
+    let Some(parent) = path.parent() else {
+        return Err("The FlowPilot review snapshot path is invalid.".to_string());
+    };
+    std::fs::create_dir_all(parent).map_err(|error| {
+        format!("Could not create the FlowPilot review snapshot directory: {error}")
+    })?;
+    let mut retained = jobs
+        .values()
+        .map(|record| {
+            let mut job = record.job.clone();
+            if job.phase == BoardEditJobPhase::AppliedPendingDelivery {
+                // The board-embedded receipt is the authoritative crash-recovery payload. Keeping
+                // another potentially huge GenericCommand vector here made registry persistence
+                // fail after the board had already committed.
+                job.result = None;
+            }
+            PersistedBoardEditJobEntry::Current(PersistedBoardEditJobRecord {
+                job,
+                board_commands: record.board_commands.clone(),
+                replacement_mode: record.replacement_mode,
+            })
+        })
+        .collect::<Vec<_>>();
+    retained.sort_by_key(|entry| match entry {
+        PersistedBoardEditJobEntry::Current(record) => {
+            (record.job.created_at_ms, record.job.job_id.clone())
+        }
+        PersistedBoardEditJobEntry::Legacy(job) => (job.created_at_ms, job.job_id.clone()),
+    });
+    let snapshot = BoardEditJobSnapshot {
+        schema_version: BOARD_EDIT_JOB_SCHEMA_VERSION.to_string(),
+        jobs: retained,
+    };
+    let encoded = serde_json::to_vec(&snapshot)
+        .map_err(|error| format!("Could not serialize FlowPilot review recovery state: {error}"))?;
+    if encoded.len() > BOARD_EDIT_JOB_MAX_SNAPSHOT_BYTES {
+        return Err(format!(
+            "FlowPilot review recovery storage is full ({} MiB limit). Resolve delivered reviews before creating more large board edits.",
+            BOARD_EDIT_JOB_MAX_SNAPSHOT_BYTES / (1024 * 1024)
+        ));
+    }
+    persist_recovery_snapshot(&path, &encoded)
+        .map_err(|error| format!("Could not commit FlowPilot review recovery state: {error}"))?;
+    Ok(())
+}
+
+static BOARD_EDIT_JOBS: LazyLock<StdMutex<HashMap<String, BoardEditJobRecord>>> =
+    LazyLock::new(|| StdMutex::new(load_board_edit_jobs()));
+
+/// Reject an ordinary native board mutation while FlowPilot owns the same board's apply/delivery
+/// window. Callers must invoke this only after acquiring the live board mutex. That lock order
+/// makes the check race-free with job resolution: either the ordinary edit already owns the board
+/// and completes first, or resolution publishes `Applying` before it waits and this check fails.
+pub(crate) fn ensure_board_mutation_not_reserved_by_flowpilot(
+    app_id: &str,
+    board_id: &str,
+) -> Result<(), String> {
+    let app_id = app_id.trim();
+    let board_id = board_id.trim();
+    let mut jobs = BOARD_EDIT_JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if prune_board_edit_jobs(&mut jobs, Instant::now()) {
+        persist_board_edit_jobs(&jobs)?;
+    }
+    let reserved = board_mutation_is_reserved(&jobs, app_id, board_id);
+    if reserved {
+        Err(
+            "FlowPilot has an applying, failed-recovery, or pending-delivery edit for this board. Retry/dismiss it or finish receipt delivery before making another board mutation."
+                .to_string(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
+fn board_mutation_is_reserved(
+    jobs: &HashMap<String, BoardEditJobRecord>,
+    app_id: &str,
+    board_id: &str,
+) -> bool {
+    jobs.values().any(|record| {
+        record.job.app_id == app_id
+            && record.job.board_id == board_id
+            && board_edit_job_phase_reserves_mutation(record.job.phase)
+    })
+}
+
+fn another_board_edit_job_reserves_mutation(
+    jobs: &HashMap<String, BoardEditJobRecord>,
+    current_job_id: &str,
+    app_id: &str,
+    board_id: &str,
+) -> bool {
+    jobs.iter().any(|(job_id, record)| {
+        job_id != current_job_id
+            && record.job.app_id == app_id
+            && record.job.board_id == board_id
+            && board_edit_job_phase_reserves_mutation(record.job.phase)
+    })
+}
+
+fn board_edit_job_phase_reserves_mutation(phase: BoardEditJobPhase) -> bool {
+    matches!(
+        phase,
+        BoardEditJobPhase::Applying
+            | BoardEditJobPhase::AppliedPendingDelivery
+            | BoardEditJobPhase::Failed
+    )
+}
+
+fn wall_clock_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn flow_ir_commit_identity(token: &FlowIrCommitToken) -> String {
+    format!(
+        "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{}",
+        token.board_id, token.draft_id, token.revision, token.base_fingerprint, token.claim_id
+    )
+}
+
+fn board_command_review(commands: &[BoardCommand], replacement_mode: bool) -> BoardEditJobReview {
+    let mut command_counts = BTreeMap::<String, usize>::new();
+    let mut command_summaries = Vec::new();
+    for command in commands {
+        let serialized = serde_json::to_value(command).unwrap_or_default();
+        let kind = serialized
+            .get("command_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("Unknown")
+            .to_string();
+        *command_counts.entry(kind).or_default() += 1;
+        if command_summaries.len() < 24
+            && let Some(summary) = serialized
+                .get("summary")
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|summary| !summary.is_empty())
+        {
+            command_summaries.push(utf8_prefix(summary, 240).to_string());
+        }
+    }
+    BoardEditJobReview {
+        command_count: commands.len(),
+        command_counts,
+        command_summaries,
+        replacement_mode,
+        destructive_effects: typed_commit_destructive_review_items(replacement_mode, commands),
+    }
+}
+
+fn release_board_edit_job_claim(record: &BoardEditJobRecord) {
+    let token = &record.job.token;
+    if let Some(store) = retained_flow_ir_draft_store(&token.board_id) {
+        let _ = store.release_commit_if_matches(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        );
+    }
+}
+
+fn prune_board_edit_jobs(jobs: &mut HashMap<String, BoardEditJobRecord>, now: Instant) -> bool {
+    let now_ms = wall_clock_ms();
+    let mut persisted_state_changed = false;
+    for record in jobs.values_mut() {
+        if record
+            .delivery_lease
+            .as_ref()
+            .is_some_and(|lease| lease.expires_at <= now)
+        {
+            record.delivery_lease = None;
+        }
+        if !record.job.phase.is_terminal()
+            && !matches!(
+                record.job.phase,
+                BoardEditJobPhase::Applying | BoardEditJobPhase::AppliedPendingDelivery
+            )
+            && now.saturating_duration_since(record.touched_at) > BOARD_EDIT_JOB_TTL
+        {
+            // An expired review is no longer presentable. Release only its exact claim so it
+            // cannot become a hidden, permanently queued compiler artifact after a renderer
+            // reload. A concurrently changed claim is left untouched by the store-side CAS.
+            release_board_edit_job_claim(record);
+            record.job.phase = BoardEditJobPhase::Stale;
+            record.job.updated_at_ms = now_ms;
+            record.job.error = Some(
+                "The compiled board-edit review expired before it was resolved; regenerate it against the current board."
+                    .to_string(),
+            );
+            record.board_commands.clear();
+            persisted_state_changed = true;
+        }
+    }
+    while jobs.len() > BOARD_EDIT_JOB_MAX_ENTRIES {
+        let removable = jobs
+            .iter()
+            .filter(|(_, record)| record.job.phase.is_terminal())
+            .min_by_key(|(_, record)| record.touched_at)
+            .map(|(id, _)| id.clone());
+        let Some(removable) = removable else {
+            break;
+        };
+        if let Some(record) = jobs.remove(&removable) {
+            // Only terminal jobs are capacity-evicted. Unresolved and post-apply delivery jobs
+            // are never sacrificed to admit a newer review.
+            release_board_edit_job_claim(&record);
+            persisted_state_changed = true;
+        }
+    }
+    persisted_state_changed
+}
+
+/// Convert an exact retained compiler claim into a host-owned review job. This function knows
+/// nothing about the model provider; Bits, GitHub Copilot, Codex and Claude all converge here.
+#[tauri::command]
+pub async fn flowpilot_create_board_edit_job(
+    app_handle: AppHandle,
+    app_id: String,
+    request_id: Option<String>,
+    token: FlowIrCommitToken,
+) -> Result<BoardEditJob, String> {
+    let app_id = app_id.trim().to_string();
+    if app_id.is_empty()
+        || token.board_id.trim().is_empty()
+        || token.draft_id.trim().is_empty()
+        || token.base_fingerprint.trim().is_empty()
+        || token.claim_id.trim().is_empty()
+    {
+        return Err("The compiled board-edit token or app id is incomplete.".to_string());
+    }
+    // Expiry may release an exact compiler claim. Perform that cleanup before validating the
+    // token, otherwise a pre-prune validation could incorrectly reopen the just-released job.
+    {
+        let mut jobs = BOARD_EDIT_JOBS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if prune_board_edit_jobs(&mut jobs, Instant::now()) {
+            persist_board_edit_jobs(&jobs)?;
+        }
+    }
+    let Some(store) = retained_flow_ir_draft_store(&token.board_id) else {
+        return Err("The compiled board-edit artifact is no longer retained.".to_string());
+    };
+    let Some(state) = app_handle.try_state::<TauriFlowLikeState>() else {
+        return Err("The live board registry is unavailable.".to_string());
+    };
+    let flow_like_state = state.0.clone();
+    let app = App::load(app_id.clone(), flow_like_state.clone())
+        .await
+        .map_err(|error| format!("The review app could not be loaded: {error}"))?;
+    if !app.boards.contains(&token.board_id) {
+        return Err("The review board does not belong to the requested app.".to_string());
+    }
+    let live_board = flow_like_state
+        .get_board(&token.board_id, None)
+        .map_err(|_| "The review board is not open in this desktop process.".to_string())?;
+    let board = live_board.lock().await;
+    let commands = store
+        .pending_commands_if_current(
+            &board,
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        )
+        .ok_or_else(|| {
+            "The retained compiler claim is stale relative to the live board.".to_string()
+        })?;
+    let replacement_mode = store
+        .pending_commit_requires_destructive_approval(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        )
+        .ok_or_else(|| "The retained compiler review policy is no longer current.".to_string())?;
+    let batch_bytes = serde_json::to_vec(&commands)
+        .map_err(|error| format!("The compiled board-edit batch could not be retained: {error}"))?
+        .len();
+    if batch_bytes > BOARD_EDIT_JOB_MAX_BATCH_BYTES {
+        let _ = store.release_commit_if_matches(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        );
+        return Err(format!(
+            "The compiled board-edit artifact is too large for crash-safe review ({} bytes; {} MiB limit). Split the workflow change into smaller reviews.",
+            batch_bytes,
+            BOARD_EDIT_JOB_MAX_BATCH_BYTES / (1024 * 1024)
+        ));
+    }
+    let review = board_command_review(&commands, replacement_mode);
+    let approval_spec =
+        flow_like::flow::copilot::tool_spec::find_global_tool_spec("flowpilot_board")
+            .ok_or_else(|| "The shared board-edit approval policy is unavailable.".to_string())?;
+    let approval = flow_like::flow::copilot::tool_spec::resolve_tool_apply_approval(
+        &approval_spec,
+        &serde_json::json!({
+            "mode": "edit",
+            "app_id": app_id,
+            "board_id": token.board_id,
+        }),
+    );
+    drop(board);
+
+    let identity = flow_ir_commit_identity(&token);
+    let now = Instant::now();
+    let now_ms = wall_clock_ms();
+    let mut jobs = BOARD_EDIT_JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing_id) = jobs
+        .iter()
+        .find(|(_, record)| {
+            record.job.app_id == app_id && flow_ir_commit_identity(&record.job.token) == identity
+        })
+        .map(|(id, _)| id.clone())
+    {
+        let previous = jobs
+            .get(&existing_id)
+            .cloned()
+            .expect("board-edit job existed while registry lock was held");
+        let existing = jobs
+            .get_mut(&existing_id)
+            .expect("board-edit job existed while registry lock was held");
+        // A renderer can return long after a TTL sweep, and a retryable native Apply failure keeps
+        // the exact compiler claim retained. Successful preflight above proves that these states
+        // can safely be offered for review again.
+        if existing.job.phase == BoardEditJobPhase::Stale {
+            existing.job.phase = BoardEditJobPhase::AwaitingApproval;
+            existing.job.result = None;
+            existing.job.error = None;
+            existing.job.review = review;
+            existing.job.approval = approval;
+            existing.delivery_lease = None;
+        }
+        // Preflight above re-established this exact claim against the live board. Refresh the
+        // durable artifact as well as the display-only review metadata.
+        existing.board_commands = commands;
+        existing.replacement_mode = replacement_mode;
+        if existing.job.request_id.is_none() {
+            existing.job.request_id = request_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+        }
+        existing.job.updated_at_ms = now_ms;
+        existing.job.expires_at_ms = now_ms.saturating_add(BOARD_EDIT_JOB_TTL.as_millis() as u64);
+        existing.touched_at = now;
+        let job = existing.job.clone();
+        if let Err(error) = persist_board_edit_jobs(&jobs) {
+            jobs.insert(existing_id, previous);
+            return Err(error);
+        }
+        return Ok(job);
+    }
+    let evicted_terminal = if jobs.len() >= BOARD_EDIT_JOB_MAX_ENTRIES
+        && let Some(oldest_terminal) = jobs
+            .iter()
+            .filter(|(_, record)| record.job.phase.is_terminal())
+            .min_by_key(|(_, record)| record.touched_at)
+            .map(|(id, _)| id.clone())
+    {
+        jobs.remove(&oldest_terminal)
+            .map(|record| (oldest_terminal, record))
+    } else {
+        None
+    };
+    if jobs.len() >= BOARD_EDIT_JOB_MAX_ENTRIES {
+        return Err(
+            "FlowPilot has too many unresolved board-edit reviews. Resolve or dismiss an existing review before creating another."
+                .to_string(),
+        );
+    }
+    let job_id = uuid::Uuid::new_v4().to_string();
+    let job = BoardEditJob {
+        schema_version: BOARD_EDIT_JOB_SCHEMA_VERSION.to_string(),
+        job_id: job_id.clone(),
+        app_id,
+        board_id: token.board_id.clone(),
+        request_id: request_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
+        remote_profile_id: None,
+        remote_principal_id: None,
+        remote_hub: None,
+        phase: BoardEditJobPhase::AwaitingApproval,
+        created_at_ms: now_ms,
+        updated_at_ms: now_ms,
+        expires_at_ms: now_ms.saturating_add(BOARD_EDIT_JOB_TTL.as_millis() as u64),
+        token,
+        approval,
+        review,
+        result: None,
+        error: None,
+    };
+    jobs.insert(
+        job_id,
+        BoardEditJobRecord {
+            job: job.clone(),
+            board_commands: commands,
+            replacement_mode,
+            touched_at: now,
+            resolution_lock: Arc::new(tokio::sync::Mutex::new(())),
+            delivery_lease: None,
+        },
+    );
+    if let Err(error) = persist_board_edit_jobs(&jobs) {
+        jobs.remove(&job.job_id);
+        if let Some((id, record)) = evicted_terminal {
+            jobs.insert(id, record);
+        }
+        return Err(error);
+    }
+    if let Some((_, record)) = evicted_terminal {
+        release_board_edit_job_claim(&record);
+    }
+    Ok(job)
+}
+
+#[tauri::command]
+pub fn flowpilot_list_board_edit_jobs(
+    app_id: Option<String>,
+    board_id: Option<String>,
+    include_terminal: Option<bool>,
+) -> Vec<BoardEditJob> {
+    let now = Instant::now();
+    let mut jobs = BOARD_EDIT_JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if prune_board_edit_jobs(&mut jobs, now)
+        && let Err(error) = persist_board_edit_jobs(&jobs)
+    {
+        tracing::error!("could not persist pruned FlowPilot review jobs: {error}");
+    }
+    let include_terminal = include_terminal.unwrap_or(false);
+    let app_id = app_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let board_id = board_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let mut result = jobs
+        .values()
+        .filter(|record| {
+            (include_terminal || !record.job.phase.is_terminal())
+                && app_id.is_none_or(|app_id| record.job.app_id == app_id)
+                && board_id.is_none_or(|board_id| record.job.board_id == board_id)
+        })
+        .map(|record| record.job.clone())
+        .collect::<Vec<_>>();
+    result.sort_by_key(|job| (job.created_at_ms, job.job_id.clone()));
+    result
+}
+
+#[tauri::command]
+pub fn flowpilot_get_board_edit_job(job_id: String) -> Option<BoardEditJob> {
+    let mut jobs = BOARD_EDIT_JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if prune_board_edit_jobs(&mut jobs, Instant::now())
+        && let Err(error) = persist_board_edit_jobs(&jobs)
+    {
+        tracing::error!("could not persist pruned FlowPilot review jobs: {error}");
+    }
+    jobs.get(job_id.trim()).map(|record| record.job.clone())
+}
+
+/// Atomically claim a pending review and resolve it. Duplicate callers observe the same native job
+/// instead of applying the batch twice; exact-batch CAS remains enforced by the existing Apply API.
+#[tauri::command]
+pub async fn flowpilot_resolve_board_edit_job(
+    app_handle: AppHandle,
+    job_id: String,
+    approved: bool,
+    remote_profile_id: Option<String>,
+    remote_principal_id: Option<String>,
+    remote_hub: Option<String>,
+) -> Result<BoardEditJobResolution, String> {
+    let job_id = job_id.trim().to_string();
+    let (resolution_lock, review_app_id, review_board_id) = {
+        let mut jobs = BOARD_EDIT_JOBS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if prune_board_edit_jobs(&mut jobs, Instant::now()) {
+            persist_board_edit_jobs(&jobs)?;
+        }
+        jobs.get(&job_id)
+            .map(|record| {
+                (
+                    record.resolution_lock.clone(),
+                    record.job.app_id.clone(),
+                    record.job.board_id.clone(),
+                )
+            })
+            .ok_or_else(|| "The board-edit review job is no longer retained.".to_string())?
+    };
+    let _resolution_guard = resolution_lock.lock().await;
+    let requires_remote_identity = if approved {
+        let Some(state) = app_handle.try_state::<TauriFlowLikeState>() else {
+            return Err("The live board registry is unavailable.".to_string());
+        };
+        let app = App::load(review_app_id.clone(), state.0.clone())
+            .await
+            .map_err(|error| format!("The review app could not be loaded: {error}"))?;
+        if !app.boards.contains(&review_board_id) {
+            return Err("The review board does not belong to the requested app.".to_string());
+        }
+        !matches!(app.visibility, AppVisibility::Offline)
+    } else {
+        false
+    };
+    let (app_id, token, recovered_batch) = {
+        let mut jobs = BOARD_EDIT_JOBS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if prune_board_edit_jobs(&mut jobs, Instant::now()) {
+            persist_board_edit_jobs(&jobs)?;
+        }
+        let previous = jobs
+            .get(&job_id)
+            .cloned()
+            .ok_or_else(|| "The board-edit review job is no longer retained.".to_string())?;
+        if approved
+            && another_board_edit_job_reserves_mutation(
+                &jobs,
+                &job_id,
+                &previous.job.app_id,
+                &previous.job.board_id,
+            )
+        {
+            return Err(
+                "Another FlowPilot edit for this board is applying, awaiting recovery, or pending receipt delivery. Retry/dismiss or deliver that job before approving this review."
+                    .to_string(),
+            );
+        }
+        let record = jobs
+            .get_mut(&job_id)
+            .expect("board-edit job existed while registry lock was held");
+        let can_resolve = matches!(
+            record.job.phase,
+            BoardEditJobPhase::AwaitingApproval | BoardEditJobPhase::Failed
+        ) || (approved && record.job.phase == BoardEditJobPhase::Applying)
+            || (!approved && record.job.phase == BoardEditJobPhase::Stale);
+        if !can_resolve {
+            return Ok(BoardEditJobResolution {
+                job: record.job.clone(),
+                transitioned: false,
+            });
+        }
+        if approved {
+            let remote_profile_id = remote_profile_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let remote_principal_id = remote_principal_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let remote_hub = remote_hub
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let incoming_identity = (
+                remote_profile_id.as_ref(),
+                remote_principal_id.as_ref(),
+                remote_hub.as_ref(),
+            );
+            let incoming_is_unbound = incoming_identity.0.is_none()
+                && incoming_identity.1.is_none()
+                && incoming_identity.2.is_none();
+            let incoming_is_complete = incoming_identity.0.is_some()
+                && incoming_identity.1.is_some()
+                && incoming_identity.2.is_some();
+            if !incoming_is_unbound && !incoming_is_complete {
+                return Err(
+                    "A remote board-edit review requires a complete profile, account, and Hub identity."
+                        .to_string(),
+                );
+            }
+
+            let existing_identity = (
+                record.job.remote_profile_id.as_ref(),
+                record.job.remote_principal_id.as_ref(),
+                record.job.remote_hub.as_ref(),
+            );
+            let existing_is_unbound = existing_identity.0.is_none()
+                && existing_identity.1.is_none()
+                && existing_identity.2.is_none();
+            if existing_is_unbound && incoming_is_complete != requires_remote_identity {
+                return Err(
+                    "The board-edit review identity does not match the app's authoritative local-only/shared visibility. Refresh the app and retry."
+                        .to_string(),
+                );
+            }
+            if !existing_is_unbound && existing_identity != incoming_identity {
+                return Err(
+                    "The board-edit review is already bound to a different remote profile, account, or Hub."
+                        .to_string(),
+                );
+            }
+            if existing_is_unbound && incoming_is_complete {
+                record.job.remote_profile_id = remote_profile_id;
+                record.job.remote_principal_id = remote_principal_id;
+                record.job.remote_hub = remote_hub;
+            }
+        }
+        record.job.phase = if approved {
+            BoardEditJobPhase::Applying
+        } else {
+            // Reserve the transition while the exact claim is released below. The per-job lock
+            // prevents a duplicate resolver from observing this provisional value.
+            BoardEditJobPhase::Denied
+        };
+        record.job.updated_at_ms = wall_clock_ms();
+        record.job.result = None;
+        record.job.error = None;
+        record.touched_at = Instant::now();
+        let transition = (
+            record.job.app_id.clone(),
+            record.job.token.clone(),
+            RecoveredBoardEditBatch {
+                board_commands: record.board_commands.clone(),
+                replacement_mode: record.replacement_mode,
+            },
+        );
+        if let Err(error) = persist_board_edit_jobs(&jobs) {
+            jobs.insert(job_id.clone(), previous);
+            return Err(error);
+        }
+        transition
+    };
+
+    if approved {
+        let result = flowpilot_apply_flow_ir_commit_with_recovery(
+            app_handle,
+            app_id,
+            token,
+            Some(recovered_batch),
+        )
+        .await;
+        let phase = match result.status.as_str() {
+            "applied" => BoardEditJobPhase::AppliedPendingDelivery,
+            "stale" => BoardEditJobPhase::Stale,
+            _ => BoardEditJobPhase::Failed,
+        };
+        let mut jobs = BOARD_EDIT_JOBS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let previous = jobs
+            .get(&job_id)
+            .cloned()
+            .ok_or_else(|| "The board-edit review job disappeared while applying.".to_string())?;
+        let record = jobs
+            .get_mut(&job_id)
+            .expect("board-edit job existed while registry lock was held");
+        record.job.phase = phase;
+        record.job.updated_at_ms = wall_clock_ms();
+        if phase == BoardEditJobPhase::AppliedPendingDelivery {
+            record.job.expires_at_ms = record
+                .job
+                .updated_at_ms
+                .saturating_add(BOARD_EDIT_DELIVERY_DISPLAY_TTL_MS);
+        }
+        record.job.error = matches!(phase, BoardEditJobPhase::Stale | BoardEditJobPhase::Failed)
+            .then(|| result.message.clone());
+        let mut retained_result = result;
+        if phase == BoardEditJobPhase::AppliedPendingDelivery {
+            // The board object already contains the compact, atomic replay receipt. Do not retain
+            // another GenericCommand vector in the registry; delivery obtains it by replaying the
+            // exact token under its native lease.
+            record.job.result = None;
+        } else {
+            // Failed/stale reviews need diagnostics, not a renderer-visible duplicate of the
+            // private exact batch.
+            retained_result.commands.clear();
+            retained_result.board_commands.clear();
+            record.job.result = Some(retained_result);
+        }
+        record.delivery_lease = None;
+        if matches!(
+            phase,
+            BoardEditJobPhase::AppliedPendingDelivery | BoardEditJobPhase::Stale
+        ) {
+            // Pending delivery is recoverable from `result` plus the board-embedded receipt; stale
+            // work is terminal. Do not retain a second large copy of the exact batch.
+            record.board_commands.clear();
+        }
+        record.touched_at = Instant::now();
+        let job = record.job.clone();
+        if let Err(error) = persist_board_edit_jobs(&jobs) {
+            // The board apply may already be durable. Restore `Applying` in memory and let the
+            // next resolution replay the board-embedded receipt instead of stranding a half-
+            // persisted lifecycle transition.
+            jobs.insert(job_id.clone(), previous);
+            return Err(error);
+        }
+        if matches!(phase, BoardEditJobPhase::Stale | BoardEditJobPhase::Failed)
+            && let Some(record) = jobs.get(&job_id)
+        {
+            // A failed apply must not keep holding the board's single pending-commit claim: the
+            // store would redeliver the same doomed batch and refuse every repair commit with
+            // FLOWSCRIPT_BOARD_COMMIT_PENDING, wedging the whole loop. The job retains its
+            // recovered batch, so an explicit retry replays independently of the released claim.
+            release_board_edit_job_claim(record);
+        }
+        return Ok(BoardEditJobResolution {
+            job,
+            transitioned: true,
+        });
+    }
+
+    let disposition =
+        flowpilot_flow_ir_commit_disposition(app_handle, token, FlowIrCommitDisposition::Dismissed)
+            .await;
+    let dismissed = disposition.status == "dismissed"
+        || disposition.code.as_deref() == Some("IR_COMMIT_TOKEN_INVALID");
+    let mut jobs = BOARD_EDIT_JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let previous = jobs
+        .get(&job_id)
+        .cloned()
+        .ok_or_else(|| "The board-edit review job disappeared while denying it.".to_string())?;
+    let record = jobs
+        .get_mut(&job_id)
+        .expect("board-edit job existed while registry lock was held");
+    record.job.phase = if dismissed {
+        BoardEditJobPhase::Denied
+    } else {
+        BoardEditJobPhase::Failed
+    };
+    record.job.updated_at_ms = wall_clock_ms();
+    record.job.error = (!dismissed).then(|| disposition.message);
+    if dismissed {
+        record.board_commands.clear();
+    }
+    record.touched_at = Instant::now();
+    let job = record.job.clone();
+    if let Err(error) = persist_board_edit_jobs(&jobs) {
+        jobs.insert(job_id, previous);
+        if let Some(record) = jobs.get(job.job_id.as_str()) {
+            // The durable state is already Denied from the provisional transition. Do not leave
+            // its exact compiler claim hidden if persisting the follow-up diagnostic failed.
+            release_board_edit_job_claim(record);
+        }
+        return Err(error);
+    }
+    Ok(BoardEditJobResolution {
+        job,
+        transitioned: true,
+    })
+}
+
+/// Lease delivery of an already-applied native receipt to exactly one renderer. The lease makes
+/// concurrent direct/global presenters harmless and expires so a renderer crash can be recovered
+/// after reload without reapplying the native board mutation.
+#[tauri::command]
+pub fn flowpilot_claim_board_edit_job_delivery(
+    job_id: String,
+) -> Result<BoardEditJobDeliveryClaim, String> {
+    let job_id = job_id.trim();
+    let now = Instant::now();
+    let mut jobs = BOARD_EDIT_JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if prune_board_edit_jobs(&mut jobs, now) {
+        persist_board_edit_jobs(&jobs)?;
+    }
+    let record = jobs
+        .get_mut(job_id)
+        .ok_or_else(|| "The board-edit delivery job is no longer retained.".to_string())?;
+    if record.job.phase != BoardEditJobPhase::AppliedPendingDelivery {
+        return Ok(BoardEditJobDeliveryClaim {
+            job: record.job.clone(),
+            claimed: false,
+            delivery_lease_id: None,
+        });
+    }
+    if record.delivery_lease.is_some() {
+        return Ok(BoardEditJobDeliveryClaim {
+            job: record.job.clone(),
+            claimed: false,
+            delivery_lease_id: None,
+        });
+    }
+
+    let lease_id = uuid::Uuid::new_v4().to_string();
+    record.delivery_lease = Some(BoardEditJobDeliveryLease {
+        lease_id: lease_id.clone(),
+        expires_at: now + BOARD_EDIT_JOB_DELIVERY_LEASE,
+    });
+    record.touched_at = now;
+    record.job.updated_at_ms = wall_clock_ms();
+    Ok(BoardEditJobDeliveryClaim {
+        job: record.job.clone(),
+        claimed: true,
+        delivery_lease_id: Some(lease_id),
+    })
+}
+
+/// Acknowledge that the renderer replayed the native receipt through its sync/history layer.
+/// Until this exact lease is acknowledged the job remains nonterminal and discoverable.
+#[tauri::command]
+pub async fn flowpilot_ack_board_edit_job_delivery(
+    app_handle: AppHandle,
+    job_id: String,
+    delivery_lease_id: String,
+) -> Result<BoardEditJob, String> {
+    let job_id = job_id.trim();
+    let delivery_lease_id = delivery_lease_id.trim();
+    let now = Instant::now();
+    let job = {
+        let mut jobs = BOARD_EDIT_JOBS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if prune_board_edit_jobs(&mut jobs, now) {
+            persist_board_edit_jobs(&jobs)?;
+        }
+        let previous = jobs
+            .get(job_id)
+            .cloned()
+            .ok_or_else(|| "The board-edit delivery job is no longer retained.".to_string())?;
+        let record = jobs
+            .get_mut(job_id)
+            .expect("board-edit job existed while registry lock was held");
+        if record.job.phase == BoardEditJobPhase::Applied {
+            return Ok(record.job.clone());
+        }
+        if record.job.phase != BoardEditJobPhase::AppliedPendingDelivery {
+            return Err(
+                "The board-edit job does not have an applied receipt to deliver.".to_string(),
+            );
+        }
+        let lease_matches = record
+            .delivery_lease
+            .as_ref()
+            .is_some_and(|lease| lease.lease_id == delivery_lease_id && lease.expires_at > now);
+        if !lease_matches {
+            return Err(
+                "The board-edit delivery lease expired or belongs to another presenter."
+                    .to_string(),
+            );
+        }
+        record.delivery_lease = None;
+        record.job.phase = BoardEditJobPhase::Applied;
+        // Delivery has completed; neither replay payload nor pre-apply batch belongs in the
+        // long-lived terminal registry entry.
+        record.job.result = None;
+        record.board_commands.clear();
+        record.job.updated_at_ms = wall_clock_ms();
+        record.touched_at = now;
+        let job = record.job.clone();
+        if let Err(error) = persist_board_edit_jobs(&jobs) {
+            jobs.insert(job_id.to_string(), previous);
+            return Err(error);
+        }
+        job
+    };
+
+    // The terminal job snapshot now prevents any future receipt replay. Remove the potentially
+    // large board-embedded recovery value best-effort; a crash here merely leaves harmless
+    // bookkeeping that the bounded receipt set will eventually replace.
+    if let Some(state) = app_handle.try_state::<TauriFlowLikeState>()
+        && let Ok(live_board) = state.0.get_board(&job.board_id, None)
+    {
+        let mut board = live_board.lock().await;
+        let key = flow_ir_durable_receipt_ref_key(&job.app_id, &job.token);
+        if let Some(encoded) = board.remove_internal_ref(&key) {
+            match TauriFlowLikeState::get_project_meta_store(&app_handle).await {
+                Ok(store) => {
+                    if let Err(error) = board.save(Some(store)).await {
+                        let _ = board.insert_internal_ref(key, encoded);
+                        tracing::warn!(
+                            "could not prune delivered FlowPilot board receipt: {error}"
+                        );
+                    }
+                }
+                Err(error) => {
+                    let _ = board.insert_internal_ref(key, encoded);
+                    tracing::warn!(
+                        "could not open board store to prune FlowPilot receipt: {error}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(job)
+}
+
 const FLOW_IR_APPLIED_RECEIPT_TTL: Duration = Duration::from_secs(2 * 60 * 60);
 const FLOW_IR_APPLIED_RECEIPT_MAX_ENTRIES: usize = 512;
+const FLOW_IR_DURABLE_RECEIPT_REF_PREFIX: &str = "__flow_like_internal_v1/flowpilot-apply-receipt/";
+
+#[derive(Deserialize, Serialize)]
+struct DurableFlowIrAppliedReceipt {
+    version: u8,
+    created_at_ms: u64,
+    identity: String,
+    result: ApplyFlowIrCommitResult,
+}
 static FLOW_IR_APPLIED_RECEIPTS: LazyLock<
     StdMutex<HashMap<String, (Instant, ApplyFlowIrCommitResult)>>,
 > = LazyLock::new(|| StdMutex::new(HashMap::new()));
@@ -183,6 +1505,110 @@ fn flow_ir_applied_receipt_key(app_id: &str, token: &FlowIrCommitToken) -> Strin
         token.base_fingerprint,
         token.claim_id
     )
+}
+
+fn flow_ir_durable_receipt_ref_key(app_id: &str, token: &FlowIrCommitToken) -> String {
+    let identity = flow_ir_applied_receipt_key(app_id, token);
+    format!(
+        "{FLOW_IR_DURABLE_RECEIPT_REF_PREFIX}{}",
+        blake3::hash(identity.as_bytes()).to_hex()
+    )
+}
+
+fn replay_flow_ir_applied_receipt_from_board(
+    board: &Board,
+    app_id: &str,
+    token: &FlowIrCommitToken,
+) -> Option<ApplyFlowIrCommitResult> {
+    let identity = flow_ir_applied_receipt_key(app_id, token);
+    let encoded = board.internal_ref(&flow_ir_durable_receipt_ref_key(app_id, token))?;
+    let receipt = serde_json::from_str::<DurableFlowIrAppliedReceipt>(encoded).ok()?;
+    if receipt.version != 1 || receipt.identity != identity {
+        return None;
+    }
+    let mut result = receipt.result;
+    result.replayed = true;
+    result.message = format!("{} (durable idempotent replay)", result.message);
+    Some(result)
+}
+
+fn compact_durable_apply_receipt(result: &ApplyFlowIrCommitResult) -> ApplyFlowIrCommitResult {
+    let mut compact = result.clone();
+    // BoardCommands are the pre-apply compiler artifact and remain represented by the token. A
+    // replay only needs executed GenericCommands for remote sync/history plus result metadata.
+    compact.board_commands.clear();
+    compact
+}
+
+fn validate_board_edit_delivery_bounds(
+    result: &ApplyFlowIrCommitResult,
+    requires_remote_delivery: bool,
+) -> Result<(), String> {
+    if requires_remote_delivery {
+        // The complete receipt is one board transaction. Measuring commands separately would
+        // permit an aggregate payload that can only be delivered as independently persisted
+        // prefixes (setup first, connections last), recreating a nodes-only Hub board on failure.
+        crate::functions::flow::board::validate_remote_command_batch_size(&result.commands)
+            .map_err(|error| {
+                format!("The atomic executed command batch cannot be delivered: {error}")
+            })?;
+    }
+
+    let durable_bytes = serde_json::to_vec(&compact_durable_apply_receipt(result))
+        .map_err(|error| format!("Could not size the durable apply receipt: {error}"))?
+        .len();
+    if durable_bytes > BOARD_EDIT_JOB_MAX_APPLY_RECEIPT_BYTES {
+        return Err(format!(
+            "The executed receipt expands to {durable_bytes} bytes, above the {} MiB crash-recovery limit.",
+            BOARD_EDIT_JOB_MAX_APPLY_RECEIPT_BYTES / (1024 * 1024)
+        ));
+    }
+    Ok(())
+}
+
+fn retain_flow_ir_applied_receipt_on_board(
+    board: &mut Board,
+    app_id: &str,
+    token: &FlowIrCommitToken,
+    result: &ApplyFlowIrCommitResult,
+) -> Result<(), String> {
+    let now_ms = wall_clock_ms();
+    let mut receipts = board
+        .internal_refs_with_prefix(FLOW_IR_DURABLE_RECEIPT_REF_PREFIX)
+        .filter_map(|(key, value)| {
+            serde_json::from_str::<DurableFlowIrAppliedReceipt>(value)
+                .ok()
+                .map(|receipt| (key.to_string(), receipt.created_at_ms))
+        })
+        .collect::<Vec<_>>();
+    receipts.sort_by_key(|(_, created_at_ms)| *created_at_ms);
+    let keep_from = receipts
+        .len()
+        .saturating_sub(FLOW_IR_APPLIED_RECEIPT_MAX_ENTRIES.saturating_sub(1));
+    let retained = receipts
+        .into_iter()
+        .skip(keep_from)
+        .map(|(key, _)| key)
+        .collect::<HashSet<_>>();
+    board
+        .retain_internal_refs_with_prefix(FLOW_IR_DURABLE_RECEIPT_REF_PREFIX, |key, _| {
+            retained.contains(key)
+        })
+        .map_err(|error| error.to_string())?;
+
+    let identity = flow_ir_applied_receipt_key(app_id, token);
+    let receipt = DurableFlowIrAppliedReceipt {
+        version: 1,
+        created_at_ms: now_ms,
+        identity,
+        result: compact_durable_apply_receipt(result),
+    };
+    let encoded = serde_json::to_string(&receipt)
+        .map_err(|error| format!("Could not serialize the durable apply receipt: {error}"))?;
+    board
+        .insert_internal_ref(flow_ir_durable_receipt_ref_key(app_id, token), encoded)
+        .map_err(|error| error.to_string())?;
+    Ok(())
 }
 
 fn prune_flow_ir_applied_receipts(
@@ -217,6 +1643,7 @@ fn replay_flow_ir_applied_receipt(
         .get(&flow_ir_applied_receipt_key(app_id, token))
         .map(|(_, result)| {
             let mut replay = result.clone();
+            replay.replayed = true;
             replay.message = format!("{} (idempotent replay)", replay.message);
             replay
         })
@@ -234,7 +1661,7 @@ fn retain_flow_ir_applied_receipt(
     prune_flow_ir_applied_receipts(&mut receipts, now);
     receipts.insert(
         flow_ir_applied_receipt_key(app_id, token),
-        (now, result.clone()),
+        (now, compact_durable_apply_receipt(result)),
     );
 }
 
@@ -242,6 +1669,7 @@ impl ApplyFlowIrCommitResult {
     fn empty(status: &str, code: &str, message: impl Into<String>) -> Self {
         Self {
             status: status.to_string(),
+            replayed: false,
             code: Some(code.to_string()),
             message: message.into(),
             commands: Vec::new(),
@@ -259,6 +1687,7 @@ impl ApplyFlowIrCommitResult {
     ) -> Self {
         Self {
             status: "error".to_string(),
+            replayed: false,
             code: Some(code.to_string()),
             message: message.into(),
             commands: Vec::new(),
@@ -392,11 +1821,46 @@ pub async fn flowpilot_flow_ir_commit_disposition(
 /// The client cannot supply or alter the commands. The live board write lock spans token/base
 /// validation, retained-batch lookup, rollback-safe application, persistence, and exact claim
 /// acknowledgement, closing the preflight/apply TOCTOU window.
+#[derive(Clone)]
+struct RecoveredBoardEditBatch {
+    board_commands: Vec<BoardCommand>,
+    replacement_mode: bool,
+}
+
 #[tauri::command]
 pub async fn flowpilot_apply_flow_ir_commit(
     app_handle: AppHandle,
     app_id: String,
     token: FlowIrCommitToken,
+) -> ApplyFlowIrCommitResult {
+    flowpilot_apply_flow_ir_commit_with_recovery(app_handle, app_id, token, None).await
+}
+
+fn board_edit_job_matches_terminal_delivery(
+    record: &BoardEditJobRecord,
+    app_id: &str,
+    token: &FlowIrCommitToken,
+) -> bool {
+    record.job.phase == BoardEditJobPhase::Applied
+        && flow_ir_applied_receipt_key(&record.job.app_id, &record.job.token)
+            == flow_ir_applied_receipt_key(app_id, token)
+}
+
+fn board_edit_job_delivery_is_terminal(app_id: &str, token: &FlowIrCommitToken) -> bool {
+    let jobs = BOARD_EDIT_JOBS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    jobs.values()
+        .any(|record| board_edit_job_matches_terminal_delivery(record, app_id, token))
+}
+
+/// Host-only recovery variant. The renderer can never supply this batch: it comes exclusively
+/// from the atomically persisted BoardEditJob that was created from the retained compiler claim.
+async fn flowpilot_apply_flow_ir_commit_with_recovery(
+    app_handle: AppHandle,
+    app_id: String,
+    token: FlowIrCommitToken,
+    recovered_batch: Option<RecoveredBoardEditBatch>,
 ) -> ApplyFlowIrCommitResult {
     if app_id.trim().is_empty()
         || token.board_id.trim().is_empty()
@@ -411,17 +1875,21 @@ pub async fn flowpilot_apply_flow_ir_commit(
         );
     }
 
+    // The renderer has already durably synchronized and acknowledged this native job. Returning
+    // its old commands through a stale/direct presenter would create a second remote delivery
+    // attempt after the job boundary, so terminal job identity takes precedence over receipts.
+    if board_edit_job_delivery_is_terminal(&app_id, &token) {
+        return ApplyFlowIrCommitResult::empty(
+            "stale",
+            "IR_COMMIT_DELIVERY_FINALIZED",
+            "This exact compiled workflow review was already applied and fully delivered.",
+        );
+    }
+
     if let Some(receipt) = replay_flow_ir_applied_receipt(&app_id, &token) {
         return receipt;
     }
 
-    let Some(store) = retained_flow_ir_draft_store(&token.board_id) else {
-        return ApplyFlowIrCommitResult::empty(
-            "stale",
-            "IR_COMMIT_TOKEN_INVALID",
-            "The compiled workflow review is no longer retained by this desktop process.",
-        );
-    };
     let Some(managed_state) = app_handle.try_state::<TauriFlowLikeState>() else {
         return ApplyFlowIrCommitResult::empty(
             "error",
@@ -437,6 +1905,17 @@ pub async fn flowpilot_apply_flow_ir_commit(
             "The review board is not open in this desktop process; nothing was applied.",
         );
     };
+    {
+        let board = live_board.lock().await;
+        if let Some(receipt) = replay_flow_ir_applied_receipt_from_board(&board, &app_id, &token) {
+            retain_flow_ir_applied_receipt(&app_id, &token, &receipt);
+            return receipt;
+        }
+    }
+    // The in-memory retained store is preferred while the originating process is alive. A native
+    // BoardEditJob additionally owns an exact persisted batch so restart recovery does not depend
+    // on reconstructing transient compiler claim state.
+    let store = retained_flow_ir_draft_store(&token.board_id);
     let project_store = match TauriFlowLikeState::get_project_meta_store(&app_handle).await {
         Ok(store) => store,
         Err(error) => {
@@ -487,30 +1966,39 @@ pub async fn flowpilot_apply_flow_ir_commit(
         })
         .collect::<Vec<_>>();
 
-    let mut board = live_board.lock().await;
-    let Some(mut board_commands) = store.pending_commands_if_current(
-        &board,
-        &token.draft_id,
-        token.revision,
-        &token.base_fingerprint,
-        &token.claim_id,
-    ) else {
-        return ApplyFlowIrCommitResult::empty(
-            "stale",
-            "IR_COMMIT_REVIEW_STALE",
-            "The live board or retained compiled revision changed after this review was generated. Nothing was applied.",
-        );
+    let resolve_exact_batch = |board: &Board| -> Option<(Vec<BoardCommand>, bool)> {
+        if let Some(store) = store.as_ref()
+            && let Some(commands) = store.pending_commands_if_current(
+                board,
+                &token.draft_id,
+                token.revision,
+                &token.base_fingerprint,
+                &token.claim_id,
+            )
+            && let Some(replacement_mode) = store.pending_commit_requires_destructive_approval(
+                &token.draft_id,
+                token.revision,
+                &token.base_fingerprint,
+                &token.claim_id,
+            )
+        {
+            return Some((commands, replacement_mode));
+        }
+
+        let recovered = recovered_batch.as_ref()?;
+        if recovered.board_commands.is_empty() || board_fingerprint(board) != token.base_fingerprint
+        {
+            return None;
+        }
+        Some((recovered.board_commands.clone(), recovered.replacement_mode))
     };
-    let Some(replacement_mode) = store.pending_commit_requires_destructive_approval(
-        &token.draft_id,
-        token.revision,
-        &token.base_fingerprint,
-        &token.claim_id,
-    ) else {
+
+    let mut board = live_board.lock().await;
+    let Some((mut board_commands, replacement_mode)) = resolve_exact_batch(&board) else {
         return ApplyFlowIrCommitResult::empty(
             "stale",
             "IR_COMMIT_REVIEW_STALE",
-            "The retained compiled revision changed while its review policy was being checked. Nothing was applied.",
+            "The live board no longer matches the exact retained or crash-recovered review batch. Nothing was applied.",
         );
     };
     let destructive_review_items =
@@ -533,31 +2021,13 @@ pub async fn flowpilot_apply_flow_ir_commit(
         }
 
         board = live_board.lock().await;
-        let Some(revalidated_commands) = store.pending_commands_if_current(
-            &board,
-            &token.draft_id,
-            token.revision,
-            &token.base_fingerprint,
-            &token.claim_id,
-        ) else {
-            return ApplyFlowIrCommitResult::empty(
-                "stale",
-                "IR_COMMIT_REVIEW_STALE",
-                "The live board or retained compiled revision changed while native destructive confirmation was open. Nothing was applied.",
-            );
-        };
-        let Some(revalidated_replacement_mode) = store
-            .pending_commit_requires_destructive_approval(
-                &token.draft_id,
-                token.revision,
-                &token.base_fingerprint,
-                &token.claim_id,
-            )
+        let Some((revalidated_commands, revalidated_replacement_mode)) =
+            resolve_exact_batch(&board)
         else {
             return ApplyFlowIrCommitResult::empty(
                 "stale",
                 "IR_COMMIT_REVIEW_STALE",
-                "The retained compiled revision changed while native destructive confirmation was open. Nothing was applied.",
+                "The live board or exact recovered batch changed while native destructive confirmation was open. Nothing was applied.",
             );
         };
         let revalidated_review_items = typed_commit_destructive_review_items(
@@ -566,7 +2036,10 @@ pub async fn flowpilot_apply_flow_ir_commit(
         );
         let exact_batch_unchanged =
             exact_board_command_batch_matches(&board_commands, &revalidated_commands);
-        if !exact_batch_unchanged || revalidated_review_items != destructive_review_items {
+        if !exact_batch_unchanged
+            || revalidated_replacement_mode != replacement_mode
+            || revalidated_review_items != destructive_review_items
+        {
             return ApplyFlowIrCommitResult::empty(
                 "stale",
                 "IR_COMMIT_REVIEW_STALE",
@@ -618,6 +2091,44 @@ pub async fn flowpilot_apply_flow_ir_commit(
         );
     }
 
+    let mut result = ApplyFlowIrCommitResult {
+        status: "applied".to_string(),
+        replayed: false,
+        code: None,
+        message: format!(
+            "Applied and persisted {} exact compiled workflow board command(s).",
+            apply_result.commands.len()
+        ),
+        commands: apply_result.commands.clone(),
+        board_commands: apply_result.board_commands.clone(),
+        diagnostics: Vec::new(),
+        final_board_node_count: Some(board_total_node_count(&board)),
+    };
+    if let Err(error) = validate_board_edit_delivery_bounds(
+        &result,
+        !matches!(app.visibility, AppVisibility::Offline),
+    ) {
+        *board = original_board;
+        return ApplyFlowIrCommitResult::empty(
+            "stale",
+            "IR_COMMIT_DELIVERY_TOO_LARGE",
+            format!(
+                "The compiled workflow was not persisted because its actual undo/sync receipt cannot be delivered crash-safely: {error} Split the workflow change or reduce the size of the affected node."
+            ),
+        );
+    }
+    if let Err(error) =
+        retain_flow_ir_applied_receipt_on_board(&mut board, &app_id, &token, &result)
+    {
+        *board = original_board;
+        return ApplyFlowIrCommitResult::apply_error(
+            "IR_COMMIT_RECEIPT_PERSISTENCE_FAILED",
+            "The compiled workflow was rolled back because its crash-recovery receipt could not be prepared.",
+            apply_result.board_commands,
+            vec![error],
+        );
+    }
+
     if let Err(error) = board.save(Some(project_store.clone())).await {
         let rollback_error = board
             .undo(apply_result.commands.clone(), flow_like_state.clone())
@@ -647,43 +2158,35 @@ pub async fn flowpilot_apply_flow_ir_commit(
         );
     }
 
-    let acknowledged = store.acknowledge_applied_commit(
-        &board,
-        &token.draft_id,
-        token.revision,
-        &token.base_fingerprint,
-        &token.claim_id,
-    );
-    // The exact claim/base/batch was validated under this continuous board lock before execution,
-    // so a failed acknowledgement only means the claim BOOKKEEPING was resolved concurrently (a
-    // dismissal issued after a lost response channel, TTL cleanup, or a duplicate disposition).
-    // The applied and persisted board is correct and must not be rolled back — destroying it here
-    // previously forced full rebuild cycles of an identical batch. Best-effort release keeps the
-    // store from redelivering the already-applied review.
-    let mut diagnostics = apply_result.diagnostics;
-    let mut code = None;
-    if !acknowledged {
-        let released = store.release_commit_if_matches(
+    if let Some(store) = store {
+        let acknowledged = store.acknowledge_applied_commit(
+            &board,
             &token.draft_id,
             token.revision,
             &token.base_fingerprint,
             &token.claim_id,
         );
-        code = Some("IR_COMMIT_ACK_RACED".to_string());
-        diagnostics.push(flow_ir_ack_race_diagnostic(released));
+        // The exact claim/base/batch was validated under this continuous board lock before
+        // execution, so a failed acknowledgement only means claim bookkeeping was resolved
+        // concurrently. The applied and persisted board remains authoritative.
+        if !acknowledged {
+            let released = store.release_commit_if_matches(
+                &token.draft_id,
+                token.revision,
+                &token.base_fingerprint,
+                &token.claim_id,
+            );
+            result.code = Some("IR_COMMIT_ACK_RACED".to_string());
+            result
+                .diagnostics
+                .push(flow_ir_ack_race_diagnostic(released));
+        }
+    } else {
+        result.diagnostics.push(
+            "Applied from the host-persisted exact review batch after the transient compiler store was unavailable."
+                .to_string(),
+        );
     }
-    let result = ApplyFlowIrCommitResult {
-        status: "applied".to_string(),
-        code,
-        message: format!(
-            "Applied and persisted {} exact compiled workflow board command(s).",
-            apply_result.commands.len()
-        ),
-        commands: apply_result.commands,
-        board_commands: apply_result.board_commands,
-        diagnostics,
-        final_board_node_count: Some(board_total_node_count(&board)),
-    };
     retain_flow_ir_applied_receipt(&app_id, &token, &result);
     result
 }
@@ -1308,7 +2811,6 @@ pub async fn copilot_chat(
     // Streaming channel
     channel: Channel<String>,
 ) -> Result<UnifiedCopilotResponse, String> {
-    let read_only = read_only.unwrap_or(false);
     let nested = nested.unwrap_or(false);
     let raw_user_prompt = raw_user_prompt
         .filter(|prompt| !prompt.trim().is_empty())
@@ -1319,6 +2821,13 @@ pub async fn copilot_chat(
                 .filter(|prompt| !prompt.trim().is_empty())
         })
         .unwrap_or_else(|| user_prompt.clone());
+    // `Some` is an explicit tool/UI mode; `None` is Auto for the direct panel. Resolve this once
+    // before choosing Bits, GitHub Copilot, Codex, or Claude so every backend receives the same
+    // authoring surface and watchdog policy.
+    let read_only = match read_only {
+        Some(explicit) => explicit,
+        None => is_read_only_workflow_request(&raw_user_prompt.to_lowercase()),
+    };
     // The retained-draft identity and acceptance contract must survive across nested runs spawned
     // from one user turn. Delegated specialist instructions differ per nested run, so identity
     // binds to the outer chat's immutable source prompt whenever the tool context carries it,
@@ -1514,6 +3023,9 @@ pub async fn copilot_chat(
     // same frontend execution bridge explicitly so provider choice does not remove runtime
     // verification tools. Detached nested board specialists must use the global bridge listener.
     let stream_parent_request_id = scoped_parent_request_id(tool_context.as_ref());
+    let board_context_augmentation = tool_context
+        .as_ref()
+        .and_then(|context| context.board_context_manifest.clone());
     let (run_cancellation, _run_registration) = register_copilot_run(
         request_id
             .as_deref()
@@ -1559,26 +3071,46 @@ pub async fn copilot_chat(
         run_cancellation.clone(),
     );
     run_summary.record_phase();
+    let workflow_session_snapshot = Arc::new(StdMutex::new(None));
+    run_summary.attach_shared_session_snapshot(workflow_session_snapshot.clone());
+    let workflow_edit_request =
+        !read_only && matches!(scope, CopilotScope::Board | CopilotScope::Both) && board.is_some();
 
     let copilot_init =
         UnifiedCopilot::new(state_clone, catalog_provider, profile, None, usage_context);
-    let mut copilot = tokio::select! {
+    let copilot = tokio::select! {
         result = copilot_init => result.map_err(|error| error.to_string())?,
         _ = run_cancellation.cancelled() => {
             return Err("FlowPilot Bits run was cancelled during initialization".to_string());
         }
     }
-    .with_runtime_bridge(runtime_bridge)
     // Bind draft/acceptance identity to the same conversation-scoped request identity the SDK and
     // external agent backends use, while `raw_user_prompt` keeps serving routing/classification.
     .with_request_identity_prompt(Some(request_identity_prompt));
+    let mut copilot = copilot
+        .with_board_context_augmentation(board_context_augmentation)
+        .with_read_only(read_only)
+        .with_workflow_session_snapshot_sink(workflow_session_snapshot);
 
+    // Core exposes database/UI/storage inspection in every mode and withholds execute tools when
+    // read-only. Attach one bridge for both rather than maintaining a provider-specific surface.
+    copilot = copilot.with_runtime_bridge(runtime_bridge);
+
+    let mut bits_draft_snapshot = None;
     if !read_only
         && !matches!(scope, CopilotScope::Frontend)
         && let Some(board) = board.as_ref()
     {
         let flow_ir_drafts = retained_flow_ir_draft_store_for_board(board)?;
-        copilot = copilot.with_flow_ir_draft_store(flow_ir_drafts);
+        let board_key = board.id.clone();
+        let snapshot_store = flow_ir_drafts.clone();
+        let snapshot_board_key = board_key.clone();
+        copilot = copilot
+            .with_flow_ir_draft_store(flow_ir_drafts.clone())
+            .with_flow_ir_draft_mutation_hook(Arc::new(move || {
+                schedule_flow_ir_draft_snapshot(&snapshot_board_key, &snapshot_store);
+            }));
+        bits_draft_snapshot = Some((board_key, flow_ir_drafts));
     }
 
     let on_token = Some(move |token: String| {
@@ -1618,15 +3150,20 @@ pub async fn copilot_chat(
             Err("FlowPilot Bits run was cancelled".to_string())
         }
     };
+    if let Some((board_key, store)) = bits_draft_snapshot.as_ref() {
+        // Flush/supersede the debounce generation on every terminal path as a final safety net;
+        // per-tool hooks above already cover long-running repair loops.
+        schedule_flow_ir_draft_snapshot(board_key, store);
+    }
     if let Ok(response) = &chat_result {
         run_summary.set_applied_commands(response.commands.len());
-        run_summary.set_outcome(
-            if response.commands.is_empty() && response.flow_ir_commit.is_none() {
-                "completed"
-            } else {
-                "committed"
-            },
-        );
+        if !response.commands.is_empty() || response.flow_ir_commit.is_some() {
+            run_summary.set_outcome("committed");
+        } else {
+            run_summary.resolve_outcome(false, workflow_edit_request);
+        }
+    } else {
+        run_summary.resolve_outcome(true, workflow_edit_request);
     }
     chat_result
 }
@@ -2050,7 +3587,9 @@ pub async fn global_chat(
                     Some(context),
                     memory,
                     Some(global_tool_context.clone()),
-                    None,
+                    // Register under the frontend run id so cancel_copilot_chat can stop this
+                    // run (the e2e runner and the UI stop button both cancel by that id).
+                    run_id.clone(),
                     false,
                     false,
                 )
@@ -2083,7 +3622,9 @@ pub async fn global_chat(
                     Some(context),
                     memory,
                     Some(global_tool_context.clone()),
-                    None,
+                    // Register under the frontend run id so cancel_copilot_chat can stop this
+                    // run (the e2e runner and the UI stop button both cancel by that id).
+                    run_id.clone(),
                     false,
                     false,
                 )
@@ -2239,12 +3780,13 @@ fn frontend_platform_tool_spec(
     tool_name: &str,
 ) -> Option<flow_like::flow::copilot::tool_spec::PlatformToolSpec> {
     use flow_like::flow::copilot::tool_spec::{
-        find_global_tool_spec, find_runtime_execution_tool_spec,
+        find_global_tool_spec, find_runtime_execution_tool_spec, find_workflow_context_tool_spec,
     };
 
     match tool_set {
         FrontendPlatformToolSet::Global => find_global_tool_spec(tool_name),
-        FrontendPlatformToolSet::BoardRuntime => find_runtime_execution_tool_spec(tool_name),
+        FrontendPlatformToolSet::BoardRuntime => find_runtime_execution_tool_spec(tool_name)
+            .or_else(|| find_workflow_context_tool_spec(tool_name)),
     }
 }
 
@@ -2410,6 +3952,9 @@ fn classify_external_agent_failure(error: &str, cancelled: bool) -> ExternalAgen
         "http 503",
         "http 504",
         "http 529",
+        // Host-initiated phase end: the shared session circuit opened and every further mutation
+        // tool would be refused, so the phase was cancelled to grant a bounded continuation.
+        "zero-progress circuit",
     ];
     if transient_markers
         .iter()
@@ -2465,6 +4010,7 @@ async fn external_code_agent_chat_internal(
     nested: bool,
     read_only: bool,
 ) -> Result<UnifiedCopilotResponse, String> {
+    let global_agent = global.is_some();
     let live_board = live_board_handle(&app_handle, board);
     let live_board_snapshot = match live_board.as_ref() {
         Some(live_board) => Some(live_board.lock().await.clone()),
@@ -2482,6 +4028,9 @@ async fn external_code_agent_chat_internal(
         &request_identity_prompt,
         host_context_guidance.as_deref(),
         global.as_deref(),
+        tool_context
+            .as_ref()
+            .and_then(|context| context.board_context_manifest.as_ref()),
         read_only,
     );
     surface.live_board = live_board;
@@ -2520,28 +4069,19 @@ async fn external_code_agent_chat_internal(
         app_handle,
         scope,
         &surface,
-        global.is_some(),
+        global_agent,
         nested,
         tool_context,
         memory,
         &raw_user_prompt,
     );
     if read_only {
-        tools.retain(|(tool, _)| !is_flowpilot_mutation_tool(&tool.name));
+        tools.retain(|(tool, _)| is_flowpilot_read_only_tool(&tool.name));
     } else if workflow_edit_request {
         // A live FlowScript already contains the graph structure. Hiding legacy/manual discovery
         // tools removes the strongest attractors for code-agent search loops and keeps the exposed
         // MCP surface focused on one declaration batch plus iterative text edits.
-        tools.retain(|(tool, _)| {
-            !matches!(
-                tool.name.as_str(),
-                "catalog_search"
-                    | "list_board_nodes"
-                    | "get_node_details"
-                    | "get_unconfigured_nodes"
-                    | "emit_commands"
-            )
-        });
+        tools.retain(|(tool, _)| workflow_authoring_tool_allowed(&tool.name));
     }
     let tool_names = tools
         .iter()
@@ -2571,9 +4111,10 @@ async fn external_code_agent_chat_internal(
         parent_request_id.as_deref(),
     );
     let workflow_state = workflow_edit_request.then(|| {
-        Arc::new(StdMutex::new(
-            WorkflowToolLoopState::from_flowscript_recovery(surface.flowscript_recovery.as_ref()),
-        ))
+        let mut state =
+            WorkflowToolLoopState::from_flowscript_recovery(surface.flowscript_recovery.as_ref());
+        state.attach_shared_session(surface.workflow_manifest.clone());
+        Arc::new(StdMutex::new(state))
     });
     let tool_activity = Arc::new(StdMutex::new(McpToolActivityState::default()));
     let mut run_summary = WorkflowRunSummaryEmitter::new(
@@ -2589,8 +4130,13 @@ async fn external_code_agent_chat_internal(
     let mut continuation = 0u8;
     let mut zero_activity_restarts = 0u8;
     let mut previous_exhausted_budget: Option<String> = None;
-    let mut prompt =
-        build_external_agent_prompt(&surface.system_content, &user_prompt, workflow_edit_request);
+    let mut prompt = build_external_agent_prompt(
+        &surface.system_content,
+        &user_prompt,
+        scope,
+        workflow_edit_request,
+        global_agent,
+    );
     let agent_result = loop {
         if nested_wall_clock_exhausted(nested_wall_clock_deadline) {
             run_summary.mark_budget_incomplete();
@@ -2677,6 +4223,44 @@ async fn external_code_agent_chat_internal(
                 }
             })
         });
+        // Once the shared circuit opens, every further mutation tool is refused pre-dispatch and
+        // nothing dispatched can close it again within this phase. Give the CLI a short grace
+        // window to stop on its own, then end the phase so the continuation (which resets the
+        // circuit) starts instead of letting refused tool calls idle out the whole budget.
+        let circuit_open_fired = Arc::new(AtomicBool::new(false));
+        let circuit_open_watchdog = workflow_state.as_ref().map(|state| {
+            let state = state.clone();
+            let cancel_invocation = invocation_cancellation.clone();
+            let fired = circuit_open_fired.clone();
+            tokio::spawn(async move {
+                let mut open_since: Option<Instant> = None;
+                loop {
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    let open = match state.lock() {
+                        Ok(state) => {
+                            let elapsed_ms = state.shared_session_elapsed_ms();
+                            state
+                                .shared_session
+                                .as_ref()
+                                .map(|session| session.snapshot(elapsed_ms))
+                                .and_then(|snapshot| snapshot.circuit)
+                                .is_some()
+                        }
+                        Err(_) => return,
+                    };
+                    if !open {
+                        open_since = None;
+                        continue;
+                    }
+                    let started = open_since.get_or_insert_with(Instant::now);
+                    if started.elapsed() >= EXTERNAL_CIRCUIT_OPEN_PHASE_END_GRACE {
+                        fired.store(true, AtomicOrdering::Relaxed);
+                        cancel_invocation.cancel();
+                        return;
+                    }
+                }
+            })
+        });
         let mut run_result = run_external_agent_invocation(
             invocation,
             channel.clone(),
@@ -2690,6 +4274,9 @@ async fn external_code_agent_chat_internal(
         if let Some(watchdog) = predraft_checkpoint_watchdog {
             watchdog.abort();
         }
+        if let Some(watchdog) = circuit_open_watchdog {
+            watchdog.abort();
+        }
         if predraft_checkpoint_fired.load(AtomicOrdering::Relaxed) {
             if let Some(state) = workflow_state.as_ref()
                 && let Ok(mut state) = state.lock()
@@ -2701,6 +4288,11 @@ async fn external_code_agent_chat_internal(
                 "FlowPilot pre-draft source checkpoint timed out after {} seconds with usable declarations but no source operation; continue in a fresh bounded phase and call write_flowscript immediately",
                 EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET.as_secs()
             ));
+        } else if circuit_open_fired.load(AtomicOrdering::Relaxed) {
+            run_result = Err(
+                "FlowPilot shared zero-progress circuit opened mid-phase; the host ended the provider phase so a bounded continuation with a reset circuit can retry a materially different strategy"
+                    .to_string(),
+            );
         }
 
         let phase_outcome = match mcp_bridge.finish_phase().await {
@@ -2753,11 +4345,22 @@ async fn external_code_agent_chat_internal(
 
         let phase_tool_calls =
             mcp_total_tool_calls(&tool_activity).saturating_sub(phase_start_tool_calls);
-        if run_failure.is_some() && phase_tool_calls == 0 {
-            // A transient provider/infrastructure failure before the first tool call did no
-            // workflow work. Retry it on its own bounded counter instead of consuming one of the
-            // workflow continuations the repair loop needs.
-            if zero_activity_restarts >= MAX_EXTERNAL_ZERO_ACTIVITY_RESTARTS {
+        // Failures reach this point only when already classified transient. Host-initiated phase
+        // ends (pre-draft checkpoint, circuit-open cancellation) must still consume a
+        // continuation — the continuation grant is what resets the circuit and re-slices the
+        // budget. Pure provider/transport failures (stream disconnects, resets) are not workflow
+        // work and retry on their own bounded counter even mid-phase; burning a continuation per
+        // dropped stream ended runs with no FlowScript after two unlucky disconnects.
+        let host_initiated_phase_end = run_failure.as_deref().is_some_and(|error| {
+            error.contains("pre-draft source checkpoint") || error.contains("zero-progress circuit")
+        });
+        if run_failure.is_some() && !host_initiated_phase_end {
+            let restart_cap = if phase_tool_calls == 0 {
+                MAX_EXTERNAL_ZERO_ACTIVITY_RESTARTS
+            } else {
+                MAX_EXTERNAL_TRANSPORT_RESTARTS
+            };
+            if zero_activity_restarts >= restart_cap {
                 break run_result;
             }
             zero_activity_restarts = zero_activity_restarts.saturating_add(1);
@@ -2814,7 +4417,13 @@ async fn external_code_agent_chat_internal(
                 flow_like::flow::copilot::stream::safe_text_preview(error, 600),
             ));
         }
-        prompt = build_external_agent_prompt(&surface.system_content, &repair_request, true);
+        prompt = build_external_agent_prompt(
+            &surface.system_content,
+            &repair_request,
+            scope,
+            true,
+            global_agent,
+        );
         send_external_progress_event(
             &channel,
             EXTERNAL_AGENT_TOOL_CALL_ID,
@@ -3024,6 +4633,9 @@ async fn copilot_sdk_chat_internal(
         &request_identity_prompt,
         host_context_guidance.as_deref(),
         global.as_deref(),
+        tool_context
+            .as_ref()
+            .and_then(|context| context.board_context_manifest.as_ref()),
         read_only,
     );
     surface.live_board = live_board;
@@ -3033,9 +4645,10 @@ async fn copilot_sdk_chat_internal(
     let emitted_surfaces = surface.emitted_surfaces.clone();
     let workflow_edit_request = surface.workflow_edit_request;
     let workflow_state = workflow_edit_request.then(|| {
-        Arc::new(StdMutex::new(
-            WorkflowToolLoopState::from_flowscript_recovery(surface.flowscript_recovery.as_ref()),
-        ))
+        let mut state =
+            WorkflowToolLoopState::from_flowscript_recovery(surface.flowscript_recovery.as_ref());
+        state.attach_shared_session(surface.workflow_manifest.clone());
+        Arc::new(StdMutex::new(state))
     });
     let mut run_summary = WorkflowRunSummaryEmitter::new(
         channel.clone(),
@@ -3059,18 +4672,9 @@ async fn copilot_sdk_chat_internal(
         &raw_user_prompt,
     );
     if read_only {
-        tools.retain(|(tool, _)| !is_flowpilot_mutation_tool(&tool.name));
+        tools.retain(|(tool, _)| is_flowpilot_read_only_tool(&tool.name));
     } else if workflow_edit_request {
-        tools.retain(|(tool, _)| {
-            !matches!(
-                tool.name.as_str(),
-                "catalog_search"
-                    | "list_board_nodes"
-                    | "get_node_details"
-                    | "get_unconfigured_nodes"
-                    | "emit_commands"
-            )
-        });
+        tools.retain(|(tool, _)| workflow_authoring_tool_allowed(&tool.name));
         tools = guard_sdk_workflow_tools(
             tools,
             workflow_state
@@ -3079,7 +4683,13 @@ async fn copilot_sdk_chat_internal(
                 .clone(),
         );
     }
-    tools = scope_sdk_tool_handlers(tools, run_cancellation.clone());
+    let sdk_tool_activity = Arc::new(SdkToolActivityRegistry::default());
+    let mut sdk_tool_activity_rx = sdk_tool_activity.subscribe();
+    tools = scope_sdk_tool_handlers(
+        tools,
+        run_cancellation.clone(),
+        Some(sdk_tool_activity.clone()),
+    );
 
     // Extract just the Tool definitions for SessionConfig
     let tool_defs: Vec<copilot_sdk::Tool> = tools.iter().map(|(t, _)| t.clone()).collect();
@@ -3358,10 +4968,23 @@ async fn copilot_sdk_chat_internal(
     let mut usage_has_cost = false;
     let mut usage_model: Option<String> = None;
     let mut usage_calls: Vec<serde_json::Value> = Vec::new();
+    let mut last_sdk_event_at = tokio::time::Instant::now();
 
     loop {
+        let event_inactivity_deadline = sdk_tool_activity.inactivity_deadline(last_sdk_event_at);
         let next_event = tokio::select! {
-            result = events.recv() => result,
+            result = events.recv() => {
+                match &result {
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        last_sdk_event_at = tokio::time::Instant::now();
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {}
+                }
+                result
+            }
+            _ = sdk_tool_activity_rx.changed() => {
+                continue;
+            }
             _ = run_cancellation.cancelled() => {
                 let note = "the FlowPilot Copilot run was cancelled";
                 let _ = tokio::time::timeout(SDK_CHAT_ABORT_TIMEOUT, session.abort()).await;
@@ -3386,10 +5009,18 @@ async fn copilot_sdk_chat_internal(
                 session_error_note = Some(note.to_string());
                 break;
             }
-            _ = tokio::time::sleep(SDK_EVENT_INACTIVITY_TIMEOUT) => {
+            _ = tokio::time::sleep_until(event_inactivity_deadline) => {
+                let now = tokio::time::Instant::now();
+                if sdk_tool_activity.inactivity_deadline(last_sdk_event_at) > now {
+                    // A protocol-v3 handler began after this sleep was armed. Activity leases carry
+                    // absolute tool deadlines even though the SDK has not broadcast the request
+                    // events to this subscriber yet.
+                    continue;
+                }
+                let inactive_seconds = now.duration_since(last_sdk_event_at).as_secs();
                 let note = format!(
                     "the Copilot SDK event stream produced no activity for {} seconds",
-                    SDK_EVENT_INACTIVITY_TIMEOUT.as_secs()
+                    inactive_seconds
                 );
                 let _ = tokio::time::timeout(SDK_CHAT_ABORT_TIMEOUT, session.abort()).await;
                 if nested {
@@ -3720,6 +5351,12 @@ async fn copilot_sdk_chat_internal(
                             "result_status": terminal_status,
                             "result_summary": summarize_tool_result(result_content, error_message.as_deref()),
                             "result_preview": result_content.map(|content| preview_tool_result(content)),
+                            // Full text for compiler-receipt evidence; previews truncate large
+                            // commit results and corrupt the captured authored source. Redaction
+                            // still applies — only truncation is lifted.
+                            "result": is_flowscript_draft_operation_tool(&completed_tool_name)
+                                .then(|| result_content.map(full_redacted_tool_result))
+                                .flatten(),
                             "error": error_message,
                         }),
                         parent_request_id.as_deref(),
@@ -4641,6 +6278,7 @@ fn preview_tool_result(content: &str) -> String {
     )
 }
 
+#[cfg(test)]
 fn is_workflow_edit_request(prompt: &str) -> bool {
     let prompt = prompt.to_lowercase();
     if is_read_only_workflow_request(&prompt) {
@@ -4732,6 +6370,27 @@ fn is_workflow_edit_request(prompt: &str) -> bool {
 }
 
 fn is_read_only_workflow_request(prompt: &str) -> bool {
+    let trimmed = prompt.trim_start();
+    let scheduled_check_imperative = (trimmed.starts_with("check ")
+        && [
+            " every ",
+            " each ",
+            " hourly",
+            " daily",
+            " then ",
+            " and notify",
+            " and send",
+            " and store",
+        ]
+        .iter()
+        .any(|signal| trimmed.contains(signal)))
+        || ((trimmed.starts_with("prüf ") || trimmed.starts_with("prüfe "))
+            && [" jede", " stünd", " täglich", " und sende", " und speicher"]
+                .iter()
+                .any(|signal| trimmed.contains(signal)));
+    if scheduled_check_imperative {
+        return false;
+    }
     let read_only_terms = [
         "are these",
         "can this",
@@ -4853,6 +6512,81 @@ impl Drop for SideEffectCommandQueueCleanup {
     }
 }
 
+/// Exact model-facing tool policy for each specialist. The same policy drives real tool retention
+/// and the advertised capability metadata so a prompt/status change cannot broaden authority.
+fn specialist_tool_policy(
+    scope: CopilotScope,
+    has_board: bool,
+    has_graph_context: bool,
+) -> HashSet<&'static str> {
+    let mut names = HashSet::new();
+
+    if matches!(scope, CopilotScope::Board | CopilotScope::Both) {
+        names.extend(["catalog_search", "emit_commands", "get_declarations"]);
+        if has_board {
+            names.extend([
+                "get_current_flowscript",
+                "write_flowscript",
+                "patch_flowscript",
+                "check_flowscript",
+                "commit_flowscript",
+            ]);
+        }
+        if has_graph_context {
+            names.extend([
+                "get_node_details",
+                "get_unconfigured_nodes",
+                "list_board_nodes",
+            ]);
+        }
+        names.extend([
+            // Cross-domain context is read-only in the schemas/handlers created for board scope.
+            "database_tool",
+            "storage_tool",
+            "ui_inspect",
+            // Executing and diagnosing a persisted workflow is board-owned. Explain mode removes
+            // the execution calls through the exact read-only policy below.
+            "execute_event",
+            "execute_node",
+            "query_execution_logs",
+        ]);
+    }
+
+    if matches!(scope, CopilotScope::Frontend | CopilotScope::Both) {
+        names.extend(["emit_ui", "get_component_schema"]);
+    }
+
+    if matches!(scope, CopilotScope::DataStudio) {
+        names.extend([
+            "database_tool",
+            "graph_overlay_tool",
+            "graph_query_tool",
+            "graph_element_tool",
+            "ontology_action_tool",
+            "list_apps",
+            "describe_app_interface",
+        ]);
+    }
+
+    names
+}
+
+fn is_flowpilot_read_only_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name,
+        "catalog_search"
+            | "get_declarations"
+            | "get_current_flowscript"
+            | "get_node_details"
+            | "get_unconfigured_nodes"
+            | "list_board_nodes"
+            | "database_tool"
+            | "storage_tool"
+            | "ui_inspect"
+            | "query_execution_logs"
+    )
+}
+
 fn build_flowpilot_sdk_tools(
     app_handle: AppHandle,
     scope: CopilotScope,
@@ -4865,8 +6599,8 @@ fn build_flowpilot_sdk_tools(
 ) -> Vec<(copilot_sdk::Tool, copilot_sdk::ToolHandler)> {
     use super::{
         copilot_sdk_tools::{
-            create_board_tools, create_data_studio_tools, create_frontend_tools,
-            create_global_assistant_tools, create_runtime_tools,
+            create_board_support_tools, create_board_tools, create_data_studio_tools,
+            create_frontend_tools, create_global_assistant_tools,
         },
         frontend_tool_bridge::{FrontendToolBridge, GLOBAL_FRONTEND_TOOL_EVENT},
     };
@@ -4913,11 +6647,21 @@ fn build_flowpilot_sdk_tools(
         FrontendToolBridge::new(app_handle)
     }
     .with_context(tool_context);
-    if matches!(scope, CopilotScope::DataStudio) {
-        tools.extend(create_data_studio_tools(runtime_bridge));
-    } else {
-        tools.extend(create_runtime_tools(runtime_bridge));
+    match scope {
+        CopilotScope::Board | CopilotScope::Both => {
+            tools.extend(create_board_support_tools(runtime_bridge));
+        }
+        CopilotScope::Frontend => {}
+        CopilotScope::DataStudio => {
+            tools.extend(create_data_studio_tools(runtime_bridge));
+        }
     }
+    let allowed = specialist_tool_policy(
+        scope,
+        surface.board_arc.is_some(),
+        surface.graph_context.is_some(),
+    );
+    tools.retain(|(tool, _)| allowed.contains(tool.name.as_str()));
     tools
 }
 
@@ -5131,6 +6875,8 @@ const MAX_EXTERNAL_WORKFLOW_CONTINUATIONS: u8 = 2;
 // Once a usable live declaration batch exists, a provider phase must dispatch its first source
 // checkpoint promptly. If it silently composes until this soft bound, retain the discovery state
 // and move to a fresh continuation instead of letting the phase consume the full nested budget.
+// Keep this at 3 minutes: a high-reasoning-effort provider legitimately spends >90s composing the
+// first full-shape draft, and every premature kill burns one of only two continuations.
 const EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET: Duration = Duration::from_secs(3 * 60);
 const MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS: u8 = 12;
 const MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS: u8 = 3;
@@ -5141,7 +6887,13 @@ const EXTERNAL_CONTINUATION_CHECK_HEADROOM: u8 = 2;
 // Provider phases that failed transiently before the CLI issued a single tool call did no work;
 // they are retried on their own bounded counter instead of consuming workflow continuations.
 const MAX_EXTERNAL_ZERO_ACTIVITY_RESTARTS: u8 = 2;
+// Transport failures mid-phase (after real tool calls) get a slightly larger allowance: the MCP
+// bridge retains all draft state, so a resumed phase loses nothing but the dropped stream.
+const MAX_EXTERNAL_TRANSPORT_RESTARTS: u8 = 3;
 const EXTERNAL_TRANSIENT_RESTART_BACKOFF: Duration = Duration::from_secs(2);
+// Grace window between the shared circuit opening and the host ending the provider phase, so a
+// CLI that honors "stop_for_host_continuation" can finish its turn cleanly first.
+const EXTERNAL_CIRCUIT_OPEN_PHASE_END_GRACE: Duration = Duration::from_secs(20);
 // Count every model-dispatched source lifecycle operation, not only compiler checks. Otherwise a
 // provider can alternate whole-document writes and patches forever without consuming the older
 // validation-attempt budget.
@@ -5216,10 +6968,13 @@ struct WorkflowToolLoopSnapshot {
     typed_stalled_attempts: u8,
     typed_missing_modules: Vec<String>,
     mutation_path: Option<WorkflowMutationPath>,
+    shared_session: Option<WorkflowSessionSnapshot>,
 }
 
 #[derive(Debug, Default)]
 struct WorkflowToolLoopState {
+    shared_session_started_at: Option<Instant>,
+    shared_session: Option<WorkflowSession>,
     current_reads: u8,
     predraft_context_reads: u8,
     declaration_calls: u8,
@@ -5332,6 +7087,38 @@ impl WorkflowToolLoopState {
         state
     }
 
+    fn attach_shared_session(&mut self, manifest: Option<BoardContextManifest>) {
+        let Some(manifest) = manifest else {
+            return;
+        };
+        let mut session = WorkflowSession::new(manifest, WorkflowSessionPolicy::default());
+        let _ = session.mark_manifest_ready(0);
+        let _ = session.begin_discovery(0);
+        if self.flowscript_draft_retained
+            && let (Some(draft_id), Some(revision), Some(source)) = (
+                self.flowscript_draft_id.as_deref(),
+                self.flowscript_revision,
+                self.last_flowscript.as_deref(),
+            )
+        {
+            let _ = session.record_artifact(
+                WorkflowArtifactKind::FlowScript,
+                draft_id,
+                revision,
+                workflow_strategy_fingerprint(&serde_json::json!({ "source": source })),
+                0,
+            );
+        }
+        self.shared_session_started_at = Some(Instant::now());
+        self.shared_session = Some(session);
+    }
+
+    fn shared_session_elapsed_ms(&self) -> u64 {
+        self.shared_session_started_at
+            .map(|started| started.elapsed().as_millis() as u64)
+            .unwrap_or_default()
+    }
+
     fn needs_initial_declaration_coverage(&self) -> bool {
         // This is an explicit host-owned authorization bit. The first usable live-catalog result
         // unlocks a retained full-shape draft; complete coverage remains separate reporting data.
@@ -5422,6 +7209,10 @@ impl WorkflowToolLoopState {
             typed_stalled_attempts: self.typed_stalled_attempts,
             typed_missing_modules: self.typed_missing_modules.clone(),
             mutation_path: self.mutation_path,
+            shared_session: self
+                .shared_session
+                .as_ref()
+                .map(|session| session.snapshot(self.shared_session_elapsed_ms())),
         }
     }
 
@@ -5467,6 +7258,17 @@ impl WorkflowToolLoopState {
     fn exhausted_budget(&self) -> Option<String> {
         if self.queued {
             return None;
+        }
+        if let Some(circuit) = self
+            .shared_session
+            .as_ref()
+            .map(|session| session.snapshot(self.shared_session_elapsed_ms()))
+            .and_then(|snapshot| snapshot.circuit)
+        {
+            return Some(format!(
+                "shared zero-progress circuit ({:?}, {} attempts)",
+                circuit.reason, circuit.consecutive_zero_progress_attempts
+            ));
         }
         if self.stalled_edit_attempts >= MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS {
             return Some(format!(
@@ -5517,6 +7319,10 @@ impl WorkflowToolLoopState {
     fn grant_continuation_slice(&mut self) {
         if self.queued {
             return;
+        }
+        let elapsed_ms = self.shared_session_elapsed_ms();
+        if let Some(session) = self.shared_session.as_mut() {
+            let _ = session.begin_continuation(elapsed_ms);
         }
         self.stalled_edit_attempts = 0;
         self.flowscript_seen_repair_signatures.clear();
@@ -5656,6 +7462,13 @@ fn workflow_run_summary_payload(
         "retained_draft": retained_draft,
         "review_notes": snapshot.map_or(0, |snapshot| snapshot.last_review_notes),
         "applied_commands": applied_commands,
+        "shared_session": snapshot
+            .and_then(|snapshot| snapshot.shared_session.as_ref())
+            .map(serde_json::to_value)
+            .transpose()
+            .ok()
+            .flatten()
+            .unwrap_or(serde_json::Value::Null),
     })
 }
 
@@ -5671,6 +7484,9 @@ struct WorkflowRunSummaryEmitter {
     started: Instant,
     cancellation: CancellationToken,
     workflow_state: Option<Arc<StdMutex<WorkflowToolLoopState>>>,
+    /// Bits/core publishes the same provider-neutral session lifecycle directly rather than
+    /// mirroring it through the external adapter's WorkflowToolLoopState.
+    shared_session_snapshot: Option<Arc<StdMutex<Option<WorkflowSessionSnapshot>>>>,
     phases: u32,
     continuations_used: u32,
     continuations_limit: u32,
@@ -5695,6 +7511,7 @@ impl WorkflowRunSummaryEmitter {
             started: Instant::now(),
             cancellation,
             workflow_state: None,
+            shared_session_snapshot: None,
             phases: 0,
             continuations_used: 0,
             continuations_limit: u32::from(MAX_EXTERNAL_WORKFLOW_CONTINUATIONS),
@@ -5706,6 +7523,13 @@ impl WorkflowRunSummaryEmitter {
 
     fn attach_workflow_state(&mut self, state: Option<Arc<StdMutex<WorkflowToolLoopState>>>) {
         self.workflow_state = state;
+    }
+
+    fn attach_shared_session_snapshot(
+        &mut self,
+        snapshot: Arc<StdMutex<Option<WorkflowSessionSnapshot>>>,
+    ) {
+        self.shared_session_snapshot = Some(snapshot);
     }
 
     fn set_continuation_limit(&mut self, limit: u32) {
@@ -5733,9 +7557,22 @@ impl WorkflowRunSummaryEmitter {
     }
 
     fn snapshot(&self) -> Option<WorkflowToolLoopSnapshot> {
-        self.workflow_state
+        let adapter_snapshot = self
+            .workflow_state
             .as_ref()
-            .and_then(|state| state.lock().ok().map(|state| state.snapshot()))
+            .and_then(|state| state.lock().ok().map(|state| state.snapshot()));
+        let shared_session = self
+            .shared_session_snapshot
+            .as_ref()
+            .and_then(|sink| sink.lock().ok().and_then(|snapshot| snapshot.clone()));
+        if adapter_snapshot.is_none() && shared_session.is_none() {
+            return None;
+        }
+        let mut snapshot = adapter_snapshot.unwrap_or_default();
+        if shared_session.is_some() {
+            snapshot.shared_session = shared_session;
+        }
+        Some(snapshot)
     }
 
     /// Classify the terminal outcome from state the run already tracks. Queued work outranks a
@@ -5751,7 +7588,9 @@ impl WorkflowRunSummaryEmitter {
             "incomplete"
         } else if run_error {
             "provider_failure"
-        } else if workflow_edit_request && self.workflow_state.is_some() {
+        } else if workflow_edit_request
+            && (self.workflow_state.is_some() || self.shared_session_snapshot.is_some())
+        {
             "incomplete"
         } else {
             "completed"
@@ -5887,11 +7726,43 @@ fn workflow_tool_preflight_sdk(
     state: &Arc<StdMutex<WorkflowToolLoopState>>,
     tool_name: &str,
     args: &serde_json::Value,
-) -> Option<copilot_sdk::ToolResultObject> {
-    let result = workflow_database_setup_preflight(state, tool_name, args)
-        .or_else(|| workflow_predraft_context_preflight(state, tool_name))
+) -> ExternalSdkToolPreflight {
+    if let Some(result) = workflow_database_setup_preflight(state, tool_name, args) {
+        return ExternalSdkToolPreflight {
+            result: Some(call_tool_result_to_sdk_result(result)),
+            lease: None,
+        };
+    }
+    let mut preflight = workflow_predraft_context_preflight_with_lease(state, tool_name, args);
+    let result = preflight
+        .result
+        .take()
         .or_else(|| workflow_tool_preflight_with_args(state, tool_name, args))
-        .or_else(|| workflow_candidate_preflight(state, tool_name, args))?;
+        .or_else(|| workflow_candidate_preflight(state, tool_name, args));
+    let Some(result) = result else {
+        return ExternalSdkToolPreflight {
+            result: None,
+            lease: preflight.lease,
+        };
+    };
+    if preflight.lease.is_some() {
+        workflow_tool_abort_with_args(
+            state,
+            preflight.lease.as_ref(),
+            tool_name,
+            args,
+            "A later host preflight short-circuited the reserved context read",
+        );
+    }
+    ExternalSdkToolPreflight {
+        result: Some(call_tool_result_to_sdk_result(result)),
+        lease: None,
+    }
+}
+
+fn call_tool_result_to_sdk_result(
+    result: rmcp::model::CallToolResult,
+) -> copilot_sdk::ToolResultObject {
     let message = result
         .content
         .iter()
@@ -5902,10 +7773,22 @@ fn workflow_tool_preflight_sdk(
         .collect::<Vec<_>>()
         .join("\n");
     if result.is_error == Some(true) {
-        Some(copilot_sdk::ToolResultObject::error(message))
+        copilot_sdk::ToolResultObject::error(message)
     } else {
-        Some(copilot_sdk::ToolResultObject::text(message))
+        copilot_sdk::ToolResultObject::text(message)
     }
+}
+
+#[derive(Debug, Default)]
+struct ExternalContextPreflight {
+    result: Option<rmcp::model::CallToolResult>,
+    lease: Option<flow_like::flow::copilot::WorkflowToolLease>,
+}
+
+#[derive(Debug, Default)]
+struct ExternalSdkToolPreflight {
+    result: Option<copilot_sdk::ToolResultObject>,
+    lease: Option<flow_like::flow::copilot::WorkflowToolLease>,
 }
 
 /// Database schema setup is useful, but it must not consume the mutation turn before the board
@@ -5948,42 +7831,76 @@ fn workflow_database_setup_preflight(
 /// source exists. The first few database/UI/storage inspections remain available for authoritative
 /// context, but after that the specialist must retain a full-shape draft and let compiler
 /// diagnostics drive any additional focused discovery.
+#[cfg(test)]
 fn workflow_predraft_context_preflight(
     state: &Arc<StdMutex<WorkflowToolLoopState>>,
     tool_name: &str,
+    args: &serde_json::Value,
 ) -> Option<rmcp::model::CallToolResult> {
+    workflow_predraft_context_preflight_with_lease(state, tool_name, args).result
+}
+
+fn workflow_predraft_context_preflight_with_lease(
+    state: &Arc<StdMutex<WorkflowToolLoopState>>,
+    tool_name: &str,
+    args: &serde_json::Value,
+) -> ExternalContextPreflight {
     if !matches!(tool_name, "database_tool" | "ui_inspect" | "storage_tool") {
-        return None;
+        return ExternalContextPreflight::default();
     }
 
     let Ok(mut state) = state.lock() else {
-        return Some(workflow_loop_state_unavailable_result());
+        return ExternalContextPreflight {
+            result: Some(workflow_loop_state_unavailable_result()),
+            lease: None,
+        };
     };
+    let shared_elapsed_ms = state.shared_session_elapsed_ms();
+    if let Some(session) = state.shared_session.as_mut() {
+        let decision = match session.preflight_tool_call(tool_name, args, shared_elapsed_ms) {
+            Ok(decision) => decision,
+            Err(_) => {
+                return ExternalContextPreflight {
+                    result: Some(workflow_loop_state_unavailable_result()),
+                    lease: None,
+                };
+            }
+        };
+        return ExternalContextPreflight {
+            result: decision
+                .short_circuit_result()
+                .map(|payload| workflow_loop_result(payload, false)),
+            lease: decision.lease().cloned(),
+        };
+    }
     if state.queued || state.flowscript_draft_retained || state.typed_draft_retained {
-        return None;
+        return ExternalContextPreflight::default();
     }
     if state.predraft_context_reads >= MAX_EXTERNAL_PREDRAFT_CONTEXT_READS {
-        return Some(workflow_loop_result(
-            serde_json::json!({
-                "status": "predraft_inspection_budget_exhausted",
-                "code": "PREDRAFT_INSPECTION_BUDGET_EXHAUSTED",
-                "retryable": true,
-                "next_action": if state.initial_declaration_lookup_usable {
-                    "write_flowscript"
-                } else if state.current_reads > 0 {
-                    "get_declarations"
-                } else {
-                    "get_current_flowscript_then_get_declarations"
-                },
-                "inspection_calls": state.predraft_context_reads,
-                "inspection_budget": MAX_EXTERNAL_PREDRAFT_CONTEXT_READS,
-                "message": "The bounded ancillary inspection budget is exhausted before a recoverable workflow draft exists. Reuse the database, UI, and storage context already returned. After one usable declaration batch, call write_flowscript immediately with a full-shape draft; do not repeat or exhaustively inventory schemas and pages."
-            }),
-            false,
-        ));
+        return ExternalContextPreflight {
+            result: Some(workflow_loop_result(
+                serde_json::json!({
+                    "status": "predraft_inspection_budget_exhausted",
+                    "code": "PREDRAFT_INSPECTION_BUDGET_EXHAUSTED",
+                    "retryable": true,
+                    "next_action": if state.initial_declaration_lookup_usable {
+                        "write_flowscript"
+                    } else if state.current_reads > 0 {
+                        "get_declarations"
+                    } else {
+                        "get_current_flowscript_then_get_declarations"
+                    },
+                    "inspection_calls": state.predraft_context_reads,
+                    "inspection_budget": MAX_EXTERNAL_PREDRAFT_CONTEXT_READS,
+                    "message": "The bounded ancillary inspection budget is exhausted before a recoverable workflow draft exists. Reuse the database, UI, and storage context already returned. After one usable declaration batch, call write_flowscript immediately with a full-shape draft; do not repeat or exhaustively inventory schemas and pages."
+                }),
+                false,
+            )),
+            lease: None,
+        };
     }
     state.predraft_context_reads = state.predraft_context_reads.saturating_add(1);
-    None
+    ExternalContextPreflight::default()
 }
 
 fn guard_sdk_workflow_tools(
@@ -6024,18 +7941,24 @@ fn guard_sdk_workflow_tools(
                 // Catch panics before they unwind past the held gate guard, and route them
                 // through the same abort/cleanup as an MCP worker failure so `edit_in_flight`
                 // cannot stay stuck for the rest of the session.
+                let preflight =
+                    workflow_tool_preflight_sdk(&guarded_state, &guarded_name, args);
+                if let Some(result) = preflight.result {
+                    return result;
+                }
+                let lease = preflight.lease;
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    if let Some(result) =
-                        workflow_tool_preflight_sdk(&guarded_state, &guarded_name, args)
-                    {
-                        return result;
-                    }
                     let mut result = handler(called_name, args);
-                    workflow_tool_record(
+                    let succeeded = result.result_type != "error"
+                        && result.error.is_none()
+                        && workflow_tool_result_succeeded(&result.text_result_for_llm);
+                    workflow_tool_record_with_outcome(
                         &guarded_state,
+                        lease.as_ref(),
                         &guarded_name,
                         args,
                         &result.text_result_for_llm,
+                        succeeded,
                     );
                     annotate_modular_fallback_result(&guarded_state, &guarded_name, &mut result);
                     suppress_unchanged_flowscript_source_echo(&guarded_name, args, &mut result);
@@ -6048,7 +7971,13 @@ fn guard_sdk_workflow_tools(
                             "FlowPilot SDK tool '{guarded_name}' failed: {}",
                             panic_payload_message(panic.as_ref())
                         );
-                        workflow_tool_abort(&guarded_state, &guarded_name, &message);
+                        workflow_tool_abort_with_args(
+                            &guarded_state,
+                            lease.as_ref(),
+                            &guarded_name,
+                            args,
+                            &message,
+                        );
                         copilot_sdk::ToolResultObject::error(message)
                     }
                 }
@@ -6073,22 +8002,41 @@ fn panic_payload_message(panic: &(dyn std::any::Any + Send)) -> &str {
 fn scope_sdk_tool_handlers(
     tools: Vec<(copilot_sdk::Tool, copilot_sdk::ToolHandler)>,
     cancellation: CancellationToken,
+    activity: Option<Arc<SdkToolActivityRegistry>>,
 ) -> Vec<(copilot_sdk::Tool, copilot_sdk::ToolHandler)> {
     tools
         .into_iter()
         .map(|(tool, handler)| {
             let handler_cancellation = cancellation.clone();
+            let handler_activity = activity.clone();
+            let registered_tool_name = tool.name.clone();
             let scoped_handler: copilot_sdk::ToolHandler = Arc::new(move |called_name, args| {
                 if handler_cancellation.is_cancelled() {
                     return copilot_sdk::ToolResultObject::error(
                         "The owning FlowPilot run was cancelled before this tool could execute.",
                     );
                 }
-                super::frontend_tool_bridge::with_frontend_tool_execution_scope(
-                    handler_cancellation.clone(),
-                    None,
-                    || handler(called_name, args),
-                )
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let _activity_guard = handler_activity
+                        .as_ref()
+                        .map(|activity| activity.begin(&registered_tool_name));
+                    super::frontend_tool_bridge::with_frontend_tool_execution_scope(
+                        handler_cancellation.clone(),
+                        None,
+                        || handler(called_name, args),
+                    )
+                }));
+                match outcome {
+                    Ok(result) => result,
+                    Err(panic) => {
+                        let message = format!(
+                            "FlowPilot SDK tool '{registered_tool_name}' panicked: {}",
+                            panic_payload_message(panic.as_ref())
+                        );
+                        tracing::error!(tool = %registered_tool_name, error = %message, "SDK tool handler panicked");
+                        copilot_sdk::ToolResultObject::error(message)
+                    }
+                }
             });
             (tool, scoped_handler)
         })
@@ -6120,24 +8068,6 @@ fn is_workflow_loop_tool(tool_name: &str) -> bool {
     )
 }
 
-fn is_flowpilot_mutation_tool(tool_name: &str) -> bool {
-    matches!(
-        tool_name,
-        "emit_commands"
-            | "edit_flowscript"
-            | "write_flowscript"
-            | "patch_flowscript"
-            | "check_flowscript"
-            | "commit_flowscript"
-            | "begin_flow_ir_draft"
-            | "update_flow_ir_draft"
-            | "upsert_flow_ir_module"
-            | "validate_flow_ir_draft"
-            | "commit_flow_ir_draft"
-            | "emit_ui"
-    )
-}
-
 fn is_workflow_commit_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -6150,6 +8080,13 @@ fn is_flowscript_draft_operation_tool(tool_name: &str) -> bool {
         tool_name,
         "write_flowscript" | "patch_flowscript" | "check_flowscript" | "commit_flowscript"
     )
+}
+
+/// Redaction without truncation: compiler-receipt evidence needs the byte-for-byte authored
+/// source, while tool results can still carry secret-shaped values that must never reach the
+/// frontend un-redacted.
+fn full_redacted_tool_result(text: &str) -> String {
+    flow_like::flow::copilot::stream::safe_tool_result_preview(text, usize::MAX)
 }
 
 fn is_typed_ir_operation_tool(tool_name: &str) -> bool {
@@ -6501,18 +8438,9 @@ fn workflow_tool_preflight_with_args(
     // during a mutation session would therefore test the pre-edit graph and could produce a false
     // green verification result. A later read/verification turn has no workflow guard and can run
     // these tools against the persisted board normally.
-    if matches!(
-        tool_name,
-        "execute_event" | "execute_node" | "query_execution_logs"
-    ) {
+    if workflow_authoring_defers_runtime_tool(tool_name) {
         return Some(workflow_loop_result(
-            serde_json::json!({
-                "status": "error",
-                "code": "runtime_verification_deferred",
-                "retryable": true,
-                "next_action": "finish_board_edit_then_run_in_a_later_turn",
-                "message": "Runtime verification cannot run inside this board-mutation session because queued commands are not persisted until the turn finishes. Complete the edit, then execute the persisted node/Event and query its run logs in a later turn."
-            }),
+            workflow_runtime_verification_deferred_payload(),
             true,
         ));
     }
@@ -6525,6 +8453,30 @@ fn workflow_tool_preflight_with_args(
                 "message": "Workflow changes are already queued. Stop workflow tools and return a brief summary. If the user also requested UI, finish it with the UI tool only."
             }),
             false,
+        ));
+    }
+
+    if is_order_sensitive_workflow_tool(tool_name)
+        && let Some(circuit) = state
+            .shared_session
+            .as_ref()
+            .map(|session| session.snapshot(state.shared_session_elapsed_ms()))
+            .and_then(|snapshot| snapshot.circuit)
+    {
+        return Some(workflow_loop_result(
+            serde_json::json!({
+                "status": "zero_progress_circuit_open",
+                "code": "WORKFLOW_ZERO_PROGRESS_CIRCUIT_OPEN",
+                // The circuit cannot close within this provider phase (progress is only
+                // recordable from a dispatched tool, and dispatch is refused while it is open).
+                // retryable:true made external CLIs retry the refused call for the whole phase.
+                "retryable": false,
+                "next_action": "stop_for_host_continuation",
+                "reason": circuit.reason,
+                "consecutive_zero_progress_attempts": circuit.consecutive_zero_progress_attempts,
+                "message": "The shared FlowPilot repair circuit opened after two host-observed attempts without lifecycle progress. Stop this provider phase. The host will preserve the retained artifact and latest diagnostics for one bounded, materially different continuation."
+            }),
+            true,
         ));
     }
 
@@ -7902,12 +9854,53 @@ fn retain_declaration_result(existing: Option<&str>, result_text: &str) -> Strin
     }
 }
 
+/// Route every backend's completed workflow tool observation through the provider-neutral core
+/// lifecycle. Ancillary context tools are reserved by `workflow_predraft_context_preflight`
+/// before dispatch, so they are intentionally not counted a second time here.
+fn record_shared_external_workflow_observation(
+    state: &Arc<StdMutex<WorkflowToolLoopState>>,
+    lease: Option<&flow_like::flow::copilot::WorkflowToolLease>,
+    tool_name: &str,
+    args: &serde_json::Value,
+    result_text: &str,
+    succeeded: bool,
+) {
+    let Ok(mut state) = state.lock() else {
+        return;
+    };
+    let elapsed_ms = state.shared_session_elapsed_ms();
+    let Some(session) = state.shared_session.as_mut() else {
+        return;
+    };
+    let _ = session.complete_tool_call(lease, tool_name, args, result_text, succeeded, elapsed_ms);
+}
+
+#[cfg(test)]
 fn workflow_tool_record(
     state: &Arc<StdMutex<WorkflowToolLoopState>>,
     tool_name: &str,
     args: &serde_json::Value,
     result_text: &str,
 ) {
+    workflow_tool_record_with_outcome(state, None, tool_name, args, result_text, true);
+}
+
+fn workflow_tool_record_with_outcome(
+    state: &Arc<StdMutex<WorkflowToolLoopState>>,
+    lease: Option<&flow_like::flow::copilot::WorkflowToolLease>,
+    tool_name: &str,
+    args: &serde_json::Value,
+    result_text: &str,
+    succeeded: bool,
+) {
+    record_shared_external_workflow_observation(
+        state,
+        lease,
+        tool_name,
+        args,
+        result_text,
+        succeeded,
+    );
     if tool_name == "get_declarations" {
         if let Ok(mut state) = state.lock() {
             let was_initial_lookup = state.needs_initial_declaration_coverage();
@@ -8514,6 +10507,30 @@ fn workflow_tool_abort(state: &Arc<StdMutex<WorkflowToolLoopState>>, tool_name: 
     }
 }
 
+fn workflow_tool_abort_with_args(
+    state: &Arc<StdMutex<WorkflowToolLoopState>>,
+    lease: Option<&flow_like::flow::copilot::WorkflowToolLease>,
+    tool_name: &str,
+    args: &serde_json::Value,
+    error: &str,
+) {
+    if matches!(tool_name, "database_tool" | "ui_inspect" | "storage_tool") {
+        if let Ok(mut state) = state.lock() {
+            let elapsed_ms = state.shared_session_elapsed_ms();
+            if let Some(session) = state.shared_session.as_mut() {
+                let _ = session.abort_tool_call(lease, tool_name, args, elapsed_ms);
+            } else if !state.queued
+                && !state.flowscript_draft_retained
+                && !state.typed_draft_retained
+            {
+                state.predraft_context_reads = state.predraft_context_reads.saturating_sub(1);
+            }
+        }
+        return;
+    }
+    workflow_tool_abort(state, tool_name, error);
+}
+
 fn annotate_modular_fallback_result(
     state: &Arc<StdMutex<WorkflowToolLoopState>>,
     tool_name: &str,
@@ -8670,13 +10687,48 @@ impl FlowPilotMcpServer {
     }
 }
 
+fn flowpilot_mcp_server_instructions<'a>(
+    tool_names: impl IntoIterator<Item = &'a str>,
+    workflow_mutation: bool,
+) -> &'static str {
+    let names = tool_names.into_iter().collect::<HashSet<_>>();
+    let has_board = names.contains("get_current_flowscript")
+        || names.contains("list_board_nodes")
+        || names.contains("write_flowscript");
+    let has_ui = names.contains("emit_ui");
+    let has_data = names.contains("graph_overlay_tool") || names.contains("graph_query_tool");
+
+    if workflow_mutation && has_ui {
+        return "This is an explicit combined root FlowPilot surface, not a widget or board specialist. Keep UI changes in emit_ui and executable workflow behavior in the FlowScript lifecycle; never let UI generation author FlowScript or let board generation emit components. For the board portion, read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls, then immediately retain a full-shape source with write_flowscript. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections.";
+    }
+    if workflow_mutation {
+        return "You are the FlowPilot BOARD specialist. FlowScript is the sole model-authored representation for executable workflow behavior. Read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, then immediately retain the full-shape source with write_flowscript. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments. Cross-domain context tools are read-only: database, storage, and UI inspection. Never emit UI, mutate app data/storage directly, use public-web/ask-user tools, or use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools and hand any requested UI work back to the parent for the UI specialist. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes.";
+    }
+    match (has_board, has_ui, has_data) {
+        (false, true, false) => {
+            "You are the FlowPilot UI specialist. Use only emit_ui/get_component_schema for A2UI pages, widgets, and components. Never author FlowScript, board nodes/connections/Events, database/storage changes, or workflow executions. Hand workflow wiring back to the board specialist. Do not use shell or file-edit tools for FlowPilot artifacts."
+        }
+        (true, false, false) => {
+            "You are the read-only FlowPilot BOARD specialist. Inspect the current board and its read-only context, then answer. Never edit FlowScript, execute workflows, emit UI, or mutate app data/storage. Do not use shell or file-edit tools for FlowPilot artifacts."
+        }
+        (false, false, true) => {
+            "You are the FlowPilot DATA STUDIO specialist. Use only the provided database, graph, analytics, and ontology tools. Never author FlowScript or emit UI. Do not use shell or file-edit tools for FlowPilot artifacts."
+        }
+        (true, true, false) => {
+            "This is an explicit combined root FlowPilot surface, not a specialist. Keep UI changes in emit_ui and board behavior in the FlowScript lifecycle; never use one role's tools to perform the other's work."
+        }
+        _ => {
+            "Use only the reviewed FlowPilot tools exposed by this role-scoped server. Do not use shell or file-edit tools for FlowPilot artifacts."
+        }
+    }
+}
+
 impl rmcp::ServerHandler for FlowPilotMcpServer {
     fn get_info(&self) -> rmcp::model::ServerInfo {
-        let instructions = if self.workflow_state.is_some() {
-            "FlowPilot tools share the exact board/frontend/runtime capabilities used by Bits and GitHub Copilot. WORKFLOW BUILD LOOP: FlowScript is the sole model-authored representation for executable workflow behavior. Read get_current_flowscript, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, then immediately retain the full-shape source with write_flowscript. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; structured compiler diagnostics are authoritative. Never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments; it rejects executable commands and every layer mutation. Never use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools; if the request also includes UI, finish it with the UI tool. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes."
-        } else {
-            "Use FlowPilot's reviewed tools for board, UI, runtime, and app operations. Do not use shell or file-edit tools for FlowPilot artifacts. For read-only requests, inspect only what is needed and answer in normal text."
-        };
+        let instructions = flowpilot_mcp_server_instructions(
+            self.tools.keys().map(String::as_str),
+            self.workflow_state.is_some(),
+        );
         rmcp::model::ServerInfo::new(
             rmcp::model::ServerCapabilities::builder()
                 .enable_tools()
@@ -8754,16 +10806,42 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
             .map_err(|message| rmcp::ErrorData::internal_error(message, None))?;
             let mut cancellation_guard = McpToolCancellationGuard::new(cancellation.clone());
 
-            if let Some(state) = &self.workflow_state
-                && let Some(result) = workflow_database_setup_preflight(state, &tool_name, &args)
-                    .or_else(|| workflow_predraft_context_preflight(state, &tool_name))
+            let mut context_preflight = ExternalContextPreflight::default();
+            if let Some(state) = &self.workflow_state {
+                if let Some(result) = workflow_database_setup_preflight(state, &tool_name, &args) {
+                    return Ok(result);
+                }
+                context_preflight =
+                    workflow_predraft_context_preflight_with_lease(state, &tool_name, &args);
+                if let Some(result) = context_preflight
+                    .result
+                    .take()
                     .or_else(|| workflow_tool_preflight_with_args(state, &tool_name, &args))
                     .or_else(|| workflow_candidate_preflight(state, &tool_name, &args))
-            {
-                return Ok(result);
+                {
+                    if context_preflight.lease.is_some() {
+                        workflow_tool_abort_with_args(
+                            state,
+                            context_preflight.lease.as_ref(),
+                            &tool_name,
+                            &args,
+                            "A later host preflight short-circuited the reserved context read",
+                        );
+                    }
+                    return Ok(result);
+                }
             }
 
             let Some(tool) = tool else {
+                if let Some(state) = &self.workflow_state {
+                    workflow_tool_abort_with_args(
+                        state,
+                        context_preflight.lease.as_ref(),
+                        &tool_name,
+                        &args,
+                        "Unknown FlowPilot tool after workflow preflight",
+                    );
+                }
                 return Err(rmcp::ErrorData::invalid_params(
                     format!("Unknown FlowPilot tool: {tool_name}"),
                     None,
@@ -8775,6 +10853,9 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
             let definition_name = tool.definition.name.clone();
             let handler = tool.handler.clone();
             let recorded_args = args.clone();
+            let abort_args = args.clone();
+            let workflow_lease = context_preflight.lease;
+            let abort_lease = workflow_lease.clone();
             let recorded_tool_name = tool_name.clone();
             let workflow_state = self.workflow_state.clone();
             let tool_activity = self.tool_activity.clone();
@@ -8796,11 +10877,16 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
                 // dropped, its JoinHandle is detached; doing this only after `.await` left
                 // `edit_in_flight` stuck and let a late result overwrite the next repair phase.
                 if let Some(state) = &workflow_state {
-                    workflow_tool_record(
+                    let succeeded = result.result_type != "error"
+                        && result.error.is_none()
+                        && workflow_tool_result_succeeded(&result.text_result_for_llm);
+                    workflow_tool_record_with_outcome(
                         state,
+                        workflow_lease.as_ref(),
                         &recorded_tool_name,
                         &recorded_args,
                         &result.text_result_for_llm,
+                        succeeded,
                     );
                     annotate_modular_fallback_result(state, &recorded_tool_name, &mut result);
                     suppress_unchanged_flowscript_source_echo(
@@ -8837,7 +10923,13 @@ impl rmcp::ServerHandler for FlowPilotMcpServer {
                 Err(error) => {
                     let message = format!("FlowPilot MCP tool task failed: {error}");
                     if let Some(state) = &self.workflow_state {
-                        workflow_tool_abort(state, &tool_name, &message);
+                        workflow_tool_abort_with_args(
+                            state,
+                            abort_lease.as_ref(),
+                            &tool_name,
+                            &abort_args,
+                            &message,
+                        );
                     }
                     return Err(rmcp::ErrorData::internal_error(message, None));
                 }
@@ -9450,7 +11542,9 @@ impl ExternalAgentInvocation {
 fn build_external_agent_prompt(
     system_content: &str,
     user_prompt: &str,
+    scope: CopilotScope,
     workflow_edit_request: bool,
+    global_agent: bool,
 ) -> String {
     let workflow_loop = if workflow_edit_request {
         r#"
@@ -9460,7 +11554,7 @@ THIS IS A WORKFLOW MUTATION RUN. Follow this bounded loop exactly:
 3. After any usable declaration result, call write_flowscript IMMEDIATELY with a stable draft id and a full-shape checkpoint that preserves the complete requested scope. It may retain compiler diagnostics; that is recoverable progress, not success. Do not chase omitted/unmatched declaration queries first. For an existing board, edit the exact returned document and preserve every kept //@n anchor. For a new board, author real functions and Event entries with concrete catalog calls.
 4. If compilation fails, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Call check_flowscript next. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery.
 5. Call commit_flowscript at the latest checked revision. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
-6. When commit_flowscript returns `queued`/`already_queued`, stop workflow tools. If the user also requested UI, finish it with emit_ui; otherwise summarize briefly.
+6. When commit_flowscript returns `queued`/`already_queued`, stop workflow tools. A BOARD specialist hands any requested UI work back to the parent for the UI specialist; only an explicit combined root session may finish it with emit_ui.
 
 Helper rule: every helper declaration requires the literal keyword `function`, for example `function fetchMail(...) { ... }`. A bare `fetchMail(...) { ... }` block is not a helper. Keep each helper declaration in the same full document as its calls; never invent helper calls and expect them to resolve as catalog nodes. If a helper returns a value, declare a named return signature such as `function classify(...): (isSupport: bool) { ...; return result.value }`.
 
@@ -9469,15 +11563,36 @@ Entry-node rule: cron/schedules are app Event setup on an `eventsSimple()` entry
     } else {
         ""
     };
+    let role_contract = if global_agent {
+        "You are the PLATFORM orchestrator described in the system instructions. Own the complete cross-specialist request by sequencing the provided global tools: create or select the app, delegate UI to the widget specialist, data setup to the data specialist, workflow behavior to the board specialist, and then configure app Events from the returned identifiers. Do not author specialist artifacts yourself, but do call and coordinate every required specialist until the full request is complete."
+    } else {
+        match scope {
+            CopilotScope::Board => {
+                "You are the BOARD specialist. Own only workflow nodes, connections, Event entry nodes, FlowScript, canvas layout, and persisted-workflow diagnostics. Never emit UI components and never mutate app databases or storage directly; use any cross-domain tools only for read-only grounding."
+            }
+            CopilotScope::Frontend => {
+                "You are the UI specialist. Own only A2UI pages, widgets, and components through emit_ui/get_component_schema. Never inspect, author, patch, validate, or submit FlowScript; never create workflow nodes, connections, or Event entries; never mutate or execute app data/workflows. If the delegated request also mentions behavior, build only its UI portion and state that the parent must call the board specialist for wiring."
+            }
+            CopilotScope::DataStudio => {
+                "You are the DATA STUDIO specialist. Own only databases, tables, graph overlays, graph queries/elements, analytics, and ontology actions through the provided data tools. Never author FlowScript or UI components; board logic and UI must be handed back to their specialists."
+            }
+            CopilotScope::Both => {
+                "This is an explicit combined root session, not a widget or board subagent. Keep UI work in emit_ui and workflow work in the FlowScript lifecycle; never substitute one representation for the other."
+            }
+        }
+    };
     format!(
         r#"SYSTEM INSTRUCTIONS
 {system_content}
 
-You are running through an external code-agent CLI connected to FlowPilot's shared MCP tools. Do not use shell/file-edit tools for workflow or UI edits. Use the FlowPilot MCP tools. Author all executable workflow behavior as FlowScript source; the host compiler owns the typed AST, validation, exact command claim, and application. Preserve all kept `//@n:<id>` anchors. If the user asks for explanation or no edit is needed, answer in normal text.
+You are running through an external code-agent CLI connected to a role-scoped FlowPilot MCP server. Do not use shell/file-edit tools for FlowPilot artifacts; use only the provided FlowPilot MCP tools.
+
+{role_contract}
 {workflow_loop}
 
 USER REQUEST
-{user_prompt}"#
+{user_prompt}"#,
+        role_contract = role_contract,
     )
 }
 
@@ -10192,6 +12307,8 @@ fn external_result_details(
                 | "valid"
                 | "queued"
                 | "already_queued"
+                // A check of a board that already matches the source — success, not an error.
+                | "no_changes"
                 | "applied"
                 | "completed"
                 | "rendered"
@@ -10292,11 +12409,20 @@ fn external_agent_process_event(value: &serde_json::Value) -> Option<String> {
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
     let fallback_status = item.get("status").and_then(serde_json::Value::as_str);
-    let (status, terminal_status, result_summary, result_preview) = external_result_details(
-        item.get("result").or_else(|| item.get("output")),
-        fallback_status,
-        error.as_deref(),
-    );
+    let result_value = item.get("result").or_else(|| item.get("output"));
+    let (status, terminal_status, result_summary, result_preview) =
+        external_result_details(result_value, fallback_status, error.as_deref());
+    // Compiler-receipt evidence needs the full authored source: an 8KB preview truncates large
+    // commit results (source + derived commands) mid-document and the captured "authored
+    // FlowScript" fails validation over an ellipsis the model never wrote. Redaction still
+    // applies — only truncation is lifted.
+    let full_result = is_flowscript_draft_operation_tool(tool_name)
+        .then(|| {
+            result_value
+                .and_then(external_tool_result_text)
+                .map(|text| full_redacted_tool_result(&text))
+        })
+        .flatten();
     Some(flowpilot_stream_tag(
         "tool_end",
         &serde_json::json!({
@@ -10306,6 +12432,7 @@ fn external_agent_process_event(value: &serde_json::Value) -> Option<String> {
             "terminal_status": terminal_status,
             "result_summary": result_summary,
             "result_preview": result_preview,
+            "result": full_result,
             "error": error.map(|error| flow_like::flow::copilot::stream::safe_text_preview(&error, 600)),
         }),
     ))
@@ -10837,6 +12964,14 @@ fn claude_agent_tool_events(
                 let error = is_error.then_some("Claude tool result reported an error");
                 let (status, terminal_status, result_summary, result_preview) =
                     external_result_details(block.get("content"), Some(fallback_status), error);
+                let full_result = is_flowscript_draft_operation_tool(&name)
+                    .then(|| {
+                        block
+                            .get("content")
+                            .and_then(external_tool_result_text)
+                            .map(|text| full_redacted_tool_result(&text))
+                    })
+                    .flatten();
                 events.push(flowpilot_stream_tag(
                     "tool_end",
                     &serde_json::json!({
@@ -10846,6 +12981,7 @@ fn claude_agent_tool_events(
                         "terminal_status": terminal_status,
                         "result_summary": result_summary,
                         "result_preview": result_preview,
+                        "result": full_result,
                         "error": error,
                     }),
                 ));
@@ -11549,43 +13685,10 @@ pub struct FlowPilotAgentCapabilitySet {
 
 impl FlowPilotAgentCapabilitySet {
     fn shared_for(scope: CopilotScope, has_board: bool, has_graph_context: bool) -> Self {
-        let mut tool_names: Vec<&'static str> = Vec::new();
-
-        if matches!(scope, CopilotScope::Board | CopilotScope::Both) {
-            tool_names.extend(["catalog_search", "emit_commands", "get_declarations"]);
-            if has_board {
-                tool_names.extend([
-                    "get_current_flowscript",
-                    "write_flowscript",
-                    "patch_flowscript",
-                    "check_flowscript",
-                    "commit_flowscript",
-                ]);
-            }
-            if has_graph_context {
-                tool_names.extend([
-                    "get_node_details",
-                    "get_unconfigured_nodes",
-                    "list_board_nodes",
-                ]);
-            }
-        }
-
-        if matches!(scope, CopilotScope::Frontend | CopilotScope::Both) {
-            tool_names.extend(["emit_ui", "get_component_schema"]);
-        }
-
-        tool_names.extend([
-            "database_tool",
-            "storage_tool",
-            "execute_event",
-            "execute_node",
-            "query_execution_logs",
-            "ask_user",
-        ]);
-
+        let mut tool_names = specialist_tool_policy(scope, has_board, has_graph_context)
+            .into_iter()
+            .collect::<Vec<_>>();
         tool_names.sort_unstable();
-        tool_names.dedup();
 
         Self {
             prompt_source: "flow_like::copilot::prompts".to_string(),
@@ -11647,6 +13750,8 @@ struct FlowPilotAgentSurface {
     /// while the loop state separately enforces the draft id/revision without trusting the model
     /// to reconstruct those coordinates from prose.
     flowscript_recovery: Option<flow_like::flow::copilot::FlowScriptDraftRecovery>,
+    /// Immutable provider-neutral facts and lifecycle identity used by every adapter loop.
+    workflow_manifest: Option<BoardContextManifest>,
     system_content: String,
     workflow_edit_request: bool,
     capabilities: FlowPilotAgentCapabilitySet,
@@ -11790,13 +13895,14 @@ fn build_flowpilot_agent_surface(
     selected_node_ids: &[String],
     current_surface: Option<&Vec<SurfaceComponent>>,
     history: &[UnifiedChatMessage],
-    original_user_prompt: &str,
+    _original_user_prompt: &str,
     // Immutable end-user request that owns retained drafts and the acceptance contract. For a
     // nested specialist run this differs from `original_user_prompt` (the per-run composed
     // instruction), so every identity bind below must use this value.
     request_identity_prompt: &str,
     host_context_guidance: Option<&str>,
     global: Option<&str>,
+    board_context_augmentation: Option<&serde_json::Value>,
     // Read-only sub-run (flowpilot_board explain): keep the board copilot out of workflow-edit mode
     // so it streams and returns its answer instead of being coerced to emit an edit and, failing
     // that, returning a canned "could not produce board commands" message.
@@ -11847,8 +13953,7 @@ fn build_flowpilot_agent_surface(
 
     let workflow_edit_request = !read_only
         && matches!(scope, CopilotScope::Board | CopilotScope::Both)
-        && board_arc.is_some()
-        && is_workflow_edit_request(original_user_prompt);
+        && board_arc.is_some();
 
     let mut system_content = if global.is_some() {
         global_assistant_system_prompt()
@@ -11908,6 +14013,74 @@ fn build_flowpilot_agent_surface(
         append_flowscript_recovery_payload(&mut system_content, recovery);
     }
 
+    let workflow_manifest = workflow_edit_request
+        .then(|| board_arc.as_deref())
+        .flatten()
+        .and_then(|board| {
+            let retained = flowscript_recovery
+                .as_ref()
+                .and_then(|recovery| recovery.exact_match.as_ref())
+                .filter(|context| !context.stale_board)
+                .and_then(|context| {
+                    context.source.as_ref().map(|source| {
+                        (
+                            source.clone(),
+                            context.revision,
+                            (!context.diagnostics.is_empty()).then(|| {
+                                workflow_strategy_fingerprint(&serde_json::json!({
+                                    "diagnostics": context.diagnostics,
+                                }))
+                            }),
+                        )
+                    })
+                });
+            let source = match retained {
+                Some((source, revision, diagnostic_fingerprint)) => ManifestSource::new(
+                    ManifestSourceStatus::Retained,
+                    Some(revision),
+                    Some(source),
+                    diagnostic_fingerprint,
+                ),
+                None => ManifestSource::new(
+                    ManifestSourceStatus::Existing,
+                    None,
+                    board_flowscript.clone(),
+                    None,
+                ),
+            };
+            BoardContextManifest::from_board(
+                board,
+                selected_node_ids,
+                &desktop_catalog_provider
+                    .as_ref()
+                    .map(|provider| provider.all_metadata())
+                    .unwrap_or_default(),
+                source,
+                ManifestAudit {
+                    request_identity: request_identity_prompt.to_string(),
+                    base_fingerprint: board_fingerprint(board),
+                    acceptance_contract_fingerprint: Some(workflow_strategy_fingerprint(
+                        &serde_json::json!({ "request_identity": request_identity_prompt }),
+                    )),
+                    build_id: None,
+                    attributes: std::collections::BTreeMap::from([(
+                        "orchestrator".to_string(),
+                        "flowpilot-shared".to_string(),
+                    )]),
+                },
+                ManifestAugmentations::from_host_value(board_context_augmentation),
+                default_flowscript_module_templates(),
+            )
+            .ok()
+        });
+    if let Some(manifest_prompt) = workflow_manifest
+        .as_ref()
+        .and_then(|manifest| manifest.render_authoring_prompt().ok())
+    {
+        system_content.push_str("\n\n");
+        system_content.push_str(&manifest_prompt);
+    }
+
     if matches!(scope, CopilotScope::Frontend | CopilotScope::Both)
         && let Some(components) = current_surface
         && !components.is_empty()
@@ -11953,6 +14126,7 @@ fn build_flowpilot_agent_surface(
         queued_flowscript: Arc::new(StdMutex::new(None)),
         emitted_surfaces: Arc::new(StdMutex::new(Vec::new())),
         flowscript_recovery,
+        workflow_manifest,
         system_content,
         workflow_edit_request,
         capabilities,
@@ -13678,29 +15852,15 @@ mod tests {
     }
 
     fn flowscript_recovery_test_board() -> Board {
-        Board {
-            id: format!("flowscript-recovery-{}", uuid::Uuid::new_v4()),
-            name: "Recovery".to_string(),
-            description: String::new(),
-            nodes: HashMap::new(),
-            variables: HashMap::new(),
-            comments: HashMap::new(),
-            viewport: (0.0, 0.0, 1.0),
-            version: (0, 0, 1),
-            stage: flow_like::flow::board::ExecutionStage::Dev,
-            log_level: flow_like::flow::execution::LogLevel::Info,
-            execution_mode: flow_like::flow::board::ExecutionMode::Hybrid,
-            refs: HashMap::new(),
-            layers: HashMap::new(),
-            page_ids: Vec::new(),
-            hash: None,
-            created_at: std::time::SystemTime::now(),
-            updated_at: std::time::SystemTime::now(),
-            parent: None,
-            board_dir: flow_like::flow_like_storage::Path::from("/test"),
-            logic_nodes: HashMap::new(),
-            app_state: None,
-        }
+        let mut board = Board::new_detached(
+            Some(format!("flowscript-recovery-{}", uuid::Uuid::new_v4())),
+            flow_like::flow_like_storage::Path::from("/test"),
+        );
+        board.name = "Recovery".to_string();
+        board.description.clear();
+        board.viewport = (0.0, 0.0, 1.0);
+        board.hash = None;
+        board
     }
 
     fn retained_recovery_context(
@@ -13955,6 +16115,517 @@ mod tests {
         serde_json::from_str(text).expect("workflow guard result is valid JSON")
     }
 
+    fn board_edit_job_test_record(
+        job_id: impl Into<String>,
+        phase: BoardEditJobPhase,
+        touched_at: Instant,
+    ) -> BoardEditJobRecord {
+        let job_id = job_id.into();
+        BoardEditJobRecord {
+            job: BoardEditJob {
+                schema_version: BOARD_EDIT_JOB_SCHEMA_VERSION.to_string(),
+                job_id: job_id.clone(),
+                app_id: "review-app".to_string(),
+                board_id: "review-board".to_string(),
+                request_id: Some(format!("request-{job_id}")),
+                remote_profile_id: None,
+                remote_principal_id: None,
+                remote_hub: None,
+                phase,
+                created_at_ms: 1,
+                updated_at_ms: 1,
+                expires_at_ms: 2,
+                token: FlowIrCommitToken {
+                    board_id: "review-board".to_string(),
+                    draft_id: format!("draft-{job_id}"),
+                    revision: 3,
+                    base_fingerprint: "base".to_string(),
+                    claim_id: format!("claim-{job_id}"),
+                    requires_destructive_approval: false,
+                },
+                approval: flow_like::flow::copilot::tool_spec::ResolvedToolApproval::none(),
+                review: BoardEditJobReview {
+                    command_count: 0,
+                    command_counts: BTreeMap::new(),
+                    command_summaries: Vec::new(),
+                    replacement_mode: false,
+                    destructive_effects: Vec::new(),
+                },
+                result: None,
+                error: None,
+            },
+            board_commands: vec![BoardCommand::AddNode {
+                node_type: "events_generic".to_string(),
+                ref_id: Some(format!("node-{job_id}")),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            }],
+            replacement_mode: false,
+            touched_at,
+            resolution_lock: Arc::new(tokio::sync::Mutex::new(())),
+            delivery_lease: None,
+        }
+    }
+
+    #[test]
+    fn board_edit_review_is_deterministic_and_host_derived() {
+        let review = board_command_review(
+            &[
+                BoardCommand::AddNode {
+                    node_type: "events_generic".to_string(),
+                    ref_id: Some("event".to_string()),
+                    position: None,
+                    friendly_name: None,
+                    additional_pins: None,
+                    target_layer: None,
+                    summary: Some("  Add the entry event.  ".to_string()),
+                },
+                BoardCommand::AddNode {
+                    node_type: "log".to_string(),
+                    ref_id: Some("log".to_string()),
+                    position: None,
+                    friendly_name: None,
+                    additional_pins: None,
+                    target_layer: None,
+                    summary: None,
+                },
+                BoardCommand::RemoveNode {
+                    node_id: "old-node".to_string(),
+                    summary: Some("Remove the obsolete node.".to_string()),
+                },
+            ],
+            false,
+        );
+
+        assert_eq!(review.command_count, 3);
+        assert_eq!(review.command_counts.get("AddNode"), Some(&2));
+        assert_eq!(review.command_counts.get("RemoveNode"), Some(&1));
+        assert_eq!(
+            review.command_summaries,
+            vec![
+                "Add the entry event.".to_string(),
+                "Remove the obsolete node.".to_string(),
+            ]
+        );
+        assert_eq!(
+            review.destructive_effects,
+            vec!["node `old-node`".to_string()]
+        );
+    }
+
+    #[test]
+    fn terminal_board_edit_identity_blocks_stale_direct_receipt_replay() {
+        let now = Instant::now();
+        let terminal = board_edit_job_test_record("terminal", BoardEditJobPhase::Applied, now);
+        assert!(board_edit_job_matches_terminal_delivery(
+            &terminal,
+            &terminal.job.app_id,
+            &terminal.job.token,
+        ));
+
+        let mut pending = terminal.clone();
+        pending.job.phase = BoardEditJobPhase::AppliedPendingDelivery;
+        assert!(!board_edit_job_matches_terminal_delivery(
+            &pending,
+            &pending.job.app_id,
+            &pending.job.token,
+        ));
+
+        let mut other = terminal.job.token.clone();
+        other.claim_id.push_str("-other");
+        assert!(!board_edit_job_matches_terminal_delivery(
+            &terminal,
+            &terminal.job.app_id,
+            &other,
+        ));
+    }
+
+    #[test]
+    fn board_edit_job_pruning_expires_reviews_and_preserves_the_exact_capacity() {
+        let now = Instant::now();
+        let expired_at = now
+            .checked_sub(BOARD_EDIT_JOB_TTL + Duration::from_secs(1))
+            .expect("test instant supports TTL subtraction");
+        let mut jobs = HashMap::from([(
+            "expired".to_string(),
+            board_edit_job_test_record("expired", BoardEditJobPhase::AwaitingApproval, expired_at),
+        )]);
+        assert!(prune_board_edit_jobs(&mut jobs, now));
+        let expired = &jobs["expired"].job;
+        assert_eq!(expired.phase, BoardEditJobPhase::Stale);
+        assert!(
+            expired
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("expired"))
+        );
+
+        let mut at_capacity = (0..BOARD_EDIT_JOB_MAX_ENTRIES)
+            .map(|index| {
+                let id = format!("settled-{index:03}");
+                (
+                    id.clone(),
+                    board_edit_job_test_record(id, BoardEditJobPhase::Applied, now),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        assert!(!prune_board_edit_jobs(&mut at_capacity, now));
+        assert_eq!(at_capacity.len(), BOARD_EDIT_JOB_MAX_ENTRIES);
+
+        at_capacity.insert(
+            "old-terminal".to_string(),
+            board_edit_job_test_record(
+                "old-terminal",
+                BoardEditJobPhase::Denied,
+                now.checked_sub(Duration::from_secs(1))
+                    .expect("test instant supports subtraction"),
+            ),
+        );
+        assert!(prune_board_edit_jobs(&mut at_capacity, now));
+        assert_eq!(at_capacity.len(), BOARD_EDIT_JOB_MAX_ENTRIES);
+        assert!(!at_capacity.contains_key("old-terminal"));
+    }
+
+    #[test]
+    fn failed_board_edit_jobs_remain_retryable_until_the_review_ttl() {
+        let now = Instant::now();
+        let mut jobs = HashMap::from([(
+            "retryable".to_string(),
+            board_edit_job_test_record("retryable", BoardEditJobPhase::Failed, now),
+        )]);
+
+        assert!(!prune_board_edit_jobs(&mut jobs, now));
+        assert_eq!(jobs["retryable"].job.phase, BoardEditJobPhase::Failed);
+        assert!(!jobs["retryable"].job.phase.is_terminal());
+
+        let expired_at = now
+            .checked_sub(BOARD_EDIT_JOB_TTL + Duration::from_secs(1))
+            .expect("test instant supports TTL subtraction");
+        jobs.get_mut("retryable").expect("retryable job").touched_at = expired_at;
+        assert!(prune_board_edit_jobs(&mut jobs, now));
+        assert_eq!(jobs["retryable"].job.phase, BoardEditJobPhase::Stale);
+    }
+
+    #[test]
+    fn applied_receipt_stays_recoverable_until_renderer_delivery_is_acknowledged() {
+        let now = Instant::now();
+        let older_than_review_ttl = now
+            .checked_sub(BOARD_EDIT_JOB_TTL + Duration::from_secs(1))
+            .expect("test instant supports TTL subtraction");
+        let mut record = board_edit_job_test_record(
+            "delivery",
+            BoardEditJobPhase::AppliedPendingDelivery,
+            older_than_review_ttl,
+        );
+        record.delivery_lease = Some(BoardEditJobDeliveryLease {
+            lease_id: "abandoned-renderer".to_string(),
+            expires_at: now
+                .checked_sub(Duration::from_millis(1))
+                .expect("test instant supports subtraction"),
+        });
+        let mut jobs = HashMap::from([("delivery".to_string(), record)]);
+
+        assert!(!prune_board_edit_jobs(&mut jobs, now));
+
+        let retained = &jobs["delivery"];
+        assert_eq!(
+            retained.job.phase,
+            BoardEditJobPhase::AppliedPendingDelivery
+        );
+        assert!(!retained.job.phase.is_terminal());
+        assert!(retained.delivery_lease.is_none());
+    }
+
+    #[test]
+    fn board_edit_job_commit_identity_is_exact_and_claim_scoped() {
+        let token = FlowIrCommitToken {
+            board_id: "board".to_string(),
+            draft_id: "draft".to_string(),
+            revision: 7,
+            base_fingerprint: "base".to_string(),
+            claim_id: "claim-a".to_string(),
+            requires_destructive_approval: false,
+        };
+        assert_eq!(
+            flow_ir_commit_identity(&token),
+            flow_ir_commit_identity(&token.clone())
+        );
+
+        let mut next_claim = token.clone();
+        next_claim.claim_id = "claim-b".to_string();
+        assert_ne!(
+            flow_ir_commit_identity(&token),
+            flow_ir_commit_identity(&next_claim)
+        );
+        let mut next_revision = token.clone();
+        next_revision.revision += 1;
+        assert_ne!(
+            flow_ir_commit_identity(&token),
+            flow_ir_commit_identity(&next_revision)
+        );
+    }
+
+    #[test]
+    fn board_edit_job_serializes_the_frontend_contract() {
+        let mut record = board_edit_job_test_record(
+            "wire-contract",
+            BoardEditJobPhase::AwaitingApproval,
+            Instant::now(),
+        );
+        record.job.review.command_count = 2;
+        record
+            .job
+            .review
+            .command_counts
+            .insert("AddNode".to_string(), 2);
+        let value = serde_json::to_value(record.job).expect("serialize board-edit job");
+
+        assert_eq!(value["schemaVersion"], BOARD_EDIT_JOB_SCHEMA_VERSION);
+        assert_eq!(value["jobId"], "wire-contract");
+        assert_eq!(value["phase"], "awaiting_approval");
+        assert_eq!(value["review"]["commandCount"], 2);
+        assert_eq!(value["review"]["commandCounts"]["AddNode"], 2);
+        assert_eq!(value["token"]["board_id"], "review-board");
+        assert!(value.get("result").is_none());
+        assert!(value.get("error").is_none());
+    }
+
+    #[test]
+    fn actual_executed_receipt_is_bounded_before_remote_persistence() {
+        let mut command =
+            flow_like::flow::board::commands::nodes::copy_paste::CopyPasteCommand::new(
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                (0.0, 0.0, 0.0),
+            );
+        command.original_refs.insert(
+            "large-public-ref".to_string(),
+            "x".repeat(BOARD_EDIT_JOB_MAX_REMOTE_COMMAND_BYTES),
+        );
+        let result = ApplyFlowIrCommitResult {
+            status: "applied".to_string(),
+            replayed: false,
+            code: None,
+            message: "applied".to_string(),
+            commands: vec![GenericCommand::CopyPaste(command)],
+            board_commands: Vec::new(),
+            diagnostics: Vec::new(),
+            final_board_node_count: Some(0),
+        };
+
+        let error = validate_board_edit_delivery_bounds(&result, true)
+            .expect_err("an unsendable executed command must fail before board save");
+        assert!(error.contains("delivery limit"), "{error}");
+    }
+
+    #[test]
+    fn aggregate_executed_receipt_must_fit_one_atomic_remote_request() {
+        let commands = (0..2)
+            .map(|index| {
+                let mut command =
+                    flow_like::flow::board::commands::nodes::copy_paste::CopyPasteCommand::new(
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        (0.0, 0.0, 0.0),
+                    );
+                command.original_refs.insert(
+                    format!("large-public-ref-{index}"),
+                    "x".repeat(BOARD_EDIT_JOB_MAX_REMOTE_COMMAND_BYTES / 2),
+                );
+                GenericCommand::CopyPaste(command)
+            })
+            .collect();
+        let result = ApplyFlowIrCommitResult {
+            status: "applied".to_string(),
+            replayed: false,
+            code: None,
+            message: "applied".to_string(),
+            commands,
+            board_commands: Vec::new(),
+            diagnostics: Vec::new(),
+            final_board_node_count: Some(0),
+        };
+
+        let error = validate_board_edit_delivery_bounds(&result, true)
+            .expect_err("individually small commands must not be split across board saves");
+        assert!(error.contains("atomic executed command batch"), "{error}");
+    }
+
+    #[test]
+    fn durable_receipt_drops_redundant_compiler_commands() {
+        let result = ApplyFlowIrCommitResult {
+            status: "applied".to_string(),
+            replayed: false,
+            code: None,
+            message: "applied".to_string(),
+            commands: Vec::new(),
+            board_commands: vec![BoardCommand::RemoveNode {
+                node_id: "old-node".to_string(),
+                summary: None,
+            }],
+            diagnostics: Vec::new(),
+            final_board_node_count: Some(0),
+        };
+
+        let compact = compact_durable_apply_receipt(&result);
+        assert!(compact.board_commands.is_empty());
+        assert_eq!(compact.commands.len(), result.commands.len());
+    }
+
+    #[test]
+    fn board_edit_job_snapshot_round_trips_the_exact_host_batch_and_policy() {
+        let mut record = board_edit_job_test_record(
+            "durable-batch",
+            BoardEditJobPhase::AwaitingApproval,
+            Instant::now(),
+        );
+        record.replacement_mode = true;
+        record.job.review.replacement_mode = true;
+        let reviewed_commands = record.board_commands.clone();
+        let encoded = serde_json::to_vec(&PersistedBoardEditJobEntry::Current(
+            PersistedBoardEditJobRecord {
+                job: record.job,
+                board_commands: record.board_commands,
+                replacement_mode: record.replacement_mode,
+            },
+        ))
+        .expect("serialize persisted board-edit job");
+        let persisted: PersistedBoardEditJobEntry =
+            serde_json::from_slice(&encoded).expect("deserialize persisted board-edit job");
+        let recovered = board_edit_job_record_from_persisted(persisted)
+            .expect("persisted exact batch remains recoverable");
+
+        assert_eq!(recovered.job.phase, BoardEditJobPhase::AwaitingApproval);
+        assert!(recovered.replacement_mode);
+        assert_eq!(recovered.job.review.command_count, reviewed_commands.len());
+        assert!(recovered.job.review.replacement_mode);
+        assert!(exact_board_command_batch_matches(
+            &reviewed_commands,
+            &recovered.board_commands
+        ));
+    }
+
+    #[test]
+    fn legacy_board_edit_job_without_an_exact_batch_fails_closed_after_restart() {
+        let legacy = board_edit_job_test_record(
+            "legacy-batch",
+            BoardEditJobPhase::AwaitingApproval,
+            Instant::now(),
+        )
+        .job;
+        let recovered =
+            board_edit_job_record_from_persisted(PersistedBoardEditJobEntry::Legacy(legacy))
+                .expect("legacy job remains visible for an actionable stale result");
+
+        assert_eq!(recovered.job.phase, BoardEditJobPhase::Stale);
+        assert!(recovered.board_commands.is_empty());
+        assert!(
+            recovered
+                .job
+                .error
+                .as_deref()
+                .is_some_and(|message| message.contains("cannot be applied safely"))
+        );
+    }
+
+    #[test]
+    fn interrupted_apply_restarts_as_retryable_failed_with_the_exact_batch() {
+        let record = board_edit_job_test_record(
+            "interrupted-apply",
+            BoardEditJobPhase::Applying,
+            Instant::now(),
+        );
+        let reviewed_commands = record.board_commands.clone();
+        let recovered = board_edit_job_record_from_persisted(PersistedBoardEditJobEntry::Current(
+            PersistedBoardEditJobRecord {
+                job: record.job,
+                board_commands: record.board_commands,
+                replacement_mode: record.replacement_mode,
+            },
+        ))
+        .expect("interrupted exact apply remains retryable");
+
+        assert_eq!(recovered.job.phase, BoardEditJobPhase::Failed);
+        assert!(exact_board_command_batch_matches(
+            &reviewed_commands,
+            &recovered.board_commands
+        ));
+        assert!(
+            recovered
+                .job
+                .error
+                .as_deref()
+                .is_some_and(|message| message.contains("restarted"))
+        );
+    }
+
+    #[test]
+    fn board_mutation_gate_reserves_matching_apply_recovery_and_delivery_phases() {
+        let now = Instant::now();
+        let jobs = HashMap::from([
+            (
+                "awaiting".to_string(),
+                board_edit_job_test_record("awaiting", BoardEditJobPhase::AwaitingApproval, now),
+            ),
+            (
+                "applying".to_string(),
+                board_edit_job_test_record("applying", BoardEditJobPhase::Applying, now),
+            ),
+        ]);
+
+        assert!(board_mutation_is_reserved(
+            &jobs,
+            "review-app",
+            "review-board"
+        ));
+        assert!(!board_mutation_is_reserved(
+            &jobs,
+            "another-app",
+            "review-board"
+        ));
+        assert!(another_board_edit_job_reserves_mutation(
+            &jobs,
+            "awaiting",
+            "review-app",
+            "review-board"
+        ));
+        assert!(!another_board_edit_job_reserves_mutation(
+            &jobs,
+            "applying",
+            "review-app",
+            "review-board"
+        ));
+        assert!(!board_mutation_is_reserved(
+            &jobs,
+            "review-app",
+            "another-board"
+        ));
+
+        let delivery = HashMap::from([(
+            "delivery".to_string(),
+            board_edit_job_test_record("delivery", BoardEditJobPhase::AppliedPendingDelivery, now),
+        )]);
+        assert!(board_mutation_is_reserved(
+            &delivery,
+            "review-app",
+            "review-board"
+        ));
+        let failed = HashMap::from([(
+            "failed".to_string(),
+            board_edit_job_test_record("failed", BoardEditJobPhase::Failed, now),
+        )]);
+        assert!(board_mutation_is_reserved(
+            &failed,
+            "review-app",
+            "review-board"
+        ));
+    }
+
     #[test]
     fn atomic_typed_apply_errors_keep_the_full_apply_result_contract() {
         let response = ApplyFlowIrCommitResult::empty(
@@ -14018,6 +16689,7 @@ mod tests {
         };
         let result = ApplyFlowIrCommitResult {
             status: "applied".to_string(),
+            replayed: false,
             code: None,
             message: "Applied exact typed batch.".to_string(),
             commands: Vec::new(),
@@ -14030,6 +16702,7 @@ mod tests {
         let replay = replay_flow_ir_applied_receipt("receipt-app", &token)
             .expect("exact token replays its applied receipt");
         assert_eq!(replay.status, "applied");
+        assert!(replay.replayed);
         assert_eq!(replay.final_board_node_count, Some(3));
         assert!(replay.message.contains("idempotent replay"));
 
@@ -14048,6 +16721,78 @@ mod tests {
         let config = flowpilot_mcp_server_config();
         assert_eq!(config.sse_keep_alive, Some(Duration::from_secs(15)));
         assert!(config.stateful_mode);
+    }
+
+    #[test]
+    fn sdk_handler_watchdog_uses_every_registered_tool_deadline() {
+        assert_eq!(
+            sdk_tool_handler_watchdog_timeout("unknown_local_tool"),
+            SDK_EVENT_INACTIVITY_TIMEOUT
+        );
+        assert_eq!(
+            sdk_tool_handler_watchdog_timeout("flowpilot_board"),
+            Duration::from_secs(1800) + SDK_CONTROL_RPC_TIMEOUT
+        );
+        assert_eq!(
+            sdk_tool_handler_watchdog_timeout("ask_user"),
+            Duration::from_secs(600) + SDK_CONTROL_RPC_TIMEOUT
+        );
+        assert_eq!(
+            sdk_tool_handler_watchdog_timeout("execute_event"),
+            Duration::from_secs(600) + SDK_CONTROL_RPC_TIMEOUT
+        );
+        assert_eq!(
+            sdk_tool_handler_watchdog_timeout("ontology_action_tool"),
+            Duration::from_secs(600) + SDK_CONTROL_RPC_TIMEOUT
+        );
+        assert_eq!(
+            sdk_tool_handler_watchdog_timeout("ui_inspect"),
+            crate::functions::ai::copilot_sdk_tools::UI_INSPECT_TOOL_TIMEOUT
+                + SDK_CONTROL_RPC_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn sdk_watchdog_observes_a_handler_before_protocol_v3_broadcast() {
+        let registry = Arc::new(SdkToolActivityRegistry::default());
+        let mut changes = registry.subscribe();
+        let last_sdk_event_at = tokio::time::Instant::now();
+        assert_eq!(
+            registry.inactivity_deadline(last_sdk_event_at),
+            last_sdk_event_at + SDK_EVENT_INACTIVITY_TIMEOUT
+        );
+        assert!(!changes.has_changed().expect("activity channel is open"));
+
+        let ask_guard = registry.begin("ask_user");
+        assert!(changes.has_changed().expect("activity channel is open"));
+        let _ = *changes.borrow_and_update();
+        let ask_deadline = registry.inactivity_deadline(last_sdk_event_at);
+        assert!(
+            ask_deadline >= last_sdk_event_at + Duration::from_secs(600) + SDK_CONTROL_RPC_TIMEOUT
+        );
+
+        let board_guard = registry.begin("flowpilot_board");
+        assert!(changes.has_changed().expect("activity channel is open"));
+        let _ = *changes.borrow_and_update();
+        assert_eq!(
+            registry.inactivity_deadline(last_sdk_event_at),
+            ask_deadline,
+            "a longer concurrent handler must not hide the earlier ask_user deadline"
+        );
+        drop(ask_guard);
+        assert!(changes.has_changed().expect("activity channel is open"));
+        let _ = *changes.borrow_and_update();
+        assert!(
+            registry.inactivity_deadline(last_sdk_event_at) > ask_deadline,
+            "dropping the shorter lease must expose the board handler deadline"
+        );
+        drop(board_guard);
+        assert!(changes.has_changed().expect("activity channel is open"));
+        assert_eq!(*changes.borrow_and_update(), 4);
+        assert_eq!(
+            registry.inactivity_deadline(last_sdk_event_at),
+            last_sdk_event_at + SDK_EVENT_INACTIVITY_TIMEOUT
+        );
     }
 
     #[test]
@@ -14789,6 +17534,7 @@ mod tests {
         let mut tools = scope_sdk_tool_handlers(
             vec![(copilot_sdk::Tool::new("runtime_test"), handler)],
             cancellation.clone(),
+            None,
         );
         let (_, handler) = tools.pop().expect("scoped SDK handler");
 
@@ -14823,6 +17569,7 @@ mod tests {
         let mut tools = scope_sdk_tool_handlers(
             vec![(copilot_sdk::Tool::new("runtime_test"), handler)],
             cancellation.clone(),
+            None,
         );
         cancellation.cancel();
         let (_, handler) = tools.pop().expect("scoped SDK handler");
@@ -14836,6 +17583,50 @@ mod tests {
                 .as_deref()
                 .unwrap_or(&result.text_result_for_llm)
                 .contains("cancelled")
+        );
+    }
+
+    #[test]
+    fn panicking_direct_sdk_handler_returns_an_error_and_releases_its_activity_lease() {
+        let activity = Arc::new(SdkToolActivityRegistry::default());
+        let observed_activity = activity.clone();
+        let handler: copilot_sdk::ToolHandler = Arc::new(move |_name, _args| {
+            assert_eq!(
+                observed_activity
+                    .state
+                    .lock()
+                    .expect("activity state")
+                    .active_deadlines
+                    .len(),
+                1,
+                "the host-side lease must exist before the SDK publishes its tool event"
+            );
+            panic!("simulated handler panic");
+        });
+        let mut tools = scope_sdk_tool_handlers(
+            vec![(copilot_sdk::Tool::new("ask_user"), handler)],
+            CancellationToken::new(),
+            Some(activity.clone()),
+        );
+        let (_, handler) = tools.pop().expect("scoped SDK handler");
+
+        let result = handler("ask_user", &serde_json::json!({}));
+
+        assert!(
+            result
+                .error
+                .as_deref()
+                .unwrap_or(&result.text_result_for_llm)
+                .contains("simulated handler panic")
+        );
+        assert!(
+            activity
+                .state
+                .lock()
+                .expect("activity state")
+                .active_deadlines
+                .is_empty(),
+            "panic unwinding must not leave the SDK watchdog extended"
         );
     }
 
@@ -14855,7 +17646,8 @@ mod tests {
 
     #[test]
     fn external_workflow_prompt_requires_an_early_retained_checkpoint() {
-        let prompt = build_external_agent_prompt("system", "build it", true);
+        let prompt =
+            build_external_agent_prompt("system", "build it", CopilotScope::Board, true, false);
         assert!(prompt.contains("ONE bounded, focused get_declarations batch"));
         assert!(prompt.contains("call write_flowscript IMMEDIATELY"));
         assert!(prompt.contains("at most six ancillary"));
@@ -14983,6 +17775,23 @@ mod tests {
                 "prompt should stay read-only: {prompt}"
             );
         }
+    }
+
+    #[test]
+    fn auto_intent_does_not_misclassify_scheduled_check_imperatives_as_questions() {
+        for prompt in [
+            "check my inbox every hour and notify me",
+            "check the API every minute and send an email",
+            "Prüfe den Posteingang jede Stunde und sende eine Nachricht",
+        ] {
+            assert!(
+                !is_read_only_workflow_request(&prompt.to_lowercase()),
+                "scheduled imperative should enter authoring mode: {prompt}"
+            );
+        }
+        assert!(is_read_only_workflow_request(
+            "check why this workflow sends an email"
+        ));
     }
 
     #[test]
@@ -15130,7 +17939,8 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(redirected.contains("declaration_lookup_required"));
-        assert!(redirected.contains("repeated-input"));
+        assert!(redirected.contains("one bounded get_declarations batch"));
+        assert!(redirected.contains("full-shape draft"));
         assert!(!state.lock().expect("state lock").edit_in_flight);
 
         let empty_lookup = workflow_tool_preflight_with_args(
@@ -16573,8 +19383,12 @@ mod tests {
         let tools = ["database_tool", "ui_inspect", "storage_tool"];
         for call in 0..MAX_EXTERNAL_PREDRAFT_CONTEXT_READS {
             assert!(
-                workflow_predraft_context_preflight(&state, tools[usize::from(call) % tools.len()])
-                    .is_none(),
+                workflow_predraft_context_preflight(
+                    &state,
+                    tools[usize::from(call) % tools.len()],
+                    &serde_json::Value::Null,
+                )
+                .is_none(),
                 "ancillary context call {call} should fit the pre-draft budget"
             );
         }
@@ -16583,8 +19397,9 @@ mod tests {
             .lock()
             .expect("state lock")
             .initial_declaration_lookup_usable = true;
-        let blocked = workflow_predraft_context_preflight(&state, "database_tool")
-            .expect("the next exhaustive inspection must redirect to source retention");
+        let blocked =
+            workflow_predraft_context_preflight(&state, "database_tool", &serde_json::Value::Null)
+                .expect("the next exhaustive inspection must redirect to source retention");
         let blocked = workflow_call_result_json(&blocked);
         assert_eq!(blocked["status"], "predraft_inspection_budget_exhausted");
         assert_eq!(blocked["next_action"], "write_flowscript");
@@ -16595,7 +19410,8 @@ mod tests {
 
         state.lock().expect("state lock").flowscript_draft_retained = true;
         assert!(
-            workflow_predraft_context_preflight(&state, "database_tool").is_none(),
+            workflow_predraft_context_preflight(&state, "database_tool", &serde_json::Value::Null,)
+                .is_none(),
             "focused inspection is available again after a recoverable source exists"
         );
     }
@@ -18691,39 +21507,86 @@ eventsSimple() {
     }
 
     #[test]
-    fn specialist_agent_capability_set_covers_app_tools_without_global_web_tools() {
-        let capabilities = FlowPilotAgentCapabilitySet::shared_for(CopilotScope::Both, true, true);
-        for tool in [
-            "get_declarations",
+    fn specialist_capabilities_follow_exact_tool_policy() {
+        let frontend =
+            FlowPilotAgentCapabilitySet::shared_for(CopilotScope::Frontend, false, false);
+        assert_eq!(
+            frontend.tool_names,
+            vec!["emit_ui".to_string(), "get_component_schema".to_string()]
+        );
+
+        let board = FlowPilotAgentCapabilitySet::shared_for(CopilotScope::Board, true, true);
+        let board_names = board
+            .tool_names
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            board_names,
+            specialist_tool_policy(CopilotScope::Board, true, true)
+        );
+        for board_tool in [
             "get_current_flowscript",
             "write_flowscript",
             "patch_flowscript",
             "check_flowscript",
             "commit_flowscript",
-            "emit_commands",
-            "emit_ui",
             "database_tool",
             "storage_tool",
+            "ui_inspect",
             "execute_event",
             "execute_node",
             "query_execution_logs",
-            "ask_user",
         ] {
             assert!(
-                capabilities.tool_names.iter().any(|name| name == tool),
-                "shared FlowPilot capability set must include {tool}; got {:?}",
-                capabilities.tool_names
+                board_names.contains(board_tool),
+                "board must expose {board_tool}"
             );
         }
-        for global_only_tool in ["internet_search", "open_url", "archive_lookup"] {
+        assert!(!board_names.contains("emit_ui"));
+        assert!(!board_names.contains("graph_overlay_tool"));
+        assert!(!board_names.contains("internet_search"));
+        assert!(!board_names.contains("open_url"));
+        assert!(!board_names.contains("archive_lookup"));
+        assert!(!board_names.contains("ask_user"));
+
+        let data = FlowPilotAgentCapabilitySet::shared_for(CopilotScope::DataStudio, false, false);
+        let data_names = data
+            .tool_names
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        assert_eq!(
+            data_names,
+            specialist_tool_policy(CopilotScope::DataStudio, false, false)
+        );
+        for data_tool in [
+            "database_tool",
+            "graph_overlay_tool",
+            "graph_query_tool",
+            "graph_element_tool",
+            "ontology_action_tool",
+            "list_apps",
+            "describe_app_interface",
+        ] {
             assert!(
-                !capabilities
-                    .tool_names
-                    .iter()
-                    .any(|name| name == global_only_tool),
-                "specialist capabilities must not advertise global-only tool {global_only_tool}"
+                data_names.contains(data_tool),
+                "Data Studio must expose {data_tool}"
             );
         }
+        for foreign_tool in [
+            "emit_ui",
+            "write_flowscript",
+            "execute_node",
+            "storage_tool",
+            "internet_search",
+            "open_url",
+            "archive_lookup",
+            "ask_user",
+        ] {
+            assert!(!data_names.contains(foreign_tool));
+        }
+
         for legacy_typed_tool in [
             "plan_flow_ir",
             "begin_flow_ir_draft",
@@ -18732,16 +21595,12 @@ eventsSimple() {
             "validate_flow_ir_draft",
             "commit_flow_ir_draft",
         ] {
-            assert!(
-                !capabilities
-                    .tool_names
-                    .iter()
-                    .any(|name| name == legacy_typed_tool),
-                "model-facing capabilities must not advertise legacy typed JSON tool {legacy_typed_tool}"
-            );
+            assert!(!board_names.contains(legacy_typed_tool));
+            assert!(!data_names.contains(legacy_typed_tool));
         }
+
         assert_eq!(
-            capabilities.prompt_source, "flow_like::copilot::prompts",
+            board.prompt_source, "flow_like::copilot::prompts",
             "all agent backends must use the shared prompt module"
         );
     }
@@ -18786,39 +21645,98 @@ eventsSimple() {
     }
 
     #[test]
-    fn read_only_tool_filter_covers_every_workflow_mutator() {
+    fn board_explain_policy_is_an_exact_read_only_allowlist() {
         for tool in [
+            "catalog_search",
+            "get_declarations",
+            "get_current_flowscript",
+            "get_node_details",
+            "get_unconfigured_nodes",
+            "list_board_nodes",
+            "database_tool",
+            "storage_tool",
+            "ui_inspect",
+            "query_execution_logs",
+        ] {
+            assert!(
+                is_flowpilot_read_only_tool(tool),
+                "read-only inspection should retain {tool}"
+            );
+        }
+        for tool in [
+            "execute_event",
+            "execute_node",
             "emit_commands",
-            "edit_flowscript",
             "write_flowscript",
             "patch_flowscript",
             "check_flowscript",
             "commit_flowscript",
-            "begin_flow_ir_draft",
-            "update_flow_ir_draft",
-            "upsert_flow_ir_module",
-            "validate_flow_ir_draft",
-            "commit_flow_ir_draft",
             "emit_ui",
+            "graph_overlay_tool",
+            "internet_search",
+            "ask_user",
         ] {
             assert!(
-                is_flowpilot_mutation_tool(tool),
+                !is_flowpilot_read_only_tool(tool),
                 "read-only FlowPilot surfaces must hide {tool}"
             );
         }
-        for tool in [
-            "catalog_search",
-            "get_declarations",
-            "plan_flow_ir",
+    }
+
+    #[test]
+    fn external_frontend_prompt_has_no_workflow_lifecycle() {
+        let prompt = build_external_agent_prompt(
+            "frontend-system",
+            "Build a dashboard and wire its save button",
+            CopilotScope::Frontend,
+            false,
+            false,
+        );
+        assert!(prompt.contains("You are the UI specialist"));
+        assert!(prompt.contains("parent must call the board specialist"));
+        for lifecycle_tool in [
             "get_current_flowscript",
-            "get_node_details",
-            "list_board_nodes",
+            "write_flowscript",
+            "patch_flowscript",
+            "check_flowscript",
+            "commit_flowscript",
         ] {
-            assert!(
-                !is_flowpilot_mutation_tool(tool),
-                "read-only inspection should retain {tool}"
-            );
+            assert!(!prompt.contains(lifecycle_tool));
         }
+    }
+
+    #[test]
+    fn external_global_prompt_keeps_the_platform_orchestrator_role() {
+        let prompt = build_external_agent_prompt(
+            "global-system",
+            "Create an app with a widget, data table, board, and event",
+            CopilotScope::Frontend,
+            false,
+            true,
+        );
+        assert!(prompt.contains("You are the PLATFORM orchestrator"));
+        assert!(prompt.contains("coordinate every required specialist"));
+        assert!(!prompt.contains("You are the UI specialist"));
+    }
+
+    #[test]
+    fn mcp_server_instructions_are_derived_from_specialist_tools() {
+        let ui = flowpilot_mcp_server_instructions(["emit_ui", "get_component_schema"], false);
+        assert!(ui.contains("UI specialist"));
+        assert!(ui.contains("Hand workflow wiring back to the board specialist"));
+        assert!(!ui.contains("write_flowscript"));
+
+        let board = flowpilot_mcp_server_instructions(
+            [
+                "get_current_flowscript",
+                "write_flowscript",
+                "commit_flowscript",
+            ],
+            true,
+        );
+        assert!(board.contains("BOARD specialist"));
+        assert!(board.contains("commit_flowscript"));
+        assert!(board.contains("Cross-domain context tools are read-only"));
     }
 
     #[test]

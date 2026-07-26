@@ -43,11 +43,8 @@ pub async fn delete_page(
         .one(&state.db)
         .await?;
     let board_id = row.and_then(|row| row.board_id);
-    let mutation_lock = board_id
-        .as_deref()
-        .map(|board_id| state.board_mutation_lock(&app_id, board_id));
-    let _mutation_guard = match mutation_lock.as_ref() {
-        Some(lock) => Some(lock.lock().await),
+    let _mutation_guard = match board_id.as_deref() {
+        Some(board_id) => Some(state.board_mutation_guard(&app_id, board_id).await?),
         None => None,
     };
 

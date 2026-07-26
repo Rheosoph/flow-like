@@ -22,7 +22,10 @@ use jsonwebtoken::{
     DecodingKey, Validation, decode,
     jwk::{AlgorithmParameters, JwkSet},
 };
-use sea_orm::{ConnectOptions, Database, DatabaseConnection};
+use sea_orm::{
+    ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection,
+    DatabaseTransaction, Statement, TransactionTrait,
+};
 use std::{
     collections::HashMap,
     sync::{Arc, Weak},
@@ -39,7 +42,7 @@ use crate::routes::registry::ServerRegistry;
 
 pub type AppState = Arc<State>;
 
-/// Stable ownership key for retained FlowPilot drafts and applied-review receipts.
+/// Stable ownership key for retained FlowPilot drafts and durable pending/applied review records.
 ///
 /// Board ids are normally globally unique, but the review token is an authority boundary. Include
 /// the authenticated principal and app explicitly so a same-id board in another app (or another
@@ -59,6 +62,42 @@ pub(crate) fn flow_ir_draft_store_key(sub: &str, app_id: &str, board_id: &str) -
 /// collaborators still mutate the same canonical app board and must take the same mutex.
 pub(crate) fn board_mutation_lock_key(app_id: &str, board_id: &str) -> String {
     format!("{}\u{1f}{}", app_id.trim(), board_id.trim())
+}
+
+/// Stable 64-bit PostgreSQL advisory-lock key for one canonical app board.
+///
+/// The domain separator keeps this lock namespace independent from other advisory-lock users in
+/// the same database. A full-width digest also avoids PostgreSQL `hashtext`'s 32-bit collision
+/// rate while preserving the app+board scoping used by the process-local mutex.
+pub(crate) fn board_mutation_advisory_key(app_id: &str, board_id: &str) -> i64 {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"flow-like.board-mutation/v1\0");
+    hasher.update(board_mutation_lock_key(app_id, board_id).as_bytes());
+    let digest = hasher.finalize();
+    i64::from_be_bytes(
+        digest.as_bytes()[..8]
+            .try_into()
+            .expect("BLAKE3 digests are at least eight bytes"),
+    )
+}
+
+/// Holds both serialization layers for a canonical board mutation.
+///
+/// Dropping the transaction releases PostgreSQL's transaction-scoped advisory lock. Call
+/// [`Self::release`] when a normal path wants to commit the otherwise read-free lock transaction
+/// explicitly; error and early-return paths can safely rely on drop/rollback.
+pub(crate) struct BoardMutationGuard {
+    _local: flow_like_types::tokio::sync::OwnedMutexGuard<()>,
+    transaction: Option<DatabaseTransaction>,
+}
+
+impl BoardMutationGuard {
+    pub(crate) async fn release(mut self) -> std::result::Result<(), sea_orm::DbErr> {
+        if let Some(transaction) = self.transaction.take() {
+            transaction.commit().await?;
+        }
+        Ok(())
+    }
 }
 
 const CONFIG: &str = include_str!("../../../flow-like.config.json");
@@ -164,7 +203,7 @@ pub struct State {
 }
 
 impl State {
-    pub(crate) fn board_mutation_lock(
+    fn board_mutation_lock(
         &self,
         app_id: &str,
         board_id: &str,
@@ -182,6 +221,35 @@ impl State {
         let lock = Arc::new(flow_like_types::tokio::sync::Mutex::new(()));
         locks.insert(key, Arc::downgrade(&lock));
         lock
+    }
+
+    /// Serialize one board writer both within this process and across API replicas.
+    ///
+    /// The local mutex is acquired first to avoid spending a database connection on same-process
+    /// waiters. The PostgreSQL transaction remains open solely to retain its advisory lock for the
+    /// guard's lifetime; canonical board bytes continue to be read and written through storage.
+    pub(crate) async fn board_mutation_guard(
+        &self,
+        app_id: &str,
+        board_id: &str,
+    ) -> std::result::Result<BoardMutationGuard, sea_orm::DbErr> {
+        let local = self
+            .board_mutation_lock(app_id, board_id)
+            .lock_owned()
+            .await;
+        let transaction = self.db.begin().await?;
+        transaction
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT pg_advisory_xact_lock($1)",
+                [board_mutation_advisory_key(app_id, board_id).into()],
+            ))
+            .await?;
+
+        Ok(BoardMutationGuard {
+            _local: local,
+            transaction: Some(transaction),
+        })
     }
 
     pub async fn new(
@@ -798,7 +866,7 @@ fn decoding_key_for_algorithm(alg: &AlgorithmParameters) -> flow_like_types::Res
 
 #[cfg(test)]
 mod tests {
-    use super::{board_mutation_lock_key, flow_ir_draft_store_key};
+    use super::{board_mutation_advisory_key, board_mutation_lock_key, flow_ir_draft_store_key};
 
     #[test]
     fn retained_flow_ir_key_is_scoped_by_user_app_and_board() {
@@ -822,6 +890,19 @@ mod tests {
         assert_ne!(
             board_mutation_lock_key("app", "board"),
             board_mutation_lock_key("app", "other")
+        );
+
+        assert_eq!(
+            board_mutation_advisory_key("app", "board"),
+            board_mutation_advisory_key(" app ", " board ")
+        );
+        assert_ne!(
+            board_mutation_advisory_key("app", "board"),
+            board_mutation_advisory_key("other", "board")
+        );
+        assert_ne!(
+            board_mutation_advisory_key("app", "board"),
+            board_mutation_advisory_key("app", "other")
         );
     }
 }

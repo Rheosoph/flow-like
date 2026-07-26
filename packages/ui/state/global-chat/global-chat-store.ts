@@ -53,6 +53,10 @@ export type GlobalChatMode = "closed" | "overlay";
 /** Session-scoped dock visibility, so a hard reload mid-response re-opens the overlay (and thus
  * re-mounts the chat surface that re-attaches to the live stream) instead of hiding it. */
 const OVERLAY_MODE_KEY = "flow-like:global-chat:mode";
+/** A user dismissal suppresses automatic re-opening for the rest of the current FlowPilot cycle.
+ * It is cleared only after the user starts interacting with the full FlowPilot page again. */
+const OVERLAY_AUTO_OPEN_DISMISSED_KEY =
+	"flow-like:global-chat:auto-open-dismissed";
 
 function persistOverlayMode(mode: GlobalChatMode) {
 	try {
@@ -69,6 +73,26 @@ export function readPersistedOverlayMode(): GlobalChatMode | null {
 		return raw === "overlay" || raw === "closed" ? raw : null;
 	} catch {
 		return null;
+	}
+}
+
+function persistOverlayAutoOpenDismissed(dismissed: boolean) {
+	try {
+		if (dismissed) {
+			sessionStorage.setItem(OVERLAY_AUTO_OPEN_DISMISSED_KEY, "true");
+		} else {
+			sessionStorage.removeItem(OVERLAY_AUTO_OPEN_DISMISSED_KEY);
+		}
+	} catch {
+		// persistence is best-effort
+	}
+}
+
+function readPersistedOverlayAutoOpenDismissed() {
+	try {
+		return sessionStorage.getItem(OVERLAY_AUTO_OPEN_DISMISSED_KEY) === "true";
+	} catch {
+		return false;
 	}
 }
 
@@ -121,6 +145,20 @@ export interface GlobalChatDraft {
 	modelId?: string;
 	/** Raw browser files captured on the landing bar, forwarded to the first /chat send. */
 	files?: File[];
+}
+
+/** Provider-neutral model configuration captured once when a global assistant turn starts. */
+export interface GlobalChatAgentSelection {
+	readonly provider: AIProvider;
+	/** Raw (un-prefixed) picker model id. */
+	readonly selectedModelId: string;
+	/** Provider-specific reasoning effort ("" = provider/model default). */
+	readonly reasoningEffort: string;
+}
+
+/** Immutable owner-tagged selection used by every specialist spawned during one global turn. */
+export interface GlobalChatTurnSelection extends GlobalChatAgentSelection {
+	readonly runId: string;
 }
 
 export type GlobalToolPromptResolution =
@@ -176,6 +214,8 @@ interface GlobalChatState {
 	draft: GlobalChatDraft | null;
 	/** Docked overlay visibility, toggled when the agent navigates or the user opens the dock. */
 	mode: GlobalChatMode;
+	/** Whether automatic opens are suppressed because the user explicitly dismissed the dock. */
+	overlayAutoOpenDismissed: boolean;
 	/** Conversation currently shown in both /chat and the overlay. */
 	activeConversationId: string;
 	/** Committed messages of the active conversation. */
@@ -199,6 +239,12 @@ interface GlobalChatState {
 	selectedModelId: string;
 	/** Provider-specific reasoning effort ("" = use the selected model's default). */
 	reasoningEffort: string;
+	/**
+	 * Immutable execution configuration for the active turn. Picker hydration and user changes may
+	 * still update the fields above while a turn streams, but nested specialists must use this
+	 * snapshot so the entire parent/child run stays on one provider, model, and reasoning effort.
+	 */
+	activeTurnSelection: GlobalChatTurnSelection | null;
 	/** Embedding bit id used for profile-scoped memory ("" = memory off). */
 	embeddingModelId: string;
 	/** Waive tool-approval prompts and the pending-change review gate. Deliberately not
@@ -268,7 +314,15 @@ interface GlobalChatState {
 	setDraft: (draft: GlobalChatDraft) => void;
 	/** Returns the pending draft once and clears it, so it is only auto-sent a single time. */
 	consumeDraft: () => GlobalChatDraft | null;
+	/** Explicitly open the dock, regardless of a previous dismissal. */
 	openOverlay: () => void;
+	/** Open the dock for agent/navigation activity unless the user dismissed it. */
+	openOverlayIfAllowed: () => void;
+	/** Close the dock and suppress automatic opens until FlowPilot is used on its full page again. */
+	dismissOverlay: () => void;
+	/** Re-enable automatic opens after renewed interaction on the full FlowPilot page. */
+	enableOverlayAutoOpen: () => void;
+	/** Close the dock without treating it as a user dismissal (for example on the full chat page). */
 	closeOverlay: () => void;
 	/** Defer a route change until the agent turn ends (navigating mid-stream breaks the run). */
 	setPendingNavigation: (route: string | null) => void;
@@ -345,6 +399,7 @@ interface GlobalChatState {
 export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	draft: null,
 	mode: "closed",
+	overlayAutoOpenDismissed: false,
 	activeConversationId: createId(),
 	messages: [],
 	isStreaming: false,
@@ -354,6 +409,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	provider: "bits",
 	selectedModelId: "",
 	reasoningEffort: "",
+	activeTurnSelection: null,
 	embeddingModelId: "",
 	autoMode: false,
 	inlineAppChats: [],
@@ -378,6 +434,32 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	openOverlay: () => {
 		persistOverlayMode("overlay");
 		set({ mode: "overlay" });
+	},
+	openOverlayIfAllowed: () => {
+		if (
+			get().overlayAutoOpenDismissed ||
+			readPersistedOverlayAutoOpenDismissed()
+		) {
+			set({ overlayAutoOpenDismissed: true });
+			return;
+		}
+		persistOverlayMode("overlay");
+		set({ mode: "overlay" });
+	},
+	dismissOverlay: () => {
+		persistOverlayMode("closed");
+		persistOverlayAutoOpenDismissed(true);
+		set({ mode: "closed", overlayAutoOpenDismissed: true });
+	},
+	enableOverlayAutoOpen: () => {
+		if (
+			!get().overlayAutoOpenDismissed &&
+			!readPersistedOverlayAutoOpenDismissed()
+		) {
+			return;
+		}
+		persistOverlayAutoOpenDismissed(false);
+		set({ overlayAutoOpenDismissed: false });
 	},
 	closeOverlay: () => {
 		persistOverlayMode("closed");
@@ -672,6 +754,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 			activeConversationId: createId(),
 			messages: [],
 			isStreaming: false,
+			activeTurnSelection: null,
 			streamingMessage: null,
 			inlineAppChats: [],
 			inlineAppPages: [],
@@ -691,6 +774,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 			activeConversationId: conversationId,
 			messages: messages.map(markRestoredMessageDebugReportStale),
 			isStreaming: false,
+			activeTurnSelection: null,
 			streamingMessage: null,
 			inlineAppChats: [],
 			inlineAppPages: [],
@@ -706,3 +790,66 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 			pendingComponents: null,
 		}),
 }));
+
+function freezeTurnSelection(
+	runId: string,
+	selection: GlobalChatAgentSelection,
+): GlobalChatTurnSelection {
+	return Object.freeze({
+		runId,
+		provider: selection.provider,
+		selectedModelId: selection.selectedModelId,
+		reasoningEffort: selection.reasoningEffort,
+	});
+}
+
+/**
+ * Capture the active turn's execution selection. Re-entering with the same run id is idempotent:
+ * callers cannot replace the model underneath an already-running parent or nested specialist.
+ */
+export function beginGlobalChatTurnSelection(
+	runId: string,
+	selection?: GlobalChatAgentSelection,
+): GlobalChatTurnSelection {
+	const state = useGlobalChatStore.getState();
+	if (state.activeTurnSelection?.runId === runId) {
+		return state.activeTurnSelection;
+	}
+	if (state.activeTurnSelection) {
+		throw new Error(
+			`Cannot start global chat run '${runId}' while run '${state.activeTurnSelection.runId}' still owns the model selection.`,
+		);
+	}
+	const snapshot = freezeTurnSelection(
+		runId,
+		selection ?? {
+			provider: state.provider,
+			selectedModelId: state.selectedModelId,
+			reasoningEffort: state.reasoningEffort,
+		},
+	);
+	useGlobalChatStore.setState({ activeTurnSelection: snapshot });
+	return snapshot;
+}
+
+/** Return the immutable turn snapshot, falling back to the picker only outside an active turn. */
+export function getGlobalChatTurnSelection(): GlobalChatAgentSelection {
+	const state = useGlobalChatStore.getState();
+	return (
+		state.activeTurnSelection ??
+		Object.freeze({
+			provider: state.provider,
+			selectedModelId: state.selectedModelId,
+			reasoningEffort: state.reasoningEffort,
+		})
+	);
+}
+
+/** Release only the snapshot owned by this run, protecting a newer turn from stale finalizers. */
+export function endGlobalChatTurnSelection(runId: string) {
+	useGlobalChatStore.setState((state) =>
+		state.activeTurnSelection?.runId === runId
+			? { activeTurnSelection: null }
+			: state,
+	);
+}

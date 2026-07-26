@@ -452,23 +452,44 @@ fn update_accum_from_snapshot(
     a.raw_usage = snapshot.raw_usage.or(a.raw_usage.take());
 }
 
-fn parse_sse_bytes(accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>, bytes: &Bytes) {
-    if let Ok(text) = std::str::from_utf8(bytes) {
-        for line in text.split('\n') {
-            let line = line.trim();
-            if !line.starts_with("data: ") {
-                continue;
-            }
-            let data = &line[6..];
-            if data == "[DONE]" {
-                continue;
-            }
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(data)
-                && let Some(snapshot) = extract_usage_and_cost_from_json(&json)
-            {
-                update_accum_from_snapshot(accum, snapshot);
-            }
+fn process_sse_line(accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>, line: &str) {
+    let line = line.trim();
+    if !line.starts_with("data: ") {
+        return;
+    }
+    let data = &line[6..];
+    if data == "[DONE]" {
+        return;
+    }
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(data)
+        && let Some(snapshot) = extract_usage_and_cost_from_json(&json)
+    {
+        update_accum_from_snapshot(accum, snapshot);
+    }
+}
+
+/// Side-channel usage parser. `buffer` persists across stream chunks so a
+/// `data:` line split across two network reads is reassembled before parsing;
+/// only lines terminated by `\n` are parsed until `flush` drains the tail at
+/// end-of-stream. Never touches the client-visible forwarded bytes.
+fn parse_sse_bytes(
+    accum: &std::sync::Arc<std::sync::Mutex<StreamingAccum>>,
+    buffer: &mut Vec<u8>,
+    chunk: &[u8],
+    flush: bool,
+) {
+    buffer.extend_from_slice(chunk);
+    while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+        let line: Vec<u8> = buffer.drain(..=pos).collect();
+        if let Ok(text) = std::str::from_utf8(&line) {
+            process_sse_line(accum, text);
         }
+    }
+    if flush && !buffer.is_empty() {
+        if let Ok(text) = std::str::from_utf8(buffer) {
+            process_sse_line(accum, text);
+        }
+        buffer.clear();
     }
 }
 
@@ -662,11 +683,12 @@ async fn handle_streaming(
         flow_like_types::tokio::spawn(async move {
             let mut upstream = resp.bytes_stream();
             let mut client_disconnected = false;
+            let mut sse_buf: Vec<u8> = Vec::new();
 
             while let Some(chunk) = upstream.next().await {
                 match chunk {
                     Ok(chunk_bytes) => {
-                        parse_sse_bytes(&accum_task, &chunk_bytes);
+                        parse_sse_bytes(&accum_task, &mut sse_buf, &chunk_bytes, false);
                         if tx.send(Ok(chunk_bytes)).await.is_err() {
                             client_disconnected = true;
                             break;
@@ -681,6 +703,7 @@ async fn handle_streaming(
                     }
                 }
             }
+            parse_sse_bytes(&accum_task, &mut sse_buf, &[], true);
 
             let latency_ms = started_at.elapsed().as_secs_f64() * 1000.0;
             if client_disconnected {
@@ -724,11 +747,12 @@ async fn handle_streaming(
     let accum_stream = accum.clone();
     let body_stream = async_stream::stream! {
         let mut upstream = resp.bytes_stream();
+        let mut sse_buf: Vec<u8> = Vec::new();
 
         while let Some(chunk) = upstream.next().await {
             match chunk {
                 Ok(chunk_bytes) => {
-                    parse_sse_bytes(&accum_stream, &chunk_bytes);
+                    parse_sse_bytes(&accum_stream, &mut sse_buf, &chunk_bytes, false);
                     yield Ok(chunk_bytes);
                 }
                 Err(error) => {
@@ -738,6 +762,7 @@ async fn handle_streaming(
                 }
             }
         }
+        parse_sse_bytes(&accum_stream, &mut sse_buf, &[], true);
 
         let latency_ms = started_at.elapsed().as_secs_f64() * 1000.0;
         finalize_llm_usage(

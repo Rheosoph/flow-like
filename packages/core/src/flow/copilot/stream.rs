@@ -679,7 +679,8 @@ fn redact_inline_secret_values(text: &str) -> String {
         }
 
         let mut value_end = value_start;
-        if matches!(bytes[value_start], b'"' | b'\'' | b'`') {
+        let quoted = matches!(bytes[value_start], b'"' | b'\'' | b'`');
+        if quoted {
             let quote = bytes[value_start];
             value_end += 1;
             let mut escaped = false;
@@ -701,7 +702,25 @@ fn redact_inline_secret_values(text: &str) -> String {
         }
 
         result.push_str(&text[cursor..value_start]);
-        result.push_str("<redacted>");
+        // An empty value carries no secret, and replacing it corrupts captured sources — the
+        // FlowScript contract deliberately leaves credentials as "" for the user to fill.
+        // Quoted replacements keep their quotes so redacted text stays syntactically valid.
+        let raw_value = &text[value_start..value_end];
+        let empty_value = if quoted {
+            raw_value.len() <= 2
+        } else {
+            raw_value.trim().is_empty()
+        };
+        if empty_value {
+            result.push_str(raw_value);
+        } else if quoted {
+            let quote = bytes[value_start] as char;
+            result.push(quote);
+            result.push_str("<redacted>");
+            result.push(quote);
+        } else {
+            result.push_str("<redacted>");
+        }
         cursor = value_end;
 
         // Avoid repeatedly matching a marker inside the replacement boundary.
@@ -722,9 +741,16 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
 }
 
 fn safe_debug_string(text: &str) -> String {
+    safe_debug_string_with_cap(text, 16_384)
+}
+
+/// Like [`safe_debug_string`] with a caller-chosen intermediate bound. Full-result capture
+/// (`max_chars == usize::MAX`) must not silently truncate at the debug default: a compiler
+/// receipt needs the byte-for-byte source, only redacted.
+fn safe_debug_string_with_cap(text: &str, max_chars: usize) -> String {
     // Bound each string before serializing a potentially huge tool payload. The outer preview has
     // its own tighter limit; this cap merely prevents an unbounded intermediate allocation.
-    let bounded = truncate_preview(text, 16_384);
+    let bounded = truncate_preview(text, max_chars);
     redact_inline_secret_values(&redact_private_key_blocks(&redact_known_secret_tokens(
         &redact_url_query_values(&redact_basic_tokens(&redact_bearer_tokens(&bounded))),
     )))
@@ -983,7 +1009,12 @@ pub fn safe_json_preview(value: &Value, max_chars: usize) -> String {
 
 /// Bounded, redacted text safe for a user-visible debug report.
 pub fn safe_text_preview(text: &str, max_chars: usize) -> String {
-    truncate_preview(&safe_debug_string(text), max_chars)
+    // The intermediate redaction bound must never undercut the caller's requested size, or a
+    // "full" capture still comes back truncated at the 16KB debug default.
+    truncate_preview(
+        &safe_debug_string_with_cap(text, max_chars.max(16_384)),
+        max_chars,
+    )
 }
 
 pub fn safe_tool_result_preview(output: &str, max_chars: usize) -> String {

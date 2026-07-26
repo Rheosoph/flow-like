@@ -31,6 +31,218 @@ pub struct DeclarationMatch {
     pub score: i32,
 }
 
+/// Query-to-candidate evidence used by the live declaration resolver.
+///
+/// The embedded declaration index intentionally remains a recall-oriented candidate generator.
+/// This second, precision-oriented pass is evaluated against live catalog metadata before a
+/// declaration is presented as usable. In particular, operation words such as `register`,
+/// `upsert`, or `compare` must occur in the candidate's name/friendly name/capability tags; a
+/// coincidental mention in prose is not sufficient to authorize a FlowScript call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeclarationSemanticEvidence {
+    pub exact_symbol: bool,
+    pub meaningful_token_count: usize,
+    pub matched_token_count: usize,
+    pub strong_matched_token_count: usize,
+    pub coverage_basis_points: u16,
+    pub strong_coverage_basis_points: u16,
+    pub missing_strong_anchors: Vec<String>,
+    pub reason_codes: Vec<String>,
+}
+
+impl DeclarationSemanticEvidence {
+    pub(crate) fn accepts(&self) -> bool {
+        self.exact_symbol
+            || (self.meaningful_token_count > 0
+                && self.missing_strong_anchors.is_empty()
+                && self.coverage_basis_points >= 6_000
+                && self.strong_coverage_basis_points >= 4_000)
+    }
+}
+
+/// Evaluate the original query against one live declaration candidate without using the broad
+/// synonym/recipe expansions that generated the candidate set.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn declaration_semantic_evidence(
+    query: &str,
+    function_name: &str,
+    node_type: &str,
+    friendly_name: &str,
+    description: &str,
+    category: Option<&str>,
+    capability_tags: &[String],
+) -> DeclarationSemanticEvidence {
+    let exact_symbol = query
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|token| !token.is_empty())
+        .any(|token| {
+            token.eq_ignore_ascii_case(function_name) || token.eq_ignore_ascii_case(node_type)
+        });
+
+    let query_tokens = semantic_tokens(query)
+        .into_iter()
+        .filter(|token| !is_semantic_stop_word(token))
+        .collect::<Vec<_>>();
+    let strong_tokens = semantic_tokens(&format!(
+        "{function_name} {node_type} {friendly_name} {}",
+        capability_tags.join(" ")
+    ))
+    .into_iter()
+    .collect::<HashSet<_>>();
+    let all_tokens = strong_tokens
+        .iter()
+        .cloned()
+        .chain(semantic_tokens(description))
+        .chain(semantic_tokens(category.unwrap_or_default()))
+        .collect::<HashSet<_>>();
+
+    let matched_token_count = query_tokens
+        .iter()
+        .filter(|token| all_tokens.contains(*token))
+        .count();
+    let strong_matched_token_count = query_tokens
+        .iter()
+        .filter(|token| strong_tokens.contains(*token))
+        .count();
+    let required_strong_tokens = query_tokens
+        .iter()
+        .filter(|token| query_tokens.len() == 1 || is_strong_semantic_anchor(token))
+        .cloned()
+        .collect::<Vec<_>>();
+    let missing_strong_anchors = required_strong_tokens
+        .iter()
+        .filter(|token| !strong_tokens.contains(*token))
+        .cloned()
+        .collect::<Vec<_>>();
+    let denominator = query_tokens.len().max(1);
+    let coverage_basis_points = ((matched_token_count * 10_000) / denominator) as u16;
+    let strong_coverage_basis_points = ((strong_matched_token_count * 10_000) / denominator) as u16;
+
+    let mut reason_codes = Vec::new();
+    if exact_symbol {
+        reason_codes.push("exact_function_symbol".to_string());
+    }
+    if query_tokens.is_empty() {
+        reason_codes.push("no_meaningful_query_tokens".to_string());
+    }
+    if coverage_basis_points >= 6_000 {
+        reason_codes.push("query_token_coverage".to_string());
+    } else if !query_tokens.is_empty() {
+        reason_codes.push("insufficient_query_token_coverage".to_string());
+    }
+    if strong_coverage_basis_points >= 4_000 {
+        reason_codes.push("strong_name_or_tag_evidence".to_string());
+    } else if !query_tokens.is_empty() {
+        reason_codes.push("insufficient_strong_evidence".to_string());
+    }
+    for anchor in &missing_strong_anchors {
+        reason_codes.push(format!("missing_strong_anchor:{anchor}"));
+    }
+
+    DeclarationSemanticEvidence {
+        exact_symbol,
+        meaningful_token_count: query_tokens.len(),
+        matched_token_count,
+        strong_matched_token_count,
+        coverage_basis_points,
+        strong_coverage_basis_points,
+        missing_strong_anchors,
+        reason_codes,
+    }
+}
+
+fn semantic_tokens(text: &str) -> Vec<String> {
+    tokenize_query_text(text)
+        .into_iter()
+        .map(|token| canonical_semantic_token(&token))
+        .filter(|token| !token.is_empty())
+        .collect()
+}
+
+fn canonical_semantic_token(token: &str) -> String {
+    match token.to_ascii_lowercase().as_str() {
+        "bool" | "boolean" | "booleans" => "boolean".to_string(),
+        "db" | "database" | "databases" => "database".to_string(),
+        "df" | "datafusion" => "datafusion".to_string(),
+        "lance" | "lancedb" => "lance".to_string(),
+        "mail" | "mails" | "email" | "emails" => "email".to_string(),
+        "int" | "integer" | "integers" => "integer".to_string(),
+        "notification" | "notifications" | "notify" | "notifies" => "notification".to_string(),
+        "chunk" | "chunks" | "chunked" | "chunking" => "chunk".to_string(),
+        "compare" | "compares" | "compared" | "comparing" | "comparison" | "comparator" => {
+            "compare".to_string()
+        }
+        "equal" | "equals" | "equality" | "unequal" | "greater" | "less" => "compare".to_string(),
+        "register" | "registers" | "registered" | "registering" | "registration" => {
+            "register".to_string()
+        }
+        "create" | "creates" | "created" | "creating" | "creation" => "create".to_string(),
+        "upsert" | "upserts" | "upserted" | "upserting" => "upsert".to_string(),
+        "search" | "searches" | "searched" | "searching" => "search".to_string(),
+        "embed" | "embeds" | "embedded" | "embedding" | "embeddings" => "embed".to_string(),
+        "insert" | "inserts" | "inserted" | "inserting" => "insert".to_string(),
+        "index" | "indexes" | "indexed" | "indexing" => "index".to_string(),
+        "query" | "queries" | "queried" | "querying" => "query".to_string(),
+        "fetch" | "fetches" | "fetched" | "fetching" => "fetch".to_string(),
+        "connect" | "connects" | "connected" | "connecting" => "connect".to_string(),
+        "send" | "sends" | "sent" | "sending" => "send".to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn is_semantic_stop_word(token: &str) -> bool {
+    matches!(
+        token,
+        "a" | "an"
+            | "the"
+            | "for"
+            | "to"
+            | "of"
+            | "in"
+            | "on"
+            | "with"
+            | "and"
+            | "node"
+            | "function"
+            | "flowscript"
+            | "flow"
+            | "operation"
+            | "capability"
+            | "use"
+            | "using"
+    )
+}
+
+fn is_strong_semantic_anchor(token: &str) -> bool {
+    matches!(
+        token,
+        "create"
+            | "register"
+            | "upsert"
+            | "chunk"
+            | "compare"
+            | "markdown"
+            | "notification"
+            | "hybrid"
+            | "search"
+            | "send"
+            | "fetch"
+            | "connect"
+            | "disconnect"
+            | "open"
+            | "insert"
+            | "update"
+            | "delete"
+            | "index"
+            | "embed"
+            | "split"
+            | "parse"
+            | "convert"
+            | "clear"
+            | "synthesize"
+    )
+}
+
 #[derive(Debug, Clone)]
 struct DeclarationEntry {
     path: &'static str,
@@ -266,15 +478,35 @@ pub fn search_declarations(query: &str) -> Vec<DeclarationMatch> {
             .cmp(&left.score)
             .then_with(|| left.function_name.cmp(&right.function_name))
     });
-    diversify_declaration_matches(scored)
+    diversify_declaration_matches(scored, &normalized_query)
 }
 
-fn diversify_declaration_matches(matches: Vec<DeclarationMatch>) -> Vec<DeclarationMatch> {
+fn diversify_declaration_matches(
+    matches: Vec<DeclarationMatch>,
+    normalized_query: &str,
+) -> Vec<DeclarationMatch> {
     let mut selected = Vec::with_capacity(MAX_DECLARATION_RESULTS);
+    let required_backbone = workflow_backbone_function_names(normalized_query)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    let mut remaining = Vec::new();
     let mut deferred = Vec::new();
     let mut group_counts: HashMap<&'static str, usize> = HashMap::new();
 
     for matched in matches {
+        if required_backbone.contains(matched.function_name.as_str())
+            && selected.len() < MAX_DECLARATION_RESULTS
+        {
+            *group_counts
+                .entry(declaration_result_group(&matched.function_name))
+                .or_default() += 1;
+            selected.push(matched);
+        } else {
+            remaining.push(matched);
+        }
+    }
+
+    for matched in remaining {
         let group = declaration_result_group(&matched.function_name);
         let count = group_counts.entry(group).or_default();
         let cap = if group == "other" { 3 } else { 4 };
@@ -295,6 +527,57 @@ fn diversify_declaration_matches(matches: Vec<DeclarationMatch>) -> Vec<Declarat
     }
 
     selected
+}
+
+/// Broad workflow requests need the connecting operations, not merely the individually
+/// highest-scoring leaf functions. Reserve the small backbone implied by explicit query intent
+/// before applying normal score/group diversification.
+fn workflow_backbone_function_names(normalized_query: &str) -> Vec<&'static str> {
+    let mut names = Vec::new();
+    let wants_email = contains_any(
+        normalized_query,
+        &["gmail", "email", "mail", "imap", "inbox"],
+    );
+    let wants_vector_db = normalized_query.contains("vector db")
+        || normalized_query.contains("vector database")
+        || (normalized_query.contains("vector") && normalized_query.contains("db"));
+
+    if contains_any(normalized_query, &["gmail", "imap", "inbox"]) {
+        names.push("emailImapConnect");
+    }
+    if normalized_query.contains("smtp") {
+        names.push("emailSmtpConnect");
+    }
+    if wants_email && contains_any(normalized_query, &["fetch", "read", "receive"]) {
+        names.push("emailImapInboxFetchMail");
+    }
+    if contains_any(
+        normalized_query,
+        &["embed", "embedding", "vector", "sentiment", "classif"],
+    ) {
+        names.push("embedDocument");
+    }
+    if wants_vector_db
+        || contains_any(
+            normalized_query,
+            &["database", "lance", "lancedb", "local db"],
+        )
+    {
+        names.push("openLocalDb");
+    }
+    if wants_vector_db
+        || contains_any(
+            normalized_query,
+            &["store", "write", "persist", "insert", "upsert"],
+        )
+    {
+        names.push("batchInsertLocalDb");
+    }
+    if wants_vector_db || contains_any(normalized_query, &["index", "search"]) {
+        names.push("indexLocalDb");
+    }
+
+    names
 }
 
 fn declaration_result_group(function_name: &str) -> &'static str {
@@ -969,6 +1252,49 @@ mod tests {
                 "{query:?} incorrectly preferred {unrelated}; matches: {matches:?}"
             );
         }
+    }
+
+    #[test]
+    fn semantic_evidence_requires_operation_words_on_the_candidate_surface() {
+        let tags = Vec::new();
+        let evidence = declaration_semantic_evidence(
+            "integer compare",
+            "fakerInteger",
+            "faker_integer",
+            "Faker Integer",
+            "Generates integer values for comparison tests.",
+            Some("utils/faker"),
+            &tags,
+        );
+
+        assert!(!evidence.accepts());
+        assert_eq!(evidence.coverage_basis_points, 10_000);
+        assert!(
+            evidence
+                .reason_codes
+                .contains(&"missing_strong_anchor:compare".to_string())
+        );
+    }
+
+    #[test]
+    fn semantic_evidence_accepts_a_unique_exact_function_symbol() {
+        let evidence = declaration_semantic_evidence(
+            "Use hybridSearchLocalDb with these pins",
+            "hybridSearchLocalDb",
+            "hybrid_search_local_db",
+            "Hybrid Search Local DB",
+            "Runs hybrid vector and full text search.",
+            Some("data/search"),
+            &[],
+        );
+
+        assert!(evidence.exact_symbol);
+        assert!(evidence.accepts());
+        assert!(
+            evidence
+                .reason_codes
+                .contains(&"exact_function_symbol".to_string())
+        );
     }
 
     #[test]

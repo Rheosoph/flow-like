@@ -522,32 +522,12 @@ mod tests {
     }
 
     fn board_with_layer(layer: Layer) -> Board {
-        let mut layers = std::collections::HashMap::new();
-        layers.insert(layer.id.clone(), layer);
-
-        Board {
-            id: "board".to_string(),
-            name: "Board".to_string(),
-            description: String::new(),
-            nodes: std::collections::HashMap::new(),
-            variables: std::collections::HashMap::new(),
-            comments: std::collections::HashMap::new(),
-            viewport: (0.0, 0.0, 0.0),
-            version: (0, 0, 1),
-            stage: ExecutionStage::Dev,
-            log_level: LogLevel::Info,
-            execution_mode: ExecutionMode::Hybrid,
-            refs: std::collections::HashMap::new(),
-            layers,
-            page_ids: Vec::new(),
-            created_at: SystemTime::now(),
-            updated_at: SystemTime::now(),
-            parent: None,
-            board_dir: Default::default(),
-            logic_nodes: std::collections::HashMap::new(),
-            app_state: None,
-            hash: None,
-        }
+        let mut board = Board::new_detached(Some("board".to_string()), Default::default());
+        board.name = "Board".to_string();
+        board.description.clear();
+        board.layers.insert(layer.id.clone(), layer);
+        board.hash = None;
+        board
     }
 
     fn ordered_pin_names(node: &Node, pin_type: PinType) -> Vec<String> {

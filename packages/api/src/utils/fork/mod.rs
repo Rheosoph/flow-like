@@ -2181,6 +2181,9 @@ pub async fn sync_uploaded_metadata_media_to_db(
 // ---- helpers ----------------------------------------------------------
 
 fn remap_board(mut board: proto::Board, maps: &mut ForkIdMap) -> proto::Board {
+    // Host receipts belong to the source board's persistence boundary and must never be copied
+    // into a fork where their identities and replay claims are invalid.
+    board.internal_refs.clear();
     let new_board_id = maps
         .boards
         .get(&board.id)

@@ -58,29 +58,14 @@ static FIXTURE: LazyLock<CatalogFixture> = LazyLock::new(|| {
 });
 
 fn empty_board(id: &str) -> Board {
-    Board {
-        id: id.to_string(),
-        name: format!("Simulator Board {id}"),
-        description: String::new(),
-        nodes: HashMap::new(),
-        variables: HashMap::new(),
-        comments: HashMap::new(),
-        viewport: (0.0, 0.0, 1.0),
-        version: (0, 0, 1),
-        stage: ExecutionStage::Dev,
-        log_level: LogLevel::Info,
-        execution_mode: ExecutionMode::Hybrid,
-        refs: HashMap::new(),
-        layers: HashMap::new(),
-        page_ids: Vec::new(),
-        hash: None,
-        created_at: SystemTime::UNIX_EPOCH,
-        updated_at: SystemTime::UNIX_EPOCH,
-        parent: None,
-        board_dir: Path::default(),
-        logic_nodes: HashMap::new(),
-        app_state: None,
-    }
+    let mut board = Board::new_detached(Some(id.to_string()), Path::default());
+    board.name = format!("Simulator Board {id}");
+    board.description.clear();
+    board.viewport = (0.0, 0.0, 1.0);
+    board.hash = None;
+    board.created_at = SystemTime::UNIX_EPOCH;
+    board.updated_at = SystemTime::UNIX_EPOCH;
+    board
 }
 
 /// A state whose node registry carries the real catalog logic, so apply-side
@@ -518,6 +503,56 @@ async fn multi_output_return_golden_path() {
     }
 
     assert_noop_roundtrip(&board, "multi_output_return_golden_path");
+}
+
+/// Commit runs the required check inline: write → commit with no explicit check queues the
+/// exact derived batch, saving the model round that used to bounce with
+/// FLOWSCRIPT_CHECK_REQUIRED. An invalid source still returns validation_errors and queues
+/// nothing.
+#[test]
+fn commit_runs_check_inline() {
+    let fixture = &*FIXTURE;
+    let store = FlowIrDraftStore::new();
+    let mut agent = ScriptedAgent::new(
+        &store,
+        empty_board("sim-inline-check"),
+        &fixture.metadata,
+        "inline-check-draft",
+    );
+    agent.run(vec![
+        Step::Write {
+            source: simple_log_script("triage the mail", "notify the reviewer"),
+        },
+        Step::ExpectStatus {
+            status: "draft_started",
+            code: None,
+        },
+        Step::Commit,
+        Step::ExpectStatus {
+            status: "queued",
+            code: None,
+        },
+    ]);
+    assert!(!agent.last().commands.is_empty());
+
+    let mut invalid = ScriptedAgent::new(
+        &store,
+        empty_board("sim-inline-check-invalid"),
+        &fixture.metadata,
+        "inline-check-invalid",
+    );
+    invalid.run(vec![
+        Step::Write {
+            source: "eventsSimple() {\n    definitelyNotACatalogNode({ value: 1 })\n}\n"
+                .to_string(),
+        },
+        Step::Commit,
+        Step::ExpectStatus {
+            status: "validation_errors",
+            code: None,
+        },
+    ]);
+    assert!(invalid.last().commands.is_empty());
 }
 
 /// A source with an unknown node name yields actionable structured
@@ -1042,6 +1077,112 @@ fn concurrent_same_draft() {
     assert_eq!(final_check.status, "valid", "{final_check:#?}");
     assert_eq!(final_check.revision, Some(successful_patches as u64));
     assert_eq!(final_check.source.as_deref(), Some(source.as_str()));
+}
+
+/// A whole-document rewrite that renames an event and drops its anchor must claim the live entry
+/// node (which already drives the body) instead of minting a duplicate. The duplicate stranded
+/// the old entry with its data edges (e.g. `history` feeding body nodes), which re-reconciled to
+/// a spurious ConnectPins on every readback — the exact non-idempotent board the simple-agent
+/// e2e produced.
+#[tokio::test]
+async fn unanchored_event_rewrite_claims_live_entry() {
+    let fixture = &*FIXTURE;
+    let state = catalog_state().await;
+    let mut board = empty_board("sim-event-rewrite");
+
+    let authored = "eventsChat chatEvent(history: History, localSession: Struct, globalSession: Struct, tools: string[], actions: Struct[], attachments: Struct[], user: User) {\n    logInfo({ message: valToString({ value: history, pretty: true }).string })\n}\n";
+    let applied = apply_flowscript_to_board(
+        &mut board,
+        authored,
+        &fixture.nodes,
+        state.clone(),
+        None,
+        false,
+    )
+    .await
+    .expect("authored chat event applies");
+    assert!(
+        applied.diagnostics.is_empty(),
+        "apply diagnostics: {:#?}",
+        applied.diagnostics
+    );
+    let chat_entries = board
+        .nodes
+        .values()
+        .filter(|node| node.name == "events_chat")
+        .count();
+    assert_eq!(chat_entries, 1, "one chat entry after the first apply");
+
+    // The rewrite: same body anchors, renamed event, anchor dropped.
+    let anchored = board_to_flowscript(
+        &board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    );
+    let rewritten = anchored
+        .lines()
+        .map(|line| {
+            if line.contains("eventsChat") && line.contains("//@n:") {
+                let without_anchor = line.split("//@n:").next().unwrap_or(line).trim_end();
+                without_anchor.replace("chatEvent", "researchAgent")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_ne!(
+        rewritten, anchored,
+        "the rewrite must actually change the event line"
+    );
+
+    let result = reconcile_text_with_catalog(&board, &rewritten, &FIXTURE.metadata);
+    assert!(
+        result.diagnostics.is_empty(),
+        "rewrite reconcile diagnostics: {:#?}\nsource:\n{rewritten}",
+        result.diagnostics
+    );
+    let added_entries: Vec<_> = result
+        .commands
+        .iter()
+        .filter(|command| {
+            matches!(command, BoardCommand::AddNode { node_type, .. } if node_type == "events_chat")
+        })
+        .collect();
+    assert!(
+        added_entries.is_empty(),
+        "the rewrite must claim the live entry, not add a duplicate: {added_entries:#?}"
+    );
+
+    let applied_rewrite =
+        apply_board_commands_to_board(&mut board, result.commands, &fixture.nodes, state, None)
+            .await
+            .expect("rewrite commands apply");
+    assert!(
+        applied_rewrite.diagnostics.is_empty(),
+        "rewrite apply diagnostics: {:#?}",
+        applied_rewrite.diagnostics
+    );
+    let chat_entries_after = board
+        .nodes
+        .values()
+        .filter(|node| node.name == "events_chat")
+        .count();
+    assert_eq!(
+        chat_entries_after, 1,
+        "still exactly one chat entry after the rewrite"
+    );
+    assert!(
+        board
+            .nodes
+            .values()
+            .any(|node| node.name == "events_chat" && node.friendly_name == "researchAgent"),
+        "the claimed entry carries the authored name"
+    );
+
+    assert_noop_roundtrip(&board, "unanchored_event_rewrite_claims_live_entry");
 }
 
 /// Applying the golden program, lowering the applied board, and re-applying

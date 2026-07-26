@@ -242,11 +242,33 @@ async fn create_memory_store(context: &mut ExecutionContext, element_id: &str) -
     store_ref
 }
 
+/// Upper bound on a single frontend-supplied upload fetched into memory. Mirrors
+/// the API's `MAX_ATTACHMENT_BYTES` upload cap so the executor cannot be driven to
+/// OOM by an oversized or dishonest download.
+const MAX_FILE_INPUT_DOWNLOAD_BYTES: usize = 512 * 1024 * 1024;
+
 async fn download_file_input_url(
     client: &reqwest::Client,
     url: &str,
     name: &str,
-) -> flow_like_types::Result<Vec<u8>> {
+) -> flow_like_types::Result<(Vec<u8>, Option<String>)> {
+    use futures::StreamExt;
+
+    // Frontend-supplied URLs are dereferenced from inside the executor. Reject
+    // non-http(s) schemes so local-resource URLs (file:, data:, etc.) are never
+    // fetched. NOTE: this does not block http(s) URLs targeting private/loopback
+    // hosts (SSRF residue) — self-hosted upload backends legitimately live on
+    // loopback/private ranges, so a blanket IP blocklist would break them.
+    let scheme = reqwest::Url::parse(url)
+        .map(|parsed| parsed.scheme().to_string())
+        .unwrap_or_default();
+    if scheme != "http" && scheme != "https" {
+        return Err(flow_like_types::anyhow!(
+            "Refusing to download uploaded file \"{}\": unsupported URL scheme",
+            name
+        ));
+    }
+
     let response = client.get(url).send().await.map_err(|err| {
         flow_like_types::anyhow!("Failed to download uploaded file \"{}\": {}", name, err)
     })?;
@@ -263,7 +285,41 @@ async fn download_file_input_url(
         ));
     }
 
-    Ok(response.bytes().await?.to_vec())
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_FILE_INPUT_DOWNLOAD_BYTES as u64)
+    {
+        return Err(flow_like_types::anyhow!(
+            "Uploaded file \"{}\" exceeds the {} byte download limit",
+            name,
+            MAX_FILE_INPUT_DOWNLOAD_BYTES
+        ));
+    }
+
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.split(';').next().unwrap_or(value).trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|err| {
+            flow_like_types::anyhow!("Failed to download uploaded file \"{}\": {}", name, err)
+        })?;
+        if bytes.len().saturating_add(chunk.len()) > MAX_FILE_INPUT_DOWNLOAD_BYTES {
+            return Err(flow_like_types::anyhow!(
+                "Uploaded file \"{}\" exceeds the {} byte download limit",
+                name,
+                MAX_FILE_INPUT_DOWNLOAD_BYTES
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+
+    Ok((bytes, content_type))
 }
 
 async fn flow_path_exists(
@@ -358,7 +414,10 @@ async fn materialize_missing_flow_paths(
                 LogLevel::Info,
             );
         }
-        let bytes = download_file_input_url(&client, &url, &file_name).await?;
+        let (bytes, content_type) = download_file_input_url(&client, &url, &file_name).await?;
+        if file.mime_type.is_none() {
+            file.mime_type = content_type;
+        }
         target_flow_path.put(context, bytes, true).await?;
 
         file.flow_path = Some(target_flow_path.clone());

@@ -3,6 +3,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    routes::app::board::flow_ir_commit::persist_pending_flow_ir_commit,
     state::{AppState, flow_ir_draft_store_key},
 };
 use axum::{
@@ -500,6 +501,43 @@ async fn build_unified_copilot(
     Ok(copilot)
 }
 
+async fn persist_response_flow_ir_claim(
+    state: &AppState,
+    sub: &str,
+    retained_app_id: Option<&str>,
+    flow_ir_draft_store: Option<&Arc<FlowIrDraftStore>>,
+    response: &UnifiedCopilotResponse,
+) -> Result<(), ApiError> {
+    let Some(token) = response.flow_ir_commit.as_ref() else {
+        return Ok(());
+    };
+    let app_id = retained_app_id.ok_or_else(|| {
+        ApiError::internal("A FlowScript review token was produced without an owning app.")
+    })?;
+    let store = flow_ir_draft_store.ok_or_else(|| {
+        ApiError::internal("A FlowScript review token was produced without its retained store.")
+    })?;
+    if let Err(error) = persist_pending_flow_ir_commit(state, sub, app_id, token, store).await {
+        let released = store.release_commit_if_matches(
+            &token.draft_id,
+            token.revision,
+            &token.base_fingerprint,
+            &token.claim_id,
+        );
+        tracing::warn!(
+            app_id,
+            board_id = %token.board_id,
+            draft_id = %token.draft_id,
+            revision = token.revision,
+            released,
+            error = %error,
+            "A FlowScript review was not exposed because its durable pending claim could not be persisted"
+        );
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Unified copilot chat endpoint (FlowPilot)
 ///
 /// Supports both JSON responses (`stream=false`) and SSE token streaming (`stream=true`).
@@ -608,7 +646,7 @@ pub async fn copilot_chat(
         payload.scope,
         profile,
         usage_context,
-        flow_ir_draft_store,
+        flow_ir_draft_store.clone(),
     )
     .await?
     .with_request_identity_prompt(Some(request_identity_prompt));
@@ -633,6 +671,17 @@ pub async fn copilot_chat(
             .await
             .map_err(|e| ApiError::internal(format!("Copilot failed: {e}")))?;
 
+        // A review token is not observable until its exact batch is durable on the canonical
+        // board. Apply/Dismiss may therefore land on any API replica.
+        persist_response_flow_ir_claim(
+            &state,
+            &sub,
+            retained_app_id.as_deref(),
+            flow_ir_draft_store.as_ref(),
+            &response,
+        )
+        .await?;
+
         return Ok(<axum::Json<_> as axum::response::IntoResponse>::into_response(Json(response)));
     }
 
@@ -646,6 +695,10 @@ pub async fn copilot_chat(
     let (done_tx, mut done_rx) =
         flow_like_types::tokio::sync::oneshot::channel::<Result<UnifiedCopilotResponse, String>>();
 
+    let delivery_state = state.clone();
+    let delivery_sub = sub.clone();
+    let delivery_app_id = retained_app_id.clone();
+    let delivery_store = flow_ir_draft_store.clone();
     flow_like_types::tokio::spawn(async move {
         let result = copilot
             .chat_with_raw_user_prompt(
@@ -665,6 +718,19 @@ pub async fn copilot_chat(
             )
             .await
             .map_err(|e| e.to_string());
+        let result = match result {
+            Ok(response) => persist_response_flow_ir_claim(
+                &delivery_state,
+                &delivery_sub,
+                delivery_app_id.as_deref(),
+                delivery_store.as_ref(),
+                &response,
+            )
+            .await
+            .map(|()| response)
+            .map_err(|error| error.to_string()),
+            Err(error) => Err(error),
+        };
 
         let _ = done_tx.send(result);
         // If the receiver is already dropped, ignore.

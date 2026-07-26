@@ -206,11 +206,13 @@ pub mod url_processing {
             }
             Err(e) => {
                 let msg = format!(
-                    "Failed to validate Tauri URL '{}': {}. Skipping this attachment.",
+                    "Failed to validate local file URL '{}': {}. This is an unfetchable local (asset://) URL that cannot be resolved in this context, likely because it crossed an app/run boundary; skipping this attachment.",
                     url, e
                 );
                 if let Some(ctx) = context.as_deref_mut() {
-                    ctx.log_message(&msg, flow_like::flow::execution::LogLevel::Error);
+                    ctx.log_message(&msg, flow_like::flow::execution::LogLevel::Warn);
+                } else {
+                    tracing::warn!("{}", msg);
                 }
                 return String::new();
             }
@@ -245,12 +247,14 @@ pub mod url_processing {
             }
             Err(e) => {
                 let msg = format!(
-                    "Failed to read local file '{}': {}. File may be deleted or inaccessible. Skipping this attachment.",
+                    "Failed to read local file '{}': {}. The local (asset://) file is deleted, inaccessible, or lives on a different host than this run; skipping this attachment.",
                     file_path.display(),
                     e
                 );
                 if let Some(ctx) = context {
-                    ctx.log_message(&msg, flow_like::flow::execution::LogLevel::Error);
+                    ctx.log_message(&msg, flow_like::flow::execution::LogLevel::Warn);
+                } else {
+                    tracing::warn!("{}", msg);
                 }
                 // Return empty string instead of the Tauri URL to prevent "Unsupported scheme" errors
                 String::new()

@@ -61,8 +61,7 @@ pub async fn upsert_page(
         .board_id
         .clone()
         .ok_or_else(|| ApiError::bad_request("page payload is missing `board_id`".to_string()))?;
-    let mutation_lock = state.board_mutation_lock(&app_id, &board_id);
-    let _mutation_guard = mutation_lock.lock().await;
+    let _mutation_guard = state.board_mutation_guard(&app_id, &board_id).await?;
 
     let app = state
         .scoped_app(
