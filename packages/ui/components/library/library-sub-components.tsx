@@ -43,13 +43,11 @@ import { useGridColumns } from "./use-grid-columns";
 export function SortableFavoriteCard({
 	item,
 	onAppClick,
-	onSettingsClick,
 	settingsHref,
 	appHref,
 }: Readonly<{
 	item: LibraryItem;
 	onAppClick: (id: string) => void;
-	onSettingsClick: () => void;
 	settingsHref?: (id: string) => string;
 	appHref?: (id: string) => string;
 }>) {
@@ -77,7 +75,6 @@ export function SortableFavoriteCard({
 				metadata={item}
 				variant="extended"
 				onClick={() => onAppClick(item.id)}
-				onSettingsClick={onSettingsClick}
 				settingsHref={settingsHref?.(item.id)}
 				href={appHref?.(item.id)}
 				className="w-full"
@@ -91,7 +88,6 @@ export function Section({
 	icon,
 	items,
 	onAppClick,
-	onSettingsClick,
 	settingsHref,
 	visibilityMode,
 	activeAppIds,
@@ -106,7 +102,6 @@ export function Section({
 	icon?: React.ReactNode;
 	items: LibraryItem[];
 	onAppClick: (id: string) => void;
-	onSettingsClick: () => void;
 	settingsHref?: (id: string) => string;
 	visibilityMode?: boolean;
 	activeAppIds?: Set<string>;
@@ -181,9 +176,6 @@ export function Section({
 									metadata={meta}
 									variant="small"
 									onClick={() => handleClick(meta.id)}
-									onSettingsClick={
-										visibilityMode ? undefined : onSettingsClick
-									}
 									settingsHref={
 										visibilityMode ? undefined : settingsHref?.(meta.id)
 									}
@@ -256,9 +248,6 @@ export function Section({
 								metadata={meta}
 								variant={variant}
 								onClick={() => handleClick(meta.id)}
-								onSettingsClick={
-									visibilityMode ? undefined : onSettingsClick
-								}
 								settingsHref={
 									visibilityMode ? undefined : settingsHref?.(meta.id)
 								}
@@ -296,7 +285,6 @@ export function Section({
 export function FavoritesSection({
 	items,
 	onAppClick,
-	onSettingsClick,
 	settingsHref,
 	onReorder,
 	appHref,
@@ -304,7 +292,6 @@ export function FavoritesSection({
 }: Readonly<{
 	items: LibraryItem[];
 	onAppClick: (id: string) => void;
-	onSettingsClick: () => void;
 	settingsHref?: (id: string) => string;
 	onReorder: (orderedIds: string[]) => void;
 	appHref?: (id: string) => string;
@@ -367,7 +354,6 @@ export function FavoritesSection({
 							metadata={item}
 							variant="small"
 							onClick={() => onAppClick(item.id)}
-							onSettingsClick={onSettingsClick}
 							settingsHref={settingsHref?.(item.id)}
 							className="w-full rounded-none border-0 shadow-none bg-transparent"
 						/>
@@ -394,7 +380,6 @@ export function FavoritesSection({
 									key={item.id}
 									item={item}
 									onAppClick={onAppClick}
-									onSettingsClick={onSettingsClick}
 									settingsHref={settingsHref}
 									appHref={appHref}
 								/>
@@ -410,14 +395,12 @@ export function FavoritesSection({
 export function PinnedHero({
 	items,
 	onAppClick,
-	onSettingsClick,
 	settingsHref,
 	appHref,
 	isMobile = false,
 }: Readonly<{
 	items: LibraryItem[];
 	onAppClick: (id: string) => void;
-	onSettingsClick: () => void;
 	settingsHref?: (id: string) => string;
 	appHref?: (id: string) => string;
 	isMobile?: boolean;
@@ -449,7 +432,6 @@ export function PinnedHero({
 								metadata={meta}
 								variant="small"
 								onClick={() => onAppClick(meta.id)}
-								onSettingsClick={onSettingsClick}
 								settingsHref={settingsHref?.(meta.id)}
 								className="w-full rounded-none border-0 shadow-none bg-transparent"
 							/>
@@ -475,7 +457,6 @@ export function PinnedHero({
 								metadata={meta}
 								variant="extended"
 								onClick={() => onAppClick(meta.id)}
-								onSettingsClick={onSettingsClick}
 								settingsHref={settingsHref?.(meta.id)}
 								className="w-full"
 							/>
@@ -491,7 +472,6 @@ export function SearchResults({
 	items,
 	query,
 	onAppClick,
-	onSettingsClick,
 	settingsHref,
 	visibilityMode,
 	activeAppIds,
@@ -502,7 +482,6 @@ export function SearchResults({
 	items: LibraryItem[];
 	query: string;
 	onAppClick: (id: string) => void;
-	onSettingsClick: () => void;
 	settingsHref?: (id: string) => string;
 	visibilityMode?: boolean;
 	activeAppIds?: Set<string>;
@@ -557,9 +536,6 @@ export function SearchResults({
 									metadata={meta}
 									variant="small"
 									onClick={() => handleClick(meta.id)}
-									onSettingsClick={
-										visibilityMode ? undefined : onSettingsClick
-									}
 									settingsHref={
 										visibilityMode ? undefined : settingsHref?.(meta.id)
 									}
@@ -594,9 +570,6 @@ export function SearchResults({
 									metadata={meta}
 									variant="extended"
 									onClick={() => handleClick(meta.id)}
-									onSettingsClick={
-										visibilityMode ? undefined : onSettingsClick
-									}
 									settingsHref={
 										visibilityMode ? undefined : settingsHref?.(meta.id)
 									}

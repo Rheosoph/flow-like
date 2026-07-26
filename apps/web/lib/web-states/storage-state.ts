@@ -3,6 +3,7 @@ import {
 	type IStorageState,
 	isAzureBlobStorageUrl,
 } from "@flow-like/flow-like-ui";
+import { stabilizeSignedUrls } from "@flow-like/flow-like-ui/lib/stable-asset-url";
 import type { IStorageItemActionResult } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { type WebBackendRef, apiDelete, apiPost, apiPut } from "./api-utils";
 
@@ -147,10 +148,12 @@ export class WebStorageState implements IStorageState {
 		prefixes: string[],
 	): Promise<IStorageItemActionResult[]> {
 		try {
-			return await apiPost<IStorageItemActionResult[]>(
-				`apps/${appId}/data/download`,
-				{ prefixes },
-				this.backend.auth,
+			return stabilizeSignedUrls(
+				await apiPost<IStorageItemActionResult[]>(
+					`apps/${appId}/data/download`,
+					{ prefixes },
+					this.backend.auth,
+				),
 			);
 		} catch {
 			return prefixes.map((prefix) => ({ prefix, error: "Download failed" }));
@@ -162,10 +165,12 @@ export class WebStorageState implements IStorageState {
 		prefixes: string[],
 	): Promise<IStorageItemActionResult[]> {
 		try {
-			return await apiPost<IStorageItemActionResult[]>(
-				`apps/${appId}/data/user/download`,
-				{ prefixes },
-				this.backend.auth,
+			return stabilizeSignedUrls(
+				await apiPost<IStorageItemActionResult[]>(
+					`apps/${appId}/data/user/download`,
+					{ prefixes },
+					this.backend.auth,
+				),
 			);
 		} catch {
 			return prefixes.map((prefix) => ({ prefix, error: "Download failed" }));

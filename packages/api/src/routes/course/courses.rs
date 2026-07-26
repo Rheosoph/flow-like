@@ -179,7 +179,7 @@ async fn resolve_course_media_url(
     );
 
     match store
-        .sign("GET", &path, Duration::from_secs(60 * 60 * 24))
+        .sign_cached("GET", &path, Duration::from_secs(60 * 60 * 24))
         .await
     {
         Ok(url) => Some(url.to_string()),

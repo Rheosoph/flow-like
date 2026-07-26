@@ -419,7 +419,10 @@ pub async fn get_meta(
             && !icon.starts_with("https://")
         {
             let path = prefix.child(format!("{icon}.webp"));
-            if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+            if let Ok(url) = store
+                .sign_cached("GET", &path, Duration::from_secs(86400))
+                .await
+            {
                 resp.icon = Some(url.to_string());
             }
         }
@@ -428,7 +431,10 @@ pub async fn get_meta(
             && !thumb.starts_with("https://")
         {
             let path = prefix.child(format!("{thumb}.webp"));
-            if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+            if let Ok(url) = store
+                .sign_cached("GET", &path, Duration::from_secs(86400))
+                .await
+            {
                 resp.thumbnail = Some(url.to_string());
             }
         }
@@ -436,7 +442,10 @@ pub async fn get_meta(
             for item in media.iter_mut() {
                 if !item.starts_with("http://") && !item.starts_with("https://") {
                     let path = prefix.child(format!("{item}.webp"));
-                    if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+                    if let Ok(url) = store
+                        .sign_cached("GET", &path, Duration::from_secs(86400))
+                        .await
+                    {
                         *item = url.to_string();
                     }
                 }

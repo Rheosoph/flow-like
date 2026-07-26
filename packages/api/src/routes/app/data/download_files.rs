@@ -107,7 +107,7 @@ pub async fn download_files(
         };
 
         let signed_url = match project_dir
-            .sign("GET", &download_path, Duration::from_secs(60 * 60 * 24))
+            .sign_cached("GET", &download_path, Duration::from_secs(60 * 60 * 24))
             .await
         {
             Ok(url) => url,
@@ -221,7 +221,7 @@ pub async fn download_user_files(
         };
 
         let signed_url = match project_dir
-            .sign("GET", &download_path, Duration::from_secs(60 * 60 * 24))
+            .sign_cached("GET", &download_path, Duration::from_secs(60 * 60 * 24))
             .await
         {
             Ok(url) => url,

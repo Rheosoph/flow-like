@@ -23,7 +23,6 @@ export interface SuiteGroup {
 interface SuiteShelfProps {
 	suites: SuiteGroup[];
 	onAppClick: (id: string) => void;
-	onSettingsClick: () => void;
 	settingsHref?: (id: string) => string;
 	appHref?: (id: string) => string;
 	visibilityMode?: boolean;
@@ -59,7 +58,6 @@ export function SuiteShelf({ suites, ...rowProps }: Readonly<SuiteShelfProps>) {
 function SuiteRow({
 	suite,
 	onAppClick,
-	onSettingsClick,
 	settingsHref,
 	appHref,
 	visibilityMode,
@@ -187,9 +185,6 @@ function SuiteRow({
 										metadata={item}
 										variant={isMobile ? "small" : "extended"}
 										onClick={() => handleClick(item.id)}
-										onSettingsClick={
-											visibilityMode ? undefined : onSettingsClick
-										}
 										settingsHref={
 											visibilityMode ? undefined : settingsHref?.(item.id)
 										}

@@ -53,7 +53,10 @@ impl MetaSummary {
             && !icon.starts_with("https://")
         {
             let path = prefix.child(format!("{icon}.webp"));
-            if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+            if let Ok(url) = store
+                .sign_cached("GET", &path, Duration::from_secs(86400))
+                .await
+            {
                 self.icon = Some(url.to_string());
             }
         }
@@ -62,7 +65,10 @@ impl MetaSummary {
             && !thumb.starts_with("https://")
         {
             let path = prefix.child(format!("{thumb}.webp"));
-            if let Ok(url) = store.sign("GET", &path, Duration::from_secs(86400)).await {
+            if let Ok(url) = store
+                .sign_cached("GET", &path, Duration::from_secs(86400))
+                .await
+            {
                 self.thumbnail = Some(url.to_string());
             }
         }
