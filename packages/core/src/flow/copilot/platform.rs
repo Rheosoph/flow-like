@@ -9,7 +9,7 @@
 //! safe public-web reads execute in core.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     sync::{Arc, LazyLock},
     time::Duration,
 };
@@ -34,8 +34,9 @@ use url::Url;
 
 use super::memory::AssistantMemory;
 use super::public_web::{
-    OpenUrlSessionBudget, WebResearchSession, normalize_public_discovery_url,
-    run_archive_lookup_for_session, run_open_url_for_session, source_id_for_url,
+    MAX_ARCHIVE_CALLS_PER_SESSION, MAX_SEARCH_CALLS_PER_SESSION, OpenUrlSessionBudget,
+    WebResearchSession, normalize_public_discovery_url, run_archive_lookup_for_session,
+    run_open_url_for_session, source_id_for_url,
 };
 use super::stream::{
     FlowScriptToolCallPreviewTracker, detailed_tool_end_frame, detailed_tool_start_frame,
@@ -44,8 +45,8 @@ use super::stream::{
 };
 use super::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL,
-    OPEN_URL_TOOL, find_global_tool_spec, global_assistant_tool_specs, resolve_tool_effect,
-    spec_arg_str,
+    OPEN_URL_TOOL, find_global_tool_spec, global_assistant_tool_specs, public_web_tool_specs,
+    resolve_tool_effect, spec_arg_str,
 };
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
@@ -58,9 +59,7 @@ pub const PLATFORM_TOOL_IMAGE_URLS_FIELD: &str = "_flowpilot_image_urls";
 
 const MAX_PLATFORM_TOOL_ROUNDS: usize = 8;
 const MAX_SEARCH_CALLS_PER_ROUND: usize = 5;
-const MAX_SEARCH_CALLS_PER_SESSION: usize = 12;
 const MAX_ARCHIVE_CALLS_PER_ROUND: usize = 2;
-const MAX_ARCHIVE_CALLS_PER_SESSION: usize = 4;
 const MAX_SEARCH_QUERY_CHARS: usize = 512;
 const MAX_SEARCH_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_SEARCH_TITLE_CHARS: usize = 300;
@@ -126,6 +125,48 @@ fn parse_image_media_type(value: &str) -> Option<ImageMediaType> {
 #[async_trait]
 pub trait PlatformToolBridge: Send + Sync {
     async fn call(&self, tool_name: &str, arguments: Value) -> String;
+
+    /// Take any user instructions that arrived since the last round and should be folded into the
+    /// conversation now. The host owns the queue (an in-process registry on the desktop, a table
+    /// row on the server); the loop just drains it at the one point where appending a user turn is
+    /// protocol-valid. Hosts without steering keep the default and never see a behaviour change.
+    async fn drain_steering(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// True once the run has been cancelled. Checked between rounds so a stopped turn stops
+    /// spending tokens immediately instead of only when the outer `select!` fires — which, with a
+    /// long tool round in flight, can be minutes later.
+    ///
+    /// Async because the hosts answer it differently: the desktop reads an in-process token, while
+    /// the server has to consult shared storage — a browser's cancel POST can land on a different
+    /// instance than the one running the turn.
+    async fn is_cancelled(&self) -> bool {
+        false
+    }
+}
+
+/// Fold instructions the user sent mid-run into the turn about to be dispatched.
+///
+/// Appended to the pending user message rather than pushed as a separate turn: at a round boundary
+/// that pending message is often a tool-result block, and providers requiring strict
+/// user/assistant alternation reject a second consecutive user turn after it.
+fn merge_steering_into_prompt(prompt: &mut rig::message::Message, steering: &[String]) {
+    let instructions: Vec<&str> = steering
+        .iter()
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .collect();
+    if instructions.is_empty() {
+        return;
+    }
+    let note = format!(
+        "The user sent this while you were working. Treat it as part of the current request and adjust course now:\n{}",
+        instructions.join("\n")
+    );
+    if let rig::message::Message::User { content } = prompt {
+        content.push(UserContent::text(note));
+    }
 }
 
 /// Whether a platform tool must preserve the model's declared call order within its round.
@@ -142,16 +183,66 @@ fn platform_tool_requires_ordered_execution(name: &str, arguments: &Value) -> bo
     resolve_tool_effect(&spec, arguments).requires_ordered_execution()
 }
 
-fn platform_tool_round_requires_ordered_execution<'a>(
-    calls: impl IntoIterator<Item = (&'a str, &'a Value)>,
-) -> bool {
-    calls
-        .into_iter()
-        .any(|(name, arguments)| platform_tool_requires_ordered_execution(name, arguments))
-}
-
 fn is_editing_flowpilot_board_call(name: &str, arguments: &Value) -> bool {
     name == "flowpilot_board" && spec_arg_str(arguments, "mode", "mode") != "explain"
+}
+
+/// The serialization lane a call belongs to, or `None` when it may run alongside anything.
+///
+/// A round is scheduled by lane rather than as one all-or-nothing decision: calls sharing a lane
+/// run sequentially in the model's declared order, and different lanes run concurrently. This is
+/// what makes a plan's fan-out real — the workflow, its page and its tables touch disjoint state
+/// (FlowScript drafts, A2UI surfaces, tables/overlays), so building them at the same time is safe,
+/// while two edits of the SAME board still cannot interleave.
+///
+/// Lanes are deliberately coarser than the underlying gates: the per-board nested-run semaphore and
+/// the frontend board-edit lock remain the authority on mutual exclusion. This only decides what the
+/// round is allowed to *attempt* concurrently, so an unrecognised or unresolved target falls back to
+/// a broader lane rather than a narrower one.
+fn platform_tool_serialization_lane(name: &str, arguments: &Value) -> Option<String> {
+    let arg = |snake: &str, camel: &str| {
+        let value = spec_arg_str(arguments, snake, camel).trim();
+        (!value.is_empty()).then(|| value.to_string())
+    };
+    let app = || arg("app_id", "appId").unwrap_or_else(|| "*".to_string());
+
+    // The three authoring specialists are laned by the state they OWN, not by their approval spec.
+    // `data_studio_agent` in particular needs no approval and so reads as read-only to the effect
+    // classifier, yet two data builds on one app absolutely do contend.
+    match name {
+        "flowpilot_board" if is_editing_flowpilot_board_call(name, arguments) => {
+            // An unresolved board target may create or adopt the app's first board, so it shares
+            // the app's board lane; a named target only contends with edits of that same board.
+            return Some(match arg("board_id", "boardId") {
+                Some(board) => format!("board:{}:{board}", app()),
+                None => format!("board:{}:unresolved", app()),
+            });
+        }
+        // Page authoring is keyed by the page it targets, so building several distinct pages of one
+        // app in a single wavefront does not queue.
+        "flowpilot_widget" => {
+            return Some(
+                match arg("page_id", "pageId")
+                    .or_else(|| arg("route", "route"))
+                    .or_else(|| arg("page_name", "pageName"))
+                {
+                    Some(page) => format!("widget:{}:{page}", app()),
+                    None => format!("widget:{}:unresolved", app()),
+                },
+            );
+        }
+        // Tables and overlays are app-scoped state.
+        "data_studio_agent" => return Some(format!("data:{}", app())),
+        _ => {}
+    }
+
+    if !platform_tool_requires_ordered_execution(name, arguments) {
+        return None;
+    }
+    // Everything else that mutates keeps the historical guarantee: one shared lane, executed in the
+    // exact order the model declared it. These calls are cheap relative to a delegated build, so
+    // serializing them costs nothing and keeps unknown side-effect policy safe by default.
+    Some("sequential".to_string())
 }
 
 fn is_workflow_event_upsert_call(name: &str, arguments: &Value) -> bool {
@@ -271,8 +362,14 @@ impl PlatformCopilot {
             system_prompt.push_str(&memory.prompt_sections(&user_prompt).await);
         }
 
+        // The public-web tools moved off the shared orchestrator set and onto the Research scope,
+        // which only the tool-driven backends can host. This rig loop cannot spawn a nested scope,
+        // and it already implements the search/open/archive handlers inline below — so it keeps them
+        // directly. Dropping them here would remove web research from the Bits backend outright
+        // rather than relocating it.
         let tool_definitions: Vec<_> = global_assistant_tool_specs(memory.is_some())
-            .iter()
+            .into_iter()
+            .chain(public_web_tool_specs())
             .map(|spec| spec.to_tool_definition())
             .collect();
 
@@ -339,6 +436,10 @@ impl PlatformCopilot {
 
         let mut plan_step_counter = 0u32;
         let mut full_response = String::new();
+        // Whether the turn ended with a real closing answer, or with an explicit notice explaining
+        // that it did not. `full_response` accumulates every round's narration, so it can no longer
+        // stand in for "the model actually synthesized an answer".
+        let mut answer_closed = false;
         // Accumulated token usage of the whole assistant session (one call entry per iteration),
         // streamed to the frontend as a `<usage_stat>` frame at the end so the chat shows the
         // agent's own model usage alongside any stats reported by apps it called.
@@ -353,6 +454,14 @@ impl PlatformCopilot {
         // advertises no tools, guaranteeing that a search/open chain cannot consume the final turn
         // and leave the user without a synthesis.
         for iteration in 0..=MAX_PLATFORM_TOOL_ROUNDS {
+            // A stopped run must stop spending immediately. The outer `select!` only fires between
+            // awaits it owns, so with a long tool round in flight it can be minutes late.
+            if bridge.is_cancelled().await {
+                return Err(flow_like_types::anyhow!("Run cancelled"));
+            }
+            // Round boundaries are the one place a user turn can be added without breaking the
+            // assistant → tool-result ordering providers require.
+            merge_steering_into_prompt(&mut current_prompt, &bridge.drain_steering().await);
             let tools_enabled = iteration < MAX_PLATFORM_TOOL_ROUNDS;
             let tools_for_round = if tools_enabled {
                 tool_definitions.clone()
@@ -500,19 +609,33 @@ impl PlatformCopilot {
                 })
                 .collect();
 
+            // Every round's streamed text is part of the reply the user already watched — keep the
+            // final message identical to the live stream. Text from rounds that also called tools
+            // must not silently drop out of the persisted/final response.
+            full_response.push_str(&iteration_text);
+            // A round that ends without tool calls IS the synthesis.
+            let round_produced_text = !iteration_text.trim().is_empty();
+
             if tool_calls.is_empty() {
-                full_response.push_str(&iteration_text);
+                answer_closed |= round_produced_text;
                 break;
             }
 
             // A provider should not emit calls for tools that were not advertised. If it does on
             // the reserved synthesis turn, stop safely instead of executing an unbudgeted action.
             if !tools_enabled {
-                full_response.push_str(&iteration_text);
-                if full_response.trim().is_empty() {
+                if round_produced_text {
+                    answer_closed = true;
+                } else {
+                    if !full_response.is_empty() && !full_response.ends_with('\n') {
+                        full_response.push_str("\n\n");
+                    }
                     full_response.push_str(
                         "The research tools completed, but the model did not produce a final synthesis within the tool budget.",
                     );
+                    // The turn is now explicitly closed out; the terminal guard must not add a
+                    // second notice on top of this one.
+                    answer_closed = true;
                 }
                 break;
             }
@@ -610,84 +733,89 @@ impl PlatformCopilot {
                     &tool_call.function.arguments,
                 )
             });
-            let ordered_round = round_has_editing_board_call
-                || platform_tool_round_requires_ordered_execution(tool_calls.iter().map(
-                    |tool_call| {
-                        (
-                            tool_call.function.name.as_str(),
-                            &tool_call.function.arguments,
-                        )
-                    },
-                ));
-            let tool_results: Vec<(String, String, String, Vec<PlatformToolImageUrl>)> =
-                if ordered_round {
-                    let mut results = Vec::with_capacity(tool_calls.len());
-                    for (tool_call, prepared) in tool_calls.iter().zip(prepared_arguments.iter()) {
-                        let name = tool_call.function.name.clone();
-                        if let Some(output) = same_round_workflow_event_guard_result(
-                            &name,
-                            &tool_call.function.arguments,
-                            round_has_editing_board_call,
-                        ) {
-                            results.push((tool_call.id.clone(), name, output, Vec::new()));
-                            continue;
+            // Group the round into serialization lanes, then run the lanes concurrently. A lane
+            // preserves the model's declared order internally; laneless (read-only) calls each get
+            // their own lane so they never wait on anything.
+            let mut lanes: Vec<Vec<usize>> = Vec::new();
+            let mut lane_index: HashMap<String, usize> = HashMap::new();
+            for (index, tool_call) in tool_calls.iter().enumerate() {
+                match platform_tool_serialization_lane(
+                    &tool_call.function.name,
+                    &tool_call.function.arguments,
+                ) {
+                    Some(lane) => match lane_index.get(&lane) {
+                        Some(&existing) => lanes[existing].push(index),
+                        None => {
+                            lane_index.insert(lane, lanes.len());
+                            lanes.push(vec![index]);
                         }
-                        let arguments = match prepared {
-                            Ok(arguments) => arguments.clone(),
-                            Err(output) => {
-                                results.push((
-                                    tool_call.id.clone(),
-                                    name,
-                                    output.clone(),
-                                    Vec::new(),
-                                ));
-                                continue;
-                            }
-                        };
-                        let output = execute_platform_tool(
-                            &name,
-                            arguments,
-                            &bridge,
-                            memory.as_ref(),
-                            &web_research_session,
-                        )
-                        .await;
-                        let (output, images) = split_platform_tool_output(output);
-                        results.push((tool_call.id.clone(), name, output, images));
-                    }
-                    results
-                } else {
-                    let tool_futures: Vec<_> = tool_calls
-                        .iter()
-                        .zip(prepared_arguments.iter())
-                        .map(|(tool_call, prepared)| {
-                            let name = tool_call.function.name.clone();
-                            let prepared = prepared.clone();
-                            let id = tool_call.id.clone();
-                            let bridge = bridge.clone();
-                            let memory = memory.clone();
-                            let web_research_session = web_research_session.clone();
-                            async move {
-                                let output = match prepared {
-                                    Ok(arguments) => {
-                                        execute_platform_tool(
-                                            &name,
-                                            arguments,
-                                            &bridge,
-                                            memory.as_ref(),
-                                            &web_research_session,
-                                        )
-                                        .await
-                                    }
-                                    Err(output) => output,
-                                };
-                                let (output, images) = split_platform_tool_output(output);
-                                (id, name, output, images)
-                            }
+                    },
+                    None => lanes.push(vec![index]),
+                }
+            }
+
+            let lane_futures: Vec<_> = lanes
+                .into_iter()
+                .map(|lane| {
+                    let bridge = bridge.clone();
+                    let memory = memory.clone();
+                    let web_research_session = web_research_session.clone();
+                    let calls: Vec<_> = lane
+                        .into_iter()
+                        .map(|index| {
+                            (
+                                index,
+                                tool_calls[index].id.clone(),
+                                tool_calls[index].function.name.clone(),
+                                tool_calls[index].function.arguments.clone(),
+                                prepared_arguments[index].clone(),
+                            )
                         })
                         .collect();
-                    futures::future::join_all(tool_futures).await
-                };
+                    async move {
+                        let mut lane_results = Vec::with_capacity(calls.len());
+                        for (index, id, name, raw_arguments, prepared) in calls {
+                            if let Some(output) = same_round_workflow_event_guard_result(
+                                &name,
+                                &raw_arguments,
+                                round_has_editing_board_call,
+                            ) {
+                                lane_results.push((index, (id, name, output, Vec::new())));
+                                continue;
+                            }
+                            let output = match prepared {
+                                Ok(arguments) => {
+                                    execute_platform_tool(
+                                        &name,
+                                        arguments,
+                                        &bridge,
+                                        memory.as_ref(),
+                                        &web_research_session,
+                                    )
+                                    .await
+                                }
+                                Err(output) => output,
+                            };
+                            let (output, images) = split_platform_tool_output(output);
+                            lane_results.push((index, (id, name, output, images)));
+                        }
+                        lane_results
+                    }
+                })
+                .collect();
+
+            // Reassemble in the model's declared call order: a tool result block must line up with
+            // the tool_call ids of the assistant message that produced it, whatever order the lanes
+            // happened to finish in.
+            let mut ordered: Vec<Option<(String, String, String, Vec<PlatformToolImageUrl>)>> =
+                (0..tool_calls.len()).map(|_| None).collect();
+            for lane_results in futures::future::join_all(lane_futures).await {
+                for (index, result) in lane_results {
+                    ordered[index] = Some(result);
+                }
+            }
+            let tool_results: Vec<(String, String, String, Vec<PlatformToolImageUrl>)> =
+                ordered.into_iter().flatten().collect();
 
             // All calls in one model-authored batch may complete. Once that batch has introduced
             // app, memory, or interactive data, later model rounds lose public-network access so
@@ -803,12 +931,23 @@ impl PlatformCopilot {
             }
         }
 
-        if full_response.trim().is_empty() {
-            let fallback = "The research run ended without a usable final synthesis. No additional web action was taken; please retry or narrow the question.".to_string();
-            if let Some(callback) = &on_token {
-                callback(fallback.clone());
+        // Ending without a closing answer needs saying even when mid-run narration left
+        // `full_response` non-empty — that narration is not a synthesis. The notice is appended
+        // rather than substituted so the text the user already watched stream is preserved.
+        if !answer_closed {
+            if full_response.trim().is_empty() {
+                let fallback = "The research run ended without a usable final synthesis. No additional web action was taken; please retry or narrow the question.".to_string();
+                if let Some(callback) = &on_token {
+                    callback(fallback.clone());
+                }
+                full_response = fallback;
+            } else {
+                let fallback = "\n\nThe run ended without a final synthesis — the notes above are mid-run narration, not a complete answer. Please retry or narrow the question.";
+                if let Some(callback) = &on_token {
+                    callback(fallback.to_string());
+                }
+                full_response.push_str(fallback);
             }
-            full_response = fallback;
         }
 
         // Publish the session's own token usage (skipped when no provider reported any).
@@ -1499,14 +1638,14 @@ mod tests {
         let list_args = json!({});
         let describe_args = json!({ "app_id": "app", "event_id": "event" });
 
-        assert!(!platform_tool_round_requires_ordered_execution([
-            ("list_apps", &list_args),
-            ("describe_app_interface", &describe_args),
-        ]));
+        assert!(platform_tool_serialization_lane("list_apps", &list_args).is_none());
+        assert!(
+            platform_tool_serialization_lane("describe_app_interface", &describe_args).is_none()
+        );
     }
 
     #[test]
-    fn side_effecting_platform_rounds_preserve_model_order_even_with_deferred_approval() {
+    fn side_effecting_platform_calls_keep_model_order_within_their_lane() {
         let list_args = json!({});
         let board_args = json!({
             "app_id": "app",
@@ -1519,11 +1658,66 @@ mod tests {
             "node_id": "entry",
         });
 
-        assert!(platform_tool_round_requires_ordered_execution([
-            ("list_apps", &list_args),
-            ("flowpilot_board", &board_args),
-            ("upsert_event", &event_args),
-        ]));
+        assert!(platform_tool_serialization_lane("list_apps", &list_args).is_none());
+        assert_eq!(
+            platform_tool_serialization_lane("flowpilot_board", &board_args),
+            Some("board:app:unresolved".to_string())
+        );
+        // Generic mutating tools keep the historical single-file lane.
+        assert_eq!(
+            platform_tool_serialization_lane("upsert_event", &event_args),
+            Some("sequential".to_string())
+        );
+    }
+
+    #[test]
+    fn authoring_lanes_let_one_feature_build_its_parts_at_once() {
+        let board =
+            json!({ "app_id": "app", "board_id": "b1", "instruction": "Build the workflow" });
+        let widget =
+            json!({ "app_id": "app", "route": "/dashboard", "instruction": "Build the page" });
+        let data = json!({ "app_id": "app", "instruction": "Create the tables" });
+
+        let board_lane = platform_tool_serialization_lane("flowpilot_board", &board);
+        let widget_lane = platform_tool_serialization_lane("flowpilot_widget", &widget);
+        let data_lane = platform_tool_serialization_lane("data_studio_agent", &data);
+
+        assert_eq!(board_lane, Some("board:app:b1".to_string()));
+        assert_eq!(widget_lane, Some("widget:app:/dashboard".to_string()));
+        assert_eq!(data_lane, Some("data:app".to_string()));
+        assert_ne!(board_lane, widget_lane);
+        assert_ne!(board_lane, data_lane);
+        assert_ne!(widget_lane, data_lane);
+    }
+
+    #[test]
+    fn board_lane_separates_distinct_boards_but_not_same_board_edits() {
+        let first = json!({ "app_id": "app", "board_id": "b1", "instruction": "Ingest" });
+        let second = json!({ "app_id": "app", "board_id": "b2", "instruction": "Report" });
+        let same = json!({ "app_id": "app", "board_id": "b1", "instruction": "Extend ingest" });
+
+        assert_ne!(
+            platform_tool_serialization_lane("flowpilot_board", &first),
+            platform_tool_serialization_lane("flowpilot_board", &second)
+        );
+        assert_eq!(
+            platform_tool_serialization_lane("flowpilot_board", &first),
+            platform_tool_serialization_lane("flowpilot_board", &same)
+        );
+        // Two board calls with no resolved target may both adopt or create the app's first board,
+        // so they must not be allowed to race.
+        let unresolved_a = json!({ "app_id": "app", "instruction": "Ingest" });
+        let unresolved_b = json!({ "app_id": "app", "instruction": "Report" });
+        assert_eq!(
+            platform_tool_serialization_lane("flowpilot_board", &unresolved_a),
+            platform_tool_serialization_lane("flowpilot_board", &unresolved_b)
+        );
+        // Different apps never contend.
+        let other_app = json!({ "app_id": "other", "instruction": "Ingest" });
+        assert_ne!(
+            platform_tool_serialization_lane("flowpilot_board", &unresolved_a),
+            platform_tool_serialization_lane("flowpilot_board", &other_app)
+        );
     }
 
     #[test]

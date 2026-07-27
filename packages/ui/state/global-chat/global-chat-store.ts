@@ -48,7 +48,18 @@ export function markRestoredMessageDebugReportStale(
 /** Id prefix marking plan steps that belong to a nested sub-agent run (e.g. flowpilot_board). */
 export const SUB_STEP_PREFIX = "sub:";
 
+/**
+ * Upper bound on assistant turns streaming at once in a single conversation. Sends beyond it are
+ * queued instead of rejected. The cap exists because every concurrent turn holds a CLI process
+ * (agent backends) or a completion stream (Bits), and the transcript stops being readable past a
+ * handful of live bubbles.
+ */
+export const MAX_CONCURRENT_GLOBAL_CHAT_RUNS = 4;
+
 export type GlobalChatMode = "closed" | "overlay";
+
+/** Session-scoped pointer to the active conversation, so reloads/navigation restore the transcript. */
+export const LAST_CONVERSATION_KEY = "flow-like:global-chat:last-conversation";
 
 /** Session-scoped dock visibility, so a hard reload mid-response re-opens the overlay (and thus
  * re-mounts the chat surface that re-attaches to the live stream) instead of hiding it. */
@@ -161,6 +172,61 @@ export interface GlobalChatTurnSelection extends GlobalChatAgentSelection {
 	readonly runId: string;
 }
 
+/** Lifecycle of one assistant turn. `cancelling` is the window between the user pressing stop and
+ * the transport actually tearing the run down — the bubble stays rendered but stops accepting new
+ * steering. */
+export type GlobalChatRunStatus = "streaming" | "cancelling";
+
+/** One user instruction pushed into an already-running turn. */
+export interface GlobalChatSteer {
+	id: string;
+	content: string;
+	/** `pending` until the backend confirms the run accepted it; `failed` keeps the text visible. */
+	status: "pending" | "delivered" | "failed";
+	createdAt: number;
+	/** Failure reason, rendered on the steer chip so a dropped instruction is never silent. */
+	error?: string;
+}
+
+/**
+ * One in-flight assistant turn. Everything a run streams — its message, the buffers nested
+ * sub-agents publish into, its debug report — hangs off this record rather than a store singleton,
+ * so N turns can stream side by side without cross-contaminating each other's steps, widgets,
+ * usage, or attachments.
+ */
+export interface GlobalChatRun {
+	runId: string;
+	conversationId: string;
+	status: GlobalChatRunStatus;
+	startedAt: number;
+	/** First line of the prompt that started the turn — labels its stop/steer controls. */
+	label: string;
+	selection: GlobalChatTurnSelection;
+	/** The assistant reply being streamed into. Its id always equals `runId`. */
+	message: IMessage | null;
+	subPlanSteps: IPlanStep[];
+	subAttachments: IAttachment[];
+	subUsageStats: IChatUsageStat[];
+	subWidgets: IChatWidget[];
+	pendingAppRefs: string[];
+	debugReport: IAgentDebugReport | null;
+	steers: GlobalChatSteer[];
+	/** Transport-level teardown (the web SSE AbortController). Desktop cancels via the Rust
+	 * registry instead, so this stays undefined there. */
+	abort?: () => void;
+}
+
+/** A message the user sent while the conversation was at its concurrency cap, or explicitly
+ * queued. Drained in order as runs finish. */
+export interface GlobalChatQueuedMessage {
+	id: string;
+	conversationId: string;
+	content: string;
+	/** Raw browser files, held until the send actually happens (they are uploaded at send time). */
+	files?: File[];
+	createdAt: number;
+}
+
 export type GlobalToolPromptResolution =
 	| { approved: boolean; remember: boolean }
 	| { answer: unknown }
@@ -220,18 +286,26 @@ interface GlobalChatState {
 	activeConversationId: string;
 	/** Committed messages of the active conversation. */
 	messages: IMessage[];
+	/**
+	 * Every in-flight turn in the app, keyed by run id, across ALL conversations — a run keeps
+	 * streaming (and finalizing) when the user switches to another chat, and re-appears in place
+	 * when they switch back.
+	 */
+	runs: Record<string, GlobalChatRun>;
+	/** Messages waiting for capacity, in send order. Drained as runs finish. */
+	queue: GlobalChatQueuedMessage[];
+	/** Derived: the active conversation has at least one live run. Maintained on every runs write.
+	 * This no longer gates sending — it only drives "is something happening" affordances. */
 	isStreaming: boolean;
+	/** Derived: live assistant bubbles of the active conversation, oldest run first. */
+	streamingMessages: IMessage[];
 	/**
 	 * A route a tool asked to open, deferred until the agent turn finishes. Navigating mid-stream
 	 * tears down the run, so tools (e.g. flowpilot_widget after creating a page) stash the target
-	 * here and the bridge navigates once streaming ends.
+	 * here and the bridge navigates once the REQUESTING run (`runId`) ends — scoping to the run
+	 * keeps conversation switches from firing it early or unrelated runs from holding it hostage.
 	 */
-	pendingNavigation: string | null;
-	/**
-	 * The in-flight assistant reply. Lives in the store (not a surface-local ref) so streaming keeps
-	 * rendering when the conversation morphs between the /chat page and the docked overlay mid-response.
-	 */
-	streamingMessage: IMessage | null;
+	pendingNavigation: { target: string; runId?: string } | null;
 	/** Pending inline approval/question from the global tool bridge (one at a time). */
 	toolPrompt: GlobalToolPrompt | null;
 	provider: AIProvider;
@@ -239,12 +313,6 @@ interface GlobalChatState {
 	selectedModelId: string;
 	/** Provider-specific reasoning effort ("" = use the selected model's default). */
 	reasoningEffort: string;
-	/**
-	 * Immutable execution configuration for the active turn. Picker hydration and user changes may
-	 * still update the fields above while a turn streams, but nested specialists must use this
-	 * snapshot so the entire parent/child run stays on one provider, model, and reasoning effort.
-	 */
-	activeTurnSelection: GlobalChatTurnSelection | null;
 	/** Embedding bit id used for profile-scoped memory ("" = memory off). */
 	embeddingModelId: string;
 	/** Waive tool-approval prompts and the pending-change review gate. Deliberately not
@@ -258,49 +326,25 @@ interface GlobalChatState {
 	/** UI an app pushed while the agent called its chat headlessly (call_app_chat), shown as cards. */
 	inlineAppSurfaces: InlineAppSurface[];
 	/**
-	 * Apps referenced by tools during the current in-flight response. The chat body attaches them
-	 * to that assistant message (message.app_refs) so the chips render inline with it.
-	 */
-	pendingAppRefs: string[];
-	/**
-	 * Plan steps of a nested sub-agent run (flowpilot_board) during the current response, published
-	 * by the tool bridge. Ids carry SUB_STEP_PREFIX; the chat body appends them to the message's
-	 * own steps so the user sees the sub-agent working live.
-	 */
-	subPlanSteps: IPlanStep[];
-	/**
-	 * Interactions (single/multiple choice, form) raised by a nested app-chat run (call_app_chat)
-	 * during the current response. Rendered by the chat body and answered via respond_to_interaction,
-	 * unblocking the app workflow while the outer call_app_chat tool call is still in flight.
+	 * Interactions (single/multiple choice, form) raised by a nested app-chat run (call_app_chat).
+	 * Rendered by the chat body and answered via respond_to_interaction, unblocking the app workflow
+	 * while the outer call_app_chat tool call is still in flight. Deliberately conversation-scoped
+	 * rather than run-scoped: these are independent cards keyed by their own ids, so interleaving
+	 * them across concurrent runs is correct.
 	 */
 	activeInteractions: IInteractionRequest[];
 	/**
-	 * Attachments produced by a nested app-chat run (call_app_chat), folded into the owning assistant
-	 * message's files so generated files/images render in the global chat instead of being dropped.
-	 */
-	subAttachments: IAttachment[];
-	/**
-	 * Usage/stats reported by nested runs during the current response: apps called via call_app_chat
-	 * (their chat_usage_stat events) and board/widget sub-agents. Folded into the owning message's
-	 * usage_stats alongside the agent's own so the <UsageStats> badge covers the whole turn.
-	 */
-	subUsageStats: IChatUsageStat[];
-	/**
-	 * a2ui widgets pushed by a nested app-chat run (call_app_chat) during the current response,
-	 * folded into the owning assistant message's `widgets` so they render inline. Each entry carries
-	 * `origin` (the pushing app/board/event) so widget actions route to the original use-case board.
-	 */
-	subWidgets: IChatWidget[];
-	/**
 	 * FlowScript workspace generated by the latest flowpilot_board run, streamed live so the chat
-	 * shows the code as it is written (same panel as the board FlowPilot).
+	 * shows the code as it is written (same panel as the board FlowPilot). There is one workspace
+	 * panel, so this stays a single slot — `ownerRunId` records which run filled it, so a finishing
+	 * or cancelled run only clears its own workspace.
 	 */
 	flowscriptWorkspace: FlowScriptWorkspaceCandidate | null;
-	/** Turn-scoped debug report mirrored into the streaming message and persisted on finalize. */
-	debugReport: IAgentDebugReport | null;
+	flowscriptWorkspaceOwnerRunId: string | null;
 	/**
 	 * Validated UI components generated by the latest flowpilot_widget run, staged in the chat for
-	 * the user to review and apply to the open widget/page builder. Never auto-applied.
+	 * the user to review and apply to the open widget/page builder. Never auto-applied. Single slot
+	 * with an owner tag, for the same reason as the FlowScript workspace.
 	 */
 	pendingComponents: {
 		components: SurfaceComponent[];
@@ -310,6 +354,7 @@ interface GlobalChatState {
 		surfaceId?: string;
 		appId?: string;
 	} | null;
+	pendingComponentsOwnerRunId: string | null;
 
 	setDraft: (draft: GlobalChatDraft) => void;
 	/** Returns the pending draft once and clears it, so it is only auto-sent a single time. */
@@ -325,13 +370,49 @@ interface GlobalChatState {
 	/** Close the dock without treating it as a user dismissal (for example on the full chat page). */
 	closeOverlay: () => void;
 	/** Defer a route change until the agent turn ends (navigating mid-stream breaks the run). */
-	setPendingNavigation: (route: string | null) => void;
+	setPendingNavigation: (
+		navigation: { target: string; runId?: string } | null,
+	) => void;
 	appendMessage: (message: IMessage) => void;
 	/** Upsert a message by id — replaces an existing one (e.g. a restored streaming checkpoint that a
 	 * resumed run finalizes) or appends it when new. Used to commit finished assistant replies. */
 	commitMessage: (message: IMessage) => void;
-	setStreaming: (streaming: boolean) => void;
-	setStreamingMessage: (message: IMessage | null) => void;
+	/** Register a new in-flight turn. Idempotent per run id — a resume re-attaches to the record. */
+	startRun: (
+		run: Pick<
+			GlobalChatRun,
+			"runId" | "conversationId" | "selection" | "label" | "message"
+		>,
+	) => void;
+	/** Replace a run's streaming bubble. No-op once the run has ended, so a late chunk from a
+	 * cancelled transport cannot resurrect a finished bubble. */
+	setRunMessage: (runId: string, message: IMessage | null) => void;
+	setRunStatus: (runId: string, status: GlobalChatRunStatus) => void;
+	/** Attach the transport teardown hook used by `cancelGlobalChatRun` (web SSE only). */
+	setRunAbort: (runId: string, abort: (() => void) | undefined) => void;
+	/** Drop the run record and any single-slot panel state it owned. */
+	endRun: (runId: string) => void;
+	/** Record a steering instruction against a live run so it renders while in flight. */
+	addRunSteer: (runId: string, steer: GlobalChatSteer) => void;
+	setRunSteerStatus: (
+		runId: string,
+		steerId: string,
+		status: GlobalChatSteer["status"],
+		error?: string,
+	) => void;
+	/** Append a message to the send queue. */
+	enqueueMessage: (
+		entry: Omit<GlobalChatQueuedMessage, "id" | "createdAt">,
+	) => string;
+	/** Remove one queued message (user deleted it, or it is being sent now). */
+	removeQueuedMessage: (id: string) => void;
+	/** Edit a queued message's text before it is sent. */
+	updateQueuedMessage: (id: string, content: string) => void;
+	/** Pop the oldest queued message of a conversation, or undefined when the queue is empty. */
+	takeNextQueuedMessage: (
+		conversationId: string,
+	) => GlobalChatQueuedMessage | undefined;
+	clearQueue: (conversationId?: string) => void;
 	setToolPrompt: (prompt: GlobalToolPrompt | null) => void;
 	setProvider: (provider: AIProvider) => void;
 	setSelectedModelId: (modelId: string) => void;
@@ -349,26 +430,22 @@ interface GlobalChatState {
 	removeInlineAppPage: (id: string) => void;
 	addInlineAppSurface: (surface: Omit<InlineAppSurface, "id">) => void;
 	removeInlineAppSurface: (id: string) => void;
-	addPendingAppRef: (appId: string) => void;
-	clearPendingAppRefs: () => void;
-	/** Replace the nested run's steps and refresh the streaming bubble so they render immediately. */
-	setSubPlanSteps: (steps: IPlanStep[]) => void;
-	clearSubPlanSteps: () => void;
+	addPendingAppRef: (runId: string, appId: string) => void;
+	/** Replace the nested run's steps and refresh that run's bubble so they render immediately. */
+	setSubPlanSteps: (runId: string, steps: IPlanStep[]) => void;
 	/** Merge app-chat interactions (upsert by id, promoting settled status) for inline rendering. */
 	addInteractions: (interactions: IInteractionRequest[]) => void;
 	/** Mark one interaction as responded so its inline card settles after the user answers. */
 	setInteractionResponded: (interactionId: string, value: unknown) => void;
 	clearInteractions: () => void;
-	/** Append app-chat attachments (deduped by url) to the current response's rendered files. */
-	addSubAttachments: (attachments: IAttachment[]) => void;
-	clearSubAttachments: () => void;
-	/** Append nested-run usage stats (deduped) and merge them into the streaming message live. */
-	addSubUsageStats: (stats: IChatUsageStat[]) => void;
-	clearSubUsageStats: () => void;
-	/** Upsert nested-run widgets (by instance id, longer-updates-wins) into the streaming message. */
-	addSubWidgets: (widgets: IChatWidget[]) => void;
-	clearSubWidgets: () => void;
+	/** Append app-chat attachments (deduped by url) to that run's rendered files. */
+	addSubAttachments: (runId: string, attachments: IAttachment[]) => void;
+	/** Append nested-run usage stats (deduped) and merge them into the run's bubble live. */
+	addSubUsageStats: (runId: string, stats: IChatUsageStat[]) => void;
+	/** Upsert nested-run widgets (by instance id, longer-updates-wins) into the run's bubble. */
+	addSubWidgets: (runId: string, widgets: IChatWidget[]) => void;
 	setFlowscriptWorkspace: (
+		runId: string | null,
 		workspace: FlowScriptWorkspaceCandidate | null,
 	) => void;
 	beginDebugReport: (
@@ -382,6 +459,7 @@ interface GlobalChatState {
 	) => IAgentDebugReport | null;
 	clearDebugReport: (messageId?: string) => void;
 	setPendingComponents: (
+		runId: string | null,
 		pending: {
 			components: SurfaceComponent[];
 			canvasSettings?: CanvasSettings;
@@ -396,34 +474,120 @@ interface GlobalChatState {
 	loadConversation: (conversationId: string, messages: IMessage[]) => void;
 }
 
+const usageSignature = (stat: IChatUsageStat) => JSON.stringify(stat);
+
+/**
+ * Re-fold a run's nested-agent buffers into its rendered bubble. Every sub-* write goes through
+ * this so nested activity shows up immediately — the run's own channel is silent while a sub-agent
+ * works, and without the fold the steps/widgets/usage would only appear on the next token.
+ */
+function foldSubBuffers(run: GlobalChatRun): GlobalChatRun {
+	const message = run.message;
+	if (!message) return run;
+	const ownSteps = (message.plan_steps ?? []).filter(
+		(step) => !step.id.startsWith(SUB_STEP_PREFIX),
+	);
+	const usage = [...(message.usage_stats ?? [])];
+	const known = new Set(usage.map(usageSignature));
+	for (const stat of run.subUsageStats) {
+		const signature = usageSignature(stat);
+		if (known.has(signature)) continue;
+		known.add(signature);
+		usage.push(stat);
+	}
+	return {
+		...run,
+		message: {
+			...message,
+			plan_steps: [...ownSteps, ...run.subPlanSteps],
+			files: run.subAttachments.length > 0 ? run.subAttachments : message.files,
+			widgets: run.subWidgets.length > 0 ? run.subWidgets : message.widgets,
+			usage_stats: usage.length > 0 ? usage : undefined,
+			app_refs:
+				run.pendingAppRefs.length > 0
+					? [...run.pendingAppRefs]
+					: message.app_refs,
+			debug_report: run.debugReport ?? message.debug_report,
+		},
+	};
+}
+
+/** Recompute the two views the UI subscribes to. Called on every write to `runs`. */
+function deriveRunViews(
+	runs: Record<string, GlobalChatRun>,
+	activeConversationId: string,
+): Pick<GlobalChatState, "runs" | "isStreaming" | "streamingMessages"> {
+	const live = Object.values(runs)
+		.filter((run) => run.conversationId === activeConversationId)
+		.sort((a, b) => a.startedAt - b.startedAt);
+	const streamingMessages: IMessage[] = [];
+	for (const run of live) if (run.message) streamingMessages.push(run.message);
+	return { runs, isStreaming: live.length > 0, streamingMessages };
+}
+
+/** Apply a patch to one run. Unknown run ids and no-op patches leave the store untouched, so a
+ * late event from a torn-down transport can never resurrect a finished run. */
+function patchRun(
+	state: GlobalChatState,
+	runId: string,
+	patch: (run: GlobalChatRun) => GlobalChatRun,
+): Partial<GlobalChatState> | GlobalChatState {
+	const existing = state.runs[runId];
+	if (!existing) return state;
+	const next = patch(existing);
+	if (next === existing) return state;
+	return deriveRunViews(
+		{ ...state.runs, [runId]: next },
+		state.activeConversationId,
+	);
+}
+
+function switchConversation(
+	state: GlobalChatState,
+	conversationId: string,
+	messages: IMessage[],
+): Partial<GlobalChatState> {
+	return {
+		activeConversationId: conversationId,
+		messages,
+		inlineAppChats: [],
+		inlineAppPages: [],
+		inlineAppSurfaces: [],
+		activeInteractions: [],
+		flowscriptWorkspace: null,
+		flowscriptWorkspaceOwnerRunId: null,
+		pendingComponents: null,
+		pendingComponentsOwnerRunId: null,
+		// Runs survive the switch; only the derived views are re-scoped to the new conversation.
+		...deriveRunViews(state.runs, conversationId),
+	};
+}
+
 export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	draft: null,
 	mode: "closed",
 	overlayAutoOpenDismissed: false,
 	activeConversationId: createId(),
 	messages: [],
+	runs: {},
+	queue: [],
 	isStreaming: false,
+	streamingMessages: [],
 	pendingNavigation: null,
-	streamingMessage: null,
 	toolPrompt: null,
 	provider: "bits",
 	selectedModelId: "",
 	reasoningEffort: "",
-	activeTurnSelection: null,
 	embeddingModelId: "",
 	autoMode: false,
 	inlineAppChats: [],
 	inlineAppPages: [],
 	inlineAppSurfaces: [],
-	pendingAppRefs: [],
-	subPlanSteps: [],
 	activeInteractions: [],
-	subAttachments: [],
-	subUsageStats: [],
-	subWidgets: [],
 	flowscriptWorkspace: null,
-	debugReport: null,
+	flowscriptWorkspaceOwnerRunId: null,
 	pendingComponents: null,
+	pendingComponentsOwnerRunId: null,
 
 	setDraft: (draft) => set({ draft }),
 	consumeDraft: () => {
@@ -466,18 +630,137 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 		set({ mode: "closed" });
 	},
 	setPendingNavigation: (pendingNavigation) => set({ pendingNavigation }),
+	// Both writers are conversation-guarded: a run that finishes after the user switched chats must
+	// not splice its reply into the transcript now on screen. It is still persisted to IndexedDB by
+	// the stream engine, so switching back shows it.
 	appendMessage: (message) =>
-		set((state) => ({ messages: [...state.messages, message] })),
+		set((state) =>
+			message.sessionId && message.sessionId !== state.activeConversationId
+				? state
+				: { messages: [...state.messages, message] },
+		),
 	commitMessage: (message) =>
 		set((state) => {
+			if (
+				message.sessionId &&
+				message.sessionId !== state.activeConversationId
+			) {
+				return state;
+			}
 			const index = state.messages.findIndex((m) => m.id === message.id);
 			if (index === -1) return { messages: [...state.messages, message] };
 			const messages = [...state.messages];
 			messages[index] = message;
 			return { messages };
 		}),
-	setStreaming: (isStreaming) => set({ isStreaming }),
-	setStreamingMessage: (streamingMessage) => set({ streamingMessage }),
+	startRun: ({ runId, conversationId, selection, label, message }) =>
+		set((state) => {
+			const existing = state.runs[runId];
+			if (existing) {
+				// Re-entrant for resumes: keep the buffers the previous attachment accumulated.
+				return deriveRunViews(
+					{ ...state.runs, [runId]: { ...existing, status: "streaming" } },
+					state.activeConversationId,
+				);
+			}
+			return deriveRunViews(
+				{
+					...state.runs,
+					[runId]: {
+						runId,
+						conversationId,
+						selection,
+						label,
+						message,
+						status: "streaming",
+						startedAt: Date.now(),
+						subPlanSteps: [],
+						subAttachments: [],
+						subUsageStats: [],
+						subWidgets: [],
+						pendingAppRefs: [],
+						debugReport: null,
+						steers: [],
+					},
+				},
+				state.activeConversationId,
+			);
+		}),
+	setRunMessage: (runId, message) =>
+		set((state) =>
+			patchRun(state, runId, (run) => foldSubBuffers({ ...run, message })),
+		),
+	setRunStatus: (runId, status) =>
+		set((state) =>
+			patchRun(state, runId, (run) =>
+				run.status === status ? run : { ...run, status },
+			),
+		),
+	setRunAbort: (runId, abort) =>
+		set((state) => patchRun(state, runId, (run) => ({ ...run, abort }))),
+	endRun: (runId) =>
+		set((state) => {
+			if (!state.runs[runId]) return state;
+			const runs = { ...state.runs };
+			delete runs[runId];
+			return {
+				...deriveRunViews(runs, state.activeConversationId),
+				// Release the single-slot panels this run owned; another run's stay untouched.
+				...(state.flowscriptWorkspaceOwnerRunId === runId
+					? { flowscriptWorkspace: null, flowscriptWorkspaceOwnerRunId: null }
+					: {}),
+			};
+		}),
+	addRunSteer: (runId, steer) =>
+		set((state) =>
+			patchRun(state, runId, (run) => ({
+				...run,
+				steers: [...run.steers, steer],
+			})),
+		),
+	setRunSteerStatus: (runId, steerId, status, error) =>
+		set((state) =>
+			patchRun(state, runId, (run) => ({
+				...run,
+				steers: run.steers.map((steer) =>
+					steer.id === steerId ? { ...steer, status, error } : steer,
+				),
+			})),
+		),
+	enqueueMessage: (entry) => {
+		const id = createId();
+		set((state) => ({
+			queue: [...state.queue, { ...entry, id, createdAt: Date.now() }],
+		}));
+		return id;
+	},
+	removeQueuedMessage: (id) =>
+		set((state) => {
+			const queue = state.queue.filter((entry) => entry.id !== id);
+			return queue.length === state.queue.length ? state : { queue };
+		}),
+	updateQueuedMessage: (id, content) =>
+		set((state) => ({
+			queue: state.queue.map((entry) =>
+				entry.id === id ? { ...entry, content } : entry,
+			),
+		})),
+	takeNextQueuedMessage: (conversationId) => {
+		const next = get().queue.find(
+			(entry) => entry.conversationId === conversationId,
+		);
+		if (!next) return undefined;
+		set((state) => ({
+			queue: state.queue.filter((entry) => entry.id !== next.id),
+		}));
+		return next;
+	},
+	clearQueue: (conversationId) =>
+		set((state) => ({
+			queue: conversationId
+				? state.queue.filter((entry) => entry.conversationId !== conversationId)
+				: [],
+		})),
 	setToolPrompt: (toolPrompt) => set({ toolPrompt }),
 	setProvider: (provider) => set({ provider }),
 	setSelectedModelId: (selectedModelId) => set({ selectedModelId }),
@@ -550,33 +833,38 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 				(surface) => surface.id !== id,
 			),
 		})),
-	addPendingAppRef: (appId) =>
+	addPendingAppRef: (runId, appId) =>
 		set((state) =>
-			state.pendingAppRefs.includes(appId)
-				? state
-				: { pendingAppRefs: [...state.pendingAppRefs, appId] },
+			patchRun(state, runId, (run) =>
+				run.pendingAppRefs.includes(appId)
+					? run
+					: foldSubBuffers({
+							...run,
+							pendingAppRefs: [...run.pendingAppRefs, appId],
+						}),
+			),
 		),
-	clearPendingAppRefs: () => set({ pendingAppRefs: [] }),
-	setSubPlanSteps: (subPlanSteps) =>
-		set((state) => {
-			const message = state.streamingMessage;
-			if (!message) return { subPlanSteps };
-			// Refresh the streaming bubble immediately — the main channel is silent while the
-			// sub-agent runs, so without this the sub-steps would only render on the next token.
-			const ownSteps = (message.plan_steps ?? []).filter(
-				(step) => !step.id.startsWith(SUB_STEP_PREFIX),
-			);
-			return {
-				subPlanSteps,
-				streamingMessage: {
-					...message,
-					plan_steps: [...ownSteps, ...subPlanSteps],
-				},
-			};
-		}),
-	clearSubPlanSteps: () =>
+	setSubPlanSteps: (runId, subPlanSteps) =>
 		set((state) =>
-			state.subPlanSteps.length > 0 ? { subPlanSteps: [] } : state,
+			patchRun(state, runId, (run) => {
+				// Anchor each sub-step where the parent's text stood when it first appeared, so it
+				// renders inline next to the tool call it belongs to. Re-publishes rebuild the step
+				// objects from scratch — keep the first-seen anchor or the steps would drift.
+				const priorAnchors = new Map(
+					run.subPlanSteps.map((step) => [step.id, step.content_offset]),
+				);
+				const content = run.message?.inner.content;
+				const anchor = typeof content === "string" ? content.length : 0;
+				const anchored = subPlanSteps.map((step) =>
+					step.content_offset !== undefined
+						? step
+						: {
+								...step,
+								content_offset: priorAnchors.get(step.id) ?? anchor,
+							},
+				);
+				return foldSubBuffers({ ...run, subPlanSteps: anchored });
+			}),
 		),
 	addInteractions: (interactions) =>
 		set((state) => {
@@ -617,178 +905,162 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 		set((state) =>
 			state.activeInteractions.length > 0 ? { activeInteractions: [] } : state,
 		),
-	addSubAttachments: (attachments) =>
-		set((state) => {
-			if (attachments.length === 0) return state;
-			const urlOf = (attachment: IAttachment) =>
-				typeof attachment === "string" ? attachment : attachment.url;
-			const seen = new Set(state.subAttachments.map(urlOf));
-			const fresh = attachments.filter((attachment) => {
-				const url = urlOf(attachment);
-				if (seen.has(url)) return false;
-				seen.add(url);
-				return true;
-			});
-			if (fresh.length === 0) return state;
-			const subAttachments = [...state.subAttachments, ...fresh];
-			const message = state.streamingMessage;
-			if (!message) return { subAttachments };
-			return {
-				subAttachments,
-				streamingMessage: { ...message, files: subAttachments },
-			};
-		}),
-	clearSubAttachments: () =>
+	addSubAttachments: (runId, attachments) =>
 		set((state) =>
-			state.subAttachments.length > 0 ? { subAttachments: [] } : state,
+			patchRun(state, runId, (run) => {
+				if (attachments.length === 0) return run;
+				const urlOf = (attachment: IAttachment) =>
+					typeof attachment === "string" ? attachment : attachment.url;
+				const seen = new Set(run.subAttachments.map(urlOf));
+				const fresh = attachments.filter((attachment) => {
+					const url = urlOf(attachment);
+					if (seen.has(url)) return false;
+					seen.add(url);
+					return true;
+				});
+				if (fresh.length === 0) return run;
+				return foldSubBuffers({
+					...run,
+					subAttachments: [...run.subAttachments, ...fresh],
+				});
+			}),
 		),
-	addSubUsageStats: (stats) =>
+	addSubUsageStats: (runId, stats) =>
+		set((state) =>
+			patchRun(state, runId, (run) => {
+				if (stats.length === 0) return run;
+				const seen = new Set(run.subUsageStats.map(usageSignature));
+				const fresh = stats.filter((stat) => {
+					const signature = usageSignature(stat);
+					if (seen.has(signature)) return false;
+					seen.add(signature);
+					return true;
+				});
+				if (fresh.length === 0) return run;
+				return foldSubBuffers({
+					...run,
+					subUsageStats: [...run.subUsageStats, ...fresh],
+				});
+			}),
+		),
+	addSubWidgets: (runId, widgets) =>
+		set((state) =>
+			patchRun(state, runId, (run) =>
+				widgets.length === 0
+					? run
+					: foldSubBuffers({
+							...run,
+							subWidgets: mergeChatWidgets(run.subWidgets, widgets),
+						}),
+			),
+		),
+	setFlowscriptWorkspace: (runId, flowscriptWorkspace) =>
 		set((state) => {
-			if (stats.length === 0) return state;
-			const seen = new Set(state.subUsageStats.map((s) => JSON.stringify(s)));
-			const fresh = stats.filter((stat) => {
-				const signature = JSON.stringify(stat);
-				if (seen.has(signature)) return false;
-				seen.add(signature);
-				return true;
-			});
-			if (fresh.length === 0) return state;
-			const subUsageStats = [...state.subUsageStats, ...fresh];
-			const message = state.streamingMessage;
-			if (!message) return { subUsageStats };
-			// Merge into the message's current stats (which already carry the agent's own),
-			// deduped, so nested stats render live while the main channel is quiet.
-			const existing = message.usage_stats ?? [];
-			const known = new Set(existing.map((s) => JSON.stringify(s)));
-			const merged = [...existing];
-			for (const stat of fresh) {
-				const signature = JSON.stringify(stat);
-				if (!known.has(signature)) {
-					known.add(signature);
-					merged.push(stat);
-				}
+			// A run may only clear the workspace it owns — otherwise a finishing board sub-agent
+			// would wipe a concurrent run's freshly generated code out of the shared panel.
+			if (
+				!flowscriptWorkspace &&
+				runId &&
+				state.flowscriptWorkspaceOwnerRunId &&
+				state.flowscriptWorkspaceOwnerRunId !== runId
+			) {
+				return state;
 			}
 			return {
-				subUsageStats,
-				streamingMessage: { ...message, usage_stats: merged },
+				flowscriptWorkspace,
+				flowscriptWorkspaceOwnerRunId: flowscriptWorkspace ? runId : null,
 			};
 		}),
-	clearSubUsageStats: () =>
-		set((state) =>
-			state.subUsageStats.length > 0 ? { subUsageStats: [] } : state,
-		),
-	addSubWidgets: (widgets) =>
-		set((state) => {
-			if (widgets.length === 0) return state;
-			const subWidgets = mergeChatWidgets(state.subWidgets, widgets);
-			const message = state.streamingMessage;
-			if (!message) return { subWidgets };
-			// Refresh the streaming bubble so widgets render as soon as the nested
-			// run pushes them, not on the next token of the quiet main channel.
-			return {
-				subWidgets,
-				streamingMessage: { ...message, widgets: subWidgets },
-			};
-		}),
-	clearSubWidgets: () =>
-		set((state) => (state.subWidgets.length > 0 ? { subWidgets: [] } : state)),
-	setFlowscriptWorkspace: (flowscriptWorkspace) => set({ flowscriptWorkspace }),
+	// The debug report is addressed by message id, which IS the run id — so these route straight
+	// into the owning run's record and never touch a sibling run's report.
 	beginDebugReport: (messageId, metadata) => {
 		beginAgentGenerationMetrics(messageId, metadata?.startedAtMs);
 		if (!FLOWPILOT_DEBUG_ENABLED) return;
-		set((state) => {
-			if (state.debugReport?.message_id === messageId) return state;
-			return { debugReport: createAgentDebugReport(messageId, metadata) };
-		});
+		set((state) =>
+			patchRun(state, messageId, (run) =>
+				run.debugReport
+					? run
+					: foldSubBuffers({
+							...run,
+							debugReport: createAgentDebugReport(messageId, metadata),
+						}),
+			),
+		);
 	},
 	recordDebugEvent: (messageId, event) => {
 		recordAgentGenerationMetricEvent(messageId, event);
 		if (!FLOWPILOT_DEBUG_ENABLED) return;
-		set((state) => {
-			if (state.debugReport?.message_id !== messageId) return state;
-			const debugReport = recordAgentDebugEvent(state.debugReport, event);
-			const message = state.streamingMessage;
-			return {
-				debugReport,
-				...(message?.id === messageId
-					? { streamingMessage: { ...message, debug_report: debugReport } }
-					: {}),
-			};
-		});
+		set((state) =>
+			patchRun(state, messageId, (run) =>
+				run.debugReport
+					? foldSubBuffers({
+							...run,
+							debugReport: recordAgentDebugEvent(run.debugReport, event),
+						})
+					: run,
+			),
+		);
 	},
 	finalizeDebugReport: (messageId, options) => {
 		finalizeAgentGenerationMetrics(messageId, options.outcome, {
 			publish: !FLOWPILOT_DEBUG_ENABLED,
 		});
 		if (!FLOWPILOT_DEBUG_ENABLED) return null;
-		const report = get().debugReport;
-		if (report?.message_id !== messageId) return null;
+		const report = get().runs[messageId]?.debugReport;
+		if (!report) return null;
 		const finalized = finalizeAgentDebugReport(report, options);
-		set((state) => ({
-			debugReport: finalized,
-			...(state.streamingMessage?.id === messageId
-				? {
-						streamingMessage: {
-							...state.streamingMessage,
-							debug_report: finalized,
-						},
-					}
-				: {}),
-		}));
+		set((state) =>
+			patchRun(state, messageId, (run) =>
+				foldSubBuffers({ ...run, debugReport: finalized }),
+			),
+		);
 		return finalized;
 	},
 	clearDebugReport: (messageId) => {
 		if (messageId) clearAgentGenerationMetrics(messageId);
+		if (!messageId) return;
 		set((state) =>
-			!state.debugReport ||
-			(messageId && state.debugReport.message_id !== messageId)
-				? state
-				: { debugReport: null },
+			patchRun(state, messageId, (run) =>
+				run.debugReport ? { ...run, debugReport: null } : run,
+			),
 		);
 	},
-	setPendingComponents: (pendingComponents) => set({ pendingComponents }),
+	setPendingComponents: (runId, pendingComponents) =>
+		set((state) => {
+			if (
+				!pendingComponents &&
+				runId &&
+				state.pendingComponentsOwnerRunId &&
+				state.pendingComponentsOwnerRunId !== runId
+			) {
+				return state;
+			}
+			return {
+				pendingComponents,
+				pendingComponentsOwnerRunId: pendingComponents ? runId : null,
+			};
+		}),
 	// Start a fresh conversation WITHOUT touching `mode`: clicking "New chat" (or deleting the
-	// active chat) from the docked overlay must keep the dock open, not close it.
-	newConversation: () =>
-		set({
-			activeConversationId: createId(),
-			messages: [],
-			isStreaming: false,
-			activeTurnSelection: null,
-			streamingMessage: null,
-			inlineAppChats: [],
-			inlineAppPages: [],
-			inlineAppSurfaces: [],
-			pendingAppRefs: [],
-			subPlanSteps: [],
-			activeInteractions: [],
-			subAttachments: [],
-			subUsageStats: [],
-			subWidgets: [],
-			flowscriptWorkspace: null,
-			debugReport: null,
-			pendingComponents: null,
-		}),
+	// active chat) from the docked overlay must keep the dock open, not close it. Runs of OTHER
+	// conversations are deliberately preserved — switching chats no longer kills what is in flight.
+	newConversation: () => {
+		// Drop the reload-restore pointer, or the next surface mount silently swaps the fresh
+		// conversation back to the previous one.
+		try {
+			sessionStorage.removeItem(LAST_CONVERSATION_KEY);
+		} catch {
+			// storage unavailable — restore is best-effort anyway
+		}
+		set((state) => switchConversation(state, createId(), []));
+	},
 	loadConversation: (conversationId, messages) =>
-		set({
-			activeConversationId: conversationId,
-			messages: messages.map(markRestoredMessageDebugReportStale),
-			isStreaming: false,
-			activeTurnSelection: null,
-			streamingMessage: null,
-			inlineAppChats: [],
-			inlineAppPages: [],
-			inlineAppSurfaces: [],
-			pendingAppRefs: [],
-			subPlanSteps: [],
-			activeInteractions: [],
-			subAttachments: [],
-			subUsageStats: [],
-			subWidgets: [],
-			flowscriptWorkspace: null,
-			debugReport: null,
-			pendingComponents: null,
-		}),
+		set((state) =>
+			switchConversation(
+				state,
+				conversationId,
+				messages.map(markRestoredMessageDebugReportStale),
+			),
+		),
 }));
 
 function freezeTurnSelection(
@@ -804,23 +1076,19 @@ function freezeTurnSelection(
 }
 
 /**
- * Capture the active turn's execution selection. Re-entering with the same run id is idempotent:
- * callers cannot replace the model underneath an already-running parent or nested specialist.
+ * Pin one run's execution selection. Idempotent per run id: once the run record exists, its stored
+ * selection wins, so nested specialists of that run can never be moved to another model — while a
+ * *different* concurrent run is free to pin its own. Before the run exists this just freezes a
+ * snapshot for the caller to hand to `startRun`.
  */
 export function beginGlobalChatTurnSelection(
 	runId: string,
 	selection?: GlobalChatAgentSelection,
 ): GlobalChatTurnSelection {
 	const state = useGlobalChatStore.getState();
-	if (state.activeTurnSelection?.runId === runId) {
-		return state.activeTurnSelection;
-	}
-	if (state.activeTurnSelection) {
-		throw new Error(
-			`Cannot start global chat run '${runId}' while run '${state.activeTurnSelection.runId}' still owns the model selection.`,
-		);
-	}
-	const snapshot = freezeTurnSelection(
+	const pinned = state.runs[runId]?.selection;
+	if (pinned) return pinned;
+	return freezeTurnSelection(
 		runId,
 		selection ?? {
 			provider: state.provider,
@@ -828,15 +1096,20 @@ export function beginGlobalChatTurnSelection(
 			reasoningEffort: state.reasoningEffort,
 		},
 	);
-	useGlobalChatStore.setState({ activeTurnSelection: snapshot });
-	return snapshot;
 }
 
-/** Return the immutable turn snapshot, falling back to the picker only outside an active turn. */
-export function getGlobalChatTurnSelection(): GlobalChatAgentSelection {
+/**
+ * The immutable selection of a specific run. Falls back to the live picker only when the caller has
+ * no run in hand — with concurrent runs, callers that omit `runId` are accepting whatever the user
+ * currently has selected, not "the" active turn.
+ */
+export function getGlobalChatTurnSelection(
+	runId?: string,
+): GlobalChatAgentSelection {
 	const state = useGlobalChatStore.getState();
+	const pinned = runId ? state.runs[runId]?.selection : undefined;
 	return (
-		state.activeTurnSelection ??
+		pinned ??
 		Object.freeze({
 			provider: state.provider,
 			selectedModelId: state.selectedModelId,
@@ -845,11 +1118,33 @@ export function getGlobalChatTurnSelection(): GlobalChatAgentSelection {
 	);
 }
 
-/** Release only the snapshot owned by this run, protecting a newer turn from stale finalizers. */
-export function endGlobalChatTurnSelection(runId: string) {
-	useGlobalChatStore.setState((state) =>
-		state.activeTurnSelection?.runId === runId
-			? { activeTurnSelection: null }
-			: state,
+/** Live runs of a conversation (defaults to the active one), oldest first. */
+export function selectGlobalChatRuns(
+	state: GlobalChatState,
+	conversationId?: string,
+): GlobalChatRun[] {
+	const target = conversationId ?? state.activeConversationId;
+	return Object.values(state.runs)
+		.filter((run) => run.conversationId === target)
+		.sort((a, b) => a.startedAt - b.startedAt);
+}
+
+/** Queued messages of a conversation (defaults to the active one), in send order. */
+export function selectGlobalChatQueue(
+	state: GlobalChatState,
+	conversationId?: string,
+): GlobalChatQueuedMessage[] {
+	const target = conversationId ?? state.activeConversationId;
+	return state.queue.filter((entry) => entry.conversationId === target);
+}
+
+/** True when the conversation is at its concurrency cap and further sends must queue. */
+export function isGlobalChatAtRunCapacity(
+	state: GlobalChatState,
+	conversationId?: string,
+): boolean {
+	return (
+		selectGlobalChatRuns(state, conversationId).length >=
+		MAX_CONCURRENT_GLOBAL_CHAT_RUNS
 	);
 }

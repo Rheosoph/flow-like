@@ -214,6 +214,16 @@ fn reconcile_inner(
                         value: new_value,
                         summary: Some(format!("Set {} on {}", arg.name, node.friendly_name)),
                     });
+                } else if is_widget_dynamic_binding_arg(&arg.name) {
+                    // These pins are minted by the node's `on_update` from the PERSISTED widget, so
+                    // a missing one almost always means the widget itself is not there yet (wrong
+                    // selector, or a page/widget build that has not landed). Saying only "no pin
+                    // named X; skipped" reads like a typo and silently drops the data binding.
+                    result.diagnostics.push(format!(
+                        "node {anchor} has no input pin named {:?} (occurrence {}); skipped. This is a widget data binding, and those pins only exist once the widget is persisted — check that the widget selector names an existing widget and that its page/widget build has completed, then re-check.",
+                        arg.name,
+                        occurrence + 1
+                    ));
                 } else {
                     result.diagnostics.push(format!(
                         "node {anchor} has no input pin named {:?} (occurrence {}); skipped",
@@ -2292,6 +2302,17 @@ pub(crate) fn synthesize_dynamic_input_pin_from_template(
         .iter()
         .any(|token| token == requested_pin || to_camel_case(token) == requested_pin)
         .then(|| generic_input_pin_metadata(requested_pin))
+}
+
+/// Whether an arg name refers to a widget's dynamic data-binding pin (`dyn_path_*` / `dyn_prop_*` /
+/// `dyn_cust_*`, in either snake_case or the camelCase form the UI surfaces use). These pins exist
+/// only after the widget is persisted, so a miss here has a specific, fixable cause worth naming.
+fn is_widget_dynamic_binding_arg(name: &str) -> bool {
+    const KINDS: [&str; 3] = ["path", "prop", "cust"];
+    KINDS.iter().any(|kind| {
+        name.starts_with(&format!("dyn_{kind}_"))
+            || name.starts_with(&to_camel_case(&format!("dyn_{kind}_")))
+    })
 }
 
 /// Whether `arg` targets a dynamic input pin the node's `on_update` will mint (one not yet live on

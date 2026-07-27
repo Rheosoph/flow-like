@@ -324,9 +324,12 @@ function summarizeWidget(widget: IWidget) {
 				property_path: prop.propertyPath,
 			})),
 		],
+		// Actions are persisted with `id` — that is also the string an events_widget_action node
+		// matches on. Reading `name` here returned an empty list for every widget, leaving the
+		// board specialist with no way to discover action ids except the instruction text.
 		actions: (widget.actions ?? [])
-			.map((action) => (action as { name?: string }).name)
-			.filter((name): name is string => typeof name === "string"),
+			.map((action) => (action as { id?: string }).id)
+			.filter((id): id is string => typeof id === "string" && id.length > 0),
 	};
 }
 

@@ -10,9 +10,13 @@ export type FlowPilotE2ECaseId =
 	| "mail-approval"
 	| "doc-compliance"
 	| "webhook-enrichment"
-	| "agent-tools";
+	| "agent-tools"
+	| "ai-adventure";
 
 export type FlowPilotE2EReasoningEffort = "low" | "medium" | "high";
+
+/** Stable benchmark alias for a pinned generation model. */
+export type FlowPilotE2EModelKey = "terra" | "sol";
 
 export interface FlowPilotE2EModelConfig {
 	provider: "codex";
@@ -80,6 +84,11 @@ export interface FlowPilotE2ECaseDefinition {
 	appName: string;
 	prompt: string;
 	smoke: boolean;
+	/**
+	 * Wall clock the runner allows one turn of this case before abandoning it. Omission keeps the
+	 * default; only raise it for cases whose scope genuinely needs more than one board build.
+	 */
+	runTimeoutMs?: number;
 	requirements: FlowPilotE2ECaseRequirements;
 }
 
@@ -270,6 +279,8 @@ export interface FlowPilotE2ERunOptions {
 	/** Ordered case selection used by the CLI. */
 	caseIds?: readonly FlowPilotE2ECaseId[];
 	suite?: "smoke" | "full";
+	/** Benchmark model alias; omission keeps the default pinned model. */
+	modelKey?: FlowPilotE2EModelKey;
 	minFlowScriptNonWhitespaceChars?: number;
 	repeat?: number;
 	failFast?: boolean;
@@ -293,6 +304,7 @@ export interface FlowPilotE2EArtifact {
 	schema: "flowpilot.app-creation-e2e-artifact/v1";
 	generatedAt: string;
 	durationMs: number;
+	requestedModelKey: FlowPilotE2EModelKey;
 	requestedModel: FlowPilotE2EModelConfig;
 	observedModel?: {
 		provider: string;
@@ -323,6 +335,7 @@ export interface FlowPilotE2ECliEnvelope {
 	durationMs: number;
 	selection: {
 		caseIds: readonly FlowPilotE2ECaseId[];
+		modelKey: FlowPilotE2EModelKey;
 		repeat: number;
 		minFlowScriptNonWhitespaceChars?: number;
 		failFast: boolean;

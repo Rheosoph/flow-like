@@ -160,6 +160,7 @@ export function applyStreamEvent(
 				description: step.description ?? existing?.description,
 				reasoning: step.reasoning ?? existing?.reasoning,
 				timestamp: existing?.timestamp ?? Date.now(),
+				content_offset: existing?.content_offset ?? acc.content.length,
 			});
 			acc.currentStepId =
 				step.status === "progress" || step.status === "planned"
@@ -170,12 +171,14 @@ export function applyStreamEvent(
 		case "tool_start": {
 			const id = toolFieldId(event.data, `tool-${acc.stepOrder.length}`);
 			const name = toolFieldName(event.data);
+			const existing = acc.steps.get(id);
 			upsertStep({
 				id,
 				title: `Using ${name}`,
 				description: toolFieldSummary(event.data),
 				status: "progress",
-				timestamp: acc.steps.get(id)?.timestamp ?? Date.now(),
+				timestamp: existing?.timestamp ?? Date.now(),
+				content_offset: existing?.content_offset ?? acc.content.length,
 			});
 			acc.currentStepId = id;
 			break;
@@ -197,6 +200,7 @@ export function applyStreamEvent(
 				description: message,
 				status: "progress",
 				timestamp: Date.now(),
+				content_offset: acc.content.length,
 			});
 			acc.currentStepId = id;
 			break;

@@ -52,12 +52,13 @@ pub async fn validate_event(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteEvents);
     let sub = permission.sub()?;
 
-    let version_opt = match query.version.as_deref() {
-        Some(ver_str) => Some(super::parse_version_tuple(ver_str).ok_or_else(|| {
-            ApiError::bad_request("version must be in MAJOR_MINOR_PATCH format")
-        })?),
-        None => None,
-    };
+    let version_opt =
+        match query.version.as_deref() {
+            Some(ver_str) => Some(super::parse_version_tuple(ver_str).ok_or_else(|| {
+                ApiError::bad_request("version must be in MAJOR_MINOR_PATCH format")
+            })?),
+            None => None,
+        };
 
     let app = state
         .scoped_app(

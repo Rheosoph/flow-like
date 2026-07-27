@@ -722,6 +722,39 @@ impl State {
         Ok(board)
     }
 
+    /// Load a template on master credentials, for callers that were authorized
+    /// by something other than app membership — e.g. the public template
+    /// preview, which is gated on the owning app's visibility.
+    #[tracing::instrument(
+        name = "master_template",
+        skip(self, state),
+        level = "debug",
+        fields(app_id, template_id, version)
+    )]
+    pub async fn master_template(
+        &self,
+        app_id: &str,
+        template_id: &str,
+        state: &AppState,
+        version: Option<(u32, u32, u32)>,
+    ) -> flow_like_types::Result<Board> {
+        let credentials = self.master_credentials().await?;
+
+        let app_state = match self.state_cache.get("master") {
+            Some(state) => state,
+            None => {
+                let state = Arc::new(credentials.to_state(state.clone()).await?);
+                self.state_cache.insert("master".to_string(), state.clone());
+                state
+            }
+        };
+
+        let storage_root = Path::from("apps").child(app_id.to_string());
+        let board = Board::load_template(storage_root, template_id, app_state, version).await?;
+
+        Ok(board)
+    }
+
     pub async fn scoped_template(
         &self,
         sub: &str,

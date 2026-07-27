@@ -95,6 +95,7 @@ pub async fn upsert_app(
             bucket_app.changelog = app_updates.changelog.clone();
             bucket_app.primary_category = app_updates.primary_category.clone();
             bucket_app.secondary_category = app_updates.secondary_category.clone();
+            bucket_app.app_type = app_updates.app_type.clone();
             bucket_app.price = app_updates.price;
             bucket_app.updated_at = SystemTime::now();
             bucket_app.status = app_updates.status.clone();
@@ -109,6 +110,7 @@ pub async fn upsert_app(
 
         app.primary_category = sea_orm::ActiveValue::Set(app_updates.primary_category);
         app.secondary_category = sea_orm::ActiveValue::Set(app_updates.secondary_category);
+        app.app_type = sea_orm::ActiveValue::Set(app_updates.app_type);
         app.price = sea_orm::ActiveValue::Set(app_updates.price);
         app.version = sea_orm::ActiveValue::Set(app_updates.version);
         app.execution_mode = sea_orm::ActiveValue::Set(app_updates.execution_mode);

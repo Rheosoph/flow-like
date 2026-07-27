@@ -57,12 +57,13 @@ pub async fn get_event(
     let sub = permission.sub()?;
     let has_read = permission.has_permission(RolePermissions::ReadEvents);
 
-    let version_opt = match query.version.as_deref() {
-        Some(ver_str) => Some(super::parse_version_tuple(ver_str).ok_or_else(|| {
-            ApiError::bad_request("version must be in MAJOR_MINOR_PATCH format")
-        })?),
-        None => None,
-    };
+    let version_opt =
+        match query.version.as_deref() {
+            Some(ver_str) => Some(super::parse_version_tuple(ver_str).ok_or_else(|| {
+                ApiError::bad_request("version must be in MAJOR_MINOR_PATCH format")
+            })?),
+            None => None,
+        };
 
     // For current version, use database lookup
     // For historical versions, fall back to bucket

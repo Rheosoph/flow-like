@@ -1668,7 +1668,9 @@ ${"// safe filler\n".repeat(900)}`;
 		});
 		clearSink();
 
-		expect(useGlobalChatStore.getState().debugReport).toBeNull();
+		expect(
+			useGlobalChatStore.getState().runs["store-production-run"]?.debugReport,
+		).toBeUndefined();
 		expect(sink).toHaveBeenCalledTimes(1);
 		expect(sink.mock.calls[0]?.[0]).toMatchObject({
 			queued_reviews: 1,

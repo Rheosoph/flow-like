@@ -17,6 +17,7 @@ import {
 	globalChatDb,
 } from "../../state/global-chat/global-chat-db";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
+import { restoreGlobalChatConversation } from "../../state/global-chat/global-chat-stream";
 
 function relativeTime(timestamp: number): string {
 	const delta = Date.now() - timestamp;
@@ -36,11 +37,12 @@ function relativeTime(timestamp: number): string {
  */
 export function GlobalChatHistory() {
 	const [open, setOpen] = useState(false);
-	const isStreaming = useGlobalChatStore((s) => s.isStreaming);
+	// Switching chats no longer blocks on a live turn: runs are keyed by run id and keep streaming
+	// (and finalizing into IndexedDB) in whatever conversation they belong to, reappearing in place
+	// when the user comes back.
 	const activeConversationId = useGlobalChatStore(
 		(s) => s.activeConversationId,
 	);
-	const loadConversation = useGlobalChatStore((s) => s.loadConversation);
 	const newConversation = useGlobalChatStore((s) => s.newConversation);
 
 	const sessions = useLiveQuery(
@@ -49,17 +51,12 @@ export function GlobalChatHistory() {
 		[],
 	);
 
-	const handleResume = useCallback(
-		async (sessionId: string) => {
-			const messages = await globalChatDb.messages
-				.where("sessionId")
-				.equals(sessionId)
-				.sortBy("timestamp");
-			loadConversation(sessionId, messages);
-			setOpen(false);
-		},
-		[loadConversation],
-	);
+	// Shared restore path: settles stale mid-stream checkpoints (no eternal spinners) and
+	// re-attaches runs of this conversation that are still streaming in Rust.
+	const handleResume = useCallback(async (sessionId: string) => {
+		await restoreGlobalChatConversation(sessionId);
+		setOpen(false);
+	}, []);
 
 	const handleDelete = useCallback(
 		async (sessionId: string) => {
@@ -81,7 +78,6 @@ export function GlobalChatHistory() {
 						size="icon"
 						className="h-9 w-9 md:h-8 md:w-8 rounded-lg"
 						aria-label="New chat"
-						disabled={isStreaming}
 						onClick={newConversation}
 					>
 						<SquarePenIcon className="size-4" />
@@ -133,7 +129,6 @@ export function GlobalChatHistory() {
 										<button
 											type="button"
 											className="flex-1 min-w-0 px-2 py-2 text-left"
-											disabled={isStreaming}
 											onClick={() => void handleResume(session.id)}
 										>
 											<span className="block text-sm truncate">

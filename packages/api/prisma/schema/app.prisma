@@ -22,6 +22,17 @@ enum Category {
   ANIME
 }
 
+/// What kind of thing the app is, structurally. Orthogonal to Category, which
+/// describes the topic. Null means the owner has not classified it yet.
+enum AppType {
+  AGENT
+  CUSTOM_INTERFACE
+  DATA_FOCUS
+  DATA_PIPELINE
+  ANALYTICS
+  FORM
+}
+
 enum Status {
   ACTIVE
   INACTIVE
@@ -75,6 +86,7 @@ model App {
 
   primaryCategory   Category?
   secondaryCategory Category?
+  appType           AppType?
 
   ratingSum         BigInt @default(0)
   ratingCount       BigInt @default(0)
@@ -276,6 +288,8 @@ model Template {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([appId])
 }
 
 model Widget {

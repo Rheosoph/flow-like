@@ -263,6 +263,36 @@ describe("FlowPilot app-creation artifact validation", () => {
 		expect(report.failures.map(({ code }) => code)).toContain("app.name");
 	});
 
+	test("evaluates a run against the benchmark model it requested", () => {
+		const artifacts = snapshot();
+		const sol = {
+			provider: "codex",
+			model: "gpt-5.6-sol",
+			reasoningEffort: "high",
+		} as const;
+
+		const wrongModel = evaluateAppCreationCase(
+			caseDefinition(),
+			artifacts,
+			sol,
+		);
+		expect(wrongModel.failures.map(({ code }) => code)).toContain("model.id");
+		expect(wrongModel.failures.map(({ code }) => code)).toContain(
+			"flowscript.compiler_receipt.nested_model",
+		);
+
+		const solRun = snapshot();
+		solRun.model = { ...sol };
+		const run = solRun.flowScriptGenerationRuns?.[0];
+		if (!run) throw new Error("expected fixture compiler run");
+		solRun.flowScriptGenerationRuns = [
+			{ ...run, modelId: "codex:gpt-5.6-sol" },
+		];
+		expect(evaluateAppCreationCase(caseDefinition(), solRun, sol).passed).toBe(
+			true,
+		);
+	});
+
 	test("requires a successful exact-revision compiler receipt", () => {
 		const missing = snapshot();
 		missing.flowScriptGenerationRuns = [];
@@ -336,6 +366,21 @@ describe("FlowPilot app-creation artifact validation", () => {
 		expect(codes).toContain("flowscript.authored.status");
 		expect(codes).toContain("flowscript.authored.completion");
 		expect(codes).toContain("flowscript.authored.lint_errors");
+	});
+
+	test("reports an authored source truncated by the stream capture cap", () => {
+		const artifacts = snapshot();
+		artifacts.authoredFlowScript = `${source}${"x".repeat(16_384 - source.length)}...`;
+		const report = evaluateAppCreationCase(caseDefinition(), artifacts);
+
+		expect(report.failures.map(({ code }) => code)).toContain(
+			"flowscript.authored.capture_complete",
+		);
+		expect(
+			evaluateAppCreationCase(caseDefinition(), snapshot()).failures.map(
+				({ code }) => code,
+			),
+		).not.toContain("flowscript.authored.capture_complete");
 	});
 
 	test("rejects Markdown wrappers and prose padding in authored FlowScript", () => {

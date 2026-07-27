@@ -17,11 +17,11 @@ import {
 	type FlowScriptGenerationRunReceipt,
 	flowScriptGenerationRunsForConversation,
 } from "@flow-like/flow-like-ui/lib/flowpilot/flowscript-generation-receipt";
-import { useGlobalChatStore } from "@flow-like/flow-like-ui/state/global-chat/global-chat-store";
 import {
 	LAST_CONVERSATION_KEY,
-	readActiveRun,
-} from "@flow-like/flow-like-ui/state/global-chat/global-chat-stream";
+	useGlobalChatStore,
+} from "@flow-like/flow-like-ui/state/global-chat/global-chat-store";
+import { readActiveRun } from "@flow-like/flow-like-ui/state/global-chat/global-chat-stream";
 import {
 	AlertTriangle,
 	CheckCircle2,
@@ -44,7 +44,8 @@ import { toast } from "sonner";
 import {
 	FLOWPILOT_APP_CREATION_CASES,
 	FLOWPILOT_APP_CREATION_SMOKE_CASES,
-	FLOWPILOT_E2E_DEFAULT_MODEL,
+	FLOWPILOT_E2E_DEFAULT_MODEL_KEY,
+	FLOWPILOT_E2E_MODEL_KEYS,
 	type FlowPilotAppCreationSnapshot,
 	type FlowPilotE2EArtifact,
 	type FlowPilotE2EAssistantTrace,
@@ -53,6 +54,7 @@ import {
 	type FlowPilotE2ECheck,
 	type FlowPilotE2ECliEnvelope,
 	type FlowPilotE2EModelConfig,
+	type FlowPilotE2EModelKey,
 	type FlowPilotE2ERunOptions,
 	type FlowPilotE2ERunReport,
 	type FlowPilotE2ERunnerIssue,
@@ -61,13 +63,13 @@ import {
 	buildCasePrompt,
 	evaluateAppCreationCase,
 	flowPilotE2EArtifactPassed,
+	flowPilotE2ECaseRunTimeoutMs,
+	flowPilotE2EModel,
+	resolveFlowPilotE2EModelKey,
 	resolveFlowPilotE2ERunCases,
 } from "../../../lib/flowpilot-e2e";
 
 const START_TIMEOUT_MS = 60_000;
-// Generous per-case ceiling: slow runs must COMPLETE so their receipts show where the time went
-// (plan-step timestamps + generation-run windows); a timeout destroys exactly that evidence.
-const RUN_TIMEOUT_MS = 35 * 60_000;
 // After a case timeout the shared chat is still streaming; give cancellation this long to land
 // before abandoning the remaining cases.
 const CANCEL_TIMEOUT_MS = 30_000;
@@ -256,6 +258,29 @@ function runSuffix(caseId: FlowPilotE2ECaseId): string {
 		.replace(/\.\d{3}Z$/, "Z");
 	const nonce = Math.random().toString(36).slice(2, 6);
 	return `[E2E ${stamp} ${caseId} ${nonce}]`;
+}
+
+/**
+ * A turn that never starts is the harness's most expensive failure: the bare timeout says nothing
+ * about which readiness gate held the draft, and re-diagnosing costs a full desktop rebuild. The
+ * decisive bit is whether the draft was ever consumed — if it is still pending, the chat's
+ * auto-send gate blocked it; if it was consumed, sending itself failed.
+ */
+function startFailureDiagnostics(availableModels: number): string {
+	const state = useGlobalChatStore.getState();
+	return [
+		`draftPending=${Boolean(state.draft)}`,
+		`isStreaming=${state.isStreaming}`,
+		`runs=${Object.keys(state.runs).length}`,
+		`queued=${state.queue.length}`,
+		`messages=${state.messages.length}`,
+		`provider=${state.provider}`,
+		`model=${state.selectedModelId || "none"}`,
+		`reasoning=${state.reasoningEffort || "none"}`,
+		`autoMode=${state.autoMode}`,
+		`toolPrompt=${Boolean(state.toolPrompt)}`,
+		`sdkModels=${availableModels}`,
+	].join(" ");
 }
 
 function answerForUnexpectedAsk(
@@ -634,6 +659,9 @@ export default function FlowPilotE2EPage() {
 	const [selected, setSelected] = useState<Set<FlowPilotE2ECaseId>>(
 		() => new Set(FLOWPILOT_APP_CREATION_SMOKE_CASES.map((item) => item.id)),
 	);
+	const [modelKey, setModelKey] = useState<FlowPilotE2EModelKey>(
+		FLOWPILOT_E2E_DEFAULT_MODEL_KEY,
+	);
 	const [minimumOverride, setMinimumOverride] = useState("");
 	const [runs, setRuns] = useState<
 		Partial<Record<FlowPilotE2ECaseId, CaseRunState>>
@@ -661,40 +689,43 @@ export default function FlowPilotE2EPage() {
 		[],
 	);
 
-	const ensureModel = useCallback(async () => {
-		await codex.start({ backend: "codex", useStdio: true });
-		const { invoke } = await import("@tauri-apps/api/core");
-		const models = await invoke<CopilotModel[]>(
-			"flowpilot_agent_backend_list_models",
-			{ backend: "codex" },
-		);
-		const terra = models.find(
-			(model) => model.id === FLOWPILOT_E2E_DEFAULT_MODEL.model,
-		);
-		if (!terra) {
-			throw new Error(
-				`Codex model ${FLOWPILOT_E2E_DEFAULT_MODEL.model} is unavailable. Available: ${
-					models.map((model) => model.id).join(", ") || "none"
-				}.`,
+	const ensureModel = useCallback(
+		async (pinned: FlowPilotE2EModelConfig) => {
+			await codex.start({ backend: "codex", useStdio: true });
+			const { invoke } = await import("@tauri-apps/api/core");
+			const models = await invoke<CopilotModel[]>(
+				"flowpilot_agent_backend_list_models",
+				{ backend: "codex" },
 			);
-		}
-		if (
-			terra.supportedReasoningEfforts &&
-			!terra.supportedReasoningEfforts.some(
-				(option) => option.id === FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort,
-			)
-		) {
-			throw new Error(
-				`${terra.id} does not advertise ${FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort} reasoning.`,
-			);
-		}
-	}, [codex]);
+			const requested = models.find((model) => model.id === pinned.model);
+			if (!requested) {
+				throw new Error(
+					`Codex model ${pinned.model} is unavailable. Available: ${
+						models.map((model) => model.id).join(", ") || "none"
+					}.`,
+				);
+			}
+			if (
+				requested.supportedReasoningEfforts &&
+				!requested.supportedReasoningEfforts.some(
+					(option) => option.id === pinned.reasoningEffort,
+				)
+			) {
+				throw new Error(
+					`${requested.id} does not advertise ${pinned.reasoningEffort} reasoning.`,
+				);
+			}
+		},
+		[codex],
+	);
 
 	const runCases = useCallback(
 		async (
 			caseDefinitions: readonly FlowPilotE2ECaseDefinition[],
+			pinnedModelKey: FlowPilotE2EModelKey,
 			minimum?: number,
 		): Promise<FlowPilotE2EArtifact[]> => {
+			const pinnedModel = flowPilotE2EModel(pinnedModelKey);
 			if (!FLOWPILOT_DEBUG_ENABLED) {
 				throw new Error(
 					"FlowPilot app-creation E2E requires a development build so compiler receipts and traces can be captured; no model request was started.",
@@ -721,7 +752,7 @@ export default function FlowPilotE2EPage() {
 			const artifacts: FlowPilotE2EArtifact[] = [];
 
 			try {
-				await ensureModel();
+				await ensureModel(pinnedModel);
 				for (const caseDefinition of caseDefinitions) {
 					const startedAt = Date.now();
 					const built = buildCasePrompt(
@@ -758,7 +789,7 @@ export default function FlowPilotE2EPage() {
 
 					const guard = useGlobalChatStore.subscribe((state) => {
 						if (state.pendingNavigation) {
-							suppressedNavigations.push(state.pendingNavigation);
+							suppressedNavigations.push(state.pendingNavigation.target);
 							state.setPendingNavigation(null);
 						}
 						const prompt = state.toolPrompt;
@@ -791,45 +822,51 @@ export default function FlowPilotE2EPage() {
 							pendingNavigation: null,
 							toolPrompt: null,
 						});
-						chat.selectProvider(FLOWPILOT_E2E_DEFAULT_MODEL.provider);
-						chat.selectModel(FLOWPILOT_E2E_DEFAULT_MODEL.model);
-						chat.selectReasoningEffort(
-							FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort,
-						);
+						chat.selectProvider(pinnedModel.provider);
+						chat.selectModel(pinnedModel.model);
+						chat.selectReasoningEffort(pinnedModel.reasoningEffort);
 						chat.setAutoMode(true);
 						const configured = useGlobalChatStore.getState();
 						if (
-							configured.provider !== FLOWPILOT_E2E_DEFAULT_MODEL.provider ||
-							configured.selectedModelId !==
-								FLOWPILOT_E2E_DEFAULT_MODEL.model ||
-							configured.reasoningEffort !==
-								FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort
+							configured.provider !== pinnedModel.provider ||
+							configured.selectedModelId !== pinnedModel.model ||
+							configured.reasoningEffort !== pinnedModel.reasoningEffort
 						) {
 							throw new Error(
-								"Could not configure Codex Terra with high reasoning.",
+								`Could not configure ${pinnedModel.provider}/${pinnedModel.model} with ${pinnedModel.reasoningEffort} reasoning.`,
 							);
 						}
 						chat.setDraft({
 							prompt: built.prompt,
-							modelId: FLOWPILOT_E2E_DEFAULT_MODEL.model,
+							modelId: pinnedModel.model,
 						});
 
 						setRun(caseDefinition.id, { phase: "running" });
-						await waitForChatState(
-							(state) => state.isStreaming,
-							START_TIMEOUT_MS,
-							`Starting ${caseDefinition.id}`,
-						);
+						try {
+							await waitForChatState(
+								(state) => state.isStreaming,
+								START_TIMEOUT_MS,
+								`Starting ${caseDefinition.id}`,
+							);
+						} catch (error) {
+							throw new Error(
+								`${errorMessage(error)}. ${startFailureDiagnostics(codex.models.length)}`,
+							);
+						}
 						const activeModel = useGlobalChatStore.getState();
+						// The harness drives exactly one turn at a time, so the newest live run is
+						// the one it just started; fall back to the picker before it registers.
 						const activeSelection =
-							activeModel.activeTurnSelection ?? activeModel;
+							Object.values(activeModel.runs)
+								.sort((a, b) => a.startedAt - b.startedAt)
+								.at(-1)?.selection ?? activeModel;
 						observedModel = {
 							provider: activeSelection.provider,
 							model: activeSelection.selectedModelId,
 							reasoningEffort: activeSelection.reasoningEffort,
 						};
 						if (
-							observedModel.provider === FLOWPILOT_E2E_DEFAULT_MODEL.provider &&
+							observedModel.provider === pinnedModel.provider &&
 							(observedModel.reasoningEffort === "low" ||
 								observedModel.reasoningEffort === "medium" ||
 								observedModel.reasoningEffort === "high")
@@ -841,19 +878,20 @@ export default function FlowPilotE2EPage() {
 							};
 						}
 						if (
-							observedModel.provider !== FLOWPILOT_E2E_DEFAULT_MODEL.provider ||
-							observedModel.model !== FLOWPILOT_E2E_DEFAULT_MODEL.model ||
-							observedModel.reasoningEffort !==
-								FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort
+							observedModel.provider !== pinnedModel.provider ||
+							observedModel.model !== pinnedModel.model ||
+							observedModel.reasoningEffort !== pinnedModel.reasoningEffort
 						) {
 							issues.push({
 								code: "runner.model_mismatch",
-								message: `The live turn started as ${observedModel.provider}/${observedModel.model}/${observedModel.reasoningEffort || "auto"}, not codex/${FLOWPILOT_E2E_DEFAULT_MODEL.model}/${FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort}.`,
+								message: `The live turn started as ${observedModel.provider}/${observedModel.model}/${observedModel.reasoningEffort || "auto"}, not ${pinnedModel.provider}/${pinnedModel.model}/${pinnedModel.reasoningEffort}.`,
 							});
 						}
+						// Slow runs must COMPLETE so their receipts show where the time went (plan-step
+						// timestamps + generation-run windows); a timeout destroys exactly that evidence.
 						await waitForChatState(
 							(state) => !state.isStreaming,
-							RUN_TIMEOUT_MS,
+							flowPilotE2ECaseRunTimeoutMs(caseDefinition),
 							`Running ${caseDefinition.id}`,
 						);
 						useGlobalChatStore.getState().setPendingNavigation(null);
@@ -888,14 +926,13 @@ export default function FlowPilotE2EPage() {
 						}
 						if (
 							debugReport &&
-							(debugReport.provider !== FLOWPILOT_E2E_DEFAULT_MODEL.provider ||
-								debugReport.model !== FLOWPILOT_E2E_DEFAULT_MODEL.model ||
-								debugReport.reasoning_effort !==
-									FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort)
+							(debugReport.provider !== pinnedModel.provider ||
+								debugReport.model !== pinnedModel.model ||
+								debugReport.reasoning_effort !== pinnedModel.reasoningEffort)
 						) {
 							issues.push({
 								code: "runner.debug_model_mismatch",
-								message: `The persisted trace records ${debugReport.provider ?? "missing"}/${debugReport.model ?? "missing"}/${debugReport.reasoning_effort ?? "missing"}, not codex/${FLOWPILOT_E2E_DEFAULT_MODEL.model}/${FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort}.`,
+								message: `The persisted trace records ${debugReport.provider ?? "missing"}/${debugReport.model ?? "missing"}/${debugReport.reasoning_effort ?? "missing"}, not ${pinnedModel.provider}/${pinnedModel.model}/${pinnedModel.reasoningEffort}.`,
 							});
 						}
 						const appRefs = trace?.appRefs ?? [];
@@ -929,7 +966,11 @@ export default function FlowPilotE2EPage() {
 							generationRuns,
 						);
 						report = appendRunnerFailures(
-							evaluateAppCreationCase(built.caseDefinition, snapshot),
+							evaluateAppCreationCase(
+								built.caseDefinition,
+								snapshot,
+								pinnedModel,
+							),
 							issues,
 						);
 					} catch (error) {
@@ -947,7 +988,8 @@ export default function FlowPilotE2EPage() {
 						schema: "flowpilot.app-creation-e2e-artifact/v1",
 						generatedAt: new Date().toISOString(),
 						durationMs: Date.now() - startedAt,
-						requestedModel: FLOWPILOT_E2E_DEFAULT_MODEL,
+						requestedModelKey: pinnedModelKey,
+						requestedModel: pinnedModel,
 						observedModel,
 						caseId: caseDefinition.id,
 						expectedAppName: built.expectedAppName,
@@ -1007,19 +1049,21 @@ export default function FlowPilotE2EPage() {
 			}
 			return artifacts;
 		},
-		[backend, ensureModel, setRun],
+		[backend, codex, ensureModel, setRun],
 	);
 
 	const runRequestedCases = useCallback(
 		async (options: FlowPilotE2ERunOptions = {}) => {
 			const definitions = resolveFlowPilotE2ERunCases(options);
 			const repeat = validatedRepeat(options.repeat);
+			const requestedModelKey = options.modelKey ?? modelKey;
 			const artifacts: FlowPilotE2EArtifact[] = [];
 			try {
 				for (let round = 0; round < repeat; round += 1) {
 					for (const caseDefinition of definitions) {
 						const completed = await runCases(
 							[caseDefinition],
+							requestedModelKey,
 							options.minFlowScriptNonWhitespaceChars,
 						);
 						artifacts.push(...completed);
@@ -1037,7 +1081,7 @@ export default function FlowPilotE2EPage() {
 			}
 			return artifacts;
 		},
-		[runCases],
+		[modelKey, runCases],
 	);
 
 	const selectedCases = useMemo(
@@ -1047,16 +1091,17 @@ export default function FlowPilotE2EPage() {
 			),
 		[selected],
 	);
+	const pinnedModel = useMemo(() => flowPilotE2EModel(modelKey), [modelKey]);
 
 	const startSelected = useCallback(async () => {
 		try {
 			const parsed = parseMinimumOverride(minimumOverride);
-			return await runCases(selectedCases, parsed);
+			return await runCases(selectedCases, modelKey, parsed);
 		} catch (error) {
 			toast.error(errorMessage(error));
 			return [];
 		}
-	}, [minimumOverride, runCases, selectedCases]);
+	}, [minimumOverride, modelKey, runCases, selectedCases]);
 
 	useEffect(() => {
 		window.flowPilotE2E = {
@@ -1087,6 +1132,8 @@ export default function FlowPilotE2EPage() {
 			const runId = claimedRunId;
 			let callback: URL | undefined;
 			let caseIds: FlowPilotE2ECaseId[] = [];
+			let requestedModelKey: FlowPilotE2EModelKey =
+				FLOWPILOT_E2E_DEFAULT_MODEL_KEY;
 			let repeat = 1;
 			let minimum: number | undefined;
 			let failFast = false;
@@ -1116,12 +1163,15 @@ export default function FlowPilotE2EPage() {
 				minimum = parseMinimumOverride(params.get("minChars"));
 				repeat = parseCliRepeat(params.get("repeat"));
 				failFast = params.get("failFast") === "1";
+				requestedModelKey = resolveFlowPilotE2EModelKey(params.get("model"));
 				const definitions = resolveFlowPilotE2ERunCases(options);
 				caseIds = definitions.map((caseDefinition) => caseDefinition.id);
 				setSelected(new Set(caseIds));
+				setModelKey(requestedModelKey);
 				if (minimum !== undefined) setMinimumOverride(String(minimum));
 				artifacts = await runRequestedCases({
 					caseIds,
+					modelKey: requestedModelKey,
 					minFlowScriptNonWhitespaceChars: minimum,
 					repeat,
 					failFast,
@@ -1145,6 +1195,7 @@ export default function FlowPilotE2EPage() {
 				durationMs: completedAtMs - startedAtMs,
 				selection: {
 					caseIds,
+					modelKey: requestedModelKey,
 					repeat,
 					minFlowScriptNonWhitespaceChars: minimum,
 					failFast,
@@ -1201,10 +1252,15 @@ export default function FlowPilotE2EPage() {
 			const definitions = resolveFlowPilotE2ERunCases(options);
 			setSelected(new Set(definitions.map((item) => item.id)));
 			const minimum = parseMinimumOverride(params.get("minChars"));
+			const requestedModelKey = resolveFlowPilotE2EModelKey(
+				params.get("model"),
+			);
+			setModelKey(requestedModelKey);
 			if (minimum !== undefined) setMinimumOverride(String(minimum));
 			if (params.get("run") === "1" && definitions.length > 0) {
 				void runRequestedCases({
 					caseIds: definitions.map((item) => item.id),
+					modelKey: requestedModelKey,
 					minFlowScriptNonWhitespaceChars: minimum,
 					repeat: parseCliRepeat(params.get("repeat")),
 					failFast: params.get("failFast") === "1",
@@ -1239,9 +1295,24 @@ export default function FlowPilotE2EPage() {
 					</div>
 				</div>
 				<div className="flex items-center gap-2 text-xs">
-					<Badge variant="secondary">Codex</Badge>
-					<Badge variant="outline">{FLOWPILOT_E2E_DEFAULT_MODEL.model}</Badge>
-					<Badge variant="outline">high reasoning</Badge>
+					<Badge variant="secondary">{pinnedModel.provider}</Badge>
+					<div className="flex items-center gap-1 rounded-md border p-0.5">
+						{FLOWPILOT_E2E_MODEL_KEYS.map((key) => (
+							<Button
+								key={key}
+								size="sm"
+								variant={key === modelKey ? "default" : "ghost"}
+								className="h-6 px-2 text-xs"
+								disabled={isSuiteRunning}
+								onClick={() => setModelKey(key)}
+							>
+								{flowPilotE2EModel(key).model}
+							</Button>
+						))}
+					</div>
+					<Badge variant="outline">
+						{pinnedModel.reasoningEffort} reasoning
+					</Badge>
 				</div>
 			</div>
 
@@ -1269,7 +1340,7 @@ export default function FlowPilotE2EPage() {
 								}
 								disabled={isSuiteRunning}
 							>
-								All six
+								All {FLOWPILOT_APP_CREATION_CASES.length}
 							</Button>
 							<Button
 								size="sm"

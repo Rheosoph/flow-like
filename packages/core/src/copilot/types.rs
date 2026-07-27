@@ -22,6 +22,14 @@ pub enum CopilotScope {
     /// Only data-layer work (databases, ontologies/overlays, graph queries,
     /// analytics and ontology actions). No board or UI modifications.
     DataStudio,
+    /// Read-only prior-art research: search and inspect existing apps and
+    /// templates to decide what can be reused as a foundation. Modifies
+    /// nothing — it returns a plan for the orchestrator to execute.
+    Scout,
+    /// Read-only PUBLIC-WEB research. The only scope holding the search,
+    /// page-read and archive tools; it has no access to apps, data, storage or
+    /// memory, so untrusted page text and private data never share a context.
+    Research,
 }
 
 /// A unified chat message that can contain both text and images

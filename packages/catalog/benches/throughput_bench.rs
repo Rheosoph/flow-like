@@ -12,6 +12,13 @@
 //!   FL_CONCURRENCY_LIST  - Comma-separated concurrency levels (e.g., "1,2,4,8,16")
 //!   FL_MAX_CONCURRENCY   - Max concurrency for auto-sweep (default: CPU * 8)
 //!   FL_MEASURE_SECS      - Measurement duration per level (default: 10)
+//!
+//! Run with the allocator used by shipping Flow-Like binaries:
+//!   cargo bench -p flow-like-catalog --bench throughput_bench --features mimalloc
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use flow_like::{
@@ -28,7 +35,10 @@ use flow_like_storage::{
     Path,
     files::store::{FlowLikeStore, local_store::LocalObjectStore},
 };
-use flow_like_types::{intercom::BufferedInterComHandler, tokio};
+use flow_like_types::{
+    intercom::{BufferedInterComHandler, InterComCallback},
+    tokio,
+};
 use std::collections::HashMap;
 use std::{
     path::PathBuf,
@@ -129,13 +139,22 @@ async fn open_board(id: &str, state: Arc<FlowLikeState>) -> Board {
     board
 }
 
-async fn run_once(board: Arc<Board>, state: Arc<FlowLikeState>, profile: &Profile, start: &str) {
-    let buffered_sender = Arc::new(BufferedInterComHandler::new(
+fn create_intercom() -> Arc<BufferedInterComHandler> {
+    BufferedInterComHandler::new(
         Arc::new(move |_event| Box::pin(async move { Ok(()) })),
         Some(100),
         Some(400),
         Some(true),
-    ));
+    )
+}
+
+async fn run_once(
+    board: Arc<Board>,
+    state: Arc<FlowLikeState>,
+    profile: &Profile,
+    start: &str,
+    callback: InterComCallback,
+) {
     let payload = RunPayload {
         id: start.to_string(),
         payload: None,
@@ -150,7 +169,7 @@ async fn run_once(board: Arc<Board>, state: Arc<FlowLikeState>, profile: &Profil
         profile,
         &payload,
         false,
-        buffered_sender.clone().into_callback(),
+        callback,
         None,
         None,
         HashMap::new(),
@@ -174,12 +193,23 @@ fn throughput_bench(c: &mut Criterion) {
     let board = Arc::new(rt.block_on(open_board(&board_id(), state.clone())));
     let profile = construct_profile();
     let start = start_id();
+    // The handler starts an idle-flush task, so construct it inside the runtime and retain one
+    // instance for this complete Criterion function instead of spawning a task per execution.
+    let intercom = rt.block_on(async { create_intercom() });
+    let callback = intercom.into_callback();
 
     // Warmup phase - important for JIT and cache warming
     eprintln!("[throughput] Warming up...");
     rt.block_on(async {
         for _ in 0..200 {
-            run_once(board.clone(), state.clone(), &profile, &start).await;
+            run_once(
+                board.clone(),
+                state.clone(),
+                &profile,
+                &start,
+                callback.clone(),
+            )
+            .await;
         }
     });
 
@@ -206,6 +236,7 @@ fn throughput_bench(c: &mut Criterion) {
                     let board = board.clone();
                     let profile = profile.clone();
                     let start = start.clone();
+                    let callback = callback.clone();
 
                     async move {
                         let begin = Instant::now();
@@ -216,8 +247,9 @@ fn throughput_bench(c: &mut Criterion) {
                                 let brd = board.clone();
                                 let pr = profile.clone();
                                 let sid = start.clone();
+                                let callback = callback.clone();
                                 tasks.push(tokio::spawn(async move {
-                                    run_once(brd, st, &pr, &sid).await;
+                                    run_once(brd, st, &pr, &sid, callback).await;
                                 }));
                             }
                             for t in tasks {
@@ -249,11 +281,20 @@ fn raw_throughput_bench(c: &mut Criterion) {
     let board = Arc::new(rt.block_on(open_board(&board_id(), state.clone())));
     let profile = construct_profile();
     let start = start_id();
+    let intercom = rt.block_on(async { create_intercom() });
+    let callback = intercom.into_callback();
 
     // Warmup
     rt.block_on(async {
         for _ in 0..100 {
-            run_once(board.clone(), state.clone(), &profile, &start).await;
+            run_once(
+                board.clone(),
+                state.clone(),
+                &profile,
+                &start,
+                callback.clone(),
+            )
+            .await;
         }
     });
 
@@ -271,6 +312,7 @@ fn raw_throughput_bench(c: &mut Criterion) {
             let board = board.clone();
             let profile = profile.clone();
             let start = start.clone();
+            let callback = callback.clone();
 
             async move {
                 let counter = Arc::new(AtomicU64::new(0));
@@ -286,8 +328,9 @@ fn raw_throughput_bench(c: &mut Criterion) {
                         let pr = profile.clone();
                         let sid = start.clone();
                         let cnt = counter.clone();
+                        let callback = callback.clone();
                         handles.push(tokio::spawn(async move {
-                            run_once(brd, st, &pr, &sid).await;
+                            run_once(brd, st, &pr, &sid, callback).await;
                             cnt.fetch_add(1, Ordering::Relaxed);
                         }));
                     }

@@ -173,6 +173,10 @@ pub struct FrontendToolContext {
     /// Correlates runtime/database calls made by a nested FlowPilot run with the outer
     /// `flowpilot_board`/`flowpilot_widget` request that started it.
     pub parent_request_id: Option<String>,
+    /// Top-level chat run that owns this tool tree — the assistant message id the frontend minted
+    /// and passed to `global_chat`. Several turns can stream at once, so the frontend cannot infer
+    /// which reply a tool call belongs to; it has to travel with the request.
+    pub run_id: Option<String>,
     /// Stable id of the chat conversation that owns this tool tree. Scopes retained-draft and
     /// acceptance-contract identity so identical prompt text sent from two different
     /// conversations can never share a draft lease.
@@ -237,6 +241,8 @@ struct FrontendToolSafeContext {
     board_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent_request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -327,6 +333,11 @@ impl FrontendToolTrace {
                 context.and_then(|context| context.board_id.as_deref()),
             ),
             parent_request_id: parent_request_id.clone(),
+            // Run ownership, not user text — safe to keep in the lifecycle trace, and it is what
+            // routes every store write the frontend handler performs to the right reply.
+            run_id: context
+                .and_then(|context| context.run_id.as_deref())
+                .and_then(safe_debug_identifier),
         };
         let mut trace = Self {
             request_id,
@@ -929,16 +940,20 @@ fn safe_argument_keys(arguments: &Value) -> (Vec<String>, usize) {
 }
 
 fn safe_request_context(context: &FrontendToolSafeContext) -> Option<FrontendToolContext> {
-    (context.app_id.is_some() || context.board_id.is_some() || context.parent_request_id.is_some())
-        .then(|| FrontendToolContext {
-            app_id: context.app_id.clone(),
-            board_id: context.board_id.clone(),
-            overlay_id: None,
-            parent_request_id: context.parent_request_id.clone(),
-            conversation_id: None,
-            source_user_prompt: None,
-            board_context_manifest: None,
-        })
+    (context.app_id.is_some()
+        || context.board_id.is_some()
+        || context.parent_request_id.is_some()
+        || context.run_id.is_some())
+    .then(|| FrontendToolContext {
+        app_id: context.app_id.clone(),
+        board_id: context.board_id.clone(),
+        overlay_id: None,
+        parent_request_id: context.parent_request_id.clone(),
+        run_id: context.run_id.clone(),
+        conversation_id: None,
+        source_user_prompt: None,
+        board_context_manifest: None,
+    })
 }
 
 fn attach_failure_correlation(

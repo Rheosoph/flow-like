@@ -166,7 +166,7 @@ pub async fn persist_notification(
         .filter(|id| !id.is_empty());
 
     let run_id = Some(context.run_id().to_string());
-    let node_id = Some(context.id.clone());
+    let node_id = Some(context.id.to_string());
     let client = reqwest::Client::new();
 
     // Try app-scoped endpoint first (online projects with board context)

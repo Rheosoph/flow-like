@@ -3,7 +3,15 @@ import type { IGenericCommand } from "../flow/board/commands/generic-command";
 import type { BoardCommand } from "../flow/copilot";
 
 /** The scope of what the copilot agent can modify */
-export type CopilotScope = "Board" | "Frontend" | "Both" | "DataStudio";
+export type CopilotScope =
+	| "Board"
+	| "Frontend"
+	| "Both"
+	| "DataStudio"
+	/** Read-only prior-art research; returns a foundation plan, mutates nothing. */
+	| "Scout"
+	/** Read-only public-web research; holds the only search/page-read tools. */
+	| "Research";
 
 /** Role in the chat conversation */
 export type ChatRole = "User" | "Assistant";
@@ -53,7 +61,12 @@ export interface UIActionContext {
 
 /** Frontend-owned scope injected into runtime tools used by a nested board/UI specialist. */
 export interface CopilotToolContext {
-	appId: string;
+	/**
+	 * Optional to match the Rust `FrontendToolContext.app_id`. A delegated run can
+	 * legitimately have no app in scope — the Scout starts by searching across
+	 * every app the user can see, before any single one is chosen.
+	 */
+	appId?: string;
 	boardId?: string;
 	/**
 	 * The overlay/ontology the current Data Studio page has selected. Injected as a DEFAULT into
@@ -62,6 +75,12 @@ export interface CopilotToolContext {
 	overlayId?: string;
 	/** Correlates tools called inside a delegated run with its outer frontend request. */
 	parentRequestId?: string;
+	/**
+	 * Top-level chat run that owns the delegated specialist. Travels down so the specialist's own
+	 * frontend tool calls come back tagged with the reply they belong to — with several turns
+	 * streaming at once the bridge cannot infer it.
+	 */
+	runId?: string;
 	/**
 	 * Stable id of the chat conversation that owns the delegated run. Scopes retained-draft and
 	 * acceptance-contract identity so identical prompt text from another conversation can never

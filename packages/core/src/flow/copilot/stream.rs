@@ -740,8 +740,14 @@ fn truncate_preview(value: &str, max_chars: usize) -> String {
     preview
 }
 
+/// Per-string bound applied while redacting a payload, before the caller's own preview budget
+/// shrinks the result. It exists only to stop an unbounded intermediate allocation, so it is set
+/// far above any real artifact: a compiler receipt captured in full needs its authored FlowScript
+/// byte-for-byte, and the previous 16KB bound silently truncated exactly that.
+const DEBUG_STRING_CAP: usize = 10 * 1024 * 1024;
+
 fn safe_debug_string(text: &str) -> String {
-    safe_debug_string_with_cap(text, 16_384)
+    safe_debug_string_with_cap(text, DEBUG_STRING_CAP)
 }
 
 /// Like [`safe_debug_string`] with a caller-chosen intermediate bound. Full-result capture
@@ -1010,9 +1016,9 @@ pub fn safe_json_preview(value: &Value, max_chars: usize) -> String {
 /// Bounded, redacted text safe for a user-visible debug report.
 pub fn safe_text_preview(text: &str, max_chars: usize) -> String {
     // The intermediate redaction bound must never undercut the caller's requested size, or a
-    // "full" capture still comes back truncated at the 16KB debug default.
+    // "full" capture still comes back truncated at the debug default.
     truncate_preview(
-        &safe_debug_string_with_cap(text, max_chars.max(16_384)),
+        &safe_debug_string_with_cap(text, max_chars.max(DEBUG_STRING_CAP)),
         max_chars,
     )
 }
@@ -1331,6 +1337,35 @@ function pollSupportInbox() {
         assert!(preview.contains("<redacted>"));
         assert!(!preview.contains("must-not-leak"));
         assert!(!preview.contains("also-must-not-leak"));
+    }
+
+    #[test]
+    fn full_capture_keeps_a_json_source_longer_than_the_debug_cap() {
+        // A compiler receipt is captured through the JSON path; a board program well past the
+        // 16KB per-string debug default must survive byte-for-byte, or every downstream check
+        // (size bounds, lint, wired-id references) silently measures a partial program.
+        let source = format!(
+            "function longBoard() {{\n{}    logInfo({{ message: \"done\" }})\n}}\n",
+            "    logInfo({ message: \"filler statement for a large generated board\" })\n"
+                .repeat(400)
+        );
+        assert!(source.chars().count() > 16_384);
+
+        let preview = safe_tool_result_preview(
+            &json!({ "status": "valid", "flowscript": source }).to_string(),
+            usize::MAX,
+        );
+
+        assert!(preview.contains("longBoard"));
+        assert!(!preview.contains("..."));
+        let captured: Value = serde_json::from_str(&preview).expect("preview stays valid JSON");
+        assert_eq!(
+            captured
+                .get("flowscript")
+                .and_then(Value::as_str)
+                .map(|text| text.chars().count()),
+            Some(source.chars().count()),
+        );
     }
 
     #[test]

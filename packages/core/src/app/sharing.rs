@@ -1010,6 +1010,7 @@ mod tests {
     fn make_app(id: &str, state: Arc<FlowLikeState>) -> App {
         App {
             id: id.to_string(),
+            app_type: None,
             status: AppStatus::Active,
             visibility: AppVisibility::Private,
             authors: vec![],

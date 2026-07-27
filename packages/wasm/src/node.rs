@@ -567,7 +567,7 @@ impl NodeLogic for WasmNodeLogic {
             .unwrap_or_default();
 
         // Get node_id from context
-        let node_id = context.id.clone();
+        let node_id = context.id.to_string();
 
         // Build app_id and board_id from execution cache
         let (app_id, board_id, sub, _board_dir) =

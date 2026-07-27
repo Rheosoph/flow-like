@@ -1060,6 +1060,8 @@ pub fn run() {
             functions::ai::copilot::flowpilot_apply_flow_ir_commit,
             functions::ai::copilot::global_chat,
             functions::ai::copilot::global_chat_resume,
+            functions::ai::copilot::global_chat_steer,
+            functions::ai::copilot::global_chat_take_unconsumed_steering,
             functions::ai::copilot::global_chat_memory_status,
             functions::ai::copilot::global_chat_clear_memory,
             functions::ai::copilot::global_chat_list_memories,

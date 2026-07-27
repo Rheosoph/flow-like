@@ -20,6 +20,7 @@ function artifact(
 		schema: "flowpilot.app-creation-e2e-artifact/v1",
 		generatedAt: "2026-07-22T10:00:00.000Z",
 		durationMs: 10,
+		requestedModelKey: "terra",
 		requestedModel: {
 			provider: "codex",
 			model: "gpt-5.6-terra",
@@ -68,7 +69,7 @@ function envelope(
 		startedAt: "2026-07-22T10:00:00.000Z",
 		completedAt: "2026-07-22T10:00:01.000Z",
 		durationMs: 1_000,
-		selection: { caseIds, repeat: 1, failFast: false },
+		selection: { caseIds, modelKey: "terra", repeat: 1, failFast: false },
 		artifacts,
 		passed: true,
 		summary: {
@@ -85,6 +86,7 @@ function envelope(
 const expectation = {
 	runId,
 	caseIds,
+	modelKey: "terra",
 	repeat: 1,
 	minFlowScriptNonWhitespaceChars: undefined,
 	failFast: false,
@@ -112,7 +114,7 @@ describe("FlowPilot E2E CLI callback contract", () => {
 		const failFastExpectation = { ...expectation, failFast: true };
 		const normalized = normalizeFlowPilotE2ECliEnvelope(
 			envelope([artifact("forum", false)], {
-				selection: { caseIds, repeat: 1, failFast: true },
+				selection: { caseIds, modelKey: "terra", repeat: 1, failFast: true },
 			}),
 			failFastExpectation,
 		);
@@ -122,7 +124,7 @@ describe("FlowPilot E2E CLI callback contract", () => {
 		expect(() =>
 			normalizeFlowPilotE2ECliEnvelope(
 				envelope([artifact("forum", true)], {
-					selection: { caseIds, repeat: 1, failFast: true },
+					selection: { caseIds, modelKey: "terra", repeat: 1, failFast: true },
 				}),
 				failFastExpectation,
 			),
@@ -130,7 +132,7 @@ describe("FlowPilot E2E CLI callback contract", () => {
 		expect(() =>
 			normalizeFlowPilotE2ECliEnvelope(
 				envelope([artifact("forum", false), artifact("simple-agent", true)], {
-					selection: { caseIds, repeat: 1, failFast: true },
+					selection: { caseIds, modelKey: "terra", repeat: 1, failFast: true },
 				}),
 				failFastExpectation,
 			),
@@ -152,7 +154,12 @@ describe("FlowPilot E2E CLI callback contract", () => {
 		expect(() =>
 			normalizeFlowPilotE2ECliEnvelope(
 				envelope([artifact("forum", true), artifact("simple-agent", true)], {
-					selection: { caseIds: ["forum"], repeat: 1, failFast: false },
+					selection: {
+						caseIds: ["forum"],
+						modelKey: "terra",
+						repeat: 1,
+						failFast: false,
+					},
 				}),
 				expectation,
 			),
@@ -166,6 +173,24 @@ describe("FlowPilot E2E CLI callback contract", () => {
 		expect(isFlowPilotE2ECliEnvelope({ runId }, runId)).toBe(false);
 	});
 
+	test("refuses a run that benchmarked another model than requested", () => {
+		const solExpectation = { ...expectation, modelKey: "sol" } as const;
+		expect(() =>
+			normalizeFlowPilotE2ECliEnvelope(
+				envelope([artifact("forum", true), artifact("simple-agent", true)]),
+				solExpectation,
+			),
+		).toThrow("selection does not match");
+		expect(() =>
+			normalizeFlowPilotE2ECliEnvelope(
+				envelope([artifact("forum", true), artifact("simple-agent", true)], {
+					selection: { caseIds, modelKey: "sol", repeat: 1, failFast: false },
+				}),
+				solExpectation,
+			),
+		).toThrow("requested model terra; expected sol");
+	});
+
 	test("validates repeated case ordering", () => {
 		const repeatedExpectation = { ...expectation, repeat: 2 };
 		const normalized = normalizeFlowPilotE2ECliEnvelope(
@@ -176,7 +201,9 @@ describe("FlowPilot E2E CLI callback contract", () => {
 					artifact("forum", true),
 					artifact("simple-agent", true),
 				],
-				{ selection: { caseIds, repeat: 2, failFast: false } },
+				{
+					selection: { caseIds, modelKey: "terra", repeat: 2, failFast: false },
+				},
 			),
 			repeatedExpectation,
 		);

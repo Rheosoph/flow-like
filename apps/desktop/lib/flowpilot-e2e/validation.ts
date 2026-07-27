@@ -11,6 +11,7 @@ import type {
 	FlowPilotE2ECaseDefinition,
 	FlowPilotE2ECheck,
 	FlowPilotE2EEntityKind,
+	FlowPilotE2EModelConfig,
 	FlowPilotE2ERunReport,
 	FlowPilotEventSnapshot,
 	FlowPilotPageSnapshot,
@@ -107,6 +108,17 @@ export function flowScriptSizeMetrics(source: string): FlowScriptSizeMetrics {
 
 function definedSource(source: string | undefined): string | undefined {
 	return source && source.trim().length > 0 ? source : undefined;
+}
+
+/**
+ * The debug/stream capture bounds individual strings and appends an ellipsis. A truncated authored
+ * source silently invalidates every check that reads it — size bounds, lint, and id references all
+ * measure a partial program — so it is reported as its own failure rather than absorbed.
+ */
+const CAPTURE_STRING_CAP = 16_384;
+
+function isTruncatedCapture(source: string): boolean {
+	return source.length >= CAPTURE_STRING_CAP && source.endsWith("...");
 }
 
 function authoredSource(
@@ -494,6 +506,8 @@ function expectedAppName(
 export function evaluateAppCreationCase(
 	caseDefinition: FlowPilotE2ECaseDefinition | ResolvedFlowPilotE2ECase,
 	snapshot: FlowPilotAppCreationSnapshot,
+	/** The pinned benchmark model this run requested; every model check is relative to it. */
+	expectedModel: FlowPilotE2EModelConfig = FLOWPILOT_E2E_DEFAULT_MODEL,
 ): FlowPilotE2ERunReport {
 	const requirements = caseDefinition.requirements;
 	const expectedName = expectedAppName(caseDefinition);
@@ -549,29 +563,28 @@ export function evaluateAppCreationCase(
 		),
 		check(
 			"model.provider",
-			snapshot.model?.provider === FLOWPILOT_E2E_DEFAULT_MODEL.provider,
-			`Generation provider must be ${FLOWPILOT_E2E_DEFAULT_MODEL.provider}.`,
+			snapshot.model?.provider === expectedModel.provider,
+			`Generation provider must be ${expectedModel.provider}.`,
 			{
-				expected: FLOWPILOT_E2E_DEFAULT_MODEL.provider,
+				expected: expectedModel.provider,
 				actual: snapshot.model?.provider ?? "missing",
 			},
 		),
 		check(
 			"model.id",
-			snapshot.model?.model === FLOWPILOT_E2E_DEFAULT_MODEL.model,
-			`Generation model must be ${FLOWPILOT_E2E_DEFAULT_MODEL.model}.`,
+			snapshot.model?.model === expectedModel.model,
+			`Generation model must be ${expectedModel.model}.`,
 			{
-				expected: FLOWPILOT_E2E_DEFAULT_MODEL.model,
+				expected: expectedModel.model,
 				actual: snapshot.model?.model ?? "missing",
 			},
 		),
 		check(
 			"model.reasoning_effort",
-			snapshot.model?.reasoningEffort ===
-				FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort,
-			`Generation reasoning effort must be ${FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort}.`,
+			snapshot.model?.reasoningEffort === expectedModel.reasoningEffort,
+			`Generation reasoning effort must be ${expectedModel.reasoningEffort}.`,
 			{
-				expected: FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort,
+				expected: expectedModel.reasoningEffort,
 				actual: snapshot.model?.reasoningEffort ?? "missing",
 			},
 		),
@@ -587,12 +600,12 @@ export function evaluateAppCreationCase(
 		const scopedRuns = generationRuns.filter(
 			(run) => run.appId === snapshot.appId && boardIds.has(run.boardId),
 		);
-		const expectedNestedModelId = `${FLOWPILOT_E2E_DEFAULT_MODEL.provider}:${FLOWPILOT_E2E_DEFAULT_MODEL.model}`;
+		const expectedNestedModelId = `${expectedModel.provider}:${expectedModel.model}`;
 		const modelMatchedRuns = scopedRuns.filter(
 			(run) =>
-				run.provider === FLOWPILOT_E2E_DEFAULT_MODEL.provider &&
+				run.provider === expectedModel.provider &&
 				run.modelId === expectedNestedModelId &&
-				run.reasoningEffort === FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort,
+				run.reasoningEffort === expectedModel.reasoningEffort,
 		);
 		const successfulChecks = generationRuns.flatMap((run) =>
 			run.compilerReceipts.filter(isSuccessfulFlowScriptCheckReceipt),
@@ -638,8 +651,8 @@ export function evaluateAppCreationCase(
 				"flowscript.compiler_receipt.nested_model",
 				scopedRuns.length > 0 && modelMatchedRuns.length === scopedRuns.length,
 				scopedRuns.length > 0 && modelMatchedRuns.length === scopedRuns.length
-					? `Every scoped compiler run used ${FLOWPILOT_E2E_DEFAULT_MODEL.provider}/${expectedNestedModelId}/${FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort}.`
-					: `${scopedRuns.length - modelMatchedRuns.length} scoped compiler run(s) did not use ${FLOWPILOT_E2E_DEFAULT_MODEL.provider}/${expectedNestedModelId}/${FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort}.`,
+					? `Every scoped compiler run used ${expectedModel.provider}/${expectedNestedModelId}/${expectedModel.reasoningEffort}.`
+					: `${scopedRuns.length - modelMatchedRuns.length} scoped compiler run(s) did not use ${expectedModel.provider}/${expectedNestedModelId}/${expectedModel.reasoningEffort}.`,
 				{
 					expected: scopedRuns.length,
 					actual: modelMatchedRuns.length,
@@ -766,6 +779,20 @@ export function evaluateAppCreationCase(
 	}
 	if (authored) {
 		const metrics = flowScriptSizeMetrics(authored);
+		checks.push(
+			check(
+				"flowscript.authored.capture_complete",
+				!isTruncatedCapture(authored),
+				isTruncatedCapture(authored)
+					? `Authored FlowScript was captured truncated at the ${CAPTURE_STRING_CAP}-character stream cap; its checks measure a partial program.`
+					: "Authored FlowScript was captured in full.",
+				{
+					path: "authoredFlowScript",
+					expected: false,
+					actual: isTruncatedCapture(authored),
+				},
+			),
+		);
 		const compactnessNoise = authored.split(/\r\n|\r|\n/).filter((line) => {
 			const trimmed = line.trim();
 			return (
@@ -1104,7 +1131,7 @@ export function evaluateAppCreationCase(
 		appId: snapshot.appId,
 		appName: snapshot.appName,
 		expectedAppName: expectedName,
-		model: snapshot.model ?? FLOWPILOT_E2E_DEFAULT_MODEL,
+		model: snapshot.model ?? expectedModel,
 		passed: failures.length === 0,
 		summary: {
 			checks: checks.length,

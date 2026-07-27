@@ -17,10 +17,20 @@ describe("FlowPilot E2E CLI options", () => {
 			]),
 		).toMatchObject({
 			caseIds: ["forum", "simple-agent"],
+			modelKey: "terra",
 			repeat: 3,
 			minChars: 900,
 			failFast: true,
 			json: true,
+		});
+	});
+
+	test("pins the benchmark model by alias or model id", () => {
+		expect(
+			parseArgs(["--case", "ai-adventure", "--model", "sol"]),
+		).toMatchObject({ caseIds: ["ai-adventure"], modelKey: "sol" });
+		expect(parseArgs(["--model=gpt-5.6-sol"])).toMatchObject({
+			modelKey: "sol",
 		});
 	});
 
@@ -30,5 +40,8 @@ describe("FlowPilot E2E CLI options", () => {
 		);
 		expect(() => parseArgs(["--repeat", "21"])).toThrow("cannot exceed 20");
 		expect(() => parseArgs(["--case", "unknown"])).toThrow("Unknown");
+		expect(() => parseArgs(["--model", "gpt-4"])).toThrow(
+			"Unknown FlowPilot E2E model",
+		);
 	});
 });

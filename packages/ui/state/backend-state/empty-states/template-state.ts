@@ -1,6 +1,9 @@
 import type {
 	IBoard,
 	IMetadata,
+	ITemplatePreview,
+	ITemplateSearchHit,
+	ITemplateSearchQuery,
 	ITemplateState,
 	IVersionType,
 } from "@flow-like/flow-like-ui";
@@ -10,6 +13,15 @@ export class EmptyTemplateState implements ITemplateState {
 		appId?: string,
 		language?: string,
 	): Promise<[string, string, IMetadata | undefined][]> {
+		throw new Error("Method not implemented.");
+	}
+	searchTemplates(query: ITemplateSearchQuery): Promise<ITemplateSearchHit[]> {
+		throw new Error("Method not implemented.");
+	}
+	getTemplatePreview(
+		appId: string,
+		templateId: string,
+	): Promise<ITemplatePreview> {
 		throw new Error("Method not implemented.");
 	}
 	getTemplate(

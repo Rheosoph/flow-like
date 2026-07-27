@@ -9212,6 +9212,461 @@ pub struct CommitFlowScriptArgs {
     pub remove_comment_ids: Vec<String>,
 }
 
+/// Upper bound on one bounded scope plan. A plan larger than this is not a decomposition, it is an
+/// unbounded backlog: every segment costs wall clock and source-operation budget that the nested run
+/// must still fit under the outer dispatch bound.
+pub const MAX_BOARD_SCOPE_SEGMENTS: usize = 8;
+/// Beyond this many segments a single retained draft cannot reach its commit inside one nested run,
+/// so the host forces per-segment commits regardless of the strategy the planner asked for.
+pub const FORCED_INCREMENTAL_SEGMENT_THRESHOLD: usize = 5;
+/// A segment whose behavior does not carry at least this much concrete text is a title, not an
+/// executable slice.
+const MIN_SEGMENT_BEHAVIOR_CHARS: usize = 24;
+const MIN_SEGMENT_BEHAVIOR_WORDS: usize = 4;
+/// Openers that mark deferred work. A segment may *contain* placeholder literals — those are
+/// encouraged for missing credentials — but its declared behavior may not itself be deferred.
+const SEGMENT_STUB_MARKERS: [&str; 8] = [
+    "todo",
+    "tbd",
+    "stub",
+    "to be implemented",
+    "to be determined",
+    "implement later",
+    "fill in later",
+    "same as above",
+];
+
+/// How the planned segments reach the board.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeStrategy {
+    /// One segment. Identical to the historical single full-shape draft.
+    #[default]
+    Single,
+    /// Grow one retained draft segment by segment and commit once. The live board is untouched
+    /// until the whole plan validates.
+    Staged,
+    /// Commit and apply each segment on its own draft. Trades atomicity for wall-clock headroom
+    /// and visible progress.
+    Incremental,
+    /// Independent entry points authored onto separate boards. Only legal when no segment needs
+    /// in-memory data from another: boards of one app share app data at rest, nothing else.
+    MultiBoard,
+}
+
+impl ScopeStrategy {
+    /// Whether each segment reaches the board on its own commit.
+    pub fn commits_per_segment(self) -> bool {
+        matches!(self, Self::Incremental | Self::MultiBoard)
+    }
+}
+
+/// One individually executable slice of the requested behavior.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlannedSegment {
+    pub id: String,
+    pub title: String,
+    /// Concrete description of what this slice does end to end. Not a heading and not deferred work.
+    pub behavior: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// `current` for the board under edit, or `new:<slug>` under `multi_board`.
+    #[serde(default = "default_segment_board_ref")]
+    pub board_ref: String,
+}
+
+fn default_segment_board_ref() -> String {
+    CURRENT_BOARD_REF.to_string()
+}
+
+pub const CURRENT_BOARD_REF: &str = "current";
+pub const NEW_BOARD_REF_PREFIX: &str = "new:";
+
+impl PlannedSegment {
+    pub fn targets_new_board(&self) -> bool {
+        self.board_ref.starts_with(NEW_BOARD_REF_PREFIX)
+    }
+
+    /// Slug of the board this segment allocates, if it allocates one.
+    pub fn new_board_slug(&self) -> Option<&str> {
+        self.board_ref.strip_prefix(NEW_BOARD_REF_PREFIX)
+    }
+}
+
+/// Ask the host for more wall clock on a long build.
+///
+/// Both fields are recorded for the user and for telemetry and are deliberately NOT inputs to the
+/// decision: the host grants time from its own progress ledger, because a model can always write a
+/// convincing account of how well it is doing.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ExtendTimeBudgetArgs {
+    /// What concretely advanced since the last extension.
+    pub progress: String,
+    /// What is still left to build.
+    pub remaining_work: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PlanBoardScopeArgs {
+    #[serde(default)]
+    pub strategy: ScopeStrategy,
+    pub segments: Vec<PlannedSegment>,
+    #[serde(default)]
+    pub rationale: String,
+}
+
+/// Host-owned execution state for an accepted plan. The model proposes; only this type decides what
+/// is active, what is already on the board, and whether the plan may still be revised.
+#[derive(Debug, Clone, Serialize)]
+pub struct BoardScopePlan {
+    pub strategy: ScopeStrategy,
+    pub segments: Vec<PlannedSegment>,
+    /// Index of the segment currently being authored.
+    pub active: usize,
+    /// Ids of segments whose commands are queued or applied. Immutable across a revision.
+    pub committed: Vec<String>,
+    /// Bounded re-planning counter. One revision per run.
+    pub revisions: u8,
+    pub rationale: String,
+}
+
+/// Rejection of a proposed plan. Always retryable: the model reshapes the plan and calls again.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopePlanRejection {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl ScopePlanRejection {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// Model-facing payload. Always retryable: reshape the plan and call again.
+    pub fn payload(&self) -> serde_json::Value {
+        json!({
+            "status": "scope_plan_rejected",
+            "code": self.code,
+            "retryable": true,
+            "next_action": "plan_board_scope",
+            "message": self.message,
+        })
+    }
+}
+
+fn segment_behavior_is_concrete(behavior: &str) -> bool {
+    let trimmed = behavior.trim();
+    if trimmed.chars().count() < MIN_SEGMENT_BEHAVIOR_CHARS {
+        return false;
+    }
+    if trimmed.split_whitespace().count() < MIN_SEGMENT_BEHAVIOR_WORDS {
+        return false;
+    }
+    let lowered = trimmed.to_ascii_lowercase();
+    !SEGMENT_STUB_MARKERS
+        .iter()
+        .any(|marker| lowered.starts_with(marker))
+}
+
+fn valid_board_slug(slug: &str) -> bool {
+    !slug.is_empty()
+        && slug.len() <= 48
+        && slug
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Validate a proposed plan and resolve the strategy the host will actually run.
+///
+/// The returned strategy may differ from the requested one: a plan too large to reach a single
+/// commit inside one nested run is forced to per-segment commits rather than accepted and then
+/// starved.
+pub fn accept_scope_plan(args: PlanBoardScopeArgs) -> Result<BoardScopePlan, ScopePlanRejection> {
+    let PlanBoardScopeArgs {
+        strategy,
+        segments,
+        rationale,
+    } = args;
+
+    if segments.is_empty() {
+        return Err(ScopePlanRejection::new(
+            "SCOPE_PLAN_EMPTY",
+            "A scope plan needs at least one segment. A small edit is a valid one-segment plan.",
+        ));
+    }
+    if segments.len() > MAX_BOARD_SCOPE_SEGMENTS {
+        return Err(ScopePlanRejection::new(
+            "SCOPE_PLAN_TOO_LARGE",
+            format!(
+                "A scope plan may declare at most {MAX_BOARD_SCOPE_SEGMENTS} segments; {} were proposed. Merge the finest-grained slices into coherent executable units.",
+                segments.len()
+            ),
+        ));
+    }
+    if matches!(strategy, ScopeStrategy::Single) && segments.len() != 1 {
+        return Err(ScopePlanRejection::new(
+            "SCOPE_PLAN_STRATEGY_MISMATCH",
+            format!(
+                "strategy \"single\" declares exactly one segment; {} were proposed. Use \"staged\" or \"incremental\" for a decomposed build.",
+                segments.len()
+            ),
+        ));
+    }
+    if !matches!(strategy, ScopeStrategy::Single) && segments.len() == 1 {
+        return Err(ScopePlanRejection::new(
+            "SCOPE_PLAN_STRATEGY_MISMATCH",
+            "A one-segment plan is strategy \"single\". Decomposed strategies need at least two segments.",
+        ));
+    }
+
+    let mut seen: HashSet<&str> = HashSet::new();
+    for (index, segment) in segments.iter().enumerate() {
+        let id = segment.id.trim();
+        if id.is_empty() || id.split_whitespace().count() != 1 {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_INVALID_SEGMENT",
+                format!("Segment {index} needs a non-empty whitespace-free id."),
+            ));
+        }
+        if !seen.insert(id) {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_DUPLICATE_SEGMENT",
+                format!("Segment id \"{id}\" is declared more than once."),
+            ));
+        }
+        if segment.title.trim().is_empty() {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_INVALID_SEGMENT",
+                format!("Segment \"{id}\" needs a title."),
+            ));
+        }
+        if !segment_behavior_is_concrete(&segment.behavior) {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_SEGMENT_NOT_CONCRETE",
+                format!(
+                    "Segment \"{id}\" describes deferred or empty work. Every segment must be an executable slice that fully feeds its own new nodes; describe what it actually does, not that it will be done later."
+                ),
+            ));
+        }
+        for dependency in &segment.depends_on {
+            let dependency = dependency.trim();
+            if dependency == id {
+                return Err(ScopePlanRejection::new(
+                    "SCOPE_PLAN_CYCLE",
+                    format!("Segment \"{id}\" depends on itself."),
+                ));
+            }
+            if !seen.contains(dependency) {
+                return Err(ScopePlanRejection::new(
+                    "SCOPE_PLAN_CYCLE",
+                    format!(
+                        "Segment \"{id}\" depends on \"{dependency}\", which is not an earlier segment. Segments are built in order, so every dependency must precede its dependent."
+                    ),
+                ));
+            }
+        }
+
+        let board_ref = segment.board_ref.trim();
+        if board_ref == CURRENT_BOARD_REF {
+            continue;
+        }
+        let Some(slug) = board_ref.strip_prefix(NEW_BOARD_REF_PREFIX) else {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_INVALID_BOARD_REF",
+                format!(
+                    "Segment \"{id}\" has board_ref \"{board_ref}\". Use \"current\" for the board under edit, or \"new:<slug>\" under strategy \"multi_board\"."
+                ),
+            ));
+        };
+        if !matches!(strategy, ScopeStrategy::MultiBoard) {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_INVALID_BOARD_REF",
+                format!(
+                    "Segment \"{id}\" allocates a new board, which only strategy \"multi_board\" may do. Boards of one app cannot call each other, so connected logic belongs in one board as function layers."
+                ),
+            ));
+        }
+        if !valid_board_slug(slug) {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_INVALID_BOARD_REF",
+                format!(
+                    "Segment \"{id}\" has board slug \"{slug}\". Use lowercase letters, digits and dashes."
+                ),
+            ));
+        }
+    }
+
+    if matches!(strategy, ScopeStrategy::MultiBoard)
+        && !segments.iter().any(PlannedSegment::targets_new_board)
+    {
+        return Err(ScopePlanRejection::new(
+            "SCOPE_PLAN_STRATEGY_MISMATCH",
+            "strategy \"multi_board\" declares no segment with a \"new:<slug>\" board_ref. If every segment targets the current board, this is a \"staged\" or \"incremental\" plan.",
+        ));
+    }
+
+    // A plan this long cannot grow one draft to a single commit inside the nested wall clock. Force
+    // per-segment commits now rather than accepting it and letting it die at the budget.
+    let strategy = if matches!(strategy, ScopeStrategy::Staged)
+        && segments.len() > FORCED_INCREMENTAL_SEGMENT_THRESHOLD
+    {
+        ScopeStrategy::Incremental
+    } else {
+        strategy
+    };
+
+    Ok(BoardScopePlan {
+        strategy,
+        segments,
+        active: 0,
+        committed: Vec::new(),
+        revisions: 0,
+        rationale,
+    })
+}
+
+impl BoardScopePlan {
+    pub fn active_segment(&self) -> Option<&PlannedSegment> {
+        self.segments.get(self.active)
+    }
+
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    pub fn is_multi_segment(&self) -> bool {
+        self.segments.len() > 1
+    }
+
+    /// Segments still to be authored, including the active one.
+    pub fn remaining(&self) -> usize {
+        self.segments.len().saturating_sub(self.active)
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.active >= self.segments.len()
+    }
+
+    /// Advance past the active segment once its source is in the retained draft.
+    pub fn mark_active_authored(&mut self) {
+        if self.active < self.segments.len() {
+            self.active += 1;
+        }
+    }
+
+    /// Record every segment authored so far as reaching the board. Called on a queued commit.
+    pub fn mark_authored_committed(&mut self) {
+        for segment in self.segments.iter().take(self.active) {
+            if !self.committed.iter().any(|id| id == &segment.id) {
+                self.committed.push(segment.id.clone());
+            }
+        }
+    }
+
+    pub fn committed_count(&self) -> usize {
+        self.committed.len()
+    }
+
+    /// Titles of segments that have not reached the board, for an honest partial report.
+    pub fn uncommitted_titles(&self) -> Vec<String> {
+        self.segments
+            .iter()
+            .filter(|segment| !self.committed.iter().any(|id| id == &segment.id))
+            .map(|segment| segment.title.clone())
+            .collect()
+    }
+
+    /// Model-facing payload for an accepted plan: what was accepted, what to author now, and the
+    /// invariant that makes a segment executable rather than a stub.
+    pub fn acceptance_payload(&self) -> serde_json::Value {
+        let active = self.active_segment();
+        let strategy_rule = match self.strategy {
+            ScopeStrategy::Single => {
+                "Author the whole request as one full-shape document, exactly as before."
+            }
+            ScopeStrategy::Staged => {
+                "Write segment 1 alone first, then grow that SAME draft_id segment by segment, checking after each. Commit once, after the final segment checks valid."
+            }
+            ScopeStrategy::Incremental => {
+                "Author, check and commit ONE segment per draft. After a queued commit, stop; the host applies it and starts the next segment on a fresh draft_id."
+            }
+            ScopeStrategy::MultiBoard => {
+                "Each board_ref is authored on its own board and committed separately. Segments on different boards share only app data at rest — never in-memory values."
+            }
+        };
+        json!({
+            "status": "scope_plan_accepted",
+            "strategy": self.strategy,
+            "segment_count": self.segment_count(),
+            "segments": self.segments,
+            "active_segment": active.map(|segment| json!({
+                "id": segment.id,
+                "title": segment.title,
+                "behavior": segment.behavior,
+                "board_ref": segment.board_ref,
+                "index": self.active + 1,
+            })),
+            "committed_segments": self.committed,
+            "next_action": "write_flowscript",
+            "strategy_rule": strategy_rule,
+            "message": "Plan accepted. Every segment must be executable on its own: fully feed the required inputs of the nodes it adds. Unfinished exec tails between segments are fine, unfed required inputs are not. Do not write a segment as stubs, TODOs, or comments.",
+        })
+    }
+
+    /// Re-segment the work that has not reached the board yet. Committed segments are immutable and
+    /// are carried into the revised plan unchanged.
+    pub fn revise(&self, args: PlanBoardScopeArgs) -> Result<Self, ScopePlanRejection> {
+        if self.revisions > 0 {
+            return Err(ScopePlanRejection::new(
+                "SCOPE_PLAN_REVISION_EXHAUSTED",
+                "This run already revised its scope plan once. Continue repairing the active segment and report honestly if it cannot be completed.",
+            ));
+        }
+
+        let committed: Vec<PlannedSegment> = self
+            .segments
+            .iter()
+            .filter(|segment| self.committed.iter().any(|id| id == &segment.id))
+            .cloned()
+            .collect();
+
+        for segment in &args.segments {
+            if committed.iter().any(|done| done.id == segment.id) {
+                return Err(ScopePlanRejection::new(
+                    "SCOPE_PLAN_COMMITTED_SEGMENT_REDECLARED",
+                    format!(
+                        "Segment \"{}\" already reached the board and cannot be re-planned. Declare only the remaining work.",
+                        segment.id
+                    ),
+                ));
+            }
+        }
+
+        let mut merged = committed;
+        let active = merged.len();
+        merged.extend(args.segments);
+
+        let revised = accept_scope_plan(PlanBoardScopeArgs {
+            strategy: args.strategy,
+            segments: merged,
+            rationale: args.rationale,
+        })?;
+
+        Ok(Self {
+            active,
+            committed: self.committed.clone(),
+            revisions: self.revisions.saturating_add(1),
+            ..revised
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FlowScriptDraftResponse {
     pub status: String,
@@ -9949,6 +10404,114 @@ impl Tool for CommitFlowIrDraftTool {
         self.store.observe_board(&self.board);
         let result = self.store.commit(&self.board, &catalog, args);
         Ok(result.render_for_model(&self.board, allow_deletions))
+    }
+}
+
+#[cfg(test)]
+mod scope_plan_tests {
+    use super::*;
+
+    fn segment(id: &str) -> PlannedSegment {
+        PlannedSegment {
+            id: id.to_string(),
+            title: format!("Segment {id}"),
+            behavior: format!("Build and fully wire every node belonging to slice {id}."),
+            depends_on: Vec::new(),
+            board_ref: CURRENT_BOARD_REF.to_string(),
+        }
+    }
+
+    fn staged(ids: &[&str]) -> PlanBoardScopeArgs {
+        PlanBoardScopeArgs {
+            strategy: ScopeStrategy::Staged,
+            segments: ids.iter().map(|id| segment(id)).collect(),
+            rationale: String::new(),
+        }
+    }
+
+    #[test]
+    fn a_revision_keeps_applied_segments_and_resumes_after_them() {
+        let mut plan = accept_scope_plan(staged(&["s1", "s2", "s3"])).expect("plan");
+        plan.mark_active_authored();
+        plan.mark_authored_committed();
+        assert_eq!(plan.committed, ["s1"]);
+
+        let revised = plan
+            .revise(staged(&["s2a", "s2b"]))
+            .expect("the remaining work may be re-split once");
+        assert_eq!(
+            revised
+                .segments
+                .iter()
+                .map(|segment| segment.id.as_str())
+                .collect::<Vec<_>>(),
+            ["s1", "s2a", "s2b"],
+            "applied segments are carried through unchanged"
+        );
+        assert_eq!(
+            revised.active, 1,
+            "authoring resumes after the applied work"
+        );
+        assert_eq!(revised.committed, ["s1"]);
+        assert_eq!(revised.revisions, 1);
+    }
+
+    #[test]
+    fn a_revision_cannot_re_declare_an_applied_segment_or_happen_twice() {
+        let mut plan = accept_scope_plan(staged(&["s1", "s2"])).expect("plan");
+        plan.mark_active_authored();
+        plan.mark_authored_committed();
+
+        let redeclared = plan
+            .revise(staged(&["s1", "s2"]))
+            .expect_err("an applied segment is immutable");
+        assert_eq!(redeclared.code, "SCOPE_PLAN_COMMITTED_SEGMENT_REDECLARED");
+
+        let revised = plan
+            .revise(staged(&["s2a", "s2b"]))
+            .expect("first revision");
+        let second = revised
+            .revise(staged(&["s2c", "s2d"]))
+            .expect_err("only one revision per run");
+        assert_eq!(second.code, "SCOPE_PLAN_REVISION_EXHAUSTED");
+    }
+
+    #[test]
+    fn uncommitted_titles_name_exactly_what_is_missing() {
+        let mut plan = accept_scope_plan(staged(&["s1", "s2", "s3"])).expect("plan");
+        assert_eq!(plan.uncommitted_titles().len(), 3);
+
+        plan.mark_active_authored();
+        plan.mark_active_authored();
+        plan.mark_authored_committed();
+        assert_eq!(plan.committed_count(), 2);
+        assert_eq!(plan.uncommitted_titles(), ["Segment s3"]);
+        assert_eq!(plan.remaining(), 1);
+    }
+
+    /// A staged plan commits once, so a placeholder-only behavior would smuggle an unbuilt segment
+    /// into an otherwise valid document. Concreteness is checked before anything is authored.
+    #[test]
+    fn behavior_must_be_concrete_prose_not_a_heading_or_a_deferral() {
+        for behavior in ["", "TODO", "Parser", "tbd for now", "stub this out later"] {
+            let args = PlanBoardScopeArgs {
+                strategy: ScopeStrategy::Staged,
+                segments: vec![
+                    segment("s1"),
+                    PlannedSegment {
+                        behavior: behavior.to_string(),
+                        ..segment("s2")
+                    },
+                ],
+                rationale: String::new(),
+            };
+            let rejection = accept_scope_plan(args)
+                .expect_err(&format!("{behavior:?} is not an executable slice"));
+            assert_eq!(rejection.code, "SCOPE_PLAN_SEGMENT_NOT_CONCRETE");
+        }
+
+        let accepted = accept_scope_plan(staged(&["s1", "s2"]));
+        assert!(accepted.is_ok());
     }
 }
 

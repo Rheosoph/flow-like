@@ -19,19 +19,9 @@ import { type IApp, IAppVisibility } from "../../lib/schema/app/app";
 import type { IMetadata } from "../../lib/schema/bit/bit";
 import { cn } from "../../lib/utils";
 import { VISIBILITY_META } from "../settings/visibility-status/visibility-meta";
-import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
+import { AppTypeMark } from "./app-type-mark";
 
 const MotionLink = motion.create(Link);
-
-/**
- * Radix hides an avatar image until its load event fires, so a cached icon
- * still paints the initials fallback for a frame on every mount — across a
- * grid of cards that reads as the whole library flickering. Holding the
- * fallback back for a moment lets cached icons appear directly, while a genuinely
- * slow load still gets its placeholder. Safe here because these cards always
- * pass a src.
- */
-const ICON_FALLBACK_DELAY_MS = 400;
 
 interface AppCardProps {
 	app: IApp;
@@ -304,28 +294,21 @@ function SmallAppCard({
 				</div>
 
 				<div className="relative shrink-0 z-10">
-					<Avatar className="w-12 h-12 rounded-xl shadow-sm">
-						<motion.div
-							variants={{
-								hover: { scale: 0.9 },
-							}}
-							transition={{ type: "spring", stiffness: 300 }}
-						>
-							<AvatarImage
-								src={metadata?.icon ?? "/app-logo.webp"}
-								alt={`${metadata?.name ?? app.id} icon`}
-								className="rounded-xl"
-							/>
-						</motion.div>
-						<AvatarFallback
-							delayMs={ICON_FALLBACK_DELAY_MS}
-							className="rounded-xl text-xs font-semibold bg-gradient-to-br from-primary/20 to-primary/10"
-						>
-							{(metadata?.name ?? app.id).substring(0, 2).toUpperCase()}
-						</AvatarFallback>
-					</Avatar>
+					<motion.div
+						variants={{ hover: { scale: 0.9 } }}
+						transition={{ type: "spring", stiffness: 300 }}
+					>
+						<AppTypeMark
+							type={app.app_type}
+							size={44}
+							src={metadata?.icon ?? "/app-logo.webp"}
+							fallback={(metadata?.name ?? app.id)
+								.substring(0, 2)
+								.toUpperCase()}
+						/>
+					</motion.div>
 					{app.visibility !== IAppVisibility.Public && (
-						<div className="absolute -top-0.5 -right-0.5 scale-[0.6]">
+						<div className="absolute -top-1.5 -left-1.5 scale-[0.6]">
 							<VisibilityIcon visibility={app.visibility} />
 						</div>
 					)}
@@ -551,24 +534,20 @@ function ExtendedAppCard({
 				{/* meta overlaid on the scrim at the bottom */}
 				<div className="relative z-10 flex flex-col gap-2.5 p-5">
 					<div className="flex items-center gap-3">
-						<Avatar className="size-11 shrink-0 rounded-xl border border-white/15 bg-white/10 shadow-lg backdrop-blur-md">
-							<motion.div
-								variants={{ hover: { scale: 0.92 } }}
-								transition={{ type: "spring", stiffness: 300 }}
-							>
-								<AvatarImage
-									src={appIcon}
-									alt={`${appName} icon`}
-									className="rounded-xl"
-								/>
-							</motion.div>
-							<AvatarFallback
-								delayMs={ICON_FALLBACK_DELAY_MS}
-								className="rounded-xl bg-white/15 text-sm font-bold text-white"
-							>
-								{appName.substring(0, 2).toUpperCase()}
-							</AvatarFallback>
-						</Avatar>
+						<motion.div
+							variants={{ hover: { scale: 0.92 } }}
+							transition={{ type: "spring", stiffness: 300 }}
+							className="shrink-0"
+						>
+							<AppTypeMark
+								type={app.app_type}
+								size={44}
+								src={appIcon}
+								badgeOnDark
+								background="oklch(1 0 0 / 0.12)"
+								fallback={appName.substring(0, 2).toUpperCase()}
+							/>
+						</motion.div>
 						<div className="min-w-0">
 							<div
 								className="truncate text-[11px] font-semibold uppercase tracking-wider"
@@ -711,19 +690,14 @@ export function SpotlightCard({
 							/>
 						)}
 						<div className="absolute inset-0 grid place-items-center">
-							<Avatar className="size-16 rounded-2xl border border-white/15 bg-white/10 shadow-lg backdrop-blur-md">
-								<AvatarImage
-									src={appIcon}
-									alt={`${appName} icon`}
-									className="rounded-2xl"
-								/>
-								<AvatarFallback
-									delayMs={ICON_FALLBACK_DELAY_MS}
-									className="rounded-2xl bg-white/15 text-lg font-bold text-white"
-								>
-									{appName.substring(0, 2).toUpperCase()}
-								</AvatarFallback>
-							</Avatar>
+							<AppTypeMark
+								type={app.app_type}
+								size={64}
+								src={appIcon}
+								badgeOnDark
+								background="oklch(1 0 0 / 0.12)"
+								fallback={appName.substring(0, 2).toUpperCase()}
+							/>
 						</div>
 					</>
 				)}

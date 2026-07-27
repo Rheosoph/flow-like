@@ -1,12 +1,15 @@
+import { isFlowPilotE2EModelKey } from "./cases";
 import type {
 	FlowPilotE2EArtifact,
 	FlowPilotE2ECaseId,
 	FlowPilotE2ECliEnvelope,
+	FlowPilotE2EModelKey,
 } from "./types";
 
 export interface FlowPilotE2ECliExpectation {
 	runId: string;
 	caseIds: readonly FlowPilotE2ECaseId[];
+	modelKey: FlowPilotE2EModelKey;
 	repeat: number;
 	minFlowScriptNonWhitespaceChars?: number;
 	failFast: boolean;
@@ -25,6 +28,7 @@ function isArtifact(value: unknown): value is FlowPilotE2EArtifact {
 	if (
 		value.schema !== "flowpilot.app-creation-e2e-artifact/v1" ||
 		typeof value.caseId !== "string" ||
+		!isFlowPilotE2EModelKey(value.requestedModelKey) ||
 		typeof value.expectedAppName !== "string" ||
 		typeof value.prompt !== "string" ||
 		typeof value.generatedAt !== "string" ||
@@ -66,6 +70,7 @@ export function isFlowPilotE2ECliEnvelope(
 		!isRecord(value.selection) ||
 		!Array.isArray(value.selection.caseIds) ||
 		!value.selection.caseIds.every((caseId) => typeof caseId === "string") ||
+		!isFlowPilotE2EModelKey(value.selection.modelKey) ||
 		!isNonNegativeInteger(value.selection.repeat) ||
 		typeof value.selection.failFast !== "boolean" ||
 		!Array.isArray(value.artifacts) ||
@@ -116,6 +121,7 @@ export function normalizeFlowPilotE2ECliEnvelope(
 	}
 	if (
 		!sameCaseIds(envelope.selection.caseIds, expected.caseIds) ||
+		envelope.selection.modelKey !== expected.modelKey ||
 		envelope.selection.repeat !== expected.repeat ||
 		envelope.selection.minFlowScriptNonWhitespaceChars !==
 			expected.minFlowScriptNonWhitespaceChars ||
@@ -138,6 +144,11 @@ export function normalizeFlowPilotE2ECliEnvelope(
 		if (artifact.caseId !== expectedOrder[index]) {
 			throw new Error(
 				`FlowPilot E2E artifact ${index + 1} is for ${artifact.caseId}; expected ${expectedOrder[index]}.`,
+			);
+		}
+		if (artifact.requestedModelKey !== expected.modelKey) {
+			throw new Error(
+				`FlowPilot E2E artifact ${index + 1} requested model ${artifact.requestedModelKey}; expected ${expected.modelKey}.`,
 			);
 		}
 	}
@@ -182,6 +193,7 @@ export function normalizeFlowPilotE2ECliEnvelope(
 		...envelope,
 		selection: {
 			caseIds: [...expected.caseIds],
+			modelKey: expected.modelKey,
 			repeat: expected.repeat,
 			minFlowScriptNonWhitespaceChars: expected.minFlowScriptNonWhitespaceChars,
 			failFast: expected.failFast,

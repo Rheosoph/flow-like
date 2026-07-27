@@ -39,8 +39,28 @@ export interface IMetaBlob {
 	data_b64: string;
 }
 
+/**
+ * Source → destination id translation produced by a fork.
+ *
+ * `boards` is the one an agent orchestrating a multi-part build needs: a plan's
+ * part targets name boards in the SOURCE app, and a fork allocates fresh ids, so
+ * every target must be retargeted through this map before it is dispatched.
+ * The node/pin maps run to thousands of entries and are of no use to a caller
+ * working at board granularity.
+ */
+export interface IForkIdMap {
+	source_app_id?: string;
+	app_id?: string;
+	boards?: Record<string, string>;
+	events?: Record<string, string>;
+	pages?: Record<string, string>;
+	widgets?: Record<string, string>;
+	templates?: Record<string, string>;
+	[key: string]: unknown;
+}
+
 export interface IForkReport {
-	id_map: Record<string, unknown>;
+	id_map: IForkIdMap;
 	skipped: { kind: string; source_id: string; reason: string }[];
 	warnings: string[];
 	bytes_copied: number;

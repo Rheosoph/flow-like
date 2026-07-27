@@ -11,8 +11,9 @@ use flow_like_ast::model::{
 };
 
 use super::ir_tools::{
-    CheckFlowScriptArgs, CommitFlowScriptArgs, FlowIrAcceptanceBinding, FlowIrDraftStore,
-    PatchFlowScriptArgs, WriteFlowScriptArgs,
+    CheckFlowScriptArgs, CommitFlowScriptArgs, ExtendTimeBudgetArgs, FlowIrAcceptanceBinding,
+    FlowIrDraftStore, MAX_BOARD_SCOPE_SEGMENTS, PatchFlowScriptArgs, PlanBoardScopeArgs,
+    WriteFlowScriptArgs, accept_scope_plan,
 };
 use super::platform::PlatformToolBridge;
 #[cfg(test)]
@@ -3404,6 +3405,67 @@ RULES:
             board_has_no_nodes(&self.board),
             args.allow_deletions,
         ))
+    }
+}
+
+pub struct ExtendTimeBudgetTool;
+
+impl Tool for ExtendTimeBudgetTool {
+    const NAME: &'static str = "extend_time_budget";
+
+    type Error = FlowScriptToolError;
+    type Args = ExtendTimeBudgetArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "Ask for more wall clock on a long build. Call this when the run is genuinely still advancing and the remaining segments need more time than the current budget allows. The host decides from its own record of what actually moved — segments committed, revisions that checked valid, the retained document growing, new compiler states reached — not from what you write here, so an accurate account costs nothing and an optimistic one buys nothing. A run that is repairing the same diagnostics or rewriting the same document is refused and should stop and report instead. You do not have to call this to survive a deadline: the host also extends automatically at the boundary whenever the same evidence of progress is present. Use it when you already know the next segment is large."
+                .to_string(),
+            parameters: serde_json::to_value(schema_for!(ExtendTimeBudgetArgs))
+                .unwrap_or_else(|_| json!({ "type": "object" })),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // The budget lives in the host run loop, which intercepts this call before dispatch. Only a
+        // surface with no such loop (the in-process rig path) ever reaches this body.
+        let payload = json!({
+            "status": "time_budget_unavailable",
+            "retryable": false,
+            "next_action": "continue_building",
+            "message": "This run has no extendable host time budget; continue within the budget you have.",
+        });
+        Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()))
+    }
+}
+
+pub struct PlanBoardScopeTool;
+
+impl Tool for PlanBoardScopeTool {
+    const NAME: &'static str = "plan_board_scope";
+
+    type Error = FlowScriptToolError;
+    type Args = PlanBoardScopeArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: format!(
+                "Declare how the requested behavior will be built, after the declaration lookup and before the first source write. Split the request into ordered segments that are each executable on their own, and pick how they reach the board: \"single\" for one segment (an ordinary edit — this is the common case and costs nothing extra), \"staged\" to grow one draft segment by segment and commit once atomically, \"incremental\" to commit each segment separately when the whole build is too large to reach one commit, or \"multi_board\" when the segments are genuinely independent entry points that each deserve their own board. Segments are NOT stubs: each must fully feed the required inputs of the nodes it adds, and describe concrete behavior rather than deferred work. Unfinished exec tails between segments are expected and do not block validation. At most {MAX_BOARD_SCOPE_SEGMENTS} segments; dependencies must point at earlier segments."
+            ),
+            parameters: serde_json::to_value(schema_for!(PlanBoardScopeArgs))
+                .unwrap_or_else(|_| json!({ "type": "object" })),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let payload = match accept_scope_plan(args) {
+            Ok(plan) => plan.acceptance_payload(),
+            Err(rejection) => rejection.payload(),
+        };
+        Ok(serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()))
     }
 }
 
