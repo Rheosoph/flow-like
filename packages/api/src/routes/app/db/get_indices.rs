@@ -50,7 +50,10 @@ impl From<IndexConfigDto> for IndexConfigResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/db/{table}/indices", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/db/{table}/indices",
+    skip(state, user, scope)
+)]
 pub async fn get_db_indices(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

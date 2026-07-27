@@ -39,7 +39,10 @@ pub struct DropColumnsPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "DELETE /apps/{app_id}/db/{table}/columns", skip(state, user))]
+#[tracing::instrument(
+    name = "DELETE /apps/{app_id}/db/{table}/columns",
+    skip(state, user, scope, payload)
+)]
 pub async fn drop_columns(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

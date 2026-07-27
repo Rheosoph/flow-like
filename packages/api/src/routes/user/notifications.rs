@@ -85,7 +85,7 @@ pub async fn get_notifications(
         ("bearer_auth" = [])
     )
 )]
-#[tracing::instrument(name = "GET /user/notifications/list", skip(state, user))]
+#[tracing::instrument(name = "GET /user/notifications/list", skip_all)]
 pub async fn list_notifications(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -262,7 +262,7 @@ pub struct CreateUserNotificationResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /user/notifications/create", skip(state, user))]
+#[tracing::instrument(name = "POST /user/notifications/create", skip_all)]
 pub async fn create_user_notification(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

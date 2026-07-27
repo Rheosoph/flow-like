@@ -36,7 +36,7 @@ pub struct DeleteFilesPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "DELETE /apps/{app_id}/data", skip(state, user))]
+#[tracing::instrument(name = "DELETE /apps/{app_id}/data", skip(state, user, payload))]
 pub async fn delete_files(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -97,7 +97,7 @@ pub async fn delete_files(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "DELETE /apps/{app_id}/data/user", skip(state, user))]
+#[tracing::instrument(name = "DELETE /apps/{app_id}/data/user", skip(state, user, payload))]
 pub async fn delete_user_files(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

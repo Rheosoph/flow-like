@@ -11,10 +11,7 @@ use sea_orm::{ActiveModelTrait, EntityTrait};
 
 /// Sometimes when the user still has an old jwt, the user info is not updated correctly.
 /// In these cases, we want to update the value correctly.
-#[tracing::instrument(
-    name = "Should update user attribute",
-    skip(state, sub, attribute, value)
-)]
+#[tracing::instrument(name = "Should update user attribute", skip_all)]
 async fn should_update(
     state: &AppState,
     sub: &str,

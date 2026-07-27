@@ -56,7 +56,7 @@ fn default_direction() -> String {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/graph/{overlay_id}/neighbors",
-    skip(state, user, payload)
+    skip(state, user, scope, payload)
 )]
 pub async fn neighbors(
     State(state): State<AppState>,

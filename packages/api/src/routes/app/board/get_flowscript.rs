@@ -46,7 +46,7 @@ pub struct FlowScriptResponse {
 )]
 #[tracing::instrument(
     name = "GET /apps/{app_id}/board/{board_id}/flowscript",
-    skip(state, user)
+    skip(state, user, params)
 )]
 pub async fn get_flowscript(
     State(state): State<AppState>,

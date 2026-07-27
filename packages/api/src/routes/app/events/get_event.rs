@@ -41,7 +41,10 @@ pub struct VersionQuery {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/events/{event_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/events/{event_id}",
+    skip(state, user, query)
+)]
 pub async fn get_event(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

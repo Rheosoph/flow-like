@@ -127,7 +127,7 @@ impl GcpRuntimeCredentials {
 
     #[tracing::instrument(
         name = "GcpRuntimeCredentials::scoped_credentials",
-        skip(self, state),
+        skip(self, sub, state),
         level = "debug"
     )]
     pub async fn scoped_credentials(

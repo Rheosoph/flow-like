@@ -42,7 +42,10 @@ pub struct QueryLogsRequest {
         (status = 500, description = "Failed to query logs")
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/board/{board_id}/logs", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/board/{board_id}/logs",
+    skip(state, user, params)
+)]
 pub async fn query_logs(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

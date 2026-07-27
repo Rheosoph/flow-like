@@ -640,7 +640,7 @@ impl State {
 
     #[tracing::instrument(
         name = "master_app",
-        skip(self, state),
+        skip(self, state, _sub),
         fields(sub, app_id, board_id, version)
     )]
     pub async fn master_app(
@@ -691,7 +691,7 @@ impl State {
 
     #[tracing::instrument(
         name = "master_board",
-        skip(self, state),
+        skip(self, state, _sub),
         level = "debug",
         fields(sub, app_id, board_id, version)
     )]

@@ -336,7 +336,7 @@ pub struct ExecutionEventOutput {
         ("user_jwt" = [])
     )
 )]
-#[tracing::instrument(name = "GET /execution/poll", skip(state, headers))]
+#[tracing::instrument(name = "GET /execution/poll", skip_all)]
 pub async fn poll_status(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -432,7 +432,7 @@ pub async fn poll_status(
         ("bearer_auth" = [])
     )
 )]
-#[tracing::instrument(name = "GET /execution/run/{run_id}", skip(state))]
+#[tracing::instrument(name = "GET /execution/run/{run_id}", skip(state, user))]
 pub async fn get_run_status(
     State(state): State<AppState>,
     axum::extract::Path(run_id): axum::extract::Path<String>,

@@ -70,7 +70,7 @@ pub struct ListSolutionsQuery {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "GET /admin/solutions", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/solutions", skip_all)]
 pub async fn list_solutions(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

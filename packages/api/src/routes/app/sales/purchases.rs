@@ -81,7 +81,7 @@ pub struct PurchasesResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/sales/purchases", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/sales/purchases", skip(state, user, query))]
 pub async fn list_purchases(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

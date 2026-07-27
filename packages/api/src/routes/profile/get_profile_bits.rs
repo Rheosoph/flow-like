@@ -31,7 +31,7 @@ const MAX_BITS: u64 = 100;
         (status = 404, description = "Profile not found")
     )
 )]
-#[tracing::instrument(name = "GET /profile/{profile_id}/bits", skip(state, user))]
+#[tracing::instrument(name = "GET /profile/{profile_id}/bits", skip(state, user, query))]
 pub async fn get_profile_bits(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

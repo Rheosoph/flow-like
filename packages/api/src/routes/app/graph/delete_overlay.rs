@@ -34,7 +34,10 @@ use flow_like_storage::databases::graph::lancegraph;
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "DELETE /apps/{app_id}/graph/{overlay_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "DELETE /apps/{app_id}/graph/{overlay_id}",
+    skip(state, user, scope)
+)]
 pub async fn delete_overlay(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -1515,7 +1515,7 @@ impl Board {
         board
     }
 
-    #[instrument(name = "Board::load", skip(app_state), level = "debug")]
+    #[instrument(name = "Board::load", skip(app_state, path), level = "debug")]
     pub async fn load(
         path: Path,
         id: &str,

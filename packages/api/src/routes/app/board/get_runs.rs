@@ -119,7 +119,10 @@ async fn hydrate_node_summaries(
         (status = 401, description = "Unauthorized")
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/board/{board_id}/runs", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/board/{board_id}/runs",
+    skip(state, user, query)
+)]
 pub async fn get_runs(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

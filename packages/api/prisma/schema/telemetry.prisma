@@ -1,0 +1,378 @@
+model TelemetryEvent {
+  id         String    @id
+  name       String
+  source     String
+  anonId     String
+  props      Json?
+  appVersion String?
+  platform   String?
+  country    String?
+  clientTs   DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([createdAt])
+  @@index([name, createdAt])
+  @@index([anonId, createdAt])
+}
+
+model TelemetryIssue {
+  id                String   @id
+  fingerprint       String   @unique
+  kind              String
+  title             String
+  culprit           String?
+  level             String
+  source            String
+  platform          String?
+  status            String   @default("unresolved")
+  resolvedInRelease String?
+  firstSeen         DateTime
+  lastSeen          DateTime
+  eventCount        Int      @default(0)
+  installCount      Int      @default(0)
+  firstRelease      String?
+  lastRelease       String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([lastSeen])
+  @@index([status, lastSeen])
+  @@index([source, lastSeen])
+}
+
+model TelemetryErrorEvent {
+  id          String    @id
+  issueId     String
+  anonId      String
+  source      String
+  platform    String?
+  appVersion  String?
+  release     String?
+  kind        String
+  title       String
+  culprit     String?
+  level       String
+  stacktrace  Json?
+  breadcrumbs Json?
+  context     Json?
+  country     String?
+  clientTs    DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([issueId, createdAt])
+  @@index([createdAt])
+  @@index([anonId, createdAt])
+}
+
+model TelemetryRelease {
+  id          String   @id
+  version     String
+  source      String
+  commitSha   String?
+  firstSeenAt DateTime
+  createdAt   DateTime @default(now())
+
+  @@unique([version, source])
+}
+
+model TelemetrySourceMap {
+  id        String   @id
+  release   String
+  source    String
+  fileName  String
+  map       String
+  createdAt DateTime @default(now())
+
+  @@unique([release, source, fileName])
+}
+
+model TelemetrySession {
+  id         String   @id
+  anonId     String
+  source     String
+  release    String?
+  platform   String?
+  status     String
+  startedAt  DateTime
+  durationMs Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([startedAt])
+  @@index([release, startedAt])
+  @@index([anonId, startedAt])
+}
+
+model TelemetrySpan {
+  id           String   @id
+  traceId      String
+  spanId       String
+  parentSpanId String?
+  name         String
+  kind         String
+  source       String
+  anonId       String?
+  release      String?
+  platform     String?
+  startedAt    DateTime
+  durationMs   Int
+  status       String
+  attributes   Json?
+  createdAt    DateTime @default(now())
+
+  @@index([traceId])
+  @@index([createdAt])
+  @@index([name, createdAt])
+  @@index([startedAt])
+}
+
+model TelemetryPerfMetric {
+  id        String    @id
+  anonId    String
+  source    String
+  platform  String?
+  release   String?
+  metric    String
+  value     Float
+  path      String?
+  country   String?
+  clientTs  DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([metric, createdAt])
+  @@index([createdAt])
+}
+
+model TelemetryAlertRule {
+  id              String    @id
+  name            String
+  metric          String
+  source          String?
+  comparator      String
+  threshold       Float?
+  mode            String
+  windowMinutes   Int
+  sensitivity     Float?
+  minSamples      Int
+  enabled         Boolean   @default(true)
+  notifyEmail     Boolean   @default(false)
+  notifyPush      Boolean   @default(false)
+  lastEvaluatedAt DateTime?
+  lastTriggeredAt DateTime?
+  lastValue       Float?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([enabled])
+}
+
+model TelemetryAlertEvent {
+  id             String    @id
+  ruleId         String
+  ruleName       String
+  status         String
+  value          Float
+  threshold      Float?
+  message        String
+  acknowledgedAt DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([ruleId, createdAt])
+  @@index([createdAt])
+  @@index([status, createdAt])
+}
+
+model TelemetrySavedQuery {
+  id         String   @id
+  name       String
+  definition Json
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model TelemetryDashboard {
+  id        String   @id
+  name      String
+  tiles     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TelemetryLlmCall {
+  id               String   @id
+  anonId           String?
+  source           String
+  release          String?
+  provider         String
+  model            String
+  operation        String
+  durationMs       Int
+  promptTokens     Int?
+  completionTokens Int?
+  totalTokens      Int?
+  status           String
+  errorKind        String?
+  toolCalls        Int      @default(0)
+  streamed         Boolean  @default(false)
+  createdAt        DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([model, createdAt])
+  @@index([provider, createdAt])
+  @@index([status, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Daily rollups
+//
+// Raw telemetry is swept on a retention schedule; these day-granular aggregates
+// are what admin queries read for any window longer than 48h, so long-range
+// dashboards never scan (or silently truncate) raw rows. `day` is a DateTime
+// truncated to UTC midnight and every table is keyed so the rollup job can
+// UPSERT idempotently — recomputing a day must never double-count.
+//
+// Ordering invariant: the sweeper must never delete raw rows for a day that has
+// not been rolled up yet, so retention cutoffs are clamped to the latest
+// rolled-up day. TelemetryIssue is never swept; its counters therefore survive
+// the raw TelemetryErrorEvent rows they were derived from and stay lifetime
+// totals by design.
+// ---------------------------------------------------------------------------
+
+/// One row per install per day — the backbone of engagement rollups
+/// (DAU/WAU/MAU, new vs returning, churn, retention cohorts, adoption).
+model TelemetryInstallDaily {
+  id        String   @id
+  day       DateTime
+  anonId    String
+  source    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([day, anonId, source])
+  @@index([day])
+  @@index([anonId, day])
+}
+
+/// Per-event-name daily counts. Names beyond the top 200 of a day are folded
+/// into a single `__other__` row to bound the long tail.
+model TelemetryEventDaily {
+  id        String   @id
+  day       DateTime
+  name      String
+  source    String
+  count     Int      @default(0)
+  installs  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([day, name, source])
+  @@index([day])
+}
+
+/// Daily breakdown per dimension (platform, country, app_version, source).
+/// Values beyond the top 200 per dimension per day fold into `__other__`.
+model TelemetryDimensionDaily {
+  id        String   @id
+  day       DateTime
+  dimension String
+  value     String
+  count     Int      @default(0)
+  installs  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([day, dimension, value])
+  @@index([day, dimension])
+}
+
+/// Release-health rollup. `release` is non-nullable so the unique key stays
+/// upsertable on CockroachDB; unknown releases collapse into a sentinel value.
+model TelemetrySessionDaily {
+  id              String   @id
+  day             DateTime
+  release         String
+  source          String
+  sessions        Int      @default(0)
+  crashedSessions Int      @default(0)
+  erroredSessions Int      @default(0)
+  installs        Int      @default(0)
+  crashedInstalls Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([day, release, source])
+  @@index([day])
+}
+
+/// Daily LLM usage and cost drivers per provider/model/source.
+model TelemetryLlmDaily {
+  id               String   @id
+  day              DateTime
+  provider         String
+  model            String
+  source           String
+  calls            Int      @default(0)
+  errors           Int      @default(0)
+  promptTokens     BigInt   @default(0)
+  completionTokens BigInt   @default(0)
+  totalTokens      BigInt   @default(0)
+  durationSumMs    BigInt   @default(0)
+  durationMaxMs    Int      @default(0)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([day, provider, model, source])
+  @@index([day])
+}
+
+/// Daily Web Vitals percentiles per metric. Percentiles are recomputed from raw
+/// samples for the whole day, never merged across days.
+model TelemetryPerfDaily {
+  id        String   @id
+  day       DateTime
+  metric    String
+  source    String
+  count     Int      @default(0)
+  p50       Float    @default(0)
+  p75       Float    @default(0)
+  p95       Float    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([day, metric, source])
+  @@index([day])
+}
+
+/// Daily FlowPilot production counters, one column per counter reported by the
+/// client `IFlowPilotProductionMetrics` payload.
+model TelemetryFlowpilotDaily {
+  id                            String   @id
+  day                           DateTime
+  runsStarted                   BigInt   @default(0)
+  runsSucceeded                 BigInt   @default(0)
+  runsFailed                    BigInt   @default(0)
+  runsCancelled                 BigInt   @default(0)
+  plansAssessed                 BigInt   @default(0)
+  plansFeasible                 BigInt   @default(0)
+  plansInfeasible               BigInt   @default(0)
+  attemptsTotal                 BigInt   @default(0)
+  attemptsParseValid            BigInt   @default(0)
+  attemptsTypedValid            BigInt   @default(0)
+  attemptsReconcileValid        BigInt   @default(0)
+  attemptsApplied               BigInt   @default(0)
+  queuedReviews                 BigInt   @default(0)
+  applyDispositions             BigInt   @default(0)
+  dismissedDispositions         BigInt   @default(0)
+  staleDispositions             BigInt   @default(0)
+  errorDispositions             BigInt   @default(0)
+  diagnosticOccurrences         BigInt   @default(0)
+  repeatedDiagnosticOccurrences BigInt   @default(0)
+  validationRegressions         BigInt   @default(0)
+  boardsInspected               BigInt   @default(0)
+  emptyBoardsAfterRun           BigInt   @default(0)
+  installs                      Int      @default(0)
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
+
+  @@unique([day])
+}

@@ -408,7 +408,7 @@ pub struct AdminPaginated<T> {
     pub page_size: u64,
 }
 
-#[tracing::instrument(name = "GET /admin/usage/overview", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/usage/overview", skip_all)]
 pub async fn overview(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -820,7 +820,7 @@ pub async fn put_limits(
 
 #[tracing::instrument(
     name = "GET /admin/usage/apps/{app_id}/technical-users/{technical_user_id}/limits",
-    skip(state, user)
+    skip(state, user, technical_user_id)
 )]
 pub async fn get_technical_user_limits(
     State(state): State<AppState>,
@@ -845,7 +845,7 @@ pub async fn get_technical_user_limits(
 
 #[tracing::instrument(
     name = "PUT /admin/usage/apps/{app_id}/technical-users/{technical_user_id}/limits",
-    skip(state, user, limits)
+    skip(state, user, limits, technical_user_id)
 )]
 pub async fn put_technical_user_limits(
     State(state): State<AppState>,
@@ -884,7 +884,7 @@ pub async fn put_technical_user_limits(
     Ok(Json(updated))
 }
 
-#[tracing::instrument(name = "GET /admin/usage/invocations", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/usage/invocations", skip_all)]
 pub async fn invocations(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -943,7 +943,7 @@ pub async fn invocations(
     }))
 }
 
-#[tracing::instrument(name = "POST /admin/usage/reconcile", skip(state, user))]
+#[tracing::instrument(name = "POST /admin/usage/reconcile", skip_all)]
 pub async fn reconcile(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -959,7 +959,7 @@ pub async fn reconcile(
     ))
 }
 
-#[tracing::instrument(name = "GET /admin/usage/alerts", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/usage/alerts", skip_all)]
 pub async fn alerts(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -1026,7 +1026,7 @@ pub async fn acknowledge_alert(
     Ok(Json(updated.into()))
 }
 
-#[tracing::instrument(name = "GET /admin/usage/audit", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/usage/audit", skip_all)]
 pub async fn audit(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

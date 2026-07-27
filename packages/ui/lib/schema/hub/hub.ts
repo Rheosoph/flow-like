@@ -191,6 +191,7 @@ export interface IFeatures {
 	governance: boolean;
 	model_hosting: boolean;
 	premium: boolean;
+	telemetry?: boolean;
 	unauthorized_read: boolean;
 	[property: string]: any;
 }

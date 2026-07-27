@@ -3,6 +3,10 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use axum::Router;
 use flow_like_api::execution::{RunSweeperConfig, spawn_run_sweeper};
+use flow_like_api::telemetry::{
+    TelemetryAlertConfig, TelemetryRollupConfig, TelemetrySweeperConfig,
+    spawn_telemetry_alert_evaluator, spawn_telemetry_rollup, spawn_telemetry_sweeper,
+};
 use flow_like_api::{construct_router, state::State};
 use flow_like_catalog::get_catalog;
 use std::sync::Arc;
@@ -41,6 +45,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _sweeper_handle =
         spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+
+    // Spawned before the sweeper so the aggregates lead the deletions. The
+    // ordering guarantee itself lives in the sweeper, which clamps every raw
+    // retention cutoff to the last fully rolled-up day.
+    let _telemetry_rollup_handle = spawn_telemetry_rollup(
+        Arc::new(state.db.clone()),
+        TelemetryRollupConfig::from_env(),
+    );
+
+    let _telemetry_sweeper_handle = spawn_telemetry_sweeper(
+        Arc::new(state.db.clone()),
+        TelemetrySweeperConfig::from_env(),
+    );
+
+    let _telemetry_alert_handle = spawn_telemetry_alert_evaluator(
+        Arc::new(state.db.clone()),
+        TelemetryAlertConfig::from_env(),
+    );
 
     let app = Router::new()
         .merge(construct_router(state.clone()))

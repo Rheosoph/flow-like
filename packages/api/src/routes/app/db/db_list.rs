@@ -34,7 +34,7 @@ use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorSt
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/db/{table}", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/db/{table}", skip(state, user, params))]
 pub async fn list_items(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

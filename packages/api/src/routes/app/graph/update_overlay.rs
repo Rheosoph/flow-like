@@ -57,7 +57,7 @@ pub struct UpdateOverlayPayload {
 )]
 #[tracing::instrument(
     name = "PUT /apps/{app_id}/graph/{overlay_id}",
-    skip(state, user, payload)
+    skip(state, user, scope, payload)
 )]
 pub async fn update_overlay(
     State(state): State<AppState>,

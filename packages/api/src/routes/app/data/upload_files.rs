@@ -39,7 +39,7 @@ pub struct UploadFilesPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/data", skip(state, user))]
+#[tracing::instrument(name = "PUT /apps/{app_id}/data", skip(state, user, payload))]
 pub async fn upload_files(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -123,7 +123,7 @@ pub async fn upload_files(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/data/user", skip(state, user))]
+#[tracing::instrument(name = "PUT /apps/{app_id}/data/user", skip(state, user, payload))]
 pub async fn upload_user_files(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

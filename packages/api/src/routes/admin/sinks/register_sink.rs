@@ -76,7 +76,7 @@ struct SinkTriggerClaims {
 ///   "sink_type": "cron"
 /// }
 /// ```
-#[tracing::instrument(name = "POST /admin/sinks/register", skip(state, user))]
+#[tracing::instrument(name = "POST /admin/sinks/register", skip_all)]
 pub async fn register_sink(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

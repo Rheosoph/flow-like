@@ -32,7 +32,10 @@ use flow_like_types::anyhow;
         (status = 404, description = "Board not found")
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/board/{board_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/board/{board_id}",
+    skip(state, user, params)
+)]
 pub async fn get_board(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -65,7 +65,7 @@ struct FlaggedRow {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "GET /admin/governance/patterns", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/governance/patterns", skip_all)]
 pub async fn list_patterns(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

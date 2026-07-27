@@ -37,7 +37,10 @@ use sea_orm::{
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/team/link/join/{token}", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/team/link/join/{token}",
+    skip(state, user, token)
+)]
 pub async fn join_invite_link(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

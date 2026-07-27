@@ -1,5 +1,6 @@
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{delete, get, patch, post, put},
 };
 use bit::{delete_bit, push_meta, upsert_bit};
@@ -20,6 +21,7 @@ pub mod publication;
 pub mod runs;
 pub mod sinks;
 pub mod solutions;
+pub mod telemetry;
 pub mod usage;
 pub mod users;
 
@@ -161,4 +163,124 @@ pub fn routes() -> Router<AppState> {
         .route("/logs/stats", get(logs::stats::error_stats))
         .route("/logs/timeseries", get(logs::timeseries::error_timeseries))
         .route("/logs/chain-status", get(logs::chain_status::chain_status))
+        // Telemetry dashboards
+        .route("/telemetry/overview", get(telemetry::telemetry_overview))
+        .route(
+            "/telemetry/timeseries",
+            get(telemetry::telemetry_timeseries),
+        )
+        .route("/telemetry/events", get(telemetry::list_telemetry_events))
+        .route(
+            "/telemetry/engagement",
+            get(telemetry::telemetry_engagement),
+        )
+        .route("/telemetry/flowpilot", get(telemetry::telemetry_flowpilot))
+        // Crash issues and release health
+        .route(
+            "/telemetry/issues",
+            get(telemetry::issues::list_telemetry_issues),
+        )
+        .route(
+            "/telemetry/issues/{issue_id}",
+            get(telemetry::issues::get_telemetry_issue)
+                .patch(telemetry::issues::update_telemetry_issue),
+        )
+        .route(
+            "/telemetry/releases",
+            get(telemetry::release_health::list_telemetry_releases),
+        )
+        .route(
+            "/telemetry/release-health",
+            get(telemetry::release_health::telemetry_release_health),
+        )
+        .route(
+            "/telemetry/sourcemaps",
+            post(telemetry::sourcemaps::upload_telemetry_sourcemap).layer(DefaultBodyLimit::max(
+                telemetry::sourcemaps::SOURCE_MAP_BODY_LIMIT_BYTES,
+            )),
+        )
+        // Distributed tracing, performance percentiles and retention
+        .route(
+            "/telemetry/traces",
+            get(telemetry::traces::list_telemetry_traces),
+        )
+        .route(
+            "/telemetry/traces/{trace_id}",
+            get(telemetry::traces::get_telemetry_trace),
+        )
+        .route(
+            "/telemetry/performance",
+            get(telemetry::performance::telemetry_performance),
+        )
+        .route(
+            "/telemetry/span-stats",
+            get(telemetry::span_stats::telemetry_span_stats),
+        )
+        .route("/telemetry/sweep", post(telemetry::sweep::sweep_telemetry))
+        .route(
+            "/telemetry/rollup",
+            post(telemetry::rollup::rollup_telemetry),
+        )
+        // LLM observability
+        .route("/telemetry/llm", get(telemetry::llm::telemetry_llm))
+        // Alert rules and the in-app alert inbox
+        .route(
+            "/telemetry/alerts",
+            get(telemetry::alerts::list_telemetry_alert_rules)
+                .post(telemetry::alerts::create_telemetry_alert_rule),
+        )
+        .route(
+            "/telemetry/alerts/events",
+            get(telemetry::alerts::list_telemetry_alert_events),
+        )
+        .route(
+            "/telemetry/alerts/evaluate",
+            post(telemetry::alerts::evaluate_telemetry_alerts),
+        )
+        .route(
+            "/telemetry/alerts/{rule_id}",
+            patch(telemetry::alerts::update_telemetry_alert_rule)
+                .delete(telemetry::alerts::delete_telemetry_alert_rule),
+        )
+        .route(
+            "/telemetry/alerts/{event_id}/ack",
+            post(telemetry::alerts::acknowledge_telemetry_alert_event),
+        )
+        // Structured ad-hoc query builder, saved queries and dashboards
+        .route(
+            "/telemetry/query",
+            post(telemetry::query::run_telemetry_query),
+        )
+        .route(
+            "/telemetry/saved-queries",
+            get(telemetry::saved_queries::list_telemetry_saved_queries)
+                .post(telemetry::saved_queries::create_telemetry_saved_query),
+        )
+        .route(
+            "/telemetry/saved-queries/{query_id}",
+            patch(telemetry::saved_queries::update_telemetry_saved_query)
+                .delete(telemetry::saved_queries::delete_telemetry_saved_query),
+        )
+        .route(
+            "/telemetry/dashboards",
+            get(telemetry::dashboards::list_telemetry_dashboards)
+                .post(telemetry::dashboards::create_telemetry_dashboard),
+        )
+        .route(
+            "/telemetry/dashboards/{dashboard_id}",
+            patch(telemetry::dashboards::update_telemetry_dashboard)
+                .delete(telemetry::dashboards::delete_telemetry_dashboard),
+        )
+}
+
+#[cfg(test)]
+mod tests {
+    /// Router construction panics on a path conflict, so building the real
+    /// admin router is the guard against a new route shadowing an existing one
+    /// (the telemetry alert routes deliberately mix static segments with two
+    /// differently named path parameters).
+    #[test]
+    fn the_admin_router_has_no_conflicting_routes() {
+        let _ = super::routes();
+    }
 }

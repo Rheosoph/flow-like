@@ -7,6 +7,7 @@
 		"dev": "next dev -p 3001",
 		"build": "bun ../../scripts/sync-node-icons.ts && next build",
 		"start": "next start -p 3001",
+		"upload-sourcemaps": "bun ../../scripts/upload-sourcemaps.ts --source=web --dir=out",
 		"deploy": "bun run build && bunx wrangler pages deploy out",
 		"deploy:force": "bun run build && bunx wrangler pages deploy out --branch main",
 		"lint": "next lint"
@@ -77,7 +78,6 @@
 		"next": "^16.1.6",
 		"next-themes": "^0.4.6",
 		"oidc-client-ts": "^3.2.1",
-		"posthog-js": "^1.335.3",
 		"react": "19.2.1",
 		"react-day-picker": "8.10.1",
 		"react-dom": "19.2.1",

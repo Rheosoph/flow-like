@@ -39,7 +39,10 @@ pub struct DeleteFromDBPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "DELETE /apps/{app_id}/db/{table}", skip(state, user))]
+#[tracing::instrument(
+    name = "DELETE /apps/{app_id}/db/{table}",
+    skip(state, user, scope, payload)
+)]
 pub async fn delete_from_table(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

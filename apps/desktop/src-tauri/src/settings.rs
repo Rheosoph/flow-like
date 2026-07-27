@@ -22,6 +22,28 @@ impl Default for LogRetentionSettings {
     }
 }
 
+/// `enabled` (usage telemetry) is `None` while the user has not answered the
+/// consent prompt, `Some(false)` when declined and `Some(true)` when opted in.
+/// `crash_reports` is a separate consent that defaults to on: only an explicit
+/// `Some(false)` turns crash reporting off.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TelemetrySettings {
+    pub enabled: Option<bool>,
+    pub crash_reports: Option<bool>,
+    pub anon_id: Option<String>,
+}
+
+impl TelemetrySettings {
+    pub fn crash_reports_enabled(&self) -> bool {
+        self.crash_reports != Some(false)
+    }
+
+    pub fn usage_enabled(&self) -> bool {
+        self.enabled == Some(true)
+    }
+}
+
 // Mobile-only centralized, sandbox-safe roots (iOS + Android).
 #[cfg(target_os = "ios")]
 fn app_data_root() -> PathBuf {
@@ -195,6 +217,8 @@ pub struct Settings {
     pub user_dir: PathBuf,
     #[serde(default)]
     pub log_retention: LogRetentionSettings,
+    #[serde(default)]
+    pub telemetry: TelemetrySettings,
     pub profiles: HashMap<String, UserProfile>,
     /// User-wide library of custom model bits. Definitions (and their
     /// credentials) are configured once here; each profile activates the ones
@@ -212,7 +236,7 @@ impl Settings {
     pub fn new() -> Self {
         // Prefer new stable settings path; fallback to legacy cache path for one-time backward compatibility.
         let new_settings_path = settings_store_path();
-        let legacy_settings_path = get_cache_dir().join("global-settings.json");
+        let legacy_settings_path = legacy_settings_store_path();
 
         if new_settings_path.exists() || legacy_settings_path.exists() {
             let path = if new_settings_path.exists() {
@@ -264,6 +288,7 @@ impl Settings {
             temporary_dir: default_temporary_dir(),
             user_dir,
             log_retention: LogRetentionSettings::default(),
+            telemetry: TelemetrySettings::default(),
             profiles: HashMap::new(),
             custom_bits: Vec::new(),
             created: SystemTime::now(),
@@ -379,7 +404,7 @@ impl Settings {
 }
 
 // Compute the path to persist global settings. On mobile, prefer data_dir for durability.
-fn settings_store_path() -> std::path::PathBuf {
+pub(crate) fn settings_store_path() -> PathBuf {
     #[cfg(any(target_os = "ios", target_os = "android"))]
     {
         return mobile_storage_root().join("global-settings.json");
@@ -387,5 +412,26 @@ fn settings_store_path() -> std::path::PathBuf {
     #[cfg(not(any(target_os = "ios", target_os = "android")))]
     {
         get_cache_dir().join("global-settings.json")
+    }
+}
+
+/// Pre-`settings_store_path` location, still read once for backward compatibility.
+pub(crate) fn legacy_settings_store_path() -> PathBuf {
+    get_cache_dir().join("global-settings.json")
+}
+
+/// The project dir `Settings::new()` would end up with, without loading the
+/// full settings graph. Mirrors `normalize_platform_paths`: on mobile the
+/// current container root always wins over the persisted value, so early
+/// startup paths derive the same directory the loaded settings will use.
+pub(crate) fn resolve_project_dir(persisted: Option<PathBuf>) -> Option<PathBuf> {
+    #[cfg(any(target_os = "ios", target_os = "android"))]
+    {
+        let _ = persisted;
+        return Some(mobile_storage_root().join("projects"));
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "android")))]
+    {
+        persisted
     }
 }

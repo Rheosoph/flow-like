@@ -50,7 +50,7 @@ pub struct CommentResponse {
 )]
 #[tracing::instrument(
     name = "PUT /registry/package/{package_id}/comments",
-    skip(state, user)
+    skip(state, user, body)
 )]
 pub async fn upsert_comment(
     State(state): State<AppState>,

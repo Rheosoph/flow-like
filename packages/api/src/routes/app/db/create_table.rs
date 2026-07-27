@@ -79,7 +79,10 @@ pub struct CreateTableResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/db/{table}", skip(state, user, payload))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/db/{table}",
+    skip(state, user, scope, payload)
+)]
 pub async fn create_table(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

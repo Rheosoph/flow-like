@@ -56,7 +56,7 @@ fn lookup<'a>(map: &'a serde_json::Value, key: &str) -> Option<&'a str> {
         (status = 404, description = "No enrollment / map for this user and course")
     )
 )]
-#[tracing::instrument(name = "GET /courses/{course_id}/translate", skip(state, user))]
+#[tracing::instrument(name = "GET /courses/{course_id}/translate", skip(state, user, q))]
 pub async fn translate(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -546,6 +546,8 @@ pub struct Features {
     pub app_package_linking: bool,
     #[serde(default)]
     pub wasm_package_user_management: bool,
+    #[serde(default)]
+    pub telemetry: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]

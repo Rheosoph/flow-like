@@ -155,7 +155,7 @@ pub struct InventoryQuery {
     ),
     security(("bearer_auth" = []), ("api_key" = []))
 )]
-#[tracing::instrument(name = "GET /admin/ai-act/inventory", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/ai-act/inventory", skip_all)]
 pub async fn list_inventory(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -1326,7 +1326,7 @@ pub struct ExportQuery {
     ),
     security(("bearer_auth" = []), ("api_key" = []))
 )]
-#[tracing::instrument(name = "GET /admin/ai-act/inventory/export", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/ai-act/inventory/export", skip_all)]
 pub async fn export_inventory(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

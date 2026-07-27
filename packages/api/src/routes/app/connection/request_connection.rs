@@ -45,7 +45,10 @@ pub struct RequestConnectionRequest {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/connections/request", skip(state, user))]
+#[tracing::instrument(
+    name = "PUT /apps/{app_id}/connections/request",
+    skip(state, user, payload)
+)]
 pub async fn request_connection(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

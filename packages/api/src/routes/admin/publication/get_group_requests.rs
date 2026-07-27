@@ -97,7 +97,7 @@ pub struct ListSuitePublicationRequestsQuery {
     ),
     security(("bearer_auth" = []), ("api_key" = []))
 )]
-#[tracing::instrument(name = "GET /admin/publication/suites", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/publication/suites", skip_all)]
 pub async fn get_group_requests(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

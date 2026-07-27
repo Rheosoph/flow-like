@@ -30,7 +30,10 @@ use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Transacti
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/roles/{role_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "PUT /apps/{app_id}/roles/{role_id}",
+    skip(state, user, payload)
+)]
 pub async fn upsert_role(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

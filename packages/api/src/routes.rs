@@ -22,6 +22,7 @@ pub mod registry;
 pub mod sink;
 pub mod solution;
 pub mod store;
+pub mod telemetry;
 pub mod tmp;
 pub mod usage;
 pub mod user;

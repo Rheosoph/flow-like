@@ -64,7 +64,7 @@ pub struct BootstrapResponse {
         ("bearer_auth" = [])
     )
 )]
-#[tracing::instrument(name = "GET /user/bootstrap", skip(state, user))]
+#[tracing::instrument(name = "GET /user/bootstrap", skip_all)]
 pub async fn bootstrap(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

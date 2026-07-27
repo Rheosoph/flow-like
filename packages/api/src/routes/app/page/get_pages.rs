@@ -39,7 +39,7 @@ pub struct PageInfo {
         (status = 401, description = "Unauthorized")
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/pages", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/pages", skip(state, user, query))]
 pub async fn get_pages(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

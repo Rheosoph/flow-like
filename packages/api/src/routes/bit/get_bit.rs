@@ -30,7 +30,7 @@ use super::llm_model_to_evaluation;
         (status = 404, description = "Bit not found")
     )
 )]
-#[tracing::instrument(name = "GET /bit/{bit_id}", skip(state, user))]
+#[tracing::instrument(name = "GET /bit/{bit_id}", skip(state, user, query))]
 pub async fn get_bit(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -62,7 +62,7 @@ pub struct CommentsResponse {
 )]
 #[tracing::instrument(
     name = "GET /registry/package/{package_id}/comments",
-    skip(state, _user)
+    skip(state, _user, query)
 )]
 pub async fn get_comments(
     State(state): State<AppState>,

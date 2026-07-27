@@ -60,7 +60,10 @@ pub struct QueryTablePayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/db/{table}/query", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/db/{table}/query",
+    skip(state, user, params, payload)
+)]
 pub async fn query_table(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

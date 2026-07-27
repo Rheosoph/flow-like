@@ -29,7 +29,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/team", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/team", skip(state, user, params))]
 pub async fn get_team(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

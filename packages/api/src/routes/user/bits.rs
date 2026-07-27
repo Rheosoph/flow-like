@@ -58,7 +58,7 @@ pub struct ListUserBitsQuery {
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "GET /user/bits", skip(state, user))]
+#[tracing::instrument(name = "GET /user/bits", skip_all)]
 pub async fn list_user_bits(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

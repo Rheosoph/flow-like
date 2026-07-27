@@ -6,6 +6,11 @@ use dotenv::dotenv;
 use flow_like_api::axum;
 use flow_like_api::construct_router;
 use flow_like_api::execution::{RunSweeperConfig, spawn_run_sweeper};
+use flow_like_api::telemetry::{
+    SpanExportConfig, TelemetryAlertConfig, TelemetryRollupConfig, TelemetrySweeperConfig,
+    spawn_telemetry_alert_evaluator, spawn_telemetry_rollup, spawn_telemetry_sweeper,
+    telemetry_span_layer,
+};
 use flow_like_catalog::get_catalog;
 use flow_like_secrets::{
     EnvProviderConfig, ExposeSecret, ProviderConfig, SecretRef, SecretStore, SecretStoreConfig,
@@ -28,9 +33,14 @@ async fn main() {
 
     let sentry_endpoint = std::env::var("SENTRY_ENDPOINT").unwrap_or_default();
 
+    // Converts closed spans into internal telemetry rows. Stays inert until the
+    // exporter is spawned below, and disarms itself when telemetry is disabled.
+    let (span_layer, span_exporter) = telemetry_span_layer(SpanExportConfig::from_env());
+
     let _sentry_guard = if sentry_endpoint.is_empty() {
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer())
+            .with(span_layer)
             .init();
         None
     } else {
@@ -50,6 +60,7 @@ async fn main() {
         tracing_subscriber::registry()
             .with(tracing_subscriber::fmt::layer())
             .with(sentry_layer)
+            .with(span_layer)
             .init();
         Some(guard)
     };
@@ -96,6 +107,26 @@ async fn main() {
 
     let _sweeper_handle =
         spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+
+    // Spawned before the sweeper so the aggregates lead the deletions. The
+    // ordering guarantee itself lives in the sweeper, which clamps every raw
+    // retention cutoff to the last fully rolled-up day.
+    let _telemetry_rollup_handle = spawn_telemetry_rollup(
+        Arc::new(state.db.clone()),
+        TelemetryRollupConfig::from_env(),
+    );
+
+    let _telemetry_sweeper_handle = spawn_telemetry_sweeper(
+        Arc::new(state.db.clone()),
+        TelemetrySweeperConfig::from_env(),
+    );
+
+    let _telemetry_alert_handle = spawn_telemetry_alert_evaluator(
+        Arc::new(state.db.clone()),
+        TelemetryAlertConfig::from_env(),
+    );
+
+    let _span_exporter_handle = span_exporter.spawn_for_state(&state);
 
     let app = construct_router(state);
 

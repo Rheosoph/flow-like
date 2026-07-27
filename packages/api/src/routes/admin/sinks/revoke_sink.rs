@@ -39,7 +39,7 @@ pub struct RevokeSinkResponse {
 ///   "message": "Token revoked successfully"
 /// }
 /// ```
-#[tracing::instrument(name = "DELETE /admin/sinks/{jti}", skip(state, user))]
+#[tracing::instrument(name = "DELETE /admin/sinks/{jti}", skip(state, user, jti))]
 pub async fn revoke_sink(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
