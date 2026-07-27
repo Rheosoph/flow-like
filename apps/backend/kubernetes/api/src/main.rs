@@ -59,10 +59,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         TelemetrySweeperConfig::from_env(),
     );
 
-    let _telemetry_alert_handle = spawn_telemetry_alert_evaluator(
-        Arc::new(state.db.clone()),
-        TelemetryAlertConfig::from_env(),
-    );
+    let _telemetry_alert_handle =
+        spawn_telemetry_alert_evaluator(state.clone(), TelemetryAlertConfig::from_env());
 
     let app = Router::new()
         .merge(construct_router(state.clone()))

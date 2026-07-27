@@ -10,9 +10,7 @@
 
 use futures::future::{join, join_all};
 use sea_orm::sea_query::{Expr, ExprTrait, SimpleExpr};
-use sea_orm::{
-    ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect,
-};
+use sea_orm::{ColumnTrait, EntityTrait, FromQueryResult, QueryFilter, QueryOrder, QuerySelect};
 
 use crate::alerting::send_alert_email;
 use crate::entity::sea_orm_active_enums::{NotificationType, UserStatus};
