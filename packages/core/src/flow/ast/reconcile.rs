@@ -2468,10 +2468,18 @@ fn schema_constraints_are_compatible(
         && input_data_type != "Generic"
         && output_data_type != "Generic"
     {
-        return matches!(
-            (input_schema.as_deref(), output_schema.as_deref()),
-            (Some(input), Some(output)) if input == output
-        );
+        return match (input_schema.as_deref(), output_schema.as_deref()) {
+            // Two declared contracts: they must be the same one. This is what catches a genuinely
+            // wrong struct, e.g. a `Bit` from findModel wired into embedDocument's
+            // `CachedEmbeddingModel` input without loading the model first.
+            (Some(input), Some(output)) => input == output,
+            // Only one side declares a contract, so there is nothing to contradict. An untyped
+            // `Struct` boundary pin — a FlowScript `function db(): (database: Struct)` parameter or
+            // return — adopts the connected schema, exactly like the struct_make/break/set boundary
+            // pins above. Rejecting these made factoring a shared handle into a helper impossible,
+            // which is precisely the decomposition BOARD_ORGANIZATION_GUIDANCE asks for.
+            _ => true,
+        };
     }
 
     true
@@ -2671,9 +2679,38 @@ fn default_exec_output_by_policy(
             {
                 return selector(many);
             }
-            select_exec_done(many)
+            select_sole_forward_exec_pin(many).or_else(|| select_exec_done(many))
         }
     }
+}
+
+fn is_error_exec_pin_name(name: &str) -> bool {
+    matches!(
+        name,
+        "error" | "exec_error" | "on_error" | "failure" | "failed"
+    )
+}
+
+/// `exec_out` + `error` is the catalog's dominant multi-output shape (527 `exec_out` against 169
+/// `error` pins), and hand-listing every one of those node types in [`EXEC_OUTPUT_POLICIES`] does
+/// not scale — so every DB write and UI update demanded a hand-written arm block just to continue
+/// sequentially. When the canonical `exec_out` is the ONLY non-error output, it is the only way
+/// forward, and continuation follows it exactly as the hand-written `batch_upsert_local_db` policy
+/// does; an unhandled error still terminates its own path.
+///
+/// Deliberately narrow: this recognizes the catalog's own `exec_out` convention only. A node with
+/// a second genuine outcome (`exec_out` + `empty`) and a custom/package node naming its outputs
+/// anything else (`success`/`exec_success`) stay ambiguous and keep demanding explicit arms rather
+/// than being guessed at.
+fn select_sole_forward_exec_pin(candidates: &[ExecPinCandidate]) -> Option<String> {
+    let mut forward = candidates
+        .iter()
+        .filter(|pin| !is_error_exec_pin_name(&pin.name));
+    let sole = forward.next()?;
+    if forward.next().is_some() || sole.name != "exec_out" {
+        return None;
+    }
+    Some(sole.name.clone())
 }
 
 fn select_exec_success(candidates: &[ExecPinCandidate]) -> Option<String> {
@@ -9528,6 +9565,110 @@ pub fn reconcile_text_with_catalog_enriched(
 mod tests {
     use super::*;
     use crate::flow::board::{Board, ExecutionMode, ExecutionStage, Layer, LayerType};
+
+    fn exec_pin(name: &str, index: u16) -> ExecPinCandidate {
+        ExecPinCandidate {
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            index,
+        }
+    }
+
+    #[test]
+    fn exec_out_plus_error_continues_from_exec_out_without_a_hand_listed_policy() {
+        // The catalog's dominant multi-output shape. Requiring an arm block for every one of these
+        // made plain sequential persistence uncompilable unless the author hand-wired each call.
+        let candidates = [exec_pin("exec_out", 0), exec_pin("error", 1)];
+        for node_type in ["insert_local_db", "upsert_local_db", "a2ui_update_table"] {
+            assert_eq!(
+                default_exec_output_by_policy(node_type, &candidates),
+                Some("exec_out".to_string()),
+                "{node_type} should continue from its only forward output"
+            );
+        }
+    }
+
+    #[test]
+    fn an_undeclared_boundary_schema_adopts_the_connected_contract() {
+        // `function adventureDb(): (database: Struct)` — an untyped boundary pin carries no schema,
+        // so an enforcing consumer has nothing to contradict and the handle may flow through.
+        assert!(schema_constraints_are_compatible(
+            "database",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"LocalDatabase\"}"),
+            true,
+            "database",
+            "Struct",
+            "Normal",
+            None,
+            false,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn two_declared_schemas_must_still_match() {
+        // findModel returns a `Bit`; embedDocument wants a loaded `CachedEmbeddingModel`. Both
+        // sides declare a contract, so this stays a real error the author has to fix.
+        assert!(!schema_constraints_are_compatible(
+            "model",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"CachedEmbeddingModel\"}"),
+            true,
+            "model",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"Bit\"}"),
+            false,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn non_canonical_forward_pins_are_still_never_guessed() {
+        // Custom/package nodes keep the "do not guess" stance: only the catalog's own `exec_out`
+        // convention is recognized, everything else needs an explicit policy or explicit arms.
+        for forward in ["success", "exec_success", "next"] {
+            assert_eq!(
+                default_exec_output_by_policy(
+                    "custom_split",
+                    &[exec_pin(forward, 0), exec_pin("error", 1)]
+                ),
+                None,
+                "{forward} must not be auto-wired"
+            );
+        }
+    }
+
+    #[test]
+    fn two_real_outcomes_still_demand_explicit_arms() {
+        let candidates = [
+            exec_pin("exec_out", 0),
+            exec_pin("empty", 1),
+            exec_pin("error", 2),
+        ];
+        assert_eq!(
+            default_exec_output_by_policy("vector_search_local_db", &candidates),
+            None,
+            "a genuine second outcome must not be auto-wired away"
+        );
+    }
+
+    #[test]
+    fn hand_listed_policies_still_win_over_the_general_rule() {
+        let candidates = [
+            exec_pin("exec_success", 0),
+            exec_pin("exec_error", 1),
+            exec_pin("exec_out", 2),
+        ];
+        assert_eq!(
+            default_exec_output_by_policy("http_fetch", &candidates),
+            Some("exec_success".to_string())
+        );
+    }
+
     use crate::flow::execution::LogLevel;
     use crate::flow::node::Node;
     use crate::flow::pin::{PinOptions, ValueType};

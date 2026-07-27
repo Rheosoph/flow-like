@@ -107,7 +107,9 @@ describe("FlowPilot app-creation E2E cases", () => {
 		// A first live run burned its whole budget re-patching an over-budget root layer.
 		expect(built.prompt).toContain("at most 50 nodes");
 		expect(built.prompt).toContain("rejected whole");
-		expect(flowPilotE2ECaseRunTimeoutMs(built.caseDefinition)).toBe(60 * 60_000);
+		expect(flowPilotE2ECaseRunTimeoutMs(built.caseDefinition)).toBe(
+			60 * 60_000,
+		);
 		expect(
 			flowPilotE2ECaseRunTimeoutMs(getFlowPilotAppCreationCase("forum")),
 		).toBe(DEFAULT_CASE_RUN_TIMEOUT_MS);

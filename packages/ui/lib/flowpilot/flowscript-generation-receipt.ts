@@ -478,6 +478,23 @@ export function flowScriptGenerationRunsForConversation(
 	return RUNS_BY_CONVERSATION.get(conversationId) ?? [];
 }
 
+/**
+ * Receipts keyed by the app they built, across every conversation. A nested board run inherits its
+ * conversation from the tool request and falls back to whichever chat is active, so with several
+ * turns in flight a run can be filed under a sibling's conversation. The app is unambiguous.
+ */
+export function flowScriptGenerationRunsForApp(
+	appId: string,
+): readonly FlowScriptGenerationRunReceipt[] {
+	const runs: FlowScriptGenerationRunReceipt[] = [];
+	for (const conversationRuns of RUNS_BY_CONVERSATION.values()) {
+		for (const run of conversationRuns) {
+			if (run.appId === appId) runs.push(run);
+		}
+	}
+	return runs.sort((left, right) => left.startedAtMs - right.startedAtMs);
+}
+
 /** Update a previously published run when an asynchronous native board-edit job settles. */
 export function updateFlowScriptGenerationRunReceipt(
 	identity: {

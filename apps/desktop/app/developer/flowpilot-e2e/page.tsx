@@ -15,13 +15,13 @@ import { GlobalChatView } from "@flow-like/flow-like-ui/components/global-chat/g
 import { FLOWPILOT_DEBUG_ENABLED } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
 import {
 	type FlowScriptGenerationRunReceipt,
+	flowScriptGenerationRunsForApp,
 	flowScriptGenerationRunsForConversation,
 } from "@flow-like/flow-like-ui/lib/flowpilot/flowscript-generation-receipt";
 import {
 	LAST_CONVERSATION_KEY,
 	useGlobalChatStore,
 } from "@flow-like/flow-like-ui/state/global-chat/global-chat-store";
-import { readActiveRun } from "@flow-like/flow-like-ui/state/global-chat/global-chat-stream";
 import {
 	AlertTriangle,
 	CheckCircle2,
@@ -75,6 +75,8 @@ const START_TIMEOUT_MS = 60_000;
 const CANCEL_TIMEOUT_MS = 30_000;
 const CREATED_APP_TIMEOUT_MS = 20_000;
 const COMPILER_RECEIPT_SETTLE_TIMEOUT_MS = 30_000;
+/** Matches the chat's own `MAX_CONCURRENT_GLOBAL_CHAT_RUNS`; extra cases queue behind these. */
+const MAX_PARALLEL_CASES = 4;
 const CLI_CALLBACK_ATTEMPTS = 3;
 const CLI_CALLBACK_TIMEOUT_MS = 15_000;
 const MAX_CLI_REPEAT = 20;
@@ -149,6 +151,24 @@ function validatedRepeat(value: number | undefined): number {
 
 function parseCliRepeat(value: string | null): number {
 	return validatedRepeat(value?.trim() ? Number(value) : undefined);
+}
+
+function validatedConcurrency(value: number | undefined): number {
+	const parsed = value ?? 1;
+	if (
+		!Number.isSafeInteger(parsed) ||
+		parsed < 1 ||
+		parsed > MAX_PARALLEL_CASES
+	) {
+		throw new Error(
+			`Case concurrency must be an integer from 1 to ${MAX_PARALLEL_CASES}.`,
+		);
+	}
+	return parsed;
+}
+
+function parseCliConcurrency(value: string | null): number {
+	return validatedConcurrency(value?.trim() ? Number(value) : undefined);
 }
 
 function parseCliCaseIds(
@@ -249,6 +269,75 @@ function waitForChatState(
 		unsubscribe = useGlobalChatStore.subscribe(check);
 		check(useGlobalChatStore.getState());
 	});
+}
+
+type ChatRunSnapshot = ReturnType<
+	typeof useGlobalChatStore.getState
+>["runs"][string];
+
+function conversationRuns(
+	state: ReturnType<typeof useGlobalChatStore.getState>,
+	conversationId: string,
+): ChatRunSnapshot[] {
+	return Object.values(state.runs).filter(
+		(run) => run.conversationId === conversationId,
+	);
+}
+
+/**
+ * Concurrent cases share one chat, so the global `isStreaming` flag cannot say whether THIS case
+ * is still running. The tracker follows one conversation's live run and keeps its last snapshot:
+ * the store drops a run once it finishes, and its debug report, plan steps and app refs — the
+ * whole assistant trace — would be dropped with it.
+ */
+function trackConversationRun(conversationId: string) {
+	let latest: ChatRunSnapshot | undefined;
+	const unsubscribe = useGlobalChatStore.subscribe((state) => {
+		const run = conversationRuns(state, conversationId).at(-1);
+		if (run) latest = run;
+	});
+	return {
+		started: () => latest !== undefined,
+		snapshot: () => latest,
+		stop: unsubscribe,
+	};
+}
+
+function traceFromRun(
+	run: ChatRunSnapshot | undefined,
+): AssistantTrace | undefined {
+	if (!run) return undefined;
+	const message = run.message;
+	return {
+		id: message?.id ?? run.runId,
+		content: message?.inner?.content,
+		appRefs: message?.app_refs ?? run.pendingAppRefs,
+		planSteps: message?.plan_steps ?? run.subPlanSteps,
+		usageStats: message?.usage_stats ?? run.subUsageStats,
+		debugReport: message?.debug_report ?? run.debugReport ?? undefined,
+	};
+}
+
+/** Runs jobs with a bounded worker pool, keeping results in request order. */
+async function withConcurrency<T>(
+	jobs: readonly (() => Promise<T>)[],
+	limit: number,
+): Promise<T[]> {
+	const results = new Array<T>(jobs.length);
+	let next = 0;
+	const workers = Array.from(
+		{ length: Math.max(1, Math.min(limit, jobs.length)) },
+		async () => {
+			while (true) {
+				const index = next++;
+				const job = jobs[index];
+				if (!job) return;
+				results[index] = await job();
+			}
+		},
+	);
+	await Promise.all(workers);
+	return results;
 }
 
 function runSuffix(caseId: FlowPilotE2ECaseId): string {
@@ -361,22 +450,20 @@ function boardNodeInventory(board: {
 	return { ids: [...ids], types: [...types] };
 }
 
+// Keyed by app, not conversation: each case builds its own app, while a nested board run can be
+// filed under a sibling case's conversation when several turns are in flight.
 async function waitForGenerationReceipts(
-	conversationId: string,
 	appId: string,
 ): Promise<readonly FlowScriptGenerationRunReceipt[]> {
 	const deadline = Date.now() + COMPILER_RECEIPT_SETTLE_TIMEOUT_MS;
-	let runs = flowScriptGenerationRunsForConversation(conversationId).filter(
-		(run) => run.appId === appId,
-	);
+	let runs = flowScriptGenerationRunsForApp(appId);
 	while (
-		runs.some((run) => run.outcome === "awaiting_approval") &&
+		(runs.length === 0 ||
+			runs.some((run) => run.outcome === "awaiting_approval")) &&
 		Date.now() < deadline
 	) {
 		await delay(250);
-		runs = flowScriptGenerationRunsForConversation(conversationId).filter(
-			(run) => run.appId === appId,
-		);
+		runs = flowScriptGenerationRunsForApp(appId);
 	}
 	return runs;
 }
@@ -615,19 +702,6 @@ async function findCreatedApp(
 	);
 }
 
-function assistantTrace(): AssistantTrace | undefined {
-	const message = useGlobalChatStore.getState().messages.at(-1);
-	if (!message) return undefined;
-	return {
-		id: message.id,
-		content: message.inner?.content,
-		appRefs: message.app_refs,
-		planSteps: message.plan_steps,
-		usageStats: message.usage_stats,
-		debugReport: message.debug_report,
-	};
-}
-
 function downloadJson(fileName: string, value: unknown) {
 	const blob = new Blob([JSON.stringify(value, null, 2)], {
 		type: "application/json",
@@ -662,6 +736,7 @@ export default function FlowPilotE2EPage() {
 	const [modelKey, setModelKey] = useState<FlowPilotE2EModelKey>(
 		FLOWPILOT_E2E_DEFAULT_MODEL_KEY,
 	);
+	const [concurrency, setConcurrency] = useState(1);
 	const [minimumOverride, setMinimumOverride] = useState("");
 	const [runs, setRuns] = useState<
 		Partial<Record<FlowPilotE2ECaseId, CaseRunState>>
@@ -724,8 +799,13 @@ export default function FlowPilotE2EPage() {
 			caseDefinitions: readonly FlowPilotE2ECaseDefinition[],
 			pinnedModelKey: FlowPilotE2EModelKey,
 			minimum?: number,
+			requestedConcurrency = 1,
 		): Promise<FlowPilotE2EArtifact[]> => {
 			const pinnedModel = flowPilotE2EModel(pinnedModelKey);
+			const concurrency = Math.max(
+				1,
+				Math.min(requestedConcurrency, MAX_PARALLEL_CASES),
+			);
 			if (!FLOWPILOT_DEBUG_ENABLED) {
 				throw new Error(
 					"FlowPilot app-creation E2E requires a development build so compiler receipts and traces can be captured; no model request was started.",
@@ -753,7 +833,16 @@ export default function FlowPilotE2EPage() {
 
 			try {
 				await ensureModel(pinnedModel);
-				for (const caseDefinition of caseDefinitions) {
+				// Starting a case switches the active conversation and hands the composer a draft,
+				// so starts must not interleave even though the turns themselves overlap.
+				let startGate: Promise<unknown> = Promise.resolve();
+				const serializeStart = <T,>(start: () => Promise<T>): Promise<T> => {
+					const started = startGate.then(start, start);
+					startGate = started.catch(() => undefined);
+					return started;
+				};
+
+				const jobs = caseDefinitions.map((caseDefinition) => async () => {
 					const startedAt = Date.now();
 					const built = buildCasePrompt(
 						caseDefinition,
@@ -770,6 +859,7 @@ export default function FlowPilotE2EPage() {
 					let trace: AssistantTrace | undefined;
 					let generationRuns: readonly FlowScriptGenerationRunReceipt[] = [];
 					let conversationId: string | undefined;
+					let tracker: ReturnType<typeof trackConversationRun> | undefined;
 					let failure: string | undefined;
 					let observedModel:
 						| {
@@ -812,54 +902,57 @@ export default function FlowPilotE2EPage() {
 					});
 
 					try {
-						const before = await backend.appState.getApps();
-						const beforeIds = new Set(before.map(([app]) => app.id));
-						const chat = useGlobalChatStore.getState();
-						chat.newConversation();
-						conversationId = useGlobalChatStore.getState().activeConversationId;
-						useGlobalChatStore.setState({
-							draft: null,
-							pendingNavigation: null,
-							toolPrompt: null,
-						});
-						chat.selectProvider(pinnedModel.provider);
-						chat.selectModel(pinnedModel.model);
-						chat.selectReasoningEffort(pinnedModel.reasoningEffort);
-						chat.setAutoMode(true);
-						const configured = useGlobalChatStore.getState();
-						if (
-							configured.provider !== pinnedModel.provider ||
-							configured.selectedModelId !== pinnedModel.model ||
-							configured.reasoningEffort !== pinnedModel.reasoningEffort
-						) {
-							throw new Error(
-								`Could not configure ${pinnedModel.provider}/${pinnedModel.model} with ${pinnedModel.reasoningEffort} reasoning.`,
-							);
-						}
-						chat.setDraft({
-							prompt: built.prompt,
-							modelId: pinnedModel.model,
-						});
+						const beforeIds = await serializeStart(async () => {
+							const before = await backend.appState.getApps();
+							const seen = new Set(before.map(([app]) => app.id));
+							const chat = useGlobalChatStore.getState();
+							chat.newConversation();
+							conversationId =
+								useGlobalChatStore.getState().activeConversationId;
+							tracker = trackConversationRun(conversationId);
+							useGlobalChatStore.setState({
+								draft: null,
+								pendingNavigation: null,
+								toolPrompt: null,
+							});
+							chat.selectProvider(pinnedModel.provider);
+							chat.selectModel(pinnedModel.model);
+							chat.selectReasoningEffort(pinnedModel.reasoningEffort);
+							chat.setAutoMode(true);
+							const configured = useGlobalChatStore.getState();
+							if (
+								configured.provider !== pinnedModel.provider ||
+								configured.selectedModelId !== pinnedModel.model ||
+								configured.reasoningEffort !== pinnedModel.reasoningEffort
+							) {
+								throw new Error(
+									`Could not configure ${pinnedModel.provider}/${pinnedModel.model} with ${pinnedModel.reasoningEffort} reasoning.`,
+								);
+							}
+							chat.setDraft({
+								prompt: built.prompt,
+								modelId: pinnedModel.model,
+							});
 
-						setRun(caseDefinition.id, { phase: "running" });
-						try {
-							await waitForChatState(
-								(state) => state.isStreaming,
-								START_TIMEOUT_MS,
-								`Starting ${caseDefinition.id}`,
-							);
-						} catch (error) {
-							throw new Error(
-								`${errorMessage(error)}. ${startFailureDiagnostics(codex.models.length)}`,
-							);
-						}
+							setRun(caseDefinition.id, { phase: "running" });
+							try {
+								// Scoped to THIS conversation: with several cases in flight the global
+								// streaming flag would be satisfied by somebody else's turn.
+								await waitForChatState(
+									() => Boolean(tracker?.started()),
+									START_TIMEOUT_MS,
+									`Starting ${caseDefinition.id}`,
+								);
+							} catch (error) {
+								throw new Error(
+									`${errorMessage(error)}. ${startFailureDiagnostics(codex.models.length)}`,
+								);
+							}
+							return seen;
+						});
 						const activeModel = useGlobalChatStore.getState();
-						// The harness drives exactly one turn at a time, so the newest live run is
-						// the one it just started; fall back to the picker before it registers.
 						const activeSelection =
-							Object.values(activeModel.runs)
-								.sort((a, b) => a.startedAt - b.startedAt)
-								.at(-1)?.selection ?? activeModel;
+							tracker?.snapshot()?.selection ?? activeModel;
 						observedModel = {
 							provider: activeSelection.provider,
 							model: activeSelection.selectedModelId,
@@ -890,14 +983,15 @@ export default function FlowPilotE2EPage() {
 						// Slow runs must COMPLETE so their receipts show where the time went (plan-step
 						// timestamps + generation-run windows); a timeout destroys exactly that evidence.
 						await waitForChatState(
-							(state) => !state.isStreaming,
+							(state) =>
+								conversationRuns(state, conversationId ?? "").length === 0,
 							flowPilotE2ECaseRunTimeoutMs(caseDefinition),
 							`Running ${caseDefinition.id}`,
 						);
 						useGlobalChatStore.getState().setPendingNavigation(null);
 						setRun(caseDefinition.id, { phase: "collecting" });
 
-						trace = assistantTrace();
+						trace = traceFromRun(tracker?.snapshot());
 						if (!trace) {
 							issues.push({
 								code: "runner.missing_assistant_trace",
@@ -949,9 +1043,7 @@ export default function FlowPilotE2EPage() {
 						} catch {
 							// The tuple metadata is still enough to report a deterministic mismatch.
 						}
-						generationRuns = conversationId
-							? await waitForGenerationReceipts(conversationId, created.appId)
-							: [];
+						generationRuns = await waitForGenerationReceipts(created.appId);
 						const compiledAuthored = authoredFlowScriptEvidence(generationRuns);
 						const workspace = useGlobalChatStore.getState().flowscriptWorkspace;
 						snapshot = await collectSnapshot(
@@ -977,9 +1069,17 @@ export default function FlowPilotE2EPage() {
 						failure = errorMessage(error);
 					} finally {
 						guard();
+						tracker?.stop();
 						useGlobalChatStore.getState().setPendingNavigation(null);
 					}
-					if (generationRuns.length === 0 && conversationId) {
+					// Last-resort evidence when no app was ever resolved. Conversation attribution is
+					// only trustworthy while this case owns the chat alone — with siblings in flight
+					// it would adopt their receipts.
+					if (
+						generationRuns.length === 0 &&
+						conversationId &&
+						concurrency === 1
+					) {
 						generationRuns =
 							flowScriptGenerationRunsForConversation(conversationId);
 					}
@@ -1005,7 +1105,6 @@ export default function FlowPilotE2EPage() {
 								: undefined,
 						error: failure,
 					};
-					artifacts.push(artifact);
 					const passed = Boolean(report?.passed) && !failure;
 					setRun(caseDefinition.id, {
 						phase: passed ? "passed" : "failed",
@@ -1013,29 +1112,38 @@ export default function FlowPilotE2EPage() {
 						error: failure,
 					});
 
-					// A timed-out run is still using the shared chat/backend. Cancel it so the
-					// remaining cases can run; abandon the suite only when the stream refuses to
-					// stop — one slow case must not silently skip every later case.
-					if (useGlobalChatStore.getState().isStreaming) {
-						const active = readActiveRun();
-						try {
-							if (active?.runId) {
-								await backend.boardState.cancelCopilotChat?.(active.runId);
+					// A timed-out case still holds a live run against the shared chat/backend, and
+					// with a pool that run would keep consuming a concurrency slot. Cancel only
+					// THIS conversation's run so the other cases in flight are untouched.
+					const leftover = conversationId
+						? conversationRuns(useGlobalChatStore.getState(), conversationId)
+						: [];
+					if (leftover.length > 0) {
+						for (const run of leftover) {
+							try {
+								await backend.boardState.cancelCopilotChat?.(run.runId);
+							} catch {
+								// Best-effort; the bounded wait below decides what to report.
 							}
-						} catch {
-							// Best-effort; the bounded wait below decides whether to continue.
 						}
 						try {
 							await waitForChatState(
-								(state) => !state.isStreaming,
+								(state) =>
+									conversationRuns(state, conversationId ?? "").length === 0,
 								CANCEL_TIMEOUT_MS,
 								`Cancelling ${caseDefinition.id}`,
 							);
-						} catch {
-							break;
+						} catch (error) {
+							issues.push({
+								code: "runner.cancel_timeout",
+								message: errorMessage(error),
+							});
 						}
 					}
-				}
+					return artifact;
+				});
+
+				artifacts.push(...(await withConcurrency(jobs, concurrency)));
 			} finally {
 				const chat = useGlobalChatStore.getState();
 				if (!chat.isStreaming) {
@@ -1057,7 +1165,22 @@ export default function FlowPilotE2EPage() {
 			const definitions = resolveFlowPilotE2ERunCases(options);
 			const repeat = validatedRepeat(options.repeat);
 			const requestedModelKey = options.modelKey ?? modelKey;
+			const requestedConcurrency = validatedConcurrency(options.concurrency);
 			const artifacts: FlowPilotE2EArtifact[] = [];
+			// Fail-fast only means something while later cases are still unstarted, so it keeps the
+			// sequential path; everything else hands the whole ordered job list to one pooled run.
+			if (requestedConcurrency > 1 && !options.failFast) {
+				try {
+					return await runCases(
+						Array.from({ length: repeat }, () => definitions).flat(),
+						requestedModelKey,
+						options.minFlowScriptNonWhitespaceChars,
+						requestedConcurrency,
+					);
+				} catch (error) {
+					throw new FlowPilotE2EPartialRunError(errorMessage(error), artifacts);
+				}
+			}
 			try {
 				for (let round = 0; round < repeat; round += 1) {
 					for (const caseDefinition of definitions) {
@@ -1096,12 +1219,17 @@ export default function FlowPilotE2EPage() {
 	const startSelected = useCallback(async () => {
 		try {
 			const parsed = parseMinimumOverride(minimumOverride);
-			return await runCases(selectedCases, modelKey, parsed);
+			return await runCases(
+				selectedCases,
+				modelKey,
+				parsed,
+				validatedConcurrency(concurrency),
+			);
 		} catch (error) {
 			toast.error(errorMessage(error));
 			return [];
 		}
-	}, [minimumOverride, modelKey, runCases, selectedCases]);
+	}, [concurrency, minimumOverride, modelKey, runCases, selectedCases]);
 
 	useEffect(() => {
 		window.flowPilotE2E = {
@@ -1164,16 +1292,21 @@ export default function FlowPilotE2EPage() {
 				repeat = parseCliRepeat(params.get("repeat"));
 				failFast = params.get("failFast") === "1";
 				requestedModelKey = resolveFlowPilotE2EModelKey(params.get("model"));
+				const requestedConcurrency = parseCliConcurrency(
+					params.get("concurrency"),
+				);
 				const definitions = resolveFlowPilotE2ERunCases(options);
 				caseIds = definitions.map((caseDefinition) => caseDefinition.id);
 				setSelected(new Set(caseIds));
 				setModelKey(requestedModelKey);
+				setConcurrency(requestedConcurrency);
 				if (minimum !== undefined) setMinimumOverride(String(minimum));
 				artifacts = await runRequestedCases({
 					caseIds,
 					modelKey: requestedModelKey,
 					minFlowScriptNonWhitespaceChars: minimum,
 					repeat,
+					concurrency: requestedConcurrency,
 					failFast,
 				});
 			} catch (error) {
@@ -1255,7 +1388,11 @@ export default function FlowPilotE2EPage() {
 			const requestedModelKey = resolveFlowPilotE2EModelKey(
 				params.get("model"),
 			);
+			const requestedConcurrency = parseCliConcurrency(
+				params.get("concurrency"),
+			);
 			setModelKey(requestedModelKey);
+			setConcurrency(requestedConcurrency);
 			if (minimum !== undefined) setMinimumOverride(String(minimum));
 			if (params.get("run") === "1" && definitions.length > 0) {
 				void runRequestedCases({
@@ -1263,6 +1400,7 @@ export default function FlowPilotE2EPage() {
 					modelKey: requestedModelKey,
 					minFlowScriptNonWhitespaceChars: minimum,
 					repeat: parseCliRepeat(params.get("repeat")),
+					concurrency: requestedConcurrency,
 					failFast: params.get("failFast") === "1",
 				}).catch((error) => toast.error(errorMessage(error)));
 			}
@@ -1355,6 +1493,23 @@ export default function FlowPilotE2EPage() {
 								)}
 								Run {selectedCases.length}
 							</Button>
+						</div>
+						<div className="space-y-1.5">
+							<Label htmlFor="case-concurrency" className="text-xs">
+								Cases in flight at once (1–{MAX_PARALLEL_CASES})
+							</Label>
+							<Input
+								id="case-concurrency"
+								type="number"
+								min={1}
+								max={MAX_PARALLEL_CASES}
+								value={concurrency}
+								onChange={(event) =>
+									setConcurrency(Number(event.target.value) || 1)
+								}
+								disabled={isSuiteRunning}
+								className="h-8"
+							/>
 						</div>
 						<div className="space-y-1.5">
 							<Label htmlFor="flowscript-min" className="text-xs">

@@ -27,6 +27,8 @@ import {
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, "..");
 const MAX_REPEAT = 20;
+// Mirrors the runner page's MAX_PARALLEL_CASES / the chat's concurrent-run cap.
+const MAX_CONCURRENCY = 4;
 // Headroom over each case's own run ceiling for startup, collection and cancellation.
 const CASE_OVERHEAD_MS = 5 * 60_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 5 * 60_000;
@@ -38,6 +40,7 @@ export interface CliOptions {
 	modelKey: FlowPilotE2EModelKey;
 	minChars?: number;
 	repeat: number;
+	concurrency: number;
 	failFast: boolean;
 	json: boolean;
 	list: boolean;
@@ -75,6 +78,7 @@ Options:
   --model <${FLOWPILOT_E2E_MODEL_KEYS.join("|")}>    Pin the benchmark model, by alias or model id (default: ${FLOWPILOT_E2E_DEFAULT_MODEL_KEY})
   --min-chars <n>         Override the non-whitespace FlowScript sanity floor
   --repeat <n>            Repeat each selected case, 1-${MAX_REPEAT} (default: 1)
+  --concurrency <n>       Cases in flight at once, 1-${MAX_CONCURRENCY} (default: 1; not with --fail-fast)
   --fail-fast             Stop after the first failed case
   --output <path>         Copy the complete JSON envelope to this path
   --json                  Print the complete JSON envelope to stdout
@@ -119,6 +123,7 @@ export function parseArgs(args: string[]): CliOptions {
 		caseIds: [],
 		modelKey: FLOWPILOT_E2E_DEFAULT_MODEL_KEY,
 		repeat: 1,
+		concurrency: 1,
 		failFast: false,
 		json: false,
 		list: false,
@@ -178,6 +183,17 @@ export function parseArgs(args: string[]): CliOptions {
 			if (options.repeat > MAX_REPEAT) {
 				throw new Error(`--repeat cannot exceed ${MAX_REPEAT}.`);
 			}
+		} else if (arg === "--concurrency" || arg.startsWith("--concurrency=")) {
+			const [value, consumed] = valueAfter(
+				normalizedArgs,
+				index,
+				"--concurrency",
+			);
+			index = consumed;
+			options.concurrency = positiveInteger(value, "--concurrency");
+			if (options.concurrency > MAX_CONCURRENCY) {
+				throw new Error(`--concurrency cannot exceed ${MAX_CONCURRENCY}.`);
+			}
 		} else if (arg === "--timeout-ms" || arg.startsWith("--timeout-ms=")) {
 			const [value, consumed] = valueAfter(
 				normalizedArgs,
@@ -209,6 +225,11 @@ export function parseArgs(args: string[]): CliOptions {
 
 	if (options.caseIds.length > 0 && options.suite) {
 		throw new Error("Use either --case or --suite, not both.");
+	}
+	if (options.concurrency > 1 && options.failFast) {
+		throw new Error(
+			"--fail-fast needs sequential cases; drop it or use --concurrency 1.",
+		);
 	}
 	options.caseIds = [...new Set(options.caseIds)];
 	return options;
@@ -718,6 +739,7 @@ async function run(options: CliOptions): Promise<number> {
 		);
 		runnerUrl.searchParams.set("model", options.modelKey);
 		runnerUrl.searchParams.set("repeat", String(options.repeat));
+		runnerUrl.searchParams.set("concurrency", String(options.concurrency));
 		if (options.minChars !== undefined) {
 			runnerUrl.searchParams.set("minChars", String(options.minChars));
 		}

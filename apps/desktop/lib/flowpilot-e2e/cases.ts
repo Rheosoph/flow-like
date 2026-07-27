@@ -573,7 +573,8 @@ Keep everything on one coherent workflow board. This app is far larger than one 
 				{ entity: "page", alias: "play_scene", source: "canonical" },
 				{ entity: "widget", alias: "adventure_card", source: "canonical" },
 				{ entity: "widget", alias: "save_slot", source: "canonical" },
-				{ entity: "widget_action", alias: "open", source: "canonical" },
+				// No widget_action reference: handlers bind at instantiation as `fnRefs: [handler]`,
+				// so an action id is never expressible as a string literal in FlowScript.
 				{ entity: "table", alias: "adventures", source: "canonical" },
 				{ entity: "table", alias: "scenes", source: "canonical" },
 				{ entity: "table", alias: "save_games", source: "canonical" },

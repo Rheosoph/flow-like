@@ -283,6 +283,12 @@ export interface FlowPilotE2ERunOptions {
 	modelKey?: FlowPilotE2EModelKey;
 	minFlowScriptNonWhitespaceChars?: number;
 	repeat?: number;
+	/**
+	 * Cases to keep in flight at once. The chat caps concurrent runs, so this is bounded by the
+	 * runner. Parallel runs and `failFast` are mutually exclusive: a fail-fast stop is only
+	 * meaningful when the next case has not started yet.
+	 */
+	concurrency?: number;
 	failFast?: boolean;
 }
 
