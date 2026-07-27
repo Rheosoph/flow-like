@@ -31,6 +31,9 @@ tokio-util = "0.7.15"
 cuid2 = { git = "https://github.com/Rheosoph/cuid-rust.git", package = "cuid2" }
 jsonschema = "0.33.0"
 regex.workspace = true
+rkyv.workspace = true
+thiserror = "2.0"
+lz4_flex = "0.11.6"
 
 [build-dependencies]
 prost-build = "0.13.5"

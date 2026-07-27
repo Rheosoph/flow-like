@@ -8588,6 +8588,7 @@ dependencies = [
  "image",
  "imageproc",
  "jsonschema",
+ "lz4_flex 0.11.6",
  "mime_guess",
  "minijinja",
  "prost 0.14.3",
@@ -8597,10 +8598,12 @@ dependencies = [
  "regex",
  "reqwest 0.12.28",
  "reqwest-eventsource",
+ "rkyv 0.8.17",
  "rxing",
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "webp",
@@ -13836,7 +13839,7 @@ dependencies = [
  "rand 0.10.1",
  "regex",
  "reqwest 0.13.4",
- "rkyv 0.8.16",
+ "rkyv 0.8.17",
  "serde",
  "serde_json",
  "strum 0.28.0",
@@ -13857,7 +13860,7 @@ dependencies = [
  "csv",
  "lindera-dictionary",
  "once_cell",
- "rkyv 0.8.16",
+ "rkyv 0.8.17",
  "serde_json",
  "tokio",
 ]
@@ -19985,9 +19988,9 @@ dependencies = [
 
 [[package]]
 name = "rkyv"
-version = "0.8.16"
+version = "0.8.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73389e0c99e664f919275ab5b5b0471391fe9a8de61e1dff9b1eaf56a90f16e3"
+checksum = "815cc8a37159a463064825246cadb07961e25cd9885908606f6d08a98d8f8874"
 dependencies = [
  "bytecheck 0.8.2",
  "bytes",
@@ -19997,7 +20000,7 @@ dependencies = [
  "ptr_meta 0.3.1",
  "rancor",
  "rend 0.5.3",
- "rkyv_derive 0.8.16",
+ "rkyv_derive 0.8.17",
  "tinyvec",
  "uuid 1.23.1",
 ]
@@ -20015,9 +20018,9 @@ dependencies = [
 
 [[package]]
 name = "rkyv_derive"
-version = "0.8.16"
+version = "0.8.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d2ed0b54125315fb36bd021e82d314d1c126548f871634b483f46b31d13cac6"
+checksum = "c0ed1a78a1b19d184b0daa629dd9a024573173ec7d485b287cb369fb3607cc1c"
 dependencies = [
  "proc-macro2",
  "quote",

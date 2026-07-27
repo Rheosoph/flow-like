@@ -148,11 +148,19 @@ name = "flow_bench"
 harness = false
 
 [[bench]]
+name = "exec_bench"
+harness = false
+
+[[bench]]
 name = "throughput_bench"
 harness = false
 
 [[bench]]
 name = "allocator_bench"
+harness = false
+
+[[bench]]
+name = "plan_bench"
 harness = false
 
 [profile.bench]

@@ -30,6 +30,8 @@ use tracing::instrument;
 
 pub mod cleanup;
 pub mod commands;
+pub mod compile;
+pub mod plan_store;
 
 /// Reserved board-ref namespace for host bookkeeping that must be persisted atomically with a
 /// board mutation but must never participate in FlowScript, semantic fingerprints, or user-facing
@@ -76,6 +78,31 @@ pub enum ExecutionStage {
     QA,
     PreProd,
     Prod,
+}
+
+impl ExecutionStage {
+    /// Encode for a compiled execution plan. Paired with [`ExecutionStage::from_plan_u8`]
+    /// so the artifact's meaning cannot change if a variant is reordered.
+    pub fn to_plan_u8(&self) -> u8 {
+        match self {
+            ExecutionStage::Dev => 0,
+            ExecutionStage::Int => 1,
+            ExecutionStage::QA => 2,
+            ExecutionStage::PreProd => 3,
+            ExecutionStage::Prod => 4,
+        }
+    }
+
+    pub fn from_plan_u8(value: u8) -> Option<Self> {
+        Some(match value {
+            0 => ExecutionStage::Dev,
+            1 => ExecutionStage::Int,
+            2 => ExecutionStage::QA,
+            3 => ExecutionStage::PreProd,
+            4 => ExecutionStage::Prod,
+            _ => return None,
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Default, Debug, PartialEq, Eq)]
@@ -990,6 +1017,22 @@ impl Board {
             }
         }
 
+        // Emit the compiled plan before the board marker. The marker is what makes a
+        // version visible, so writing the plan first means a visible version never lacks
+        // one. A failure here is logged rather than fatal: the plan is a derived cache and
+        // the runtime regenerates it from this very snapshot on first use, so refusing to
+        // publish would turn a recoverable cache miss into a user-facing failure.
+        if let Err(error) = published.write_version_plan(version, store.clone()).await {
+            tracing::error!(
+                "failed to compile execution plan for board {} version {}.{}.{}: {}",
+                self.id,
+                version.0,
+                version.1,
+                version.2,
+                error
+            );
+        }
+
         let board = published.to_proto();
         if let Err(create_error) =
             compress_to_file_create(store.clone(), board_version_path, &board).await
@@ -1023,6 +1066,84 @@ impl Board {
         }
 
         Ok(())
+    }
+
+    /// Signature over the WASM packages this board's nodes reference.
+    ///
+    /// WASM nodes contribute `on_update` behaviour that compilation freezes, so a plan is
+    /// only valid while the same package set backs the board.
+    fn wasm_signature(&self) -> u64 {
+        use highway::{HighwayHash, HighwayHasher};
+
+        let mut packages: Vec<&str> = self
+            .nodes
+            .values()
+            .chain(
+                self.layers
+                    .values()
+                    .filter(|layer| matches!(layer.r#type, LayerType::Function))
+                    .flat_map(|layer| layer.nodes.values()),
+            )
+            .filter_map(|node| node.wasm.as_ref().map(|wasm| wasm.package_id.as_str()))
+            .collect();
+        packages.sort_unstable();
+        packages.dedup();
+
+        let mut hasher = HighwayHasher::new(highway::Key([
+            0x1122_3344_5566_7788,
+            0x99aa_bbcc_ddee_ff00,
+            0x0f1e_2d3c_4b5a_6978,
+            0x8796_a5b4_c3d2_e1f0,
+        ]));
+        for package in packages {
+            hasher.append(package.as_bytes());
+        }
+        hasher.finalize64()
+    }
+
+    /// Stamps describing the toolchain this board compiles against.
+    pub async fn compile_stamps(&self, app_state: &Arc<FlowLikeState>) -> compile::CompileStamps {
+        let catalog_signature = app_state
+            .node_registry
+            .read()
+            .await
+            .node_registry
+            .signature();
+
+        compile::CompileStamps {
+            catalog_signature,
+            wasm_signature: self.wasm_signature(),
+        }
+    }
+
+    /// Lower this board into a compiled execution plan container.
+    pub async fn compile_plan(
+        &self,
+        app_state: &Arc<FlowLikeState>,
+    ) -> flow_like_types::Result<Vec<u8>> {
+        let stamps = self.compile_stamps(app_state).await;
+        let plan = compile::compile_board(self, stamps)?;
+        Ok(plan.to_container()?)
+    }
+
+    /// Compile and persist the immutable plan for a published version.
+    async fn write_version_plan(
+        &self,
+        version: (u32, u32, u32),
+        store: Arc<dyn ObjectStore>,
+    ) -> flow_like_types::Result<()> {
+        let Some(app_state) = self.app_state.as_ref() else {
+            // A detached board has no registry, so there is no catalog to stamp against.
+            return Ok(());
+        };
+
+        let bytes = self.compile_plan(app_state).await?;
+        plan_store::write_plan_immutable(
+            store,
+            plan_store::version_plan_path(&self.board_dir, &self.id, version),
+            bytes,
+        )
+        .await
     }
 
     fn immutable_snapshot_conflict(version: (u32, u32, u32)) -> flow_like_types::Error {

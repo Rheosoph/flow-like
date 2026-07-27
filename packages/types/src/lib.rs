@@ -37,6 +37,7 @@ pub use mime_guess;
 pub use prost::Message;
 pub use reqwest;
 pub use reqwest_eventsource;
+pub use rkyv;
 pub use schemars::JsonSchema;
 pub use serde;
 pub use serde_json::Value;
@@ -51,6 +52,7 @@ pub mod json {
 }
 
 pub mod dispatch;
+pub mod plan;
 
 /// Header carrying registration-level credentials on app-connection proxy
 /// requests, where `Authorization` is occupied by the app-connection bearer.

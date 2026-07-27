@@ -191,6 +191,46 @@ pub enum ValueType {
     HashSet,
 }
 
+impl ValueType {
+    /// Encode for a compiled execution plan. Paired with [`ValueType::from_plan_u8`].
+    pub fn to_plan_u8(&self) -> u8 {
+        match self {
+            ValueType::Array => 0,
+            ValueType::Normal => 1,
+            ValueType::HashMap => 2,
+            ValueType::HashSet => 3,
+        }
+    }
+
+    pub fn from_plan_u8(value: u8) -> Option<Self> {
+        Some(match value {
+            0 => ValueType::Array,
+            1 => ValueType::Normal,
+            2 => ValueType::HashMap,
+            3 => ValueType::HashSet,
+            _ => return None,
+        })
+    }
+}
+
+impl PinType {
+    /// Encode for a compiled execution plan. Paired with [`PinType::from_plan_u8`].
+    pub fn to_plan_u8(&self) -> u8 {
+        match self {
+            PinType::Input => 0,
+            PinType::Output => 1,
+        }
+    }
+
+    pub fn from_plan_u8(value: u8) -> Option<Self> {
+        Some(match value {
+            0 => PinType::Input,
+            1 => PinType::Output,
+            _ => return None,
+        })
+    }
+}
+
 impl Pin {}
 
 #[cfg(test)]

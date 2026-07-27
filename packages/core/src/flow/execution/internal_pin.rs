@@ -73,6 +73,38 @@ impl InternalPin {
         }
     }
 
+    /// Build a pin directly from its parts, without an intermediate [`Pin`].
+    ///
+    /// The compiled path already holds these fields as plain values and its default is
+    /// parsed once at hydration, so going through `Pin` would mean rebuilding strings and
+    /// re-parsing JSON for every pin of every run — the exact cost the plan exists to
+    /// remove. It would also force the plan's cold section to be decoded.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        id: String,
+        name: String,
+        pin_type: PinType,
+        data_type: VariableType,
+        default_value: Option<Value>,
+        layer_pin: bool,
+        index: u16,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            pin_type,
+            data_type,
+            has_default: default_value.is_some(),
+            default_value,
+            layer_pin,
+            index,
+            node: OnceLock::new(),
+            connected_to: OnceLock::new(),
+            depends_on: OnceLock::new(),
+            value: RwLock::new(None),
+        }
+    }
+
     // === One-time initialization methods (called during graph construction) ===
 
     /// Set the parent node reference (can only be called once)

@@ -263,6 +263,43 @@ pub enum VariableType {
     Byte,
 }
 
+impl VariableType {
+    /// Encode for a compiled execution plan.
+    ///
+    /// Paired with [`VariableType::from_plan_u8`]; both are written out explicitly so the
+    /// artifact's meaning cannot silently change if a variant is ever reordered.
+    pub fn to_plan_u8(&self) -> u8 {
+        match self {
+            VariableType::Execution => 0,
+            VariableType::String => 1,
+            VariableType::Integer => 2,
+            VariableType::Float => 3,
+            VariableType::Boolean => 4,
+            VariableType::Date => 5,
+            VariableType::PathBuf => 6,
+            VariableType::Generic => 7,
+            VariableType::Struct => 8,
+            VariableType::Byte => 9,
+        }
+    }
+
+    pub fn from_plan_u8(value: u8) -> Option<Self> {
+        Some(match value {
+            0 => VariableType::Execution,
+            1 => VariableType::String,
+            2 => VariableType::Integer,
+            3 => VariableType::Float,
+            4 => VariableType::Boolean,
+            5 => VariableType::Date,
+            6 => VariableType::PathBuf,
+            7 => VariableType::Generic,
+            8 => VariableType::Struct,
+            9 => VariableType::Byte,
+            _ => return None,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use flow_like_types::{FromProto, ToProto};

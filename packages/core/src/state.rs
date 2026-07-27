@@ -165,6 +165,20 @@ impl FlowNodeRegistryInner {
         self.registry.values().map(|node| node.0.clone()).collect()
     }
 
+    /// Stable signature over the catalog's schema surface.
+    ///
+    /// Compiled plans freeze the result of `Board::node_updates`, which normally reapplies
+    /// `on_update` against the live catalog on every board load. A plan is therefore only
+    /// valid for the catalog it was built against, and this is what detects the difference.
+    pub fn signature(&self) -> u64 {
+        let entries: std::collections::BTreeMap<String, u64> = self
+            .registry
+            .iter()
+            .map(|(name, (node, _))| (name.clone(), node.semantic_hash()))
+            .collect();
+        crate::flow::board::compile::catalog_signature(&entries)
+    }
+
     pub fn prepare(nodes: &Arc<Vec<Arc<dyn NodeLogic>>>) -> Self {
         let mut registry = FlowNodeRegistryInner {
             registry: HashMap::with_capacity(nodes.len()),
@@ -188,6 +202,15 @@ impl FlowNodeRegistryInner {
                 node_id
             )),
         }
+    }
+
+    /// Resolve node logic straight from a type key.
+    ///
+    /// Compiled plans carry the type key without a surrounding `Node`, so hydration cannot
+    /// go through [`Self::instantiate`].
+    #[inline]
+    pub fn instantiate_by_name(&self, type_key: &str) -> Option<Arc<dyn NodeLogic>> {
+        self.registry.get(type_key).map(|entry| entry.1.clone())
     }
 
     #[inline]

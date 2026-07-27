@@ -64,20 +64,24 @@ pub async fn evaluate_pin_value(
     overrides: &Option<BTreeMap<String, Value>>,
 ) -> flow_like_types::Result<Value> {
     let mut current_pin = pin;
-    let mut visited_pins = std::collections::HashSet::with_capacity(8);
+    // Keyed by pointer, not by id string. Within one runtime graph each pin is a single
+    // `Arc`, so pointer identity detects a cycle exactly as well as the id did — without
+    // allocating two `String`s on every hop of every pin evaluation.
+    let mut visited_pins: ahash::AHashSet<usize> = ahash::AHashSet::with_capacity(8);
     let has_overrides = overrides.is_some();
 
     loop {
-        let pin_id = current_pin.id().to_string();
-
-        if !visited_pins.insert(pin_id.clone()) {
+        if !visited_pins.insert(flow_like_types::utils::ptr_key(&current_pin)) {
             return Err(flow_like_types::anyhow!(
                 "Detected circular dependency in pin chain"
             ));
         }
 
-        // Check overrides first — they short-circuit the entire chain
-        if let Some(found_override) = overrides.as_ref().and_then(|map| map.get(&pin_id)) {
+        // Check overrides first — they short-circuit the entire chain.
+        if let Some(found_override) = overrides
+            .as_ref()
+            .and_then(|map| map.get(current_pin.id()))
+        {
             return Ok(found_override.clone());
         }
 

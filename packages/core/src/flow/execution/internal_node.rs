@@ -56,8 +56,9 @@ async fn exec_deps_from_map(
         Exit,
     }
 
-    let node = ctx.read_node().await;
-    let root_id = node.id.clone();
+    // Served from the lock-free meta: `read_node` deep-clones the whole node, including
+    // its pin map, and only the id is wanted here.
+    let root_id = ctx.node.node_id().to_string();
 
     let mut stack: Vec<(Arc<InternalNode>, Phase)> = Vec::new();
     if let Some(roots) = dependencies.get(&root_id) {
@@ -105,12 +106,12 @@ async fn exec_deps_from_map(
                     continue;
                 }
 
-                // Use cached metadata instead of locking
-                let dep_id = n.node_id().to_string();
-                let dep_name = n.node_name().to_string();
+                // Borrowed, not owned: `AHashSet<String>::contains` accepts `&str`, so the
+                // guard check needs no allocation.
+                let dep_id = n.node_id();
 
                 if let Some(guard) = recursion_guard
-                    && guard.contains(&dep_id)
+                    && guard.contains(dep_id)
                 {
                     ctx.log_message(
                         &format!("Recursion detected for: {}, skipping execution", dep_id),
@@ -121,17 +122,25 @@ async fn exec_deps_from_map(
                 }
 
                 let mut sub = ctx.create_sub_context(&n).await;
-                let mut log_message = LogMessage::new(
-                    &format!("Triggering mapped dependency: {}", dep_name),
-                    LogLevel::Debug,
-                    None,
-                );
+                // Built only when it will survive the level filter. Constructing it
+                // unconditionally cost a `format!`, a `String`, and — via `LogMessage::new`
+                // plus `end()` — two `SystemTime::now()` calls per dependency execution,
+                // all discarded at the default Info level.
+                let mut log_message = ctx.logs_at(LogLevel::Debug).then(|| {
+                    LogMessage::new(
+                        &format!("Triggering mapped dependency: {}", n.node_name()),
+                        LogLevel::Debug,
+                        None,
+                    )
+                });
 
                 // Reuse your non-recursive single-node runner
                 let res = run_node_logic_only(&mut sub, recursion_guard).await;
 
-                log_message.end();
-                ctx.log(log_message);
+                if let Some(mut log_message) = log_message.take() {
+                    log_message.end();
+                    ctx.log(log_message);
+                }
                 sub.end_trace();
                 ctx.push_sub_context(&mut sub);
 
@@ -160,37 +169,49 @@ async fn run_node_logic_only(
     }
 
     ctx.set_state(NodeState::Running).await;
-    let node = ctx.read_node().await;
 
     if recursion_guard.is_none() {
         *recursion_guard = Some(AHashSet::new());
     }
     if let Some(guard) = recursion_guard {
-        if guard.contains(&node.id) {
+        // `contains` takes `&str` via `Borrow`, so the guard check allocates nothing; only
+        // the insert on the miss path needs an owned id.
+        if guard.contains(ctx.node.node_id()) {
             ctx.log_message(
-                &format!("Recursion detected for: {}", &node.id),
+                &format!("Recursion detected for: {}", ctx.node.node_id()),
                 LogLevel::Debug,
             );
             ctx.end_trace();
             return Ok(());
         }
-        guard.insert(node.id.clone());
+        guard.insert(ctx.node.node_id().to_string());
     }
 
     let logic = ctx.node.logic.clone();
-    let mut log_message = LogMessage::new(
-        &format!("Starting Node Execution: {} [{}]", &node.name, &node.id),
-        LogLevel::Debug,
-        None,
-    );
+    // Boards run at Info by default, so this Debug line is normally discarded. Building it
+    // conditionally also skips the two `SystemTime::now()` calls that `LogMessage::new`
+    // and `end()` would otherwise make on every node execution.
+    let mut log_message = ctx.logs_at(LogLevel::Debug).then(|| {
+        LogMessage::new(
+            &format!(
+                "Starting Node Execution: {} [{}]",
+                ctx.node.node_name(),
+                ctx.node.node_id()
+            ),
+            LogLevel::Debug,
+            None,
+        )
+    });
 
     let result = logic.run(ctx).await;
 
     // Check for cancellation after node execution
     if ctx.is_cancelled() {
         ctx.log_message("Execution cancelled after node completed", LogLevel::Warn);
-        log_message.end();
-        ctx.log(log_message);
+        if let Some(mut log_message) = log_message.take() {
+            log_message.end();
+            ctx.log(log_message);
+        }
         ctx.end_trace();
         ctx.set_state(NodeState::Error).await;
         return Err(InternalNodeError::ExecutionFailed("Cancelled".to_string()));
@@ -202,16 +223,20 @@ async fn run_node_logic_only(
             &format!("Failed to execute node: {}", &err_string),
             LogLevel::Error,
         );
-        log_message.end();
-        ctx.log(log_message);
+        if let Some(mut log_message) = log_message.take() {
+            log_message.end();
+            ctx.log(log_message);
+        }
         ctx.end_trace();
         ctx.set_state(NodeState::Error).await;
         return Err(InternalNodeError::ExecutionFailed(err_string));
     }
 
     ctx.set_state(NodeState::Success).await;
-    log_message.end();
-    ctx.log(log_message);
+    if let Some(mut log_message) = log_message.take() {
+        log_message.end();
+        ctx.log(log_message);
+    }
     ctx.end_trace();
     Ok(())
 }
@@ -327,6 +352,28 @@ impl InternalNode {
         }
     }
 
+    /// Build a node around an already-materialized, shared definition.
+    ///
+    /// Every catalog site that reaches for the definition only reads it, so one `Arc` can
+    /// back every run of a board. The alternative — what construction from a `Board` does —
+    /// is to deep-clone each node, pin map and dependency sets included, on every run.
+    pub fn from_shared(
+        node: Arc<Mutex<Node>>,
+        meta: NodeMeta,
+        pins: AHashMap<String, Arc<InternalPin>>,
+        logic: Arc<dyn NodeLogic>,
+        name_cache: AHashMap<String, Vec<Arc<InternalPin>>>,
+    ) -> Self {
+        InternalNode {
+            node,
+            meta,
+            pins,
+            logic,
+            pin_name_cache: Mutex::new(name_cache),
+            exec_calls: AtomicU64::new(0),
+        }
+    }
+
     /// Get cached node ID without locking
     #[inline]
     pub fn node_id(&self) -> &str {
@@ -380,7 +427,7 @@ impl InternalNode {
                 .and_then(|pins_ref| pins_ref.first().cloned())
         };
 
-        let pin = pin.ok_or(flow_like_types::anyhow!("Pin {} not found", name))?;
+        let pin = pin.ok_or_else(|| flow_like_types::anyhow!("Pin {} not found", name))?;
         Ok(pin)
     }
 
@@ -444,7 +491,7 @@ impl InternalNode {
             for depends_on_pin in deps {
                 let depends_on_pin = depends_on_pin
                     .upgrade()
-                    .ok_or(flow_like_types::anyhow!("Failed to lock Pin"))?;
+                    .ok_or_else(|| flow_like_types::anyhow!("Failed to lock Pin"))?;
 
                 // Only value access needs locking
                 let has_value = depends_on_pin.value.read().await.is_some();
@@ -491,7 +538,7 @@ impl InternalNode {
             while let Some(next_weak) = stack.pop() {
                 let pin_arc = next_weak
                     .upgrade()
-                    .ok_or(flow_like_types::anyhow!("Failed to lock Pin"))?;
+                    .ok_or_else(|| flow_like_types::anyhow!("Failed to lock Pin"))?;
 
                 let pin_key = Arc::as_ptr(&pin_arc) as usize;
                 if !visited_pins.insert(pin_key) {
@@ -530,16 +577,19 @@ impl InternalNode {
         let mut stack: Vec<Weak<InternalPin>> = Vec::with_capacity(64);
 
         for pin in self.pins.values() {
+            // Type first: it is two immutable field reads, whereas evaluating a pin walks
+            // its dependency chain, clones a `Value` and allocates a visited set. Only
+            // output execution pins can continue the flow, so evaluating the rest was pure
+            // waste — a node with ten pins and one exec output paid ten evaluations.
+            if pin.pin_type != PinType::Output || pin.data_type != VariableType::Execution {
+                continue;
+            }
+
             if filter_valid {
                 match evaluate_pin_value(pin.clone(), &context.context_pin_overrides).await {
                     Ok(Value::Bool(true)) => {}
                     _ => continue,
                 }
-            }
-
-            // Direct access to immutable fields - no lock needed
-            if pin.pin_type != PinType::Output || pin.data_type != VariableType::Execution {
-                continue;
             }
 
             visited_pins.clear();
@@ -621,7 +671,7 @@ impl InternalNode {
         while let Some(next_weak) = stack.pop() {
             let pin_arc = next_weak
                 .upgrade()
-                .ok_or(flow_like_types::anyhow!("Failed to lock Pin"))?;
+                .ok_or_else(|| flow_like_types::anyhow!("Failed to lock Pin"))?;
 
             let pin_key = Arc::as_ptr(&pin_arc) as usize;
             if !visited_pins.insert(pin_key) {
@@ -669,7 +719,7 @@ impl InternalNode {
             while let Some(dep_weak) = stack.pop() {
                 let dep_arc = dep_weak
                     .upgrade()
-                    .ok_or(flow_like_types::anyhow!("Failed to lock Pin"))?;
+                    .ok_or_else(|| flow_like_types::anyhow!("Failed to lock Pin"))?;
 
                 let pin_key = Arc::as_ptr(&dep_arc) as usize;
                 if !visited_pins.insert(pin_key) {
@@ -709,7 +759,10 @@ impl InternalNode {
             Exit,
         }
 
-        let mut parents_memo: AHashMap<usize, Vec<Arc<InternalNode>>> = AHashMap::with_capacity(16);
+        // Unsized: this is rebuilt per impure node execution and on a linear dependency
+        // chain never serves a hit, so pre-reserving 16 slots allocated ~1 KB per node
+        // execution for nothing.
+        let mut parents_memo: AHashMap<usize, Vec<Arc<InternalNode>>> = AHashMap::new();
 
         // Seed: pure parents of the current node. Dedup by pointer.
         let mut roots = match pure_parents_for_memo(&context.node, &mut parents_memo).await {
@@ -986,8 +1039,9 @@ impl InternalNode {
                 recursion_guard,
             )
             .await?;
-            let node = context.read_node().await;
-            return Err(InternalNodeError::DependencyFailed(node.id));
+            return Err(InternalNodeError::DependencyFailed(
+                context.node.node_id().to_string(),
+            ));
         }
 
         // this node
@@ -1083,34 +1137,39 @@ impl InternalNode {
     ) -> flow_like_types::Result<(), InternalNodeError> {
         context.set_state(NodeState::Running).await;
 
-        let node = context.read_node().await;
+        let node_id = context.node.node_id().to_string();
+        let node_name = context.node.node_name().to_string();
 
         if recursion_guard.is_none() {
             *recursion_guard = Some(AHashSet::new());
         }
         if let Some(guard) = recursion_guard {
-            if guard.contains(&node.id) {
+            if guard.contains(&node_id) {
                 context.log_message(
-                    &format!("Recursion detected for: {}", &node.id),
+                    &format!("Recursion detected for: {}", &node_id),
                     LogLevel::Debug,
                 );
                 context.end_trace();
                 return Ok(());
             }
-            guard.insert(node.id.clone());
+            guard.insert(node_id.clone());
         }
 
         // 1) Execute precomputed dependencies iteratively (no recursion)
         if !exec_deps_from_map(context, recursion_guard, dependencies).await {
             let err = "Failed to trigger mapped dependencies".to_string();
             InternalNode::handle_error(context, &err, recursion_guard).await?;
-            return Err(InternalNodeError::DependencyFailed(node.id.clone()));
+            return Err(InternalNodeError::DependencyFailed(node_id.clone()));
         }
 
         // 2) Run this node (no successors here)
         let logic = context.node.logic.clone();
         let mut log_message = LogMessage::new(
-            &format!("Starting Node Execution: {} [{}]", &node.name, &node.id),
+            &if context.logs_at(LogLevel::Debug) {
+                format!("Starting Node Execution: {} [{}]", &node_name, &node_id)
+            } else {
+                String::new()
+            },
             LogLevel::Debug,
             None,
         );

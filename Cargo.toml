@@ -110,6 +110,7 @@ futures-util = "0.3.31"
 moka = { version = "0.12.11", features = ["sync"] }
 bitflags = "2.9.4"
 blake3 = "1.8.2"
+rkyv = "0.8.17"
 lambda_runtime = "0.14.2"
 aws-config = "1.8.16"
 aws-sdk-dynamodb = "1.80.0"

@@ -44,6 +44,7 @@ use std::{
 };
 use trace::Trace;
 
+pub mod compiled;
 pub mod context;
 pub mod internal_node;
 pub mod internal_pin;
@@ -866,6 +867,83 @@ impl InternalRun {
         .await
     }
 
+    /// Build a run from an already-hydrated [`CompiledGraph`] instead of from a `Board`.
+    ///
+    /// Only the graph differs: the pin/node arena comes from the plan's flat `u32` tables
+    /// rather than from six string-keyed passes over the board. Everything per-run —
+    /// variables (including event and runtime overrides), `Run`/`RunMeta`, the cache seed,
+    /// log configuration — is produced by the same code as [`Self::new_with_run_id`], so
+    /// the two constructors cannot drift apart.
+    ///
+    /// No `Board` is loaded. `Run` still holds one and catalog nodes reach through it for
+    /// `board.layers` and `board.refs`, but it is *projected from the plan* rather than
+    /// fetched and decoded — so a run needs only the plan object.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn from_compiled(
+        graph: &crate::flow::execution::compiled::CompiledGraph,
+        app_id: &str,
+        board_dir: &flow_like_storage::Path,
+        event: Option<Event>,
+        handler: &Arc<FlowLikeState>,
+        profile: &Profile,
+        payload: &RunPayload,
+        stream_state: bool,
+        callback: InterComCallback,
+        credentials: Option<SharedCredentials>,
+        token: Option<String>,
+        oauth_tokens: std::collections::HashMap<String, OAuthToken>,
+        run_id: Option<String>,
+    ) -> flow_like_types::Result<Self> {
+        let before = Instant::now();
+        let board = graph.board(board_dir);
+        let runtime = graph.build_runtime_graph()?;
+
+        // Seed the entry exactly as the board builder does: the target is the node whose
+        // id matches `payload.id`, entered through no pins. Nodes inside function layers
+        // are deliberately not entry candidates, matching the old builder's scan over
+        // board-level nodes only — a payload naming one yields an empty stack and a no-op
+        // run rather than a surprise entry point.
+        let mut stack = RunStack::with_capacity(1);
+        if let Some(node) = runtime.nodes.get(&payload.id) {
+            let is_board_level = board.nodes.contains_key(&payload.id);
+            if is_board_level {
+                stack.push(ExecutionTarget {
+                    node: node.clone(),
+                    through_pins: vec![],
+                });
+            }
+        }
+
+        if board.log_level <= LogLevel::Debug {
+            tracing::debug!(
+                "InternalRun::from_compiled took {:?} on {} nodes and {} pins",
+                before.elapsed(),
+                runtime.nodes.len(),
+                runtime.pins.len()
+            );
+        }
+
+        Self::assemble(
+            app_id,
+            board,
+            event,
+            handler,
+            profile,
+            payload,
+            stream_state,
+            callback,
+            credentials,
+            token,
+            oauth_tokens.into_iter().collect(),
+            run_id.unwrap_or_else(create_id),
+            runtime.nodes,
+            runtime.pins,
+            stack,
+            AHashMap::new(),
+        )
+        .await
+    }
+
     pub async fn new_with_run_id(
         app_id: &str,
         board: Arc<Board>,
@@ -885,99 +963,8 @@ impl InternalRun {
 
         let before = Instant::now();
         let run_id = run_id.unwrap_or_else(create_id);
-        let execution_mode = ExecutionMode::from_event(event.as_ref());
-
-        let (log_store, db, lance_write_options) = {
-            let guard = handler.config.read().await;
-            let log_store = guard.stores.log_store.clone();
-            let db = guard.callbacks.build_logs_database.clone();
-            let write_opts = guard.callbacks.lance_write_options.clone();
-            tracing::debug!(
-                has_log_store = log_store.is_some(),
-                has_log_db = db.is_some(),
-                "InternalRun: Reading log configuration from state"
-            );
-            (log_store, db, write_opts)
-        };
-
-        // derive sub from token (JWT) or default to "local"
-        let sub_value = token
-            .as_ref()
-            .and_then(|t| extract_sub_from_jwt(t).ok())
-            .unwrap_or_else(|| "local".to_string());
-
-        let run = Run {
-            id: run_id.clone(),
-            app_id: app_id.to_string(),
-            model_usage_app_id: Some(app_id.to_string()),
-            traces: vec![],
-            status: RunStatus::Running,
-            start: SystemTime::now(),
-            end: SystemTime::now(),
-            log_level: board.log_level,
-            board: board.clone(),
-            payload: Arc::new(payload.clone()),
-            sub: sub_value.clone(),
-            highest_log_level: LogLevel::Debug,
-            log_initialized: false,
-            logs: 0,
-            stream_state,
-            log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
-
-            event_id: event.as_ref().map(|e| e.id.clone()),
-            event_version: event.as_ref().map(|e| {
-                let (major, minor, patch) = e.event_version;
-                format!("{}.{}.{}", major, minor, patch)
-            }),
-
-            visited_nodes: AHashMap::with_capacity(board.nodes.len()),
-            log_store,
-            log_db: db,
-            lance_write_options,
-        };
-
-        let run = Arc::new(Mutex::new(run));
 
         let mut dependencies = AHashMap::with_capacity(board.nodes.len());
-
-        let event_variables = event
-            .as_ref()
-            .map(|e| e.variables.clone())
-            .unwrap_or_default();
-
-        // Extract runtime_variables from payload
-        let runtime_variables = payload.runtime_variables.clone().unwrap_or_default();
-        let filter_secrets = payload.filter_secrets.unwrap_or(true);
-
-        let variables = Arc::new(Mutex::new({
-            let mut map = AHashMap::with_capacity(board.variables.len());
-            for (variable_id, board_variable) in &board.variables {
-                // Priority: runtime_configured/secret vars > event vars (for exposed) > board vars
-                // When filter_secrets is true, only runtime_configured vars may be overridden;
-                // secrets from untrusted callers are ignored to prevent injection.
-                let allow_runtime_override =
-                    board_variable.runtime_configured || (board_variable.secret && !filter_secrets);
-                let variable = if allow_runtime_override {
-                    runtime_variables.get(variable_id).unwrap_or(board_variable)
-                } else if board_variable.exposed {
-                    event_variables.get(variable_id).unwrap_or(board_variable)
-                } else {
-                    board_variable
-                };
-
-                let value = match &variable.default_value {
-                    Some(bytes) => {
-                        flow_like_types::json::from_slice::<Value>(bytes).unwrap_or(Value::Null)
-                    }
-                    None => Value::Null,
-                };
-
-                let mut var = variable.clone();
-                var.value = Arc::new(Mutex::new(value));
-                map.insert(variable_id.clone(), var);
-            }
-            map
-        }));
 
         let mut pin_to_node = AHashMap::with_capacity(board.nodes.len() * 3);
         let mut pins: AHashMap<String, Arc<InternalPin>> =
@@ -1188,14 +1175,154 @@ impl InternalRun {
             }
         }
 
-        if board.log_level <= LogLevel::Info {
-            println!(
+        // Boards default to Info, so this fired on essentially every run and wrote to
+        // stdout from library code. Kept as a trace span, which a host can enable.
+        if board.log_level <= LogLevel::Debug {
+            tracing::debug!(
                 "InternalRun::new took {:?} on {} nodes and {} pins",
                 before.elapsed(),
                 nodes.len(),
                 pins.len()
             );
         }
+
+        Self::assemble(
+            app_id,
+            board,
+            event,
+            handler,
+            profile,
+            payload,
+            stream_state,
+            callback,
+            credentials,
+            token,
+            oauth_tokens,
+            run_id,
+            nodes,
+            pins,
+            stack,
+            dependencies,
+        )
+        .await
+    }
+
+    /// Everything a run needs that is *not* the node/pin graph.
+    ///
+    /// Both constructors funnel through here so the per-run semantics that are easy to get
+    /// subtly wrong — variable override priority, `Run`/`RunMeta` fields, the temporary
+    /// store seeded into the cache, log configuration — exist in exactly one place and
+    /// cannot drift between the board-built and plan-built paths.
+    #[allow(clippy::too_many_arguments)]
+    async fn assemble(
+        app_id: &str,
+        board: Arc<Board>,
+        event: Option<Event>,
+        handler: &Arc<FlowLikeState>,
+        profile: &Profile,
+        payload: &RunPayload,
+        stream_state: bool,
+        callback: InterComCallback,
+        credentials: Option<SharedCredentials>,
+        token: Option<String>,
+        oauth_tokens: AHashMap<String, OAuthToken>,
+        run_id: String,
+        nodes: AHashMap<String, Arc<InternalNode>>,
+        pins: AHashMap<String, Arc<InternalPin>>,
+        stack: RunStack,
+        dependencies: AHashMap<String, Vec<Arc<InternalNode>>>,
+    ) -> flow_like_types::Result<Self> {
+        let execution_mode = ExecutionMode::from_event(event.as_ref());
+
+        let (log_store, db, lance_write_options) = {
+            let guard = handler.config.read().await;
+            let log_store = guard.stores.log_store.clone();
+            let db = guard.callbacks.build_logs_database.clone();
+            let write_opts = guard.callbacks.lance_write_options.clone();
+            tracing::debug!(
+                has_log_store = log_store.is_some(),
+                has_log_db = db.is_some(),
+                "InternalRun: Reading log configuration from state"
+            );
+            (log_store, db, write_opts)
+        };
+
+        // derive sub from token (JWT) or default to "local"
+        let sub_value = token
+            .as_ref()
+            .and_then(|t| extract_sub_from_jwt(t).ok())
+            .unwrap_or_else(|| "local".to_string());
+
+        let run = Run {
+            id: run_id.clone(),
+            app_id: app_id.to_string(),
+            model_usage_app_id: Some(app_id.to_string()),
+            traces: vec![],
+            status: RunStatus::Running,
+            start: SystemTime::now(),
+            end: SystemTime::now(),
+            log_level: board.log_level,
+            board: board.clone(),
+            payload: Arc::new(payload.clone()),
+            sub: sub_value.clone(),
+            highest_log_level: LogLevel::Debug,
+            log_initialized: false,
+            logs: 0,
+            stream_state,
+            log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
+
+            event_id: event.as_ref().map(|e| e.id.clone()),
+            event_version: event.as_ref().map(|e| {
+                let (major, minor, patch) = e.event_version;
+                format!("{}.{}.{}", major, minor, patch)
+            }),
+
+            visited_nodes: AHashMap::with_capacity(board.nodes.len()),
+            log_store,
+            log_db: db,
+            lance_write_options,
+        };
+
+        let run = Arc::new(Mutex::new(run));
+
+        let event_variables = event
+            .as_ref()
+            .map(|e| e.variables.clone())
+            .unwrap_or_default();
+
+        // Extract runtime_variables from payload
+        let runtime_variables = payload.runtime_variables.clone().unwrap_or_default();
+        let filter_secrets = payload.filter_secrets.unwrap_or(true);
+
+        let variables = Arc::new(Mutex::new({
+            let mut map = AHashMap::with_capacity(board.variables.len());
+            for (variable_id, board_variable) in &board.variables {
+                // Priority: runtime_configured/secret vars > event vars (for exposed) > board vars
+                // When filter_secrets is true, only runtime_configured vars may be overridden;
+                // secrets from untrusted callers are ignored to prevent injection.
+                let allow_runtime_override =
+                    board_variable.runtime_configured || (board_variable.secret && !filter_secrets);
+                let variable = if allow_runtime_override {
+                    runtime_variables.get(variable_id).unwrap_or(board_variable)
+                } else if board_variable.exposed {
+                    event_variables.get(variable_id).unwrap_or(board_variable)
+                } else {
+                    board_variable
+                };
+
+                let value = match &variable.default_value {
+                    Some(bytes) => {
+                        flow_like_types::json::from_slice::<Value>(bytes).unwrap_or(Value::Null)
+                    }
+                    None => Value::Null,
+                };
+
+                let mut var = variable.clone();
+                var.value = Arc::new(Mutex::new(value));
+                map.insert(variable_id.clone(), var);
+            }
+            map
+        }));
 
         let cache = Arc::new(RwLock::new(AHashMap::new()));
         let temporary_store = {
@@ -1371,7 +1498,9 @@ impl InternalRun {
     ) {
         let variables = &self.variables;
         let cache = &self.cache;
-        let dependencies = self.dependencies.clone();
+        // Shared by reference: this map is rebuilt only at construction, and cloning it
+        // per parallel step duplicated every entry for nothing.
+        let dependencies = &self.dependencies;
         let run = self.run.clone();
         let profile = self.profile.clone();
         let concurrency_limit = self.concurrency_limit;
@@ -1547,16 +1676,23 @@ impl InternalRun {
 
         // Spawn background flush task for long-running nodes
         let run_clone = self.run.clone();
-        let flush_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let flush_cancel_clone = flush_cancel.clone();
+        // Shutdown is a token rather than a flag so it can interrupt the sleep.
+        //
+        // Previously the task only re-checked a `AtomicBool` *after* `interval.tick()`
+        // resolved, so tearing it down at the end of a run blocked until the next tick —
+        // up to `flush_interval` (5s by default) of dead wait after the last node had
+        // already finished, on every run. It also quantised every measured run duration to
+        // a multiple of the interval.
+        let flush_shutdown = CancellationToken::new();
+        let flush_shutdown_child = flush_shutdown.clone();
         let flush_task = flow_like_types::tokio::spawn(async move {
             let mut interval = flow_like_types::tokio::time::interval(flush_interval);
             interval.tick().await; // Skip first immediate tick
 
-            while !flush_cancel_clone.load(Ordering::Relaxed) {
-                interval.tick().await;
-                if flush_cancel_clone.load(Ordering::Relaxed) {
-                    break;
+            loop {
+                flow_like_types::tokio::select! {
+                    _ = flush_shutdown_child.cancelled() => break,
+                    _ = interval.tick() => {}
                 }
 
                 let prepared: Option<PreparedFlush> =
@@ -1635,8 +1771,9 @@ impl InternalRun {
         let cancellation_log_level = self.cancellation_log_level;
         let cancellation_log_message = self.cancellation_log_message.clone();
 
-        // Stop background flush task
-        flush_cancel.store(true, Ordering::Relaxed);
+        // Stop background flush task. Cancelling the token interrupts an in-flight sleep,
+        // so this returns immediately instead of waiting out the current tick.
+        flush_shutdown.cancel();
         let _ = flush_task.await;
 
         if self.trigger_completion_callbacks().await {

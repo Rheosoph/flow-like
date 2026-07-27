@@ -219,12 +219,12 @@ impl NodeLogic for LazyRegisterFunctionToolsNode {
             std::collections::HashSet::new();
 
         for referenced_node in &referenced_functions {
-            let mut node_guard = referenced_node.node.lock().await;
+            let node_guard = referenced_node.node.lock().await;
             let node_id = node_guard.id.clone();
 
-            // Compute a stable hash over name, description, and pin shapes.
-            node_guard.hash();
-            let node_hash = node_guard.hash.unwrap_or(0).to_string();
+            // Stable hash over display metadata and pin shape only, so moving a node on
+            // the canvas does not invalidate its embedding.
+            let node_hash = node_guard.semantic_hash().to_string();
             current_node_ids.insert(node_id.clone());
 
             // Build the searchable text blob (used for both FTS and embedding).

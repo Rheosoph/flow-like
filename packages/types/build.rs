@@ -6,7 +6,6 @@ fn main() -> Result<()> {
             "src/protobufs/app.proto",
             "src/protobufs/metadata.proto",
             "src/protobufs/board.proto",
-            "src/protobufs/execution-plan.proto",
             "src/protobufs/comment.proto",
             "src/protobufs/node.proto",
             "src/protobufs/pin.proto",

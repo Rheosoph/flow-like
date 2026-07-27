@@ -517,24 +517,69 @@ impl ExecutionContext {
         self.cancellation_token = Some(token);
     }
 
+    /// Derive a child context for `node` from this one.
+    ///
+    /// Everything a sub-context needs is already resolved on the parent, so this copies it
+    /// rather than re-deriving it. Going through `ExecutionContext::new` acquired the
+    /// **global `Run` mutex twice** (once for `run_id`/`stream_state`/spill threshold, once
+    /// inside `ExecutionContextCache::new` for the app/board identifiers) plus a
+    /// `config.read()` for the store set — per sub-context, i.e. per node execution. A loop
+    /// body creates one per node per iteration, so a five-million-iteration board was
+    /// funnelling tens of millions of acquisitions through a single shared mutex.
+    ///
+    /// The copied values are immutable for the lifetime of a run, which is the same
+    /// assumption `with_meta` already relies on.
     pub async fn create_sub_context(&self, node: &Arc<InternalNode>) -> ExecutionContext {
-        let mut context = ExecutionContext::new(
-            self.nodes.clone(),
-            &self.run,
-            &self.app_state,
-            node,
-            &self.variables,
-            &self.cache,
-            self.log_level,
-            self.stage.clone(),
-            self.profile.clone(),
-            self.callback.clone(),
-            self.completion_callbacks.clone(),
-            self.credentials.clone(),
-            self.token.clone(),
-            self.oauth_tokens.clone(),
-        )
-        .await;
+        let id = node.node_id().to_string();
+
+        // Only the node identity differs from the parent's cache.
+        let execution_cache = self.execution_cache.as_ref().map(|cache| {
+            let mut cache = cache.clone();
+            cache.node_id = id.clone();
+            cache
+        });
+
+        let mut trace = Trace::new(&id);
+        if self.log_level == LogLevel::Debug {
+            trace.snapshot_variables(&self.variables).await;
+        }
+
+        let mut context = ExecutionContext {
+            id,
+            run_id: self.run_id.clone(),
+            execution_environment: self.execution_environment,
+            execution_mode: self.execution_mode,
+            started_by: None,
+            run: self.run.clone(),
+            app_state: self.app_state.clone(),
+            node: node.clone(),
+            variables: self.variables.clone(),
+            local_variables: None,
+            cache: self.cache.clone(),
+            log_level: self.log_level,
+            stage: self.stage.clone(),
+            sub_traces: vec![],
+            trace,
+            profile: self.profile.clone(),
+            callback: self.callback.clone(),
+            token: self.token.clone(),
+            execution_cache,
+            stream_state: self.stream_state,
+            state: NodeState::Idle,
+            context_state: BTreeMap::new(),
+            nodes: self.nodes.clone(),
+            completion_callbacks: self.completion_callbacks.clone(),
+            credentials: self.credentials.clone(),
+            context_pin_overrides: None,
+            result: None,
+            delegated: false,
+            oauth_tokens: self.oauth_tokens.clone(),
+            cancellation_token: None,
+            user_context: None,
+            log_spill_threshold: self.log_spill_threshold,
+            log_flush_interval: self.log_flush_interval,
+            last_log_spill: Instant::now(),
+        };
 
         context.context_pin_overrides = self.context_pin_overrides.clone();
         context.cancellation_token = self.cancellation_token.clone();
@@ -725,7 +770,7 @@ impl ExecutionContext {
             .lock()
             .await
             .get(variable_id)
-            .ok_or(flow_like_types::anyhow!("Variable not found"))?
+            .ok_or_else(|| flow_like_types::anyhow!("Variable not found"))?
             .value
             .clone();
         let mut guard = value_ref.lock().await;
@@ -770,6 +815,15 @@ impl ExecutionContext {
     /// Check if a valid OAuth token exists for a specific provider.
     pub fn has_oauth_token(&self, provider_id: &str) -> bool {
         self.get_oauth_token(provider_id).is_some()
+    }
+
+    /// Whether a message at `level` would be kept.
+    ///
+    /// Lets callers skip formatting a message that is about to be discarded. Boards default
+    /// to `Info`, so every `Debug` line built on the hot path is normally wasted work.
+    #[inline]
+    pub fn logs_at(&self, level: LogLevel) -> bool {
+        level >= self.log_level
     }
 
     pub fn log(&mut self, log: LogMessage) {
@@ -1019,9 +1073,14 @@ impl ExecutionContext {
         self.trace.finish();
     }
 
+    /// Hand this context's traces upward, leaving it empty.
+    ///
+    /// Moves rather than clones: every caller drops or stops reading the traces right
+    /// afterwards, so copying them was pure overhead — and it is paid at every nesting
+    /// level of every loop iteration.
     pub fn take_traces(&mut self) -> Vec<Trace> {
-        let mut traces = self.sub_traces.clone();
-        traces.push(self.trace.clone());
+        let mut traces = std::mem::take(&mut self.sub_traces);
+        traces.push(self.trace.take());
         traces.sort_by(|a, b| a.start.cmp(&b.start));
         traces
     }

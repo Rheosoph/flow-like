@@ -147,6 +147,55 @@ pub enum NodePermission {
     Functions,
 }
 
+impl NodePermission {
+    /// Encode for a compiled execution plan.
+    ///
+    /// Written out explicitly and paired with [`NodePermission::from_plan_u8`]: this grant
+    /// governs what a WASM node is allowed to do, so its meaning must never depend on
+    /// declaration order. Reordering a variant with a derived cast would silently convert
+    /// stored `StorageRead` grants into `NetworkHttp` ones.
+    pub fn to_plan_u8(&self) -> u8 {
+        match self {
+            NodePermission::NetworkHttp => 0,
+            NodePermission::NetworkWebsocket => 1,
+            NodePermission::NetworkTcp => 2,
+            NodePermission::NetworkUdp => 3,
+            NodePermission::NetworkDns => 4,
+            NodePermission::StorageRead => 5,
+            NodePermission::StorageWrite => 6,
+            NodePermission::Variables => 7,
+            NodePermission::Cache => 8,
+            NodePermission::Streaming => 9,
+            NodePermission::Models => 10,
+            NodePermission::A2ui => 11,
+            NodePermission::OAuth => 12,
+            NodePermission::Functions => 13,
+        }
+    }
+
+    /// Decode a stored grant. Unknown values yield `None` and are dropped rather than
+    /// guessed — failing closed is the only safe direction for a permission.
+    pub fn from_plan_u8(value: u8) -> Option<Self> {
+        Some(match value {
+            0 => NodePermission::NetworkHttp,
+            1 => NodePermission::NetworkWebsocket,
+            2 => NodePermission::NetworkTcp,
+            3 => NodePermission::NetworkUdp,
+            4 => NodePermission::NetworkDns,
+            5 => NodePermission::StorageRead,
+            6 => NodePermission::StorageWrite,
+            7 => NodePermission::Variables,
+            8 => NodePermission::Cache,
+            9 => NodePermission::Streaming,
+            10 => NodePermission::Models,
+            11 => NodePermission::A2ui,
+            12 => NodePermission::OAuth,
+            13 => NodePermission::Functions,
+            _ => return None,
+        })
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct NodeWasm {
     pub package_id: String,
@@ -642,6 +691,48 @@ impl Node {
         }
 
         self.hash = Some(hasher.finalize64());
+    }
+
+    /// Hash over the fields that determine how this node is exposed to LLM tooling,
+    /// MCP/REST surfaces and semantic search: display metadata and pin shape.
+    ///
+    /// Deliberately excludes layout and editor-only state (coordinates, scores, icon,
+    /// comment, connections) so cosmetic edits do not invalidate derived caches such as
+    /// tool embeddings. Unlike [`Node::hash`] this takes `&self` and does not mutate.
+    pub fn semantic_hash(&self) -> u64 {
+        let mut hasher = HighwayHasher::new(highway::Key([
+            0x0123456789abcdef,
+            0xfedcba9876543210,
+            0x0011223344556677,
+            0x8899aabbccddeeff,
+        ]));
+
+        hasher.append(self.name.as_bytes());
+        hasher.append(self.friendly_name.as_bytes());
+        hasher.append(self.description.as_bytes());
+
+        let mut pin_keys: Vec<_> = self.pins.keys().collect();
+        pin_keys.sort();
+        for key in pin_keys {
+            let pin = &self.pins[key];
+            hasher.append(pin.name.as_bytes());
+            hasher.append(pin.friendly_name.as_bytes());
+            hasher.append(pin.description.as_bytes());
+            hasher.append(&[pin.pin_type.clone() as u8]);
+            hasher.append(&[pin.data_type.clone() as u8]);
+            hasher.append(&[pin.value_type.clone() as u8]);
+            hasher.append(&pin.index.to_le_bytes());
+            if let Some(schema) = &pin.schema {
+                hasher.append(schema.as_bytes());
+            }
+            if let Some(valid_values) = pin.options.as_ref().and_then(|o| o.valid_values.as_ref()) {
+                for value in valid_values {
+                    hasher.append(value.as_bytes());
+                }
+            }
+        }
+
+        hasher.finalize64()
     }
 }
 
