@@ -49,16 +49,21 @@ const parallaxMask = (name: string) =>
     style={`--workflow-mask: ${parallaxMask("workflow-core")}`}
   >
     <div class="workflow-art">
-      <img
-        src="/parallax/optimized/workflow-core-1920.webp"
-        srcset={parallaxSrcset("workflow-core")}
-        alt={`${t("v5.platform.f.workflow.title")} — Flow-Like visual workflow and FlowScript editor`}
-        sizes="(max-width: 959px) calc(100vw - 36px), min(60vw, 1150px)"
-        width={workflowCore.width}
-        height={workflowCore.height}
-        loading="lazy"
-        decoding="async"
-      />
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("workflow-core")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/workflow-core-1920.webp"
+          alt={`${t("v5.platform.f.workflow.title")} — Flow-Like visual workflow and FlowScript editor`}
+          width={workflowCore.width}
+          height={workflowCore.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
     </div>
   </div>
 )}
@@ -69,16 +74,21 @@ const parallaxMask = (name: string) =>
     style={`--workflow-mask: ${parallaxMask("ui-builder")}`}
   >
     <div class="workflow-art">
-      <img
-        src="/parallax/optimized/ui-builder-1920.webp"
-        srcset={parallaxSrcset("ui-builder")}
-        alt={`${t("v5.platform.f.frontend.title")} — Flow-Like visual page builder and interaction editor`}
-        sizes="(max-width: 959px) calc(100vw - 36px), min(60vw, 1150px)"
-        width={uiBuilder.width}
-        height={uiBuilder.height}
-        loading="lazy"
-        decoding="async"
-      />
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("ui-builder")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/ui-builder-1920.webp"
+          alt={`${t("v5.platform.f.frontend.title")} — Flow-Like visual page builder and interaction editor`}
+          width={uiBuilder.width}
+          height={uiBuilder.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
     </div>
   </div>
 )}
@@ -89,16 +99,21 @@ const parallaxMask = (name: string) =>
     style={`--workflow-mask: ${parallaxMask("data-studio")}`}
   >
     <div class="workflow-art">
-      <img
-        src="/parallax/optimized/data-studio-1920.webp"
-        srcset={parallaxSrcset("data-studio")}
-        alt={`${t("v5.platform.f.data.title")} — Flow-Like ontology and knowledge graph workspace`}
-        sizes="(max-width: 959px) calc(100vw - 36px), min(60vw, 1150px)"
-        width={dataStudio.width}
-        height={dataStudio.height}
-        loading="lazy"
-        decoding="async"
-      />
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("data-studio")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/data-studio-1920.webp"
+          alt={`${t("v5.platform.f.data.title")} — Flow-Like ontology and knowledge graph workspace`}
+          width={dataStudio.width}
+          height={dataStudio.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
     </div>
   </div>
 )}
@@ -115,16 +130,21 @@ const parallaxMask = (name: string) =>
     style={`--workflow-mask: ${parallaxMask("governance")}`}
   >
     <div class="workflow-art">
-      <img
-        src="/parallax/optimized/governance-1920.webp"
-        srcset={parallaxSrcset("governance")}
-        alt={`${t("v5.platform.f.governance.title")} — Flow-Like AI inventory, security, audit, and usage governance dashboards`}
-        sizes="(max-width: 959px) calc(100vw - 36px), min(60vw, 1150px)"
-        width={governance.width}
-        height={governance.height}
-        loading="lazy"
-        decoding="async"
-      />
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("governance")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/governance-1920.webp"
+          alt={`${t("v5.platform.f.governance.title")} — Flow-Like AI inventory, security, audit, and usage governance dashboards`}
+          width={governance.width}
+          height={governance.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
     </div>
   </div>
 )}
@@ -247,6 +267,11 @@ const parallaxMask = (name: string) =>
     height: 100%;
     object-fit: contain;
     image-rendering: auto;
+  }
+  .workflow-art :global(picture) {
+    display: block;
+    width: 100%;
+    height: 100%;
   }
   .workflow-visual:hover:before {
     opacity: .8;
