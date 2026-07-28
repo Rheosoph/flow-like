@@ -500,15 +500,10 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
     .app-rail-header > span b { display: none; }
     .app-rail .app-card { width: 290px; height: 225px; }
     .app-rail .app-body { height: 145px; }
-    .rail-bridge { grid-template-columns: 1fr; gap: 10px; padding: 12px; }
-    .rail-bridge > span:last-child { display: none; }
-    .ecosystem, .unified-shell > .ecosystem { width: 100%; height: auto; display: grid; grid-template-columns: 1fr; gap: 10px; padding: 12px; border-radius: 16px; }
-    .ecosystem-grid, .system-link { display: none; }
-    .connected-app, .connected-app:not(.compact), .connected-app.compact { position: relative; top: auto; right: auto; bottom: auto; left: auto; width: 100%; height: 205px; display: block; opacity: .82; transform: none; }
-    .connected-app.compact { height: 126px; }
-    .connected-app.active { transform: none; }
-    .os-core { position: relative; top: auto; left: auto; order: -1; width: 100%; min-height: 310px; transform: none; }
-    .flow-switcher, .unified-shell > .flow-switcher { width: 100%; grid-template-columns: 1fr; margin-top: 12px; }
+    /* The operating-layer map depends on spatial relationships that do not
+       survive a single-column layout. The app carousel carries this story on
+       small screens without adding a long stack of disconnected panels. */
+    .layer-shell { display: none; }
   }
 
   @media (prefers-reduced-motion: reduce) {

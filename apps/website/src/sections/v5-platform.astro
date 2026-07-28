@@ -121,7 +121,9 @@ const featuresJson = JSON.stringify(
     .story-sticky > h2 { left: 2vw; }
   }
 
-  @media (max-width: 800px) {
+  /* The sticky story is only useful when its complete stage can remain visible.
+     Narrow and short viewports get the linear version instead. */
+  @media (max-width: 959px), (max-height: 679px) {
     .story { display: none; }
     .mobile-story { display: block; padding: 100px 18px; background: var(--background); }
     .mobile-story > header { padding: 0 4px 55px; }
@@ -152,6 +154,24 @@ const featuresJson = JSON.stringify(
   function initV5Platform() {
     const story = document.querySelector<HTMLElement>("[data-v5-story]");
     if (!story || story.dataset.ready === "true") return;
+
+    // The sticky/parallax composition needs enough room for its heading,
+    // navigation, mockup and copy to stay visible together. Smaller viewports
+    // use the linear story rendered alongside this scene instead.
+    const linearStoryQuery = window.matchMedia(
+      "(max-width: 959px), (max-height: 679px)",
+    );
+    if (linearStoryQuery.matches) {
+      linearStoryQuery.addEventListener(
+        "change",
+        (event) => {
+          if (!event.matches) initV5Platform();
+        },
+        { once: true },
+      );
+      return;
+    }
+
     story.dataset.ready = "true";
 
     const raw = story.getAttribute("data-features");
