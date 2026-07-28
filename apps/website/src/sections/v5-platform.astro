@@ -88,11 +88,27 @@ const featuresJson = JSON.stringify(
   .eyebrow { font: 9px/1 var(--mono); letter-spacing: .16em; color: var(--muted-foreground); }
 
   .story { position: relative; height: 700vh; background: var(--background); }
-  .story-sticky { position: sticky; top: 0; height: 100vh; display: grid; grid-template-columns: 19vw 1fr 24vw; grid-template-rows: 55px 1fr; overflow: hidden; padding: 24px 3vw; background: radial-gradient(circle at 52% 50%, color-mix(in oklab, var(--primary) 8%, transparent), transparent 34%), var(--background); }
-  .story-top { grid-column: 1/-1; display: grid; grid-template-columns: 19vw 1fr 24vw; align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font: 9px var(--mono); letter-spacing: .12em; }
+  .story-sticky {
+    --story-gutter: clamp(24px, 3vw, 60px);
+    --story-left: 19%;
+    --story-right: 24%;
+    position: sticky;
+    top: 0;
+    width: min(100%, var(--website-content-max));
+    height: 100vh;
+    display: grid;
+    grid-template-columns: var(--story-left) minmax(0, 1fr) var(--story-right);
+    grid-template-rows: 55px 1fr;
+    overflow: hidden;
+    box-sizing: border-box;
+    margin-inline: auto;
+    padding: 24px var(--story-gutter);
+    background: radial-gradient(circle at 52% 50%, color-mix(in oklab, var(--primary) 8%, transparent), transparent 34%), var(--background);
+  }
+  .story-top { grid-column: 1/-1; display: grid; grid-template-columns: var(--story-left) minmax(0, 1fr) var(--story-right); align-items: center; padding-bottom: 14px; border-bottom: 1px solid var(--border); color: var(--muted-foreground); font: 9px var(--mono); letter-spacing: .12em; }
   .story-top > i { height: 1px; margin-right: 26px; background: var(--border); }
   .story-top > i b { display: block; height: 1px; background: var(--accent); transition: width .1s linear; }
-  .story-sticky > h2 { position: absolute; top: 100px; left: 3vw; display: grid; margin: 0; font-size: clamp(45px, 4.4vw, 72px); line-height: .88; letter-spacing: -.065em; }
+  .story-sticky > h2 { position: absolute; top: 100px; left: var(--story-gutter); display: grid; margin: 0; font-size: clamp(45px, 4.4vw, 72px); line-height: .88; letter-spacing: -.065em; }
   .story-sticky > h2 span:nth-child(2) { color: var(--muted-foreground); }
   .story-sticky > nav { grid-column: 1; grid-row: 2; align-self: end; display: grid; margin-bottom: 18px; border-top: 1px solid var(--border); }
   .story-sticky > nav button { height: 43px; display: grid; grid-template-columns: 27px 1fr; gap: 8px; align-items: center; padding: 0 6px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--muted-foreground); text-align: left; cursor: pointer; transition: color .2s, padding .2s, background .2s; }
@@ -117,8 +133,11 @@ const featuresJson = JSON.stringify(
   .mobile-story { display: none; }
 
   @media (max-width: 1050px) {
-    .story-sticky { grid-template-columns: 18vw 1fr 23vw; padding-right: 2vw; padding-left: 2vw; }
-    .story-sticky > h2 { left: 2vw; }
+    .story-sticky {
+      --story-gutter: 2vw;
+      --story-left: 18%;
+      --story-right: 23%;
+    }
   }
 
   /* The sticky story is only useful when its complete stage can remain visible.

@@ -163,7 +163,7 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
 ---
 
 <section id="apps" class="v5-apps apps unified-apps" data-v5-apps>
-  <div class="section-head unified-head">
+  <div class="section-head unified-head website-content-canvas">
     <span class="eyebrow">01 / {t("v5.apps.eyebrow")}</span>
     <div>
       <h2>{t("v5.apps.h2.l1")}<br />{t("v5.apps.h2.l2")}</h2>
@@ -313,7 +313,7 @@ const active0 = (id: string): boolean => flow0.nodes.includes(id);
 
   /* Apps section shell */
   .apps { padding: 150px 0 130px; background: var(--background); color: var(--foreground); overflow: hidden; }
-  .section-head { display: grid; grid-template-columns: 24% 1fr; padding: 0 6vw 75px; }
+  .section-head { display: grid; grid-template-columns: 24% 1fr; padding: 0 clamp(22px, 6vw, 115px) 75px; }
   .apps .eyebrow { padding-top: 13px; color: var(--muted-foreground); }
   .section-head > div { display: flex; flex-direction: column; align-items: flex-start; gap: 34px; }
   .section-head h2 { margin: 0; font-size: clamp(54px, 6.1vw, 96px); line-height: .92; letter-spacing: -.065em; font-weight: 650; white-space: nowrap; }
