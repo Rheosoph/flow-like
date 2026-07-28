@@ -3,7 +3,7 @@
 //! Rules are evaluated on a fixed interval by an in-process ticker, mirroring
 //! `telemetry::sweeper`. Deployments without a long-lived process (AWS Lambda)
 //! drive the exact same `evaluate_once` through
-//! `POST /admin/telemetry/alerts/evaluate`.
+//! `POST /api/v1/maintenance/run` (or the Admin-only manual endpoint).
 //!
 //! A firing rule always appends a row to the in-app inbox; that row is the
 //! source of truth. Rules that opt into a notification channel additionally
@@ -15,11 +15,11 @@ use std::time::Duration;
 
 use chrono::{Duration as ChronoDuration, NaiveDateTime, Utc};
 use flow_like_types::tokio::{self, task::JoinHandle};
-use sea_orm::sea_query::{Expr, IntoColumnRef, SimpleExpr};
+use sea_orm::sea_query::{Expr, IntoColumnRef, NullOrdering, SimpleExpr};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, DatabaseConnection, DbBackend, DbErr,
-    EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set, Statement,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, DbBackend, DbErr, EntityTrait, FromQueryResult,
+    IntoActiveModel, Order, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement,
+    TransactionTrait,
 };
 
 use crate::entity::{
@@ -63,6 +63,7 @@ const MIN_INTERVAL_SECS: u64 = 30;
 const DEFAULT_RULE_CAP: u64 = 200;
 const CRASHED_STATUS: &str = "crashed";
 const ERROR_STATUS: &str = "error";
+static ALERT_EVALUATION_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 /// Upper bound on the spans folded in Rust when the backend has no
 /// `percentile_cont`.
 const SPAN_ROW_CAP: u64 = 100_000;
@@ -188,42 +189,79 @@ pub fn spawn_telemetry_alert_evaluator(
 /// Evaluate every enabled rule once. Returns how many rules were evaluated and
 /// how many opened or closed an alert.
 ///
-/// Exposed for tests, for the spawned task, and for the Admin-gated
-/// `POST /admin/telemetry/alerts/evaluate` endpoint used by serverless
-/// deployments. A rule that fails to evaluate is logged and skipped so one bad
-/// rule cannot stop the pass, and a transition is only notified once its inbox
-/// row is committed.
+/// Exposed for tests, for the spawned task, and for the service-authenticated
+/// maintenance endpoint used by serverless deployments. A process mutex avoids
+/// redundant local passes, while each rule is evaluated inside a transaction
+/// holding a row lock. The row lock serializes that rule across API replicas
+/// without relying on database-specific advisory locks. A rule that fails to
+/// evaluate is logged and skipped so one bad rule cannot stop the pass, and a
+/// transition is only notified once its transaction commits.
 pub async fn evaluate_once(
     state: &AppState,
     config: &TelemetryAlertConfig,
 ) -> Result<AlertEvaluationResult, DbErr> {
+    // Avoid doing the same expensive metric aggregation twice in this process.
+    let _local_guard = ALERT_EVALUATION_MUTEX.lock().await;
+
     let rules = telemetry_alert_rule::Entity::find()
         .filter(telemetry_alert_rule::Column::Enabled.eq(true))
+        // The cap is a per-pass work budget, not a permanent subset. Rules
+        // never evaluated come first, then the least recently evaluated.
+        .order_by_with_nulls(
+            telemetry_alert_rule::Column::LastEvaluatedAt,
+            Order::Asc,
+            NullOrdering::First,
+        )
         .order_by_asc(telemetry_alert_rule::Column::CreatedAt)
+        .order_by_asc(telemetry_alert_rule::Column::Id)
         .limit(config.rule_cap)
         .all(&state.db)
         .await?;
 
     let mut result = AlertEvaluationResult::default();
-    for rule in rules {
+    for listed_rule in rules {
+        let transaction = state.db.begin().await?;
+        let Some(rule) = telemetry_alert_rule::Entity::find_by_id(&listed_rule.id)
+            .lock_exclusive()
+            .one(&transaction)
+            .await?
+        else {
+            transaction.commit().await?;
+            continue;
+        };
+
+        // A rule can be disabled after the initial bounded list but before its
+        // row lock is acquired.
+        if !rule.enabled {
+            transaction.commit().await?;
+            continue;
+        }
+
         result.evaluated += 1;
-        match evaluate_rule(&state.db, &rule).await {
+        let evaluation = match evaluate_rule(&transaction, &rule).await {
             Ok(evaluation) => {
                 match evaluation.transition {
                     AlertTransition::Trigger => result.triggered += 1,
                     AlertTransition::Resolve => result.resolved += 1,
                     AlertTransition::None => {}
                 }
-                if let Some(event) = evaluation.event {
-                    notify_alert_transition(state, &rule, &event).await;
-                }
+                evaluation
             }
-            Err(e) => tracing::error!(
-                rule_id = %rule.id,
-                metric = %rule.metric,
-                error = %e,
-                "Telemetry alert rule evaluation failed"
-            ),
+            Err(error) => {
+                let _ = transaction.rollback().await;
+                tracing::error!(
+                    rule_id = %rule.id,
+                    metric = %rule.metric,
+                    error = %error,
+                    "Telemetry alert rule evaluation failed"
+                );
+                continue;
+            }
+        };
+
+        transaction.commit().await?;
+        if let Some(event) = evaluation.event {
+            notify_alert_transition(state, &rule, &event).await;
         }
     }
 
@@ -238,8 +276,8 @@ struct RuleEvaluation {
     event: Option<telemetry_alert_event::Model>,
 }
 
-async fn evaluate_rule(
-    db: &DatabaseConnection,
+async fn evaluate_rule<C: ConnectionTrait>(
+    db: &C,
     rule: &telemetry_alert_rule::Model,
 ) -> Result<RuleEvaluation, DbErr> {
     let now = Utc::now().naive_utc();

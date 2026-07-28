@@ -9,6 +9,7 @@ members = [
     "apps/backend/aws/executor",
     "apps/backend/aws/executor-async",
     "apps/backend/aws/event-bridge",
+    "apps/backend/aws/maintenance",
     "apps/backend/aws/media-transformer",
     "apps/backend/aws/file-tracker",
     "apps/backend/aws/compiler-lambda",

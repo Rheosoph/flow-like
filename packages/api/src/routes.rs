@@ -15,6 +15,7 @@ pub mod health;
 pub mod inbound;
 pub mod info;
 pub mod interaction;
+pub mod maintenance;
 pub mod oauth;
 pub mod og;
 pub mod profile;

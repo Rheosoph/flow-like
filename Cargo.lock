@@ -1727,6 +1727,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aws-maintenance"
+version = "0.1.0"
+dependencies = [
+ "flow-like-types",
+ "lambda_runtime 1.1.2",
+ "mimalloc",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "aws-runtime"
 version = "1.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

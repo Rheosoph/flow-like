@@ -743,7 +743,7 @@ pub async fn acknowledge_telemetry_alert_event(
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden")
     ),
-    description = "Evaluate every enabled alert rule once, append the resulting alerts to the inbox and deliver them on the channels each rule enables — the platform alerting mailbox and the platform admins. Long-running deployments do this on a timer; serverless deployments call this from a scheduler. Requires Admin permission."
+    description = "Manually evaluate every enabled alert rule once, append the resulting alerts to the inbox and deliver them on the channels each rule enables — the platform alerting mailbox and the platform admins. Long-running deployments use an in-process timer; serverless schedulers use the service-authenticated maintenance endpoint. Requires Admin permission."
 )]
 #[tracing::instrument(name = "POST /admin/telemetry/alerts/evaluate", skip(state, user))]
 pub async fn evaluate_telemetry_alerts(
