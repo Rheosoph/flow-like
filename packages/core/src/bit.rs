@@ -26,8 +26,10 @@ const NAME_HINT_WEIGHT: f32 = 0.2; // weight of name similarity for best model p
 const NAME_HINT_SIMILARITY_THRESHOLD: f32 = 0.5; // minimum required similarity score to model name
 pub const MLX_PROVIDER_NAME: &str = "MLX";
 const INLINE_MLX_ASSET_IDENTITY_DOMAIN: &[u8] = b"flow-like-inline-mlx-asset-v1";
+const MLX_RUNTIME_MODEL_IDENTITY_DOMAIN: &[u8] = b"flow-like-mlx-runtime-model-v1";
 const USER_SOURCE_ARTIFACT_IDENTITY_DOMAIN: &[u8] = b"flow-like-user-source-artifact-v1";
 const USER_SOURCE_PACK_IDENTITY_DOMAIN: &[u8] = b"flow-like-user-source-pack-v1";
+const MLX_RUNTIME_MODEL_ID_PREFIX: &str = "mlx-source-";
 const USER_SOURCE_ARTIFACT_ID_PREFIX: &str = "user-source-";
 const USER_SOURCE_PACK_ID_PREFIX: &str = "user-source-pack-";
 const MAX_INLINE_MLX_ASSETS: usize = 512;
@@ -1273,6 +1275,82 @@ impl Bit {
         self.id.clone()
     }
 
+    /// Returns the deterministic runtime cache key for an MLX model.
+    ///
+    /// Dependency-free user models derive their identity from the validated
+    /// inline Hugging Face artifact manifest. Curated models use the immutable
+    /// root and dependency-tree identities emitted by the registry. Display
+    /// metadata and manifest file order deliberately do not affect this key.
+    pub fn mlx_runtime_model_cache_key(&self) -> flow_like_types::Result<String> {
+        if !self.is_mlx_model() {
+            return Err(flow_like_types::anyhow!(
+                "MLX runtime cache keys require an MLX LLM or VLM bit"
+            ));
+        }
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(MLX_RUNTIME_MODEL_IDENTITY_DOMAIN);
+        update_source_identity_field(
+            &mut hasher,
+            match self.bit_type {
+                BitTypes::Llm => b"llm",
+                BitTypes::Vlm => b"vlm",
+                _ => unreachable!("is_mlx_model only accepts LLM and VLM bits"),
+            },
+        );
+
+        let has_inline_manifest =
+            self.dependencies.is_empty() && self.parameters.get("huggingface").is_some();
+        if has_inline_manifest {
+            update_source_identity_field(&mut hasher, b"inline-huggingface");
+            let mut assets = self.inline_mlx_asset_bits()?;
+            assets.sort_by(|left, right| {
+                left.file_name
+                    .cmp(&right.file_name)
+                    .then_with(|| left.hash.cmp(&right.hash))
+            });
+            for asset in assets {
+                let file_name = asset.file_name.as_deref().ok_or_else(|| {
+                    flow_like_types::anyhow!("Inline MLX asset is missing its file name")
+                })?;
+                let download_link = asset.download_link.as_deref().ok_or_else(|| {
+                    flow_like_types::anyhow!(
+                        "Inline MLX asset {file_name} is missing its source URL"
+                    )
+                })?;
+                let size = asset.size.ok_or_else(|| {
+                    flow_like_types::anyhow!("Inline MLX asset {file_name} is missing its size")
+                })?;
+                update_source_identity_field(&mut hasher, file_name.as_bytes());
+                update_source_identity_field(&mut hasher, download_link.as_bytes());
+                update_source_identity_field(&mut hasher, asset.hash.as_bytes());
+                update_source_identity_field(&mut hasher, &size.to_le_bytes());
+            }
+        } else {
+            update_source_identity_field(&mut hasher, b"registry-dependency-tree");
+            update_source_identity_field(&mut hasher, self.hub.as_bytes());
+            update_source_identity_field(&mut hasher, self.hash.as_bytes());
+            update_source_identity_field(&mut hasher, self.dependency_tree_hash.as_bytes());
+
+            let mut dependencies = self
+                .dependencies
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            dependencies.sort_unstable();
+            for dependency in dependencies {
+                update_source_identity_field(&mut hasher, dependency.as_bytes());
+            }
+        }
+
+        Ok(format!(
+            "{}@{}{}",
+            self.id,
+            MLX_RUNTIME_MODEL_ID_PREFIX,
+            hasher.finalize().to_hex()
+        ))
+    }
+
     pub fn is_mlx_model(&self) -> bool {
         matches!(self.bit_type, BitTypes::Llm | BitTypes::Vlm)
             && self.try_to_provider().is_some_and(|provider| {
@@ -1872,6 +1950,90 @@ mod tests {
         assert_ne!(
             base_id,
             &inline_asset(&other_size, "weights/model.safetensors").id
+        );
+    }
+
+    #[test]
+    fn inline_mlx_runtime_cache_key_tracks_the_pinned_manifest_source() {
+        let first = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/model",
+            &"a".repeat(40),
+            "weights/model.safetensors",
+            4_000,
+            false,
+        );
+        let mut reordered = first.clone();
+        reordered.updated = "metadata-only-change".into();
+        reordered.parameters["huggingface"]["files"]
+            .as_array_mut()
+            .expect("Hugging Face files")
+            .reverse();
+        let edited_revision = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/model",
+            &"b".repeat(40),
+            "weights/model.safetensors",
+            4_000,
+            false,
+        );
+
+        let first_key = first.mlx_runtime_model_cache_key().unwrap();
+        assert!(first_key.starts_with("my-inline-mlx@mlx-source-"));
+        assert_eq!(
+            first_key,
+            reordered.mlx_runtime_model_cache_key().unwrap(),
+            "manifest order and display metadata do not change the model source"
+        );
+        assert_ne!(
+            first_key,
+            edited_revision.mlx_runtime_model_cache_key().unwrap(),
+            "a new pinned revision must not reuse the loaded MLX runtime"
+        );
+    }
+
+    #[test]
+    fn curated_mlx_runtime_cache_key_tracks_root_and_dependency_tree_identity() {
+        let mut first = inline_mlx_bit(
+            BitTypes::Vlm,
+            "owner/model",
+            &"a".repeat(40),
+            "weights/model.safetensors",
+            4_000,
+            true,
+        );
+        first
+            .parameters
+            .as_object_mut()
+            .expect("MLX parameters")
+            .remove("huggingface");
+        first.hash = "curated-root-hash".into();
+        first.dependencies = vec!["hub:weights".into(), "hub:tokenizer".into()];
+        first.dependency_tree_hash = "curated-tree-a".into();
+
+        let mut reordered = first.clone();
+        reordered.dependencies.reverse();
+        reordered.updated = "metadata-only-change".into();
+        let mut edited_tree = first.clone();
+        edited_tree.dependency_tree_hash = "curated-tree-b".into();
+        let mut edited_root = first.clone();
+        edited_root.hash = "other-curated-root-hash".into();
+
+        let first_key = first.mlx_runtime_model_cache_key().unwrap();
+        assert_eq!(
+            first_key,
+            reordered.mlx_runtime_model_cache_key().unwrap(),
+            "dependency order and display metadata do not change the model source"
+        );
+        assert_ne!(
+            first_key,
+            edited_tree.mlx_runtime_model_cache_key().unwrap(),
+            "a new dependency tree must not reuse the loaded MLX runtime"
+        );
+        assert_ne!(
+            first_key,
+            edited_root.mlx_runtime_model_cache_key().unwrap(),
+            "a new root source must not reuse the loaded MLX runtime"
         );
     }
 

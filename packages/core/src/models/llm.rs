@@ -251,15 +251,16 @@ impl ModelFactory {
         let provider = model_provider.provider_name.clone();
 
         if bit.is_mlx_model() {
-            if let Some(model) = self.cached_models.get(&bit.id) {
-                self.ttl_list.insert(bit.id.clone(), SystemTime::now());
+            let cache_key = bit.mlx_runtime_model_cache_key()?;
+            if let Some(model) = self.cached_models.get(&cache_key) {
+                self.ttl_list.insert(cache_key.clone(), SystemTime::now());
                 return Ok(model.clone());
             }
 
             let mlx_model: Arc<MlxModel> =
                 Arc::new(MlxModel::new(bit, app_state.clone(), &settings).await?);
-            self.ttl_list.insert(bit.id.clone(), SystemTime::now());
-            self.cached_models.insert(bit.id.clone(), mlx_model.clone());
+            self.ttl_list.insert(cache_key.clone(), SystemTime::now());
+            self.cached_models.insert(cache_key, mlx_model.clone());
             return Ok(mlx_model);
         }
 

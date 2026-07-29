@@ -17,7 +17,7 @@
 		"dev:android:host": "ORT_LIB_LOCATION=$PWD/src-tauri/thirdparty/onnxruntime/android/arm64-v8a ORT_PREFER_DYNAMIC_LINK=1 dotenv -- bun run tauri android dev  --host --force-ip-prompt",
 		"dev:auto": "dotenv -- bun run ./scripts/dev-with-config.ts",
 		"dev:mac:intel": "ORT_LIB_LOCATION=$PWD/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64 MACOSX_DEPLOYMENT_TARGET=14.0 dotenv -- bun run tauri dev --config src-tauri/configs/tauri.macos.intel.conf.json & bun run --watch ./scripts/translation-server.ts",
-		"dev:mac:arm": "bun ./scripts/prepare-mlx.ts --configuration Debug && ORT_LIB_LOCATION=$PWD/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64 MACOSX_DEPLOYMENT_TARGET=14.0 dotenv -- bun run tauri dev --config src-tauri/configs/tauri.macos.arm.conf.json",
+		"dev:mac:arm": "ORT_LIB_LOCATION=$PWD/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64 MACOSX_DEPLOYMENT_TARGET=14.0 dotenv -- bun run tauri dev --config src-tauri/configs/tauri.macos.arm.conf.json",
 		"dev:win:x64": "dotenv -- bun ./scripts/prepare-windows-prereqs.ts --arch x64 && dotenv -- bun run tauri dev --config src-tauri/configs/tauri.win.x64.conf.json",
 		"dev:win:arm": "dotenv -- bun ./scripts/prepare-windows-prereqs.ts --arch arm64 && dotenv -- bun run tauri dev --config src-tauri/configs/tauri.win.arm.conf.json",
 		"build:win:x64": "dotenv -- bun ./scripts/prepare-windows-prereqs.ts --arch x64 && dotenv -- bun run tauri build --config src-tauri/configs/tauri.win.x64.conf.json",
