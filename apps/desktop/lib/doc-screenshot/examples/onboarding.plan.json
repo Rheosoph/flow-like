@@ -1,0 +1,72 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "tmp/doc-screenshots/onboarding",
+	"tauriFixture": "../fixtures/onboarding.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "light",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 250,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "onboarding",
+			"path": "/onboarding",
+			"query": {
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "button[aria-pressed]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "overview",
+					"mode": "viewport"
+				},
+				{
+					"type": "click",
+					"selector": "button[aria-pressed]",
+					"index": 3
+				},
+				{
+					"type": "waitFor",
+					"selector": "button[aria-pressed=\"true\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "selected",
+					"mode": "viewport"
+				},
+				{
+					"type": "goto",
+					"path": "/onboarding/done",
+					"query": {
+						"capture": "docs"
+					}
+				},
+				{
+					"type": "waitFor",
+					"selector": "h2",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "complete",
+					"mode": "viewport"
+				}
+			]
+		}
+	]
+}
