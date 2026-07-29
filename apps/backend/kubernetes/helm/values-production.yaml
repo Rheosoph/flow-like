@@ -1,124 +1,108 @@
-# Example production values for Flow-Like Kubernetes deployment
-# Copy this file and customize for your environment
+# Example production overrides for the Flow-Like Helm chart.
+# Replace every placeholder and keep credentials in pre-created Kubernetes
+# Secrets rather than in this file.
 
-nameOverride: ""
-fullnameOverride: "flow-like"
+fullnameOverride: flow-like
 
 global:
-  imageRegistry: "ghcr.io/rheosoph/"
+  imageRegistry: "registry.example.com/flow-like/"
   imagePullSecrets:
-    - name: ghcr-pull-secret
+    - name: registry-credentials
 
 api:
-  enabled: true
   replicaCount: 3
   image:
-    repository: flow-like-k8s-api
-    tag: "v1.0.0"
+    repository: api
+    tag: "replace-me"
     pullPolicy: IfNotPresent
-
-  resources:
-    requests:
-      memory: "512Mi"
-      cpu: "250m"
-    limits:
-      memory: "2Gi"
-      cpu: "2"
-
   autoscaling:
     enabled: true
     minReplicas: 3
     maxReplicas: 20
-    targetCPUUtilization: 70
-    targetMemoryUtilization: 80
+
+web:
+  replicaCount: 2
+  image:
+    repository: web
+    tag: "replace-me"
+    pullPolicy: IfNotPresent
 
 executor:
   image:
-    repository: flow-like-k8s-executor
-    tag: "v1.0.0"
+    repository: executor
+    tag: "replace-me"
     pullPolicy: IfNotPresent
-
+  # Set this only after the named RuntimeClass handler exists on cluster nodes.
   runtimeClass: kata
-  timeout: 3600
-  maxRetries: 3
 
-  resources:
-    requests:
-      memory: "512Mi"
-      cpu: "250m"
-    limits:
-      memory: "4Gi"
-      cpu: "4"
+executorPool:
+  replicaCount: 2
+  image:
+    repository: executor
+    tag: "replace-me"
+    pullPolicy: IfNotPresent
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 20
 
-# =============================================================================
-# Database Configuration
-# =============================================================================
-# Option 1: Internal CockroachDB (recommended for self-hosting)
+execution:
+  backend: http
+  asyncBackend: redis
+
+jwt:
+  # Required keys: BACKEND_KEY, BACKEND_PUB, BACKEND_KID
+  existingSecret: flow-like-backend-jwt
+
+# Use an external PostgreSQL or CockroachDB service for production.
 database:
-  type: internal
-  internal:
-    replicas: 3
-    persistence:
-      storageClass: "gp3"
-      size: 50Gi
-    resources:
-      requests:
-        memory: "1Gi"
-        cpu: "500m"
-      limits:
-        memory: "4Gi"
-        cpu: "4"
-    tls:
-      enabled: true
-      existingSecret: "flow-like-cockroachdb-certs"
-
-# Option 2: External database (uncomment to use)
-# database:
-#   type: external
-#   external:
-#     existingSecret: "flow-like-db-credentials"
-#     # connectionString is read from secret key "DATABASE_URL"
-
-# External S3-compatible storage (required)
-storage:
+  type: external
   external:
-    endpoint: "https://s3.us-east-1.amazonaws.com"
-    region: "us-east-1"
-    metaBucket: "my-company-flow-like-meta"
-    contentBucket: "my-company-flow-like-content"
-    usePathStyle: false
-    existingSecret: "flow-like-s3-credentials"
+    # Required key: DATABASE_URL
+    existingSecret: flow-like-database
+  migration:
+    image:
+      repository: migration
+      tag: "replace-me"
+      pullPolicy: IfNotPresent
 
-# Redis (deployed internally for job queue)
+storage:
+  provider: s3
+  s3:
+    # Required keys are documented in values.yaml and the Helm docs.
+    existingSecret: flow-like-storage
+
 redis:
   enabled: true
-  architecture: standalone
   auth:
     enabled: true
-    existingSecret: "flow-like-redis-credentials"
+    # Required key: REDIS_PASSWORD
+    existingSecret: flow-like-redis
   master:
     persistence:
       enabled: true
-      storageClass: "gp3"
+      storageClass: ""
       size: 10Gi
 
 ingress:
   enabled: true
-  className: "nginx"
-  annotations:
-    cert-manager.io/cluster-issuer: "letsencrypt-prod"
-    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  className: nginx
   hosts:
     - host: api.flow-like.example.com
       paths:
         - path: /
           pathType: Prefix
+          service: api
+    - host: app.flow-like.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+          service: web
   tls:
     - secretName: flow-like-tls
       hosts:
         - api.flow-like.example.com
+        - app.flow-like.example.com
 
 networkPolicy:
   enabled: true
@@ -126,10 +110,10 @@ networkPolicy:
 monitoring:
   enabled: true
   serviceMonitor:
-    enabled: true
-    interval: 30s
-    scrapeTimeout: 10s
+    enabled: false
 
+# Creating the object does not install Kata on the nodes.
 runtimeClass:
-  create: false  # Assume Kata is already installed
+  create: false
   name: kata
+  handler: kata

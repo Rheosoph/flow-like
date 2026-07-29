@@ -12,10 +12,9 @@ cd apps/backend/kubernetes
 
 **Production:**
 ```bash
-helm install flow-like ./helm -n flow-like --create-namespace \
-  --set storage.external.endpoint='https://s3.example.com' \
-  --set storage.external.accessKeyId='YOUR_KEY' \
-  --set storage.external.secretAccessKey='YOUR_SECRET'
+# First customize values-production.yaml and create its referenced Secrets.
+helm upgrade --install flow-like ./helm -n flow-like \
+  --values ./helm/values-production.yaml
 ```
 
 ## Documentation
@@ -41,7 +40,7 @@ Full step-by-step documentation: **[docs.flow-like.com/self-hosting/kubernetes](
 | API | Deployment | Flow-Like API with HPA |
 | Web | Deployment | Web application (Next.js static) |
 | Executor Pool | Deployment | Warm execution workers with HPA |
-| CockroachDB | StatefulSet | 3-node distributed SQL |
+| CockroachDB | StatefulSet | Single-node evaluation database; use an external database in production |
 | Redis | Deployment | Job queue and state |
 | Prometheus | Deployment | Metrics collection |
 | Grafana | Deployment | Pre-configured dashboards |
@@ -86,8 +85,8 @@ After running `./scripts/k3d-setup.sh`, services are available at:
 | Service | URL | Notes |
 |---------|-----|-------|
 | API | http://localhost:8080 | NodePort (automatic) |
-| Web App | http://localhost:30001 | NodePort |
-| Grafana | http://localhost:30002 | NodePort, default login: admin/admin |
+| Web App | `kubectl port-forward -n flow-like svc/flow-like-web 3001:3001` | Port forward |
+| Grafana | http://localhost:3002 | NodePort, default login: admin/admin |
 | Registry | http://localhost:5111 | Local Docker registry |
 
 ## Production Access

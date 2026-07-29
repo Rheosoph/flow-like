@@ -1,6 +1,7 @@
 {{- if .Values.api.enabled }}
 {{- $provider := default "s3" .Values.storage.provider }}
 {{- $storageSecretName := include "flow-like.storageSecretName" . }}
+{{- $redisUsesExistingSecret := and .Values.redis.auth.enabled (ne (default "" .Values.redis.auth.existingSecret) "") }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,11 +52,21 @@ spec:
                 secretKeyRef:
                   name: {{ include "flow-like.databaseSecretName" . }}
                   key: DATABASE_URL
+            {{- if $redisUsesExistingSecret }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "flow-like.redisSecretName" . }}
+                  key: REDIS_PASSWORD
+            - name: REDIS_URL
+              value: {{ printf "redis://:$(REDIS_PASSWORD)@%s-redis-master:6379" (include "flow-like.fullname" .) | quote }}
+            {{- else }}
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "flow-like.fullname" . }}-redis
+                  name: {{ include "flow-like.redisSecretName" . }}
                   key: REDIS_URL
+            {{- end }}
             - name: KUBERNETES_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -90,6 +101,8 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ $storageSecretName }}
+            - secretRef:
+                name: {{ include "flow-like.jwtSecretName" . }}
             {{- with .Values.api.envFrom }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

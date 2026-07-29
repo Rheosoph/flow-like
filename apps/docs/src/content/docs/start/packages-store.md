@@ -1,125 +1,102 @@
 ---
 title: Package Store
-description: Browse, install, and manage community WASM packages
+description: Discover and install WASM node packages
 sidebar:
   order: 28
 ---
 
-The Package Store allows you to extend Flow-Like with community-created nodes. Browse verified packages, install with a single click, and keep your packages up to date.
+WASM packages extend Flow-Like with additional workflow nodes. The package
+registry is part of the **Explore** hub alongside community Apps.
 
-## Accessing the Store
+## Open the registry
 
-Navigate to **Store → Packages** in the sidebar to open the package registry.
+Open **Explore**, then select **Packages** in the header. The same destination
+is available from **Library → Packages → Browse Packages** in Flow-Like
+Desktop.
 
 ## Browsing Packages
 
-### Search
+Package cards show the current version, category, install count, rating, price,
+and visibility. A shield marks a package that has completed the registry's
+verification process.
 
-Use the search bar to find packages by:
-- Package name
-- Description keywords
-- Author name
+Use the search field to match package metadata, then sort by:
 
-### Filtering
+- **Most Downloads**
+- **Relevance**
+- **Name**
+- **Recently Updated**
+- **Newest**
 
-- **Verified only**: Toggle to show only packages reviewed and approved by the Flow-Like team
-- This is recommended for most users to ensure quality and security
+Select **Verified** to limit results to packages carrying the registry's
+verified status. Without a search query, packages are grouped into category
+swimlanes; search results use a regular results grid.
 
-### Sorting
+## Inspect before installing
 
-Sort packages by:
-- **Downloads**: Most popular packages first
-- **Relevance**: Best match for your search query
-- **Name**: Alphabetical order
-- **Updated**: Recently updated packages first
-- **Created**: Newest packages first
+Open a package to review:
 
-## Package Details
+- **Overview** — description, README, author, links, usage, and publication
+  information supplied by the maintainer.
+- **Nodes** — the nodes exported by the package.
+- **Permissions** — declared resource limits and host capabilities.
+- **Versions** — available, installed, yanked, disabled, or review versions.
+- **Reviews** — user reviews and ratings.
 
-Click on any package card to view its details page with four tabs:
+Permissions can include network access, scoped storage, OAuth scopes, runtime
+variables, cache, streaming, A2UI, or model access. Network declarations can
+also constrain allowed hosts and protocol families. Requesting a permission
+does not mean the package should receive it blindly—compare the declaration
+with what the nodes are supposed to do.
 
-### Overview
-
-- **Description**: What the package does
-- **Author**: Who created the package
-- **License**: Terms of use
-- **Downloads**: How many times installed
-- **Links**: GitHub repository, homepage, documentation
-
-### Nodes
-
-A list of all workflow nodes included in the package:
-- Node names and descriptions
-- Input and output pins
-- Categories
-
-### Permissions
-
-What system access the package requires:
-- **None**: Pure computation, safest option
-- **Network**: Can make HTTP requests
-- **File System**: Can read/write files
-- **Environment**: Can access environment variables
-
-:::tip
-Prefer packages that request minimal permissions. A package should only request what it actually needs.
+:::caution[Verification is not a security warranty]
+A verified badge records registry review state. It does not make third-party
+code risk-free or guarantee that every future version behaves identically.
+Review the package, version, permissions, author, and source links before
+installing it.
 :::
 
-### Versions
+## Install and use a package
 
-Version history showing:
-- Version numbers
-- Release dates
-- Release notes (when available)
+1. Open the package detail page.
+2. Select **Install**. If more than one installable version is available, you
+   can choose a version from **Versions**.
+3. Open the target App and select **Packages**.
+4. Select **Add Package**, choose the package version, and confirm.
 
-## Installing Packages
+Installation and App linkage are separate:
 
-### From the Store
+- **Installed on this device** means Flow-Like Desktop has the package code
+  available locally.
+- **Linked to an App** records the package and version the App requires. That
+  declaration is used to populate its catalog and resolve remote execution.
 
-1. Find the package you want
-2. Click on it to open the detail page
-3. Click the **Install** button
-4. Wait for the download to complete
+For online Apps, the App's **Packages** screen can enable automatic updates.
+Offline Apps keep an explicit linked version. Review available updates before
+changing a production App's package version.
 
-The package's nodes will immediately be available in your workflow editor.
+## Remove or update
 
-### Checking for Updates
+Open **Library → Packages** to search installed packages, apply available
+updates, inspect details, or uninstall a package from the device.
 
-Return to the package detail page anytime. If a newer version is available, you'll see an **Update** button instead of "Installed".
+Before uninstalling, check which Apps use the package. Removing the local copy
+can make its nodes unavailable for local editing or execution until the
+required version is installed again. Removing a package from one App is a
+separate action in that App's **Packages** screen.
 
-## What is a Verified Package?
+## If nodes do not appear
 
-Packages with the **✓ Verified** badge have been:
-
-- Reviewed by Flow-Like maintainers
-- Checked for security issues
-- Tested for correct functionality
-- Confirmed to follow best practices
-
-We recommend only installing verified packages unless you trust the package author.
-
-## Troubleshooting
-
-### Package Won't Install
-
-- Check your internet connection
-- Try again later—the registry may be temporarily unavailable
-- Ensure you have sufficient disk space
-
-### Package Nodes Don't Appear
-
-- Close and reopen the workflow editor
-- Check the node catalog under the package's category
-- Restart Flow-Like Desktop if needed
-
-### Package Doesn't Work as Expected
-
-- Check the package's documentation or GitHub issues
-- Ensure you're using the latest version
-- Report issues to the package author
+- Confirm that the package is both installed and linked to the current App.
+- Check the linked version and any compile-status badge.
+- Reload the Flow after changing App packages.
+- Open the package's **Nodes** tab to verify that the expected node is exported
+  by the selected version.
 
 ## Next Steps
 
-- [Managing Installed Packages](/start/packages-library) - Update and uninstall packages
-- [Creating Custom Packages](/dev/wasm-nodes/overview) - Build your own WASM nodes
-- [Publishing Packages](/dev/wasm-nodes/registry) - Share your packages with the community
+- [Managing Installed Packages](/start/packages-library/) — local package and
+  update management
+- [Creating Custom Packages](/dev/wasm-nodes/overview/) — build a WASM package
+- [Registry and Governance](/dev/wasm-nodes/registry/) — publish and request
+  review

@@ -1,0 +1,30 @@
+---
+title: "Containers Node Catalog"
+description: "Video/Containers Flow-Like node category with 1 generated node reference."
+sidebar:
+  order: 0
+  label: "Containers"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Containers nodes, Video/Containers, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Video/Containers"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Containers Node Catalog\",\"description\":\"Video/Containers Flow-Like node category with 1 generated node reference.\",\"url\":\"https://docs.flow-like.com/nodes/video/containers/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Video/Containers\",\"keywords\":\"Containers nodes, Video/Containers, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Video/Containers"}
+	label="Containers"
+	nodes={nodesByCategory["Video/Containers"] ?? []}
+	client:load
+/>

@@ -11,27 +11,7 @@ Flow-Like provides a shared summarization engine used by both the **Summarize** 
 
 Long text is split into chunks, processed by the chosen strategy, and optionally post-processed with Chain of Density compression. The pipeline:
 
-```
-Input Text/Pages
-      │
-      ▼
-  Chunking (Markdown-aware with overlap)
-      │
-      ▼
-  Entity Extraction (optional)
-      │
-      ▼
-  Strategy (Refine / MapReduce / Hierarchical / Hybrid / SlidingWindow)
-      │
-      ▼
-  Iteration (if output still exceeds chunk size)
-      │
-      ▼
-  Chain of Density (optional post-processing)
-      │
-      ▼
-  Final Summary
-```
+![The Flow-Like long-document summarization pipeline: text or pages are chunked, optionally enriched with entity context, processed with a selected strategy, iterated when needed, optionally compressed, and returned as a final summary](../../../../assets/SummarizationStrategiesOverview.svg)
 
 ## Strategy Comparison
 
@@ -41,14 +21,14 @@ Input Text/Pages
 | **MapReduce** | Full | ★★★ | No | N + reduce | Speed-critical, large docs |
 | **Hierarchical** | Partial | ★★★★ | Yes | Sections + merges | Reports, papers with headings |
 | **Hybrid** | Map phase | ★★★★ | No | N + K refine | Balance of speed & quality |
-| **SlidingWindow** | None | ★★★★ (recent) | No | N + compressions | Very long docs (100+ pages) |
+| **SlidingWindow** | None | Strongest on recent context | No | N + compressions | Very long or streaming inputs |
 
 ### Refine
 
 Processes chunks **sequentially**. Each step receives the accumulated summary so far plus the next chunk, producing a rolling summary.
 
 **Pros:**
-- Best narrative coherence — the model always sees prior context
+- Strong narrative coherence because the model sees the accumulated summary
 - Simple, predictable behavior
 - Works well with small models
 
@@ -121,7 +101,7 @@ Maintains a **fixed-size memory buffer** that is compressed whenever it exceeds 
 - Recent chunks are over-represented in the final output
 - Memory budget tuning affects quality significantly
 
-**When to use:** Very long documents (100+ pages), streaming ingestion, memory-constrained environments.
+**When to use:** Very long documents, streaming ingestion, and memory-constrained environments.
 
 ## Chain of Density Post-Processing
 
@@ -137,7 +117,7 @@ Based on [research by Adams et al. (2023)](https://arxiv.org/abs/2309.04269), st
 | 4 | High | Moderate | Technical audiences |
 | 5 | Very high | Dense | Maximum compression |
 
-**Tip:** Skip CoD for small models — it requires nuanced revision ability that sub-14B models often lack.
+**Tip:** Evaluate CoD with the configured model before enabling it in production. Density revisions require the model to preserve facts while rewriting under a length constraint.
 
 ## Entity Tracking
 
@@ -173,35 +153,12 @@ Controls parallel requests for MapReduce and Hybrid strategies.
 
 ### Model Selection
 
-- **Large models** (GPT-4o, Claude Sonnet, Gemini Pro): All strategies work well. Use MapReduce/Hybrid for speed.
-- **Medium models** (GPT-4o-mini, Llama 70B): Refine or Hybrid recommended. CoD works at step 2–3.
-- **Small models** (7B–13B): Prefer Refine or SlidingWindow. Skip CoD and entity tracking.
-- **No function calling required:** All strategies use standard text completion — no tool use or structured output needed.
+- Choose a model with enough context for the configured chunk, instructions, accumulated summary, and output.
+- Evaluate factual preservation, coverage, and instruction following on representative documents.
+- Use bounded concurrency that fits the provider's rate limits.
+- Treat Chain of Density and entity tracking as independent quality/cost choices and evaluate them with the selected model.
+- The summarization strategies use text generation; tool use is not required.
 
 ## Quick Decision Tree
 
-```
-Is the document short (fits in one chunk)?
-  → Any strategy works, skip CoD
-
-Need maximum speed?
-  → MapReduce (concurrency = 0)
-
-Need best coherence?
-  → Refine
-
-Document has clear headings/sections?
-  → Hierarchical
-
-Very long document (100+ pages)?
-  → SlidingWindow
-
-Want both speed and quality?
-  → Hybrid
-
-Want maximum information density?
-  → Any strategy + ChainOfDensity (step 3)
-
-Working with small models?
-  → Refine, skip CoD &amp; entity tracking
-```
+![A decision guide for Flow-Like summarization strategies: MapReduce for speed, Refine for coherence, Hierarchical for structured documents, SlidingWindow for very long documents, Hybrid for balanced speed and quality, and Chain of Density for maximum density](../../../../assets/SummarizationDecisionGuide.svg)

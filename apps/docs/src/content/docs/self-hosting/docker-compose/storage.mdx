@@ -1,306 +1,223 @@
 ---
 title: Storage Providers
-description: Configure object storage for Flow-Like Docker Compose deployment.
+description: Configure object storage and scoped runtime credentials for Docker Compose
 sidebar:
   order: 24
 ---
 
-Flow-Like requires S3-compatible object storage for storing workflow data, execution logs, and content. Three providers are supported natively.
+Flow-Like uses object storage for app metadata, user content, CDN/public
+content, and execution logs. The Compose stack does not create buckets or
+containers.
 
-## AWS S3
+## Current Provider Status
 
-```env
-STORAGE_PROVIDER=aws
+| Configuration | Checked-in Compose images | Notes |
+| --- | --- | --- |
+| Azure Blob Storage | Supported | API includes Azure runtime credentials |
+| Google Cloud Storage | Supported | API includes GCP runtime credentials |
+| Cloudflare R2 | Supported with an explicit R2 runtime override | Uses the AWS-compatible backing-store adapter and R2 temporary credentials |
+| AWS S3 | Backing-store adapter is present, but the API image omits the `flow-like-api/aws` feature | Rebuild the API with that feature |
+| Other S3-compatible services | Same missing AWS runtime feature, plus unverified STS behavior | Not a stock end-to-end option |
 
-# Credentials
-AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE
-AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY
+The Docker Compose API target enables `azure`, `gcp`, and `r2` runtime
+credentials. It does not enable `aws`, even though the Compose file's
+interpolation default and `.env.example` currently select `aws`.
 
-# Region and endpoint
-AWS_REGION=us-east-1
-AWS_ENDPOINT=  # Leave empty for AWS S3
-
-# Bucket names
-META_BUCKET=flow-like-meta
-CONTENT_BUCKET=flow-like-content
-LOG_BUCKET=flow-like-logs
-```
-
-### S3 Express One Zone (Recommended for Meta Bucket)
-
-S3 Express One Zone is a high-performance, single-AZ storage class ideal for the meta bucket:
-
-- **10x faster** than standard S3 (single-digit millisecond latency)
-- **50% lower cost** per request than standard S3
-- **Consistent performance** for metadata-heavy workloads
-
-Express One Zone bucket names end with `--<az-id>--x-s3` (e.g., `flow-like-meta--usw2-az1--x-s3`).
-
-```env
-# Enable S3 Express for meta bucket
-META_BUCKET=flow-like-meta--usw2-az1--x-s3
-META_BUCKET_EXPRESS_ZONE=true
-
-# Content bucket can also use Express if in same AZ
-CONTENT_BUCKET=flow-like-content
-CONTENT_BUCKET_EXPRESS_ZONE=false
-
-# Logs bucket (standard S3 is usually sufficient)
-LOG_BUCKET=flow-like-logs
-LOGS_BUCKET_EXPRESS_ZONE=false
-```
-
-:::tip[Performance]
-Use S3 Express One Zone for the meta bucket when your API runs in the same AWS region. The execution state store also uses the meta bucket by default, benefiting from Express performance.
+:::caution[Do not use the copied storage defaults unchanged]
+The API loads master runtime credentials during startup. With the checked-in
+image, `STORAGE_PROVIDER=aws` is rejected as an unsupported runtime provider.
+Choose Azure, GCP, or the R2 configuration below, or rebuild the API with its
+`aws` feature.
 :::
 
-### IAM Permissions
+## Explicit Values Required by Compose
 
-The credentials need the following permissions on your buckets:
+The Compose template injects the runtime-provider, CDN, and provider-specific
+bucket variables even when their `.env` values are empty. The Rust
+configuration treats an explicit empty value as configured; it does not fall
+through to another variable.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:DeleteObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::flow-like-*",
-        "arn:aws:s3:::flow-like-*/*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3express:CreateSession"
-      ],
-      "Resource": [
-        "arn:aws:s3express:*:*:bucket/flow-like-*--*--x-s3"
-      ]
-    }
-  ]
-}
-```
+For the selected provider:
 
-### Scoped Runtime Credentials (STS AssumeRole)
+- set `RUNTIME_CREDENTIALS_PROVIDER` to a non-empty provider name;
+- set `CDN_BUCKET_NAME` to a real bucket/container, commonly the content
+  location;
+- set all selected provider-specific meta, content, and log names;
+- do not expect empty credential fields to activate an ambient credential
+  chain.
 
-Flow-Like generates scoped credentials for every execution using STS AssumeRole. This ensures users can only access their own prefix-isolated storage paths, providing strict isolation between users and apps.
+The generic logical names should also be set:
 
-:::caution[STS Compatibility Required]
-Scoped credentials require credential scoping support from your S3-compatible provider:
-- **AWS S3** ✅ Full support (STS AssumeRole)
-- **MinIO** ✅ Supported ([requires STS configuration](https://min.io/docs/minio/linux/developers/security-token-service.html))
-- **Cloudflare R2** ✅ Supported (uses [proprietary temp credentials API](https://developers.cloudflare.com/api/node/resources/r2/subresources/temporary_credentials/))
-- **Hetzner Object Storage** ❌ Not supported
-
-Providers without credential scoping support cannot be used with Flow-Like.
-:::
-
-```env
-# Role to assume for runtime credentials
-RUNTIME_ROLE_ARN=arn:aws:iam::123456789012:role/FlowLikeRuntimeRole
-```
-
-The runtime role needs a trust policy allowing the API to assume it:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "AWS": "arn:aws:iam::123456789012:role/FlowLikeApiRole"
-      },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
-```
-
-When `RUNTIME_ROLE_ARN` is set, each execution receives temporary credentials scoped to:
-- Read/write the specific app's data (`apps/{app_id}/*`)
-- Read/write the user's app data (`users/{user_id}/apps/{app_id}/*`)
-- Write execution logs (`runs/{app_id}/*`)
-- Access temporary storage (`tmp/user/{user_id}/apps/{app_id}/*`)
-
-## Cloudflare R2
-
-R2 is S3-compatible and supports prefix-scoped temporary credentials through Cloudflare's [proprietary API](https://developers.cloudflare.com/api/node/resources/r2/subresources/temporary_credentials/):
-
-```env
-STORAGE_PROVIDER=r2
-
-# R2 credentials for S3 API access (from R2 API tokens)
-R2_ACCESS_KEY_ID=your-r2-access-key-id
-R2_SECRET_ACCESS_KEY=your-r2-secret-access-key
-
-# R2 endpoint (replace with your account ID)
-R2_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
-
-# R2 Temp Credentials API (required for scoped credentials)
-R2_ACCOUNT_ID=your-cloudflare-account-id
-R2_API_TOKEN=your-cloudflare-api-token
-
-# Bucket names
+```dotenv
 META_BUCKET=flow-like-meta
 CONTENT_BUCKET=flow-like-content
 LOG_BUCKET=flow-like-logs
+CDN_BUCKET_NAME=flow-like-content
 ```
 
-### R2 API Token Setup
-
-The API token needs the `Workers R2 Storage:Edit` permission for the temp credentials API:
-
-1. Go to your [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Manage Account** → **API Tokens**
-2. Create a custom token with:
-   - **Permissions**: `Account` → `Workers R2 Storage` → `Edit`
-   - **Account Resources**: Include your account
-
-### How R2 Scoped Credentials Work
-
-Unlike AWS STS, R2 uses Cloudflare's proprietary temp credentials API which:
-- Creates temporary S3-compatible credentials (access key, secret key, session token)
-- Supports prefix-scoping via the `prefixes` parameter
-- Returns credentials with configurable TTL (default: 1 hour)
-
-Each execution receives temporary credentials scoped to access only:
-- The specific app's data prefixes
-- The user's app data prefixes
-- Execution log paths
-
-## MinIO (Self-hosted)
-
-For local development or air-gapped environments:
-
-```env
-STORAGE_PROVIDER=aws
-
-# MinIO credentials
-AWS_ACCESS_KEY_ID=minioadmin
-AWS_SECRET_ACCESS_KEY=minioadmin
-
-# MinIO endpoint
-AWS_ENDPOINT=http://minio:9000
-AWS_REGION=us-east-1
-AWS_USE_PATH_STYLE=true
-
-# Bucket names
-META_BUCKET=flow-like-meta
-CONTENT_BUCKET=flow-like-content
-LOG_BUCKET=flow-like-logs
-
-# STS AssumeRole for scoped credentials
-# MinIO requires STS to be enabled: https://min.io/docs/minio/linux/developers/security-token-service.html
-RUNTIME_ROLE_ARN=arn:minio:iam:::role/FlowLikeRuntimeRole
-```
-
-To add MinIO to your Docker Compose stack, add this service:
-
-```yaml
-services:
-  minio:
-    image: minio/minio
-    command: server /data --console-address ":9001"
-    ports:
-      - "9000:9000"
-      - "9001:9001"  # Console
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    volumes:
-      - minio_data:/data
-    networks:
-      - flowlike
-
-volumes:
-  minio_data:
-```
+Meta and CDN can share the content location by using the same name. Execution
+state is configured separately through `EXECUTION_STATE_BACKEND`; it is not
+stored in the meta bucket by default.
 
 ## Azure Blob Storage
 
-```env
+```dotenv
 STORAGE_PROVIDER=azure
+RUNTIME_CREDENTIALS_PROVIDER=azure
 
-# Azure credentials
-AZURE_STORAGE_ACCOUNT_NAME=yourstorageaccount
-AZURE_STORAGE_ACCOUNT_KEY=your-access-key
+AZURE_STORAGE_ACCOUNT_NAME=replace-me
+AZURE_STORAGE_ACCOUNT_KEY=replace-me
+AZURE_META_CONTAINER=meta
+AZURE_CONTENT_CONTAINER=content
+AZURE_LOG_CONTAINER=logs
 
-# Container names
-AZURE_META_CONTAINER=flow-like-meta
-AZURE_CONTENT_CONTAINER=flow-like-content
-AZURE_LOG_CONTAINER=flow-like-logs
+META_BUCKET=meta
+CONTENT_BUCKET=content
+LOG_BUCKET=logs
+CDN_BUCKET_NAME=content
 ```
 
-### Creating containers
+Create all three containers before starting the API. The account key is also
+used to mint short-lived SAS credentials for scoped access.
 
 ```bash
-az storage container create --name flow-like-meta --account-name yourstorageaccount
-az storage container create --name flow-like-content --account-name yourstorageaccount
-az storage container create --name flow-like-logs --account-name yourstorageaccount
+az storage container create --name meta --account-name replace-me
+az storage container create --name content --account-name replace-me
+az storage container create --name logs --account-name replace-me
 ```
 
 ## Google Cloud Storage
 
-```env
+```dotenv
 STORAGE_PROVIDER=gcp
+RUNTIME_CREDENTIALS_PROVIDER=gcp
 
-# GCP project
-GCS_PROJECT_ID=your-project-id
-
-# Service account JSON (base64 encoded or raw)
-GOOGLE_APPLICATION_CREDENTIALS_JSON={"type":"service_account","project_id":"..."}
-
-# Bucket names
+GCP_PROJECT_ID=replace-me
+GOOGLE_APPLICATION_CREDENTIALS_JSON={"type":"service_account","project_id":"replace-me"}
 GCP_META_BUCKET=flow-like-meta
 GCP_CONTENT_BUCKET=flow-like-content
 GCP_LOG_BUCKET=flow-like-logs
+
+META_BUCKET=flow-like-meta
+CONTENT_BUCKET=flow-like-content
+LOG_BUCKET=flow-like-logs
+CDN_BUCKET_NAME=flow-like-content
 ```
 
-### Service account permissions
+`GOOGLE_APPLICATION_CREDENTIALS_JSON` is JSON text, not a path. The Compose
+template injects this variable even when it is empty, so provide valid JSON
+instead of relying on an empty value to select ambient credentials.
 
-The service account needs the `Storage Object Admin` role on your buckets:
+Grant the service account access only to the configured buckets and validate
+the token-exchange/downscoping path as well as ordinary object access.
+
+## Cloudflare R2
+
+Keep the backing-store selector on the AWS-compatible adapter and select R2
+only for runtime credentials:
+
+```dotenv
+STORAGE_PROVIDER=aws
+RUNTIME_CREDENTIALS_PROVIDER=r2
+
+AWS_ENDPOINT=https://replace-me.r2.cloudflarestorage.com
+AWS_REGION=auto
+AWS_USE_PATH_STYLE=true
+AWS_ACCESS_KEY_ID=replace-me
+AWS_SECRET_ACCESS_KEY=replace-me
+AWS_META_BUCKET=flow-like-meta
+AWS_CONTENT_BUCKET=flow-like-content
+AWS_LOG_BUCKET=flow-like-logs
+
+R2_ENDPOINT=https://replace-me.r2.cloudflarestorage.com
+R2_ACCOUNT_ID=replace-me
+R2_ACCESS_KEY_ID=replace-me
+R2_SECRET_ACCESS_KEY=replace-me
+R2_API_TOKEN=replace-me
+
+META_BUCKET=flow-like-meta
+CONTENT_BUCKET=flow-like-content
+LOG_BUCKET=flow-like-logs
+CDN_BUCKET_NAME=flow-like-content
+```
+
+The R2 API token is separate from the S3-compatible key pair. It is used to
+mint prefix-scoped temporary credentials, so restrict it to the required
+account and R2 operations.
+
+## AWS S3
+
+AWS requires rebuilding `docker-compose-api` with the `flow-like-api/aws`
+feature. After doing so, configure both backing storage and credential
+scoping:
+
+```dotenv
+STORAGE_PROVIDER=aws
+RUNTIME_CREDENTIALS_PROVIDER=aws
+
+AWS_REGION=eu-central-1
+AWS_USE_PATH_STYLE=false
+AWS_ACCESS_KEY_ID=replace-me
+AWS_SECRET_ACCESS_KEY=replace-me
+AWS_META_BUCKET=flow-like-meta
+AWS_CONTENT_BUCKET=flow-like-content
+AWS_LOG_BUCKET=flow-like-logs
+
+META_BUCKET=flow-like-meta
+CONTENT_BUCKET=flow-like-content
+LOG_BUCKET=flow-like-logs
+CDN_BUCKET_NAME=flow-like-content
+RUNTIME_ROLE_ARN=arn:aws:iam::123456789012:role/FlowLikeRuntimeRole
+```
+
+The API identity needs bucket access and permission to assume
+`RUNTIME_ROLE_ARN`. Flow-Like adds per-request inline session policies that
+narrow the role to app, user, temporary, and run-log prefixes.
+
+The supplied Compose service always injects the static AWS keys. Empty values
+remain explicit credentials and can prevent the AWS credential chain from
+using workload identity. To use an instance or web identity, add a Compose
+override that removes those environment entries entirely and mounts the
+identity material required by the platform.
+
+The `META_BUCKET_EXPRESS_ZONE`, `CONTENT_BUCKET_EXPRESS_ZONE`, and
+`LOGS_BUCKET_EXPRESS_ZONE` names still appear in the Compose template, but the
+current storage code does not read them. They do not enable S3 Express.
+
+## Other S3-Compatible Services
+
+An endpoint such as MinIO can implement the object operations used by the
+backing-store adapter, but `STORAGE_PROVIDER=aws` also selects the AWS runtime
+credential implementation. That implementation calls AWS STS
+`AssumeRole`; basic S3 API compatibility is insufficient.
+
+Do not describe an S3-compatible provider as end-to-end supported until its
+scoped runtime-credential path has been implemented and tested. The API does
+not read `MINIO_*` variables.
+
+## Validate Before Starting
+
+Check interpolation without printing secrets:
 
 ```bash
-gsutil iam ch serviceAccount:your-sa@project.iam.gserviceaccount.com:objectAdmin gs://flow-like-meta
-gsutil iam ch serviceAccount:your-sa@project.iam.gserviceaccount.com:objectAdmin gs://flow-like-content
-gsutil iam ch serviceAccount:your-sa@project.iam.gserviceaccount.com:objectAdmin gs://flow-like-logs
+docker compose config --quiet
 ```
 
-## Path-style URLs
+Then inspect only the non-secret selection and names:
 
-Some S3-compatible providers (MinIO, R2) require path-style URLs:
-
-```env
-AWS_USE_PATH_STYLE=true
+```bash
+docker compose run --rm --no-deps api sh -lc \
+  'printf "storage=%s runtime=%s meta=%s content=%s logs=%s cdn=%s\n" \
+  "$STORAGE_PROVIDER" "$RUNTIME_CREDENTIALS_PROVIDER" \
+  "$META_BUCKET" "$CONTENT_BUCKET" "$LOG_BUCKET" "$CDN_BUCKET_NAME"'
 ```
 
-This changes requests from:
-- Virtual-hosted style: `https://bucket.endpoint.com/key`
-- Path style: `https://endpoint.com/bucket/key`
+Start or recreate the API and review its logs:
 
-## Environment Variables Reference
+```bash
+docker compose up -d --build api api-gateway
+docker compose logs api
+```
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `STORAGE_PROVIDER` | Storage backend (`aws`, `r2`, `azure`, `gcp`) | `aws` |
-| `META_BUCKET` | Bucket for app metadata and execution state | Required |
-| `CONTENT_BUCKET` | Bucket for user content and workflow data | Required |
-| `LOG_BUCKET` | Bucket for execution logs | Required |
-| `META_BUCKET_EXPRESS_ZONE` | Enable S3 Express for meta bucket | `false` |
-| `CONTENT_BUCKET_EXPRESS_ZONE` | Enable S3 Express for content bucket | `false` |
-| `LOGS_BUCKET_EXPRESS_ZONE` | Enable S3 Express for logs bucket | `false` |
-| `RUNTIME_ROLE_ARN` | IAM role ARN for scoped runtime credentials (AWS/MinIO) | Optional |
-| `R2_ACCESS_KEY_ID` | R2 S3-compatible access key | R2 only |
-| `R2_SECRET_ACCESS_KEY` | R2 S3-compatible secret key | R2 only |
-| `R2_ENDPOINT` | R2 S3-compatible endpoint URL | R2 only |
-| `R2_ACCOUNT_ID` | Cloudflare account ID for R2 temp credentials | R2 only |
-| `R2_API_TOKEN` | Cloudflare API token for R2 temp credentials | R2 only |
-| `EXECUTION_STATE_BACKEND` | State store backend (`postgres`, `redis`, `s3`) | `postgres` |
-| `AWS_USE_PATH_STYLE` | Use path-style URLs (for MinIO/R2) | `false` |
+Test metadata, content, temporary-file, database, and log operations. A
+successful bucket listing does not exercise temporary credential scoping.

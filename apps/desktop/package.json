@@ -4,6 +4,7 @@
 	"version": "0.0.2",
 	"type": "module",
 	"scripts": {
+		"docs:screenshot": "bun ./scripts/doc-screenshot.ts",
 		"e2e:flowpilot": "bun ./scripts/flowpilot-e2e.ts",
 		"dev:xcode": "bun tauri ios dev --open --host",
 		"dev:android-studio": "ORT_LIB_LOCATION=$PWD/src-tauri/thirdparty/onnxruntime/android/arm64-v8a ORT_PREFER_DYNAMIC_LINK=1 bun tauri android dev --open",

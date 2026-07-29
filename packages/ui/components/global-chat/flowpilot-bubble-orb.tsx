@@ -11,6 +11,11 @@ import {
 import { useForwardedRef } from "../../lib/use-forwarded-ref";
 import { cn } from "../../lib/utils";
 import {
+	type FlowPilotOrbState,
+	ORB_STATE_PARAMS,
+	ORB_TEETH_COUNT,
+} from "./flowpilot-orb-state";
+import {
 	FRAG,
 	VERT,
 	readTokenRGB,
@@ -32,11 +37,23 @@ const CANVAS_OFFSET_PERCENT = ((CANVAS_PX - BUTTON_PX) / 2 / BUTTON_PX) * 100;
 /** The soap-film canvas, drawn oversized + unclipped so its bloom never hits a hard edge. */
 function BubbleOrbCanvas({
 	hostRef,
+	state,
+	ackNonce,
 }: {
 	hostRef: RefObject<HTMLButtonElement | null>;
+	state: FlowPilotOrbState;
+	ackNonce: number;
 }) {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const [failed, setFailed] = useState(false);
+	// Read by the render loop. Kept in refs so changing state never tears down the GL context.
+	const stateRef = useRef(state);
+	const ackRef = useRef(0);
+	stateRef.current = state;
+
+	useEffect(() => {
+		if (ackNonce > 0) ackRef.current = 1;
+	}, [ackNonce]);
 
 	useEffect(() => {
 		const canvas = canvasRef.current;
@@ -104,6 +121,13 @@ function BubbleOrbCanvas({
 		const uMorph = gl.getUniformLocation(prog, "u_morph");
 		const uLight = gl.getUniformLocation(prog, "u_light");
 		const uPrimary = gl.getUniformLocation(prog, "u_primary");
+		const uRound = gl.getUniformLocation(prog, "u_round");
+		const uSpin = gl.getUniformLocation(prog, "u_spin");
+		const uTeeth = gl.getUniformLocation(prog, "u_teeth");
+		const uTeethN = gl.getUniformLocation(prog, "u_teethN");
+		const uSat = gl.getUniformLocation(prog, "u_sat");
+		const uPop = gl.getUniformLocation(prog, "u_pop");
+		const uSpinMix = gl.getUniformLocation(prog, "u_spin_mix");
 
 		const reduced = window.matchMedia(
 			"(prefers-reduced-motion: reduce)",
@@ -117,19 +141,6 @@ function BubbleOrbCanvas({
 
 		let lightTarget = themeIsLight() ? 1 : 0;
 		let light = lightTarget;
-		const themeObserver = new MutationObserver(() => {
-			lightTarget = themeIsLight() ? 1 : 0;
-			setPrimary();
-			if (reduced) {
-				light = lightTarget;
-				draw(4200);
-			}
-		});
-		themeObserver.observe(document.documentElement, {
-			attributes: true,
-			attributeFilter: ["class", "style", "data-theme"],
-		});
-
 		// Hover physics: the film swells and bulges toward the pointer. Pointer events are read from
 		// the host button because the oversized canvas is pointer-events:none, so its bloom never eats
 		// clicks meant for nearby content.
@@ -159,19 +170,63 @@ function BubbleOrbCanvas({
 		host.addEventListener("pointerleave", onLeave);
 		host.addEventListener("pointermove", onMove);
 
-		const draw = (ms: number) => {
+		// The orb runs its own clock, advanced at the active state's rate, and its own spin.
+		// Everything the shader churns comes off u_time, so the rate is what makes idle sit
+		// nearly still while thinking boils.
+		const cur = { ...ORB_STATE_PARAMS[stateRef.current] };
+		let clock = 0;
+		let spin = 0;
+		let ack = 0;
+
+		const draw = () => {
 			gl.uniform2f(uRes, canvas.width, canvas.height);
-			gl.uniform1f(uTime, ms / 1000);
-			gl.uniform1f(uFocus, focus);
-			gl.uniform2f(uBox, BOX, BOX);
+			gl.uniform1f(uTime, clock);
+			gl.uniform1f(uFocus, cur.focus + ack * 1.3 + focus);
+			const box =
+				BOX * cur.scale * (1 + Math.sin(clock * 1.6) * cur.breathe + ack * 0.1);
+			gl.uniform2f(uBox, box, box);
 			gl.uniform2f(uMouse, mx, my);
-			gl.uniform1f(uMstr, mstr);
+			// Hover reads in every state, damped so it can never flatten the cog.
+			gl.uniform1f(
+				uMstr,
+				Math.min(1.6, cur.bulge * (1 - mstr * 0.5) + mstr * 0.75 + ack * 0.5),
+			);
 			gl.uniform1f(uMorph, 0);
 			gl.uniform1f(uLight, light);
+			gl.uniform1f(uRound, cur.round);
+			gl.uniform1f(uSpin, spin);
+			gl.uniform1f(uTeeth, cur.teeth);
+			gl.uniform1f(uTeethN, ORB_TEETH_COUNT);
+			gl.uniform1f(uSat, cur.sat);
+			gl.uniform1f(uPop, ack);
+			gl.uniform1f(uSpinMix, cur.spinMix);
 			gl.clearColor(0, 0, 0, 0);
 			gl.clear(gl.COLOR_BUFFER_BIT);
 			gl.drawArrays(gl.TRIANGLES, 0, 3);
 		};
+
+		// Reduced motion still gets a distinct still frame per state, not a shared one.
+		const still = () => {
+			Object.assign(cur, ORB_STATE_PARAMS[stateRef.current]);
+			clock = 6 * cur.rate;
+			spin = 0.6;
+			ack = 0;
+			draw();
+		};
+
+		// Registered after still() exists so the callback never forward-references it.
+		const themeObserver = new MutationObserver(() => {
+			lightTarget = themeIsLight() ? 1 : 0;
+			setPrimary();
+			if (reduced) {
+				light = lightTarget;
+				still();
+			}
+		});
+		themeObserver.observe(document.documentElement, {
+			attributes: true,
+			attributeFilter: ["class", "style", "data-theme"],
+		});
 
 		const resize = () => {
 			const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -181,7 +236,7 @@ function BubbleOrbCanvas({
 			canvas.width = Math.round(width * dpr);
 			canvas.height = Math.round(height * dpr);
 			gl.viewport(0, 0, canvas.width, canvas.height);
-			if (reduced) draw(4200);
+			if (reduced) still();
 		};
 		resize();
 		const observer = new ResizeObserver(resize);
@@ -193,15 +248,33 @@ function BubbleOrbCanvas({
 		let inViewport = true;
 		let documentVisible = document.visibilityState !== "hidden";
 
+		let last = 0;
 		const loop = (ms: number) => {
 			if (!running) return;
+			const dt = last ? Math.min((ms - last) / 1000, 0.05) : 0.016;
+			last = ms;
+			const target = ORB_STATE_PARAMS[stateRef.current];
+			for (const key of Object.keys(cur) as (keyof typeof cur)[]) {
+				cur[key] += (target[key] - cur[key]) * 0.07;
+			}
+			clock += dt * cur.rate;
+			spin += dt * cur.spin;
+			if (ackRef.current > 0) {
+				ack = ackRef.current;
+				ackRef.current = 0;
+			}
+			ack *= 0.955;
 			focus += (focusTarget - focus) * 0.06;
 			mstr += (mstrTarget - mstr) * 0.08;
-			mx += (mxTarget - mx) * 0.12;
-			my += (myTarget - my) * 0.12;
+			// With no pointer on it the bulge travels an ellipse, so the film always has
+			// somewhere to go; the pointer takes over smoothly as you hover.
+			const ox = Math.cos(clock * 0.9) * cur.reach;
+			const oy = Math.sin(clock * 1.15) * cur.reach * 0.8;
+			mx += (ox * (1 - mstr) + mxTarget * mstr - mx) * 0.12;
+			my += (oy * (1 - mstr) + myTarget * mstr - my) * 0.12;
 			if (++frame % 20 === 0) lightTarget = themeIsLight() ? 1 : 0;
 			light += (lightTarget - light) * 0.08;
-			draw(ms);
+			draw();
 			raf = requestAnimationFrame(loop);
 		};
 
@@ -215,7 +288,7 @@ function BubbleOrbCanvas({
 		const syncAnimation = () => {
 			const shouldAnimate = inViewport && documentVisible;
 			if (reduced) {
-				if (shouldAnimate) draw(4200);
+				if (shouldAnimate) still();
 				return;
 			}
 			if (!shouldAnimate) {
@@ -257,6 +330,7 @@ function BubbleOrbCanvas({
 			gl.deleteShader(vs);
 			gl.deleteShader(fs);
 		};
+		// stateRef/ackRef are refs on purpose: the GL context must survive state changes.
 	}, [hostRef]);
 
 	if (failed) {
@@ -282,7 +356,12 @@ function BubbleOrbCanvas({
 	);
 }
 
-export type FlowPilotBubbleOrbProps = ComponentPropsWithoutRef<"button">;
+export type FlowPilotBubbleOrbProps = ComponentPropsWithoutRef<"button"> & {
+	/** What the assistant is doing. Defaults to `idle` for callers that don't track it. */
+	orbState?: FlowPilotOrbState;
+	/** Bump to fire the acknowledge burst (e.g. on a state change). */
+	ackNonce?: number;
+};
 
 /**
  * Pure, inline FlowPilot orb button. It owns only the canonical shader and pointer interaction;
@@ -296,6 +375,8 @@ export const FlowPilotBubbleOrb = forwardRef<
 		className,
 		children,
 		type = "button",
+		orbState = "idle",
+		ackNonce = 0,
 		"aria-label": ariaLabel = "Ask FlowPilot",
 		...props
 	},
@@ -314,7 +395,7 @@ export const FlowPilotBubbleOrb = forwardRef<
 			)}
 			{...props}
 		>
-			<BubbleOrbCanvas hostRef={hostRef} />
+			<BubbleOrbCanvas hostRef={hostRef} state={orbState} ackNonce={ackNonce} />
 			{children ?? <span className="sr-only">{ariaLabel}</span>}
 		</button>
 	);

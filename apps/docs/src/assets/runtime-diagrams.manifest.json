@@ -1,0 +1,18 @@
+{
+	"version": 1,
+	"generatedBy": "Codex deterministic SVG composition",
+	"assets": [
+		{
+			"file": "SinkExecutionArchitecture.svg",
+			"width": 1600,
+			"height": 900,
+			"purpose": "Local and hosted event-sink delivery paths converging on workflow dispatch"
+		},
+		{
+			"file": "WasmRuntimeModels.svg",
+			"width": 1600,
+			"height": 900,
+			"purpose": "Component Model and core-module ABI comparison with their shared capability boundary"
+		}
+	]
+}

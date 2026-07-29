@@ -17,19 +17,17 @@ This template uses the **Core Module** runtime model — see [Runtime Models](/d
 - [MoonBit toolchain](https://www.moonbitlang.com/download/) (`moon` CLI)
 - The local SDK directory (`../wasm-sdk-moonbit`) placed next to the template
 
-## Project Structure
+## Important Files
 
-```
-wasm-node-moonbit/
-├── node.mbt              # Node definition + run logic
-├── moon.mod.json          # Module manifest (SDK dependency)
-├── moon.pkg.json          # Package config (WASM exports)
-├── flow-like.toml         # Flow-Like package manifest
-├── mise.toml              # Task runner config
-├── examples/
-│   └── http_request.mbt   # HTTP request example
-└── README.md
-```
+| Path | Purpose |
+|------|---------|
+| `node.mbt` | Defines node metadata, run logic, and exported Core Module functions |
+| `moon.mod.json` | Declares the module and local SDK dependency |
+| `moon.pkg.json` | Configures imports, WASM exports, and exported memory |
+| `examples/http_request.mbt` | Demonstrates an HTTP request |
+| `flow-like.toml` | Declares the Flow-Like package |
+| `mise.toml` | Provides setup, build, test, and clean tasks |
+| `README.md` | Template-specific setup and usage notes |
 
 ### moon.mod.json
 

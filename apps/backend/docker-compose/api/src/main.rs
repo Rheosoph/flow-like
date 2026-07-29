@@ -63,8 +63,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if !flow_like_api::execution::is_jwt_configured() {
         tracing::warn!(
             "Execution JWT keys not configured. \
-            Generate keys using ./scripts/gen-execution-keys.sh and set \
-            EXECUTION_KEY, EXECUTION_PUB environment variables."
+            Generate keys using tools/gen-execution-keys.sh and set \
+            BACKEND_KEY, BACKEND_PUB environment variables."
         );
     }
 

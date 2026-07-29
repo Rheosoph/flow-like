@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+	<title id="title">Flow-Like Kubernetes architecture</title>
+	<desc id="description">A Helm release can expose web and API services through an optional Ingress. The API uses CockroachDB, Redis execution state, and external object storage, then dispatches runs to a reusable executor pool. The chart does not currently deploy a Redis queue consumer. A Kubernetes Job dispatcher exists, but the checked-in one-job executor runner is pending. Compiler, sink services, and observability are configurable chart components.</desc>
+	<defs>
+		<linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#111217"/>
+			<stop offset="1" stop-color="#191a20"/>
+		</linearGradient>
+		<linearGradient id="control" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#36231f"/>
+			<stop offset="1" stop-color="#211d1e"/>
+		</linearGradient>
+		<pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+			<circle cx="2" cy="2" r="1.2" fill="#ffffff" opacity=".065"/>
+		</pattern>
+		<filter id="shadow" x="-25%" y="-30%" width="150%" height="175%">
+			<feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity=".34"/>
+		</filter>
+		<marker id="arrow-coral" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+			<path d="M0 0 10 5 0 10z" fill="#ff7652"/>
+		</marker>
+		<marker id="arrow-green" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+			<path d="M0 0 10 5 0 10z" fill="#4fd2a0"/>
+		</marker>
+		<style>
+			text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+			.heading{fill:#f6f3f0;font-size:40px;font-weight:730;letter-spacing:-.7px}
+			.sub{fill:#aaa7a5;font-size:18px}
+			.kicker{fill:#ff8c6b;font-size:14px;font-weight:760;letter-spacing:2.1px}
+			.title{fill:#f5f2ef;font-size:20px;font-weight:700}
+			.copy{fill:#aaa7a5;font-size:14px}
+			.tiny{fill:#c9c6c3;font-size:11px;font-weight:700;letter-spacing:.8px}
+			.tag{font-size:10px;font-weight:780;letter-spacing:1.1px}
+		</style>
+	</defs>
+
+	<rect width="1600" height="900" rx="36" fill="url(#background)"/>
+	<rect x="26" y="26" width="1548" height="848" rx="29" fill="url(#dots)" stroke="#ffffff" stroke-opacity=".08"/>
+	<text x="76" y="91" class="heading">Application plane with a warm execution pool</text>
+	<text x="76" y="127" class="sub">Helm deploys the working pool path; Kubernetes Job dispatch is present, but its one-job runner is pending.</text>
+	<text x="1506" y="90" text-anchor="end" class="kicker">FLOW-LIKE · KUBERNETES</text>
+
+	<!-- Cluster -->
+	<rect x="234" y="170" width="1296" height="644" rx="34" fill="#15171c" fill-opacity=".74" stroke="#50535d" stroke-width="2"/>
+	<rect x="258" y="188" width="220" height="28" rx="14" fill="#292b32"/>
+	<circle cx="279" cy="202" r="5" fill="#62a7ff"/>
+	<text x="294" y="207" fill="#c7c9cf" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="13" font-weight="720" letter-spacing="1.3">KUBERNETES CLUSTER</text>
+
+	<!-- Connectors -->
+	<path d="M202 328H306" fill="none" stroke="#ff7652" stroke-width="4" marker-end="url(#arrow-coral)"/>
+	<path d="M546 294H614" fill="none" stroke="#ff7652" stroke-width="4" marker-end="url(#arrow-coral)"/>
+	<path d="M854 294H930" fill="none" stroke="#ff7652" stroke-width="4" marker-end="url(#arrow-coral)"/>
+	<path d="M1175 370V410H392V452" fill="none" stroke="#59c7d8" stroke-width="3"/>
+	<path d="M1175 410H680V452" fill="none" stroke="#a58aff" stroke-width="3"/>
+	<path d="M1175 410H968V452" fill="none" stroke="#4fd2a0" stroke-width="3"/>
+	<path d="M1175 370V592H432V628" fill="none" stroke="#ff7652" stroke-width="3.5"/>
+	<path d="M1175 592H778V628" fill="none" stroke="#ff7652" stroke-width="3.5"/>
+	<path d="M680 566V608H1118V628" fill="none" stroke="#a58aff" stroke-width="3"/>
+
+	<!-- Client -->
+	<g filter="url(#shadow)">
+		<rect x="54" y="258" width="148" height="172" rx="24" fill="#202126" stroke="#5b5d66" stroke-width="2"/>
+		<circle cx="128" cy="306" r="24" fill="#ff7652" fill-opacity=".13"/>
+		<path d="M111 297h34v22h-34zm7 28h20" fill="none" stroke="#ff987d" stroke-width="3" stroke-linecap="round"/>
+		<text x="128" y="358" text-anchor="middle" class="title">Clients</text>
+		<text x="128" y="386" text-anchor="middle" class="copy">Browser · Desktop</text>
+		<text x="128" y="408" text-anchor="middle" class="copy">API consumers</text>
+	</g>
+
+	<!-- Entry and application plane -->
+	<g filter="url(#shadow)">
+		<rect x="306" y="238" width="240" height="132" rx="24" fill="#202126" stroke="#59c7d8" stroke-opacity=".58" stroke-dasharray="7 6"/>
+		<rect x="332" y="258" width="78" height="24" rx="12" fill="#59c7d8" fill-opacity=".12"/>
+		<text x="371" y="274" text-anchor="middle" fill="#7ad8e7" class="tag">OPTIONAL</text>
+		<text x="332" y="313" class="title">Ingress</text>
+		<text x="332" y="341" class="copy">Host or path routing</text>
+		<path d="M484 270l16 16-16 16" fill="none" stroke="#7ad8e7" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="614" y="226" width="240" height="144" rx="25" fill="#1e2725" stroke="#4fd2a0" stroke-opacity=".6"/>
+		<rect x="640" y="248" width="74" height="24" rx="12" fill="#4fd2a0" fill-opacity=".12"/>
+		<text x="677" y="264" text-anchor="middle" fill="#73ddb5" class="tag">ENABLED</text>
+		<text x="640" y="305" class="title">Web Service</text>
+		<text x="640" y="333" class="copy">Next.js application pods</text>
+		<rect x="758" y="247" width="66" height="34" rx="10" fill="#4fd2a0" fill-opacity=".1"/>
+		<text x="791" y="269" text-anchor="middle" class="tiny">1…N</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="930" y="214" width="490" height="156" rx="28" fill="url(#control)" stroke="#ff7652" stroke-width="2.3"/>
+		<rect x="958" y="238" width="74" height="24" rx="12" fill="#ff7652" fill-opacity=".12"/>
+		<text x="995" y="254" text-anchor="middle" fill="#ff987d" class="tag">ENABLED</text>
+		<text x="958" y="296" class="title">API Service</text>
+		<text x="958" y="324" class="copy">App state · access control · execution dispatch</text>
+		<rect x="1264" y="236" width="64" height="36" rx="10" fill="#ff7652" fill-opacity=".12"/>
+		<text x="1296" y="259" text-anchor="middle" class="tiny">POD 1</text>
+		<rect x="1338" y="236" width="54" height="36" rx="10" fill="#ff7652" fill-opacity=".12"/>
+		<text x="1365" y="259" text-anchor="middle" class="tiny">+N</text>
+		<text x="1392" y="343" text-anchor="end" fill="#ff987d" class="tiny">HPA CONFIGURABLE</text>
+	</g>
+
+	<!-- State -->
+	<g filter="url(#shadow)">
+		<rect x="282" y="452" width="220" height="114" rx="22" fill="#202126" stroke="#59c7d8" stroke-opacity=".55"/>
+		<ellipse cx="320" cy="488" rx="17" ry="7" fill="none" stroke="#7ad8e7" stroke-width="2.5"/>
+		<path d="M303 488v24c0 5 8 8 17 8s17-3 17-8v-24m-34 12c0 5 8 8 17 8s17-3 17-8" fill="none" stroke="#7ad8e7" stroke-width="2.5"/>
+		<text x="356" y="491" class="title">CockroachDB</text>
+		<text x="356" y="519" class="copy">Internal or external SQL</text>
+		<text x="474" y="548" text-anchor="end" fill="#7ad8e7" class="tiny">SINGLE-NODE DEFAULT</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="570" y="452" width="220" height="114" rx="22" fill="#232129" stroke="#a58aff" stroke-opacity=".55"/>
+		<path d="M607 483l17-8 17 8-17 8zm0 12 17 8 17-8m-34 11 17 8 17-8" fill="none" stroke="#beaaff" stroke-width="2.5"/>
+		<text x="660" y="491" class="title">Redis</text>
+		<text x="660" y="519" class="copy">Execution state</text>
+		<text x="760" y="548" text-anchor="end" fill="#beaaff" class="tiny">NO QUEUE CONSUMER DEPLOYED</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="858" y="452" width="220" height="114" rx="22" fill="#1e2725" stroke="#4fd2a0" stroke-opacity=".55" stroke-dasharray="7 6"/>
+		<path d="M893 484h30l10 10v19h-40z" fill="none" stroke="#73ddb5" stroke-width="2.5"/>
+		<text x="948" y="491" class="title">Object storage</text>
+		<text x="948" y="519" class="copy">Content · metadata · logs</text>
+		<text x="1048" y="548" text-anchor="end" fill="#73ddb5" class="tiny">EXTERNAL</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="1126" y="452" width="268" height="114" rx="22" fill="#202126" stroke="#f1b35f" stroke-opacity=".5" stroke-dasharray="7 6"/>
+		<text x="1154" y="482" fill="#f6c779" class="tag">OPTIONAL</text>
+		<text x="1154" y="511" class="title">WASM compiler</text>
+		<text x="1154" y="538" class="copy">Deployment + Service when enabled</text>
+	</g>
+
+	<!-- Execution -->
+	<g filter="url(#shadow)">
+		<rect x="282" y="628" width="300" height="118" rx="24" fill="#1e2725" stroke="#4fd2a0" stroke-width="2"/>
+		<rect x="310" y="650" width="72" height="24" rx="12" fill="#4fd2a0" fill-opacity=".12"/>
+		<text x="346" y="666" text-anchor="middle" fill="#73ddb5" class="tag">DEFAULT</text>
+		<text x="310" y="704" class="title">Warm executor pool</text>
+		<text x="310" y="731" class="copy">Reusable pods behind a Service</text>
+		<circle cx="528" cy="666" r="8" fill="#4fd2a0"/><circle cx="550" cy="666" r="8" fill="#4fd2a0" opacity=".72"/>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="628" y="628" width="300" height="118" rx="24" fill="#232129" stroke="#a58aff" stroke-width="2"/>
+		<rect x="656" y="650" width="92" height="24" rx="12" fill="#a58aff" fill-opacity=".12"/>
+		<text x="702" y="666" text-anchor="middle" fill="#beaaff" class="tag">INCOMPLETE</text>
+		<text x="656" y="704" class="title">Job dispatcher</text>
+		<text x="656" y="731" class="copy">Creates Job; runner pending</text>
+		<path d="M865 654h28v28h-28z" fill="none" stroke="#beaaff" stroke-width="2.5"/>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="978" y="628" width="280" height="118" rx="24" fill="#202126" stroke="#f1b35f" stroke-opacity=".5" stroke-dasharray="7 6"/>
+		<text x="1006" y="660" fill="#f6c779" class="tag">OPTIONAL</text>
+		<text x="1006" y="696" class="title">Sink services</text>
+		<text x="1006" y="724" class="copy">CronJobs and configured bots</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="1300" y="628" width="180" height="118" rx="24" fill="#202126" stroke="#59c7d8" stroke-opacity=".55"/>
+		<text x="1326" y="660" fill="#7ad8e7" class="tag">REVIEW</text>
+		<text x="1326" y="696" class="title">Network</text>
+		<text x="1326" y="724" class="copy">Check selectors</text>
+	</g>
+
+	<!-- Observability -->
+	<rect x="282" y="770" width="1198" height="26" rx="13" fill="#292a31"/>
+	<text x="304" y="788" fill="#8f929b" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="11" font-weight="760" letter-spacing="1.4">OBSERVABILITY</text>
+	<circle cx="455" cy="783" r="5" fill="#ff7652"/><text x="470" y="788" class="tiny">Prometheus</text>
+	<circle cx="590" cy="783" r="5" fill="#a58aff"/><text x="605" y="788" class="tiny">Tempo</text>
+	<circle cx="684" cy="783" r="5" fill="#4fd2a0"/><text x="699" y="788" class="tiny">Grafana</text>
+	<text x="1448" y="788" text-anchor="end" class="copy">Chart defaults enable this stack; tune storage and exposure before production.</text>
+
+	<text x="76" y="846" class="sub">Dashed cards are optional or externally supplied. Actual isolation depends on cluster runtime, policies, and executor configuration.</text>
+</svg>

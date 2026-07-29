@@ -218,6 +218,9 @@ site-search button > kbd {
 .sidebar-pane,
 .right-sidebar {
 	background: color-mix(in oklab, var(--sl-color-black) 88%, transparent);
+}
+
+.sidebar-pane {
 	backdrop-filter: blur(14px);
 }
 
@@ -227,6 +230,13 @@ site-search button > kbd {
 
 .right-sidebar {
 	border-inline-start: 1px solid color-mix(in oklab, var(--sl-color-gray-5) 65%, transparent);
+}
+
+@media (min-width: 72rem) {
+	/* A backdrop filter creates a containing block for the mobile TOC's fixed nav. */
+	.right-sidebar {
+		backdrop-filter: blur(14px);
+	}
 }
 
 .content-panel {
@@ -546,6 +556,11 @@ html:has(.node-doc) mobile-starlight-toc {
 .node-score-high {
 	background: color-mix(in oklab, var(--sl-color-accent) 18%, transparent);
 	color: var(--sl-color-accent-high);
+}
+
+.node-score-unrated {
+	background: color-mix(in oklab, var(--sl-color-gray-4) 16%, transparent);
+	color: var(--sl-color-gray-2);
 }
 
 .node-score-empty,

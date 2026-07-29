@@ -1,645 +1,179 @@
 ---
 title: Document Processing
-description: Extract, transform, and process PDFs, spreadsheets, and documents at scale
+description: Extract, transform, and process PDFs, spreadsheets, images, and office documents
 sidebar:
   order: 1
 ---
 
-Flow-Like provides powerful document processing capabilities—extract text from PDFs, process Excel files, batch-transform documents, and use AI for intelligent extraction.
+Flow-Like can read, transform, and extract structured information from document collections. Prefer deterministic readers and converters first, then add schema extraction or a configured AI model when layout or language makes rules insufficient.
 
-## Supported Document Types
+![A Flow-Like document-processing workflow from files to structured outputs](../../../../assets/DocumentProcessingOverview.svg)
 
-| Format | Capabilities |
-|--------|--------------|
-| **PDF** | Page count, render to images, text extraction |
-| **Excel (.xlsx)** | Read/write cells, manage worksheets, extract tables |
-| **CSV** | Stream reading, database conversion, SQL queries |
-| **Images** | OCR, resize, crop, rotate, convert formats |
-| **Word (.docx)** | Text extraction |
-| **HTML** | Convert to Markdown, extract content |
+## Choose a processing path
 
-## PDF Processing
+| Input | Start with | Add when needed |
+|-------|------------|-----------------|
+| Digital PDF | Text extraction or page rendering | AI extraction for complex visual layouts |
+| Scanned PDF | Render pages to images | Vision-capable extraction and validation |
+| Excel workbook | Cell, worksheet, or table nodes | AI table extraction for unusual layouts |
+| CSV | Buffered reader or database registration | Batching and schema validation |
+| Image | Read, inspect dimensions, crop, resize, convert | Barcode reading, annotation, or AI extraction |
+| DOCX or PPTX | Native extraction and editing nodes | Template-specific replacement or generation |
+| HTML | Convert to Markdown | Section or keyword extraction |
 
-### Get Page Count
+## PDF processing
 
-```
-PDF Page Count (file_path)
-    │
-    ▼
-Number: 42
-```
+### Inspect, render, and extract
 
-### Render Pages as Images
+| Need | Node |
+|------|------|
+| Count pages | [PDF Page Count](/nodes/image/pdf/pdf-page-count/) |
+| Render one page | [PDF Page To Image](/nodes/image/pdf/pdf-page-to-image/) |
+| Render every page | [PDF To Images](/nodes/image/pdf/pdf-to-images/) |
+| Extract selectable text | [Extract Text](/nodes/document/pdf/pdf-extract-text/) |
+| Split or extract page ranges | [Split PDF](/nodes/document/pdf/pdf-split/), [Extract Pages](/nodes/document/pdf/pdf-extract-pages/) |
+| Rotate pages | [Rotate Pages](/nodes/document/pdf/pdf-rotate-pages/) |
+| Merge files | [Merge PDFs](/nodes/document/pdf/pdf-merge/) |
 
-Process each page visually:
+Use text extraction for digitally generated PDFs. Render pages when downstream work depends on the visual layout or when the source is scanned.
 
-```
-PDF To Images (file_path)
-    │
-    ▼
-Array<Image>: [page1.png, page2.png, ...]
-```
+### AI-assisted extraction
 
-Or render a specific page:
+[AI Extract Document](/nodes/ai/processing/ai-processing-extract-document-ai/) can describe images and recover content from visually complex documents. [AI Extract Documents](/nodes/ai/processing/ai-processing-extract-documents-ai/) handles multiple files in parallel.
 
-```
-PDF Page To Image
-├── file: document.pdf
-├── page: 1 (1-based)
-└── scale: 2.0 (for high resolution)
-    │
-    ▼
-Image (PNG)
-```
+Pass a configured model that supports the source format. Do not hard-code a vendor-specific model name into reusable boards. Model availability and capabilities depend on the configured provider.
 
-### Extract Text with AI
+For structured output, define a schema and validate the extracted values before writing them. An invoice schema might look like:
 
-For complex PDFs with mixed layouts:
-
-```
-AI Extract Document
-├── file: complex_document.pdf
-├── model: GPT-4 Vision
-└── extract_images: true
-    │
-    ▼
-Markdown text with structure preserved
-```
-
-**What AI extraction handles:**
-- Multi-column layouts
-- Tables and charts
-- Handwritten text
-- Mixed text and images
-- Scanned documents
-
-### Example: Invoice Processing Pipeline
-
-```
-Quick Action Event (pdf_files: Array<Path>)
-    │
-    ▼
-For Each pdf_file
-    │
-    ▼
-AI Extract Document
-    │
-    ▼
-Extract Knowledge (Invoice Schema)
-├── vendor: String
-├── invoice_number: String
-├── date: Date
-├── line_items: Array<{description, quantity, price}>
-└── total: Number
-    │
-    ▼
-Insert to Database ──▶ Return summary
-```
-
-## Excel Processing
-
-### Read/Write Cells
-
-```
-Excel Read Cell
-├── file: report.xlsx
-├── sheet: "Sales"
-└── cell: "B5"
-    │
-    ▼
-Value: 45230.00
-```
-
-```
-Excel Write Cell
-├── file: report.xlsx
-├── sheet: "Sales"
-├── cell: "C5"
-└── value: "Processed"
-```
-
-### Manage Worksheets
-
-```
-Get Sheet Names (file)
-    │
-    ▼
-["Sales", "Inventory", "Summary"]
-```
-
-```
-New Worksheet
-├── file: report.xlsx
-└── name: "Q4 Results"
-```
-
-```
-Copy Worksheet
-├── source: template.xlsx
-├── source_sheet: "Template"
-├── target: report.xlsx
-└── target_sheet: "January"
-```
-
-### Loop Through Rows
-
-Process all rows in a worksheet:
-
-```
-For Each Row (file: data.xlsx, sheet: "Customers")
-    │
-    ├── row.A ──▶ customer_id
-    ├── row.B ──▶ name
-    └── row.C ──▶ email
-    │
-    ▼
-Process each customer
-```
-
-### Extract Tables Intelligently
-
-For messy Excel files with multiple tables:
-
-```
-AI Extract Tables
-├── file: messy_report.xlsx
-├── model: GPT-4
-└── Strategy determined by AI
-    │
-    ▼
-Array of structured tables
-```
-
-The AI:
-1. Analyzes the spreadsheet structure
-2. Identifies table boundaries
-3. Determines headers
-4. Extracts clean data
-
-### Microsoft 365 Excel
-
-Work with Excel files in OneDrive/SharePoint:
-
-```
-Microsoft Provider (OAuth)
-    │
-    ▼
-List Excel Worksheets
-├── file_id: "abc123"
-└── site_id (optional for SharePoint)
-    │
-    ▼
-Read Excel Range
-├── sheet: "Data"
-└── range: "A1:D100"
-    │
-    ▼
-Array of rows
-```
-
-## CSV Processing
-
-### Stream Large Files
-
-Process CSV files without loading everything into memory:
-
-```
-Buffered CSV Reader (large_file.csv)
-    │
-    ▼
-For Each batch (1000 rows)
-    │
-    ▼
-Process batch ──▶ Insert to database
-```
-
-### Convert to Database
-
-Load CSV into queryable format:
-
-```
-Create Database (lance_db)
-    │
-    ▼
-Load CSV (sales.csv)
-    │
-    ▼
-SQL Query: "SELECT * FROM sales WHERE amount > 1000"
-```
-
-### DataFusion Integration
-
-Query CSV files with SQL:
-
-```
-Create DataFusion Session
-    │
-    ▼
-Register CSV ("sales", sales.csv)
-    │
-    ▼
-Register CSV ("customers", customers.csv)
-    │
-    ▼
-SQL Query:
-"SELECT c.name, SUM(s.amount) as total
- FROM sales s
- JOIN customers c ON s.customer_id = c.id
- GROUP BY c.name
- ORDER BY total DESC"
-```
-
-## Image Processing
-
-### Read & Analyze
-
-```
-Read Image (photo.jpg)
-    │
-    ├── Image Dimensions ──▶ {width: 1920, height: 1080}
-    │
-    └── AI Extract Document ──▶ Extracted text/content
-```
-
-### Transform Images
-
-| Node | Description |
-|------|-------------|
-| **Resize** | Scale to specific dimensions |
-| **Crop** | Extract region |
-| **Rotate** | Rotate by degrees |
-| **Flip** | Horizontal or vertical flip |
-| **Blur** | Apply blur effect |
-| **Brighten** | Adjust brightness |
-| **Contrast** | Adjust contrast |
-| **Convert** | Change format (PNG, JPG, WebP) |
-
-**Example: Prepare images for processing**
-```
-Read Image
-    │
-    ▼
-Resize (max_width: 1024)
-    │
-    ▼
-Convert to PNG
-    │
-    ▼
-AI Analysis
-```
-
-### Barcode & QR Reading
-
-```
-Read Barcodes (image)
-    │
-    ▼
-[{
-  type: "QR_CODE",
-  data: "https://example.com/product/123",
-  bounds: {x, y, width, height}
-}]
-```
-
-### Draw Annotations
-
-Add bounding boxes or annotations:
-
-```
-Draw Boxes
-├── image: document.png
-├── boxes: [{x, y, w, h, label: "Invoice Number"}]
-└── color: red
-    │
-    ▼
-Annotated image
-```
-
-### Generate Barcodes
-
-```
-Write Barcode
-├── data: "https://myapp.com/verify/abc123"
-├── format: QR_CODE
-└── scale: 8
-    │
-    ▼
-Barcode image
-```
-
-## Text Extraction
-
-### HTML to Markdown
-
-Clean up web content:
-
-```
-HTML to Markdown
-├── html: "<h1>Title</h1><p>Content...</p>"
-└── remove_tags: ["script", "style", "nav"]
-    │
-    ▼
-"# Title\n\nContent..."
-```
-
-### Keyword Extraction
-
-**YAKE (Unsupervised):**
-```
-YAKE Keywords
-├── text: document_content
-├── language: "en"
-└── max_keywords: 10
-    │
-    ▼
-["machine learning", "data processing", "automation", ...]
-```
-
-**RAKE (Rule-based):**
-```
-RAKE Keywords
-├── text: document_content
-└── language: "en"
-    │
-    ▼
-[{keyword: "artificial intelligence", score: 8.5}, ...]
-```
-
-**AI-Powered:**
-```
-AI Keyword Extraction
-├── text: document_content
-└── model: GPT-4
-    │
-    ▼
-Semantically relevant keywords
-```
-
-## Batch Processing
-
-### Process Folder of Documents
-
-```
-Quick Action Event (folder_path)
-    │
-    ▼
-List Paths (folder_path, pattern: "*.pdf")
-    │
-    ▼
-For Each file_path
-    │
-    ▼
-Detect file type
-    │
-    ├── PDF ──▶ AI Extract Document
-    ├── Excel ──▶ Extract Tables
-    ├── Image ──▶ OCR Extract
-    └── CSV ──▶ Load to Database
-    │
-    ▼
-Store extracted data ──▶ Generate report
-```
-
-### Watch Folder for New Files
-
-```
-Scheduled Event (every 5 minutes)
-    │
-    ▼
-List Paths (/incoming, modified_after: last_run)
-    │
-    ▼
-For Each new_file
-    │
-    ▼
-Process document ──▶ Move to /processed
-```
-
-## AI-Powered Processing
-
-### Structured Extraction
-
-Extract specific fields from any document:
-
-```
-AI Extract Document (document)
-    │
-    ▼
-Extract Knowledge
-├── Schema:
-│   ├── company_name: String
-│   ├── document_type: Enum["invoice", "receipt", "contract"]
-│   ├── date: Date
-│   ├── total_amount: Number
-│   └── line_items: Array<{description, amount}>
-│
-└── Model: GPT-4
-    │
-    ▼
-Validated structured data
-```
-
-### Document Classification
-
-```
-AI Classification
-├── document: extracted_text
-├── categories: ["Invoice", "Receipt", "Contract", "Report", "Letter"]
-└── model: GPT-4
-    │
-    ▼
+```json
 {
-  category: "Invoice",
-  confidence: 0.95
+  "vendor": "string",
+  "invoice_number": "string",
+  "date": "date",
+  "line_items": [
+    {
+      "description": "string",
+      "quantity": "number",
+      "price": "number"
+    }
+  ],
+  "total": "number"
 }
 ```
 
-### Summarization
+Use deterministic checks for totals, dates, identifiers, and required fields. Route low-confidence or invalid records to review instead of silently accepting them.
 
-```
-Invoke LLM
-├── prompt: "Summarize this document in 3 bullet points: {document_text}"
-└── model: GPT-4
-    │
-    ▼
-• Key point 1
-• Key point 2
-• Key point 3
-```
+## Spreadsheet processing
 
-## Template Processing
+### Cells and worksheets
 
-Generate documents from templates:
+| Need | Node |
+|------|------|
+| Read a cell | [Excel Read Cell](/nodes/data/excel/excel-read-cell/) |
+| Write a cell | [Excel Write Cell](/nodes/data/excel/excel-write-cell/) |
+| List sheets | [Get Sheet Names](/nodes/data/excel/files-spreadsheet-get-sheet-names/) |
+| Create a sheet | [New Worksheet](/nodes/data/excel/files-spreadsheet-new-worksheet/) |
+| Copy a sheet | [Copy Worksheet](/nodes/data/excel/files-spreadsheet-copy-worksheet/) |
 
-```
-Render Template
-├── template: "Dear {name},\n\nYour order #{order_id} has shipped..."
-├── variables:
-│   ├── name: "Alice"
-│   └── order_id: "12345"
-    │
-    ▼
-"Dear Alice,\n\nYour order #12345 has shipped..."
-```
+### Tables
 
-**Jinja-style features:**
-- Variable interpolation: `{variable}`
-- Conditionals: `{% if condition %}...{% endif %}`
-- Loops: `{% for item in items %}...{% endfor %}`
-- Filters: `{name|upper}`
+Use [Extract Tables (Excel)](/nodes/data/excel/data-excel-extract-tables/) for predictable workbook layouts. Use [Extract Tables AI (Excel)](/nodes/data/excel/data-excel-extract-tables-ai/) when tables have irregular headers, spacing, or multiple regions that deterministic extraction cannot identify reliably.
 
-## File Operations
+For either path:
 
-### Basic Operations
+1. inspect sheet names and choose the intended worksheet;
+2. define expected columns and types;
+3. normalize headers;
+4. validate row counts and required fields;
+5. preserve the source workbook or a stable reference to it.
 
-| Node | Description |
-|------|-------------|
-| **Copy** | Copy file to new location |
-| **Delete** | Remove file |
-| **Rename** | Rename/move file |
-| **Exists** | Check if file exists |
-| **File Hash** | Compute MD5/SHA hash |
+## CSV processing
 
-### Cloud Storage
+[Buffered CSV Reader](/nodes/utils/csv/csv-buffered-reader/) reads large CSV files in batches. Keep the batch size appropriate to row width and downstream work, and validate the header before processing the first batch.
 
-Work with files in cloud storage:
+CSV files can also be registered in a DataFusion session and queried with SQL:
 
-```
-S3 / Azure / GCS Provider
-    │
-    ▼
-List Files (bucket/container)
-    │
-    ▼
-Download File
-    │
-    ▼
-Process locally
-    │
-    ▼
-Upload results
+```sql
+SELECT
+  c.name,
+  SUM(s.amount) AS total
+FROM sales AS s
+JOIN customers AS c
+  ON s.customer_id = c.id
+GROUP BY c.name
+ORDER BY total DESC;
 ```
 
-### Signed URLs
+SQL is useful for joins, aggregation, and filtering, but it does not replace source validation. Confirm delimiters, quoting, encoding, and numeric or date conventions when files come from multiple systems.
 
-Generate temporary access URLs:
+## Image processing
 
-```
-Sign URL
-├── path: "reports/quarterly.pdf"
-├── expiry: 3600 (seconds)
-└── provider: S3
-    │
-    ▼
-"https://bucket.s3.amazonaws.com/reports/quarterly.pdf?signature=..."
-```
+| Need | Node |
+|------|------|
+| Load an image | [Read Image](/nodes/image/content/read-image/) |
+| Read dimensions | [Get Dimensions](/nodes/image/metadata/get-dimensions/) |
+| Resize | [Resize Image](/nodes/image/transform/resize-image/) |
+| Crop | [Crop Image](/nodes/image/transform/crop-image/) |
+| Convert color representation | [Color Convert](/nodes/image/transform/convert-image/) |
+| Adjust contrast | [Contrast](/nodes/image/transform/contrast-image/) |
+| Read a QR code or barcode | [Read QR-/Barcode](/nodes/image/content/read-barcodes/) |
+| Draw review annotations | [Draw Boxes](/nodes/image/annotate/draw-boxes/) |
+| Save an image | [Write Image](/nodes/image/content/write-image/) |
 
-## Example Pipelines
+Resize large scans before model-based extraction when the reduced image still preserves the required text. Keep the original file for audit, reprocessing, or a higher-resolution retry.
 
-### Invoice Processing
+## DOCX and presentation files
 
-```
-Watch Folder (/invoices)
-    │
-    ▼
-For Each new PDF
-    │
-    ├──▶ AI Extract Document
-    │
-    ├──▶ Extract Knowledge (Invoice Schema)
-    │
-    ├──▶ Validate required fields
-    │       │
-    │       ├── Valid ──▶ Insert to Database
-    │       │               │
-    │       │               ▼
-    │       │           Create Approval Task
-    │       │
-    │       └── Invalid ──▶ Move to /review
-    │
-    └──▶ Move to /processed
-```
+The document catalog includes native operations for office files:
 
-### Document Search System
+- [Extract Text from DOCX](/nodes/document/docx/docx-extract-text/), replace text or images, merge documents, and build documents from paragraphs, tables, images, and links.
+- [Extract Text from PPTX](/nodes/document/pptx/pptx-extract-text/), replace slide content, merge presentations, and add slides, tables, charts, shapes, or speaker notes.
 
-```
-Ingest Pipeline:
-├── List all documents
-├── For Each document
-│   ├── Extract text (AI Extract Document)
-│   ├── Chunk into sections
-│   ├── Generate embeddings
-│   └── Insert to Vector DB
-│
-Query Pipeline:
-├── User search query
-├── Embed query
-├── Vector search (top 10)
-├── Return matching documents with snippets
-```
+Use placeholder and replacement operations for controlled templates. Use native creation nodes when the workflow needs to assemble a new document from structured data.
 
-### Report Generation
+## Text and template processing
 
-```
-Scheduled Event (monthly)
-    │
-    ▼
-Query Database (monthly stats)
-    │
-    ▼
-Generate Charts (Nivo)
-    │
-    ▼
-Render Template (report_template.md)
-    │
-    ▼
-Convert to PDF
-    │
-    ▼
-Email Report ──▶ Archive
-```
+| Task | Node |
+|------|------|
+| Convert HTML to Markdown | [HTML to Markdown](/nodes/utils/markdown/utils-md-html-to-md/) |
+| Extract content sections | [Extract Content Sections](/nodes/ai/processing/ai-processing-extract-content-sections/) |
+| Extract deterministic keywords | [RAKE Keywords](/nodes/ai/processing/ai-processing-rake-extraction/), [YAKE Keywords](/nodes/ai/processing/ai-processing-yake-extraction/) |
+| Extract semantic keywords | [AI Keywords](/nodes/ai/processing/ai-processing-ai-keyword-extraction/) |
+| Summarize a document | [Summarize Document](/nodes/ai/processing/ai-processing-summarize-document/) |
+| Render a text template | [Render Template](/nodes/utils/string/string-render-template/) |
 
-## Best Practices
+Choose deterministic keyword extraction when reproducibility and cost matter most. Use a model when the task depends on meaning rather than surface terms, and record the provider and model configuration with the run when reproducibility matters.
 
-### 1. Handle Encoding
-Always specify encoding for text files:
-```
-Read to String (file, encoding: "utf-8")
-```
+## Batch-processing pattern
 
-### 2. Validate Before Processing
-Check file type and size before heavy processing:
-```
-File Exists → Get File Size → Validate → Process
-```
+For a folder or upload collection:
 
-### 3. Use Appropriate Extraction
-| Document Type | Best Approach |
-|---------------|---------------|
-| Clean PDF | Direct text extraction |
-| Scanned PDF | AI vision OCR |
-| Structured Excel | Cell/range reading |
-| Messy Excel | AI table extraction |
-| Mixed content | AI Extract Document |
+1. enumerate the input files;
+2. identify or validate each file type;
+3. send each type through its dedicated reader;
+4. normalize all results into a shared schema;
+5. validate required fields and business rules;
+6. store the structured result and source reference;
+7. route failures or uncertain extractions to review;
+8. emit a summary with processed, skipped, reviewed, and failed counts.
 
-### 4. Batch Wisely
-For large volumes, process in batches to manage memory:
-```
-For Each batch of 100 files
-    │
-    ▼
-Process batch ──▶ Save results ──▶ Next batch
-```
+Limit concurrency for large documents and external model calls. A large collection should be restartable, so save progress or make each file operation idempotent.
 
-### 5. Archive Originals
-Keep original documents before processing:
-```
-Copy to /archive ──▶ Process ──▶ Store results
-```
+## Quality and safety checklist
 
-## Next Steps
+- [ ] File type is validated instead of trusted from the extension alone
+- [ ] Original files or stable source references are retained
+- [ ] Deterministic extraction is preferred where it is sufficient
+- [ ] Model choice is configurable and supports the input format
+- [ ] Required fields and business rules are validated
+- [ ] Large collections are batched and concurrency-limited
+- [ ] Low-confidence results have a review path
+- [ ] Sensitive document content is not exposed in logs
+- [ ] Output records include provenance back to the source
 
-- **[Data Loading](/topics/datascience/loading/)** – Store extracted data
-- **[DataFusion](/topics/datascience/datafusion/)** – Query processed data
-- **[GenAI](/topics/genai/extraction/)** – Advanced AI extraction
-- **[Building Internal Tools](/topics/internal-tools/overview/)** – Create document processing UIs
+## Related guides
+
+- [Summarization strategies](/topics/document-processing/summarization-strategies/)
+- [Data pipelines](/topics/data-pipelines/overview/)
+- [API integrations](/topics/api-integrations/overview/)
+- [Node catalog](/nodes/overview/)

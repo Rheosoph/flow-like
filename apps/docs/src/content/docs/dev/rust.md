@@ -14,7 +14,7 @@ Flow-Like's core is built in Rust, providing the performance, safety, and reliab
 Rust's type system enables Flow-Like's fully-typed workflows:
 
 - **Compile-time guarantees**: Catch errors before runtime
-- **No null pointer exceptions**: `Option<T>` and `Result<T, E>` enforce error handling
+- **Explicit absence and failure**: `Option<T>` and `Result<T, E>` make callers handle those states
 - **Trait-based abstractions**: Nodes, pins, and storage backends share common interfaces
 
 ### Performance
@@ -29,28 +29,32 @@ Workflow execution benefits from:
 
 For a platform handling user-defined workflows:
 
-- **No buffer overflows**: Memory bugs are caught at compile time
-- **Safe FFI**: Integrating ONNX, LanceDB, and other native libraries safely
-- **Minimal attack surface**: Fewer security vulnerabilities by design
+- **Safe ownership and borrowing**: Safe Rust prevents many use-after-free,
+  aliasing, and data-race bugs; indexing remains bounds-checked
+- **Visible native boundaries**: ONNX, LanceDB, and other native integrations
+  keep their `unsafe`/FFI boundaries reviewable
+- **Controlled concurrency**: Shared state has to satisfy Rust's thread-safety
+  contracts before it can cross task and thread boundaries
 
 ## Rust in the Codebase
 
 ### Core Packages
 
-All core functionality is in Rust:
+Key Rust crates in the workspace include:
 
-```
-packages/
-├── core/              # flow-like: Core library
-├── types/             # flow-like-types: Shared types
-├── storage/           # flow-like-storage: Storage abstraction
-├── bits/              # flow-like-bits: Reusable components
-├── model-provider/    # flow-like-model-provider: AI/ML
-├── api/               # flow-like-api: REST API
-├── executor/          # flow-like-executor: Execution runtime
-├── catalog/           # flow-like-catalog: Node implementations
-└── catalog-macros/    # flow-like-catalog-macros: Proc macros
-```
+| Path | Crate | Responsibility |
+|------|-------|----------------|
+| `packages/core/` | `flow-like` | Core workflow library |
+| `packages/types/` | `flow-like-types` | Shared domain types |
+| `packages/storage/` | `flow-like-storage` | Storage abstraction |
+| `packages/bits/` | `flow-like-bits` | Reusable components |
+| `packages/model-provider/` | `flow-like-model-provider` | AI and ML providers |
+| `packages/api/` | `flow-like-api` | REST API |
+| `packages/executor/` | `flow-like-executor` | Execution runtime |
+| `packages/catalog/` | `flow-like-catalog` | Built-in node implementations |
+| `packages/catalog-macros/` | `flow-like-catalog-macros` | Procedural macros for the catalog |
+
+The workspace also contains supporting crates. Treat the root `Cargo.toml` member list as the authoritative inventory.
 
 ### Key Dependencies
 
@@ -67,7 +71,9 @@ packages/
 
 ### Edition 2024
 
-Flow-Like uses Rust Edition 2024 for most packages, enabling:
+Flow-Like uses Rust Edition 2024 for most packages. Some executor, compiler,
+and WASM crates remain on Edition 2021, so check the crate's own
+`Cargo.toml` before relying on edition-specific syntax.
 
 - Latest language features
 - Improved async ergonomics
@@ -93,7 +99,9 @@ The `async_trait` crate enables async trait methods, and `tokio` provides the ru
 
 ## Feature Flags
 
-Conditional compilation reduces binary size:
+Conditional compilation selects deployment and runtime capabilities. These
+examples come from different workspace crates rather than one shared feature
+table:
 
 ```toml
 [features]
@@ -160,4 +168,3 @@ cargo bench -p flow-like-catalog
 - [Building from Source](/dev/build/) — Set up your development environment
 - [Writing Nodes](/dev/writing-nodes/) — Create custom workflow nodes
 - [Architecture](/dev/architecture/) — Understand the full system
-

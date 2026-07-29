@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like API integration architecture</title>
+  <desc id="desc">HTTP events, schedules, and flows build authenticated requests, call REST APIs, platform connectors, or external data sources, then validate, transform, store, or route each response.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff8a68"/><stop offset="1" stop-color="#ff5d3d"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.section{fill:#f7f8fa;font-size:22px;font-weight:720}.item{fill:#d8dbe1;font-size:16px;font-weight:650}.note{fill:#929aa7;font-size:14px}.tiny{fill:#89919e;font-size:13px;font-weight:700;letter-spacing:1.1px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/><rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="252" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="kicker">API INTEGRATIONS</text>
+  <text x="64" y="136" class="heading">Connect services without hiding the contract</text>
+  <text x="64" y="169" class="sub">Make authentication, request construction, response handling, and failure paths explicit in the flow.</text>
+
+  <path d="M292 384H348M666 384H722M1036 384H1092" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
+
+  <g>
+    <rect x="64" y="246" width="228" height="276" rx="25" fill="#191c22" stroke="#373d48" stroke-width="2"/>
+    <text x="94" y="288" class="tiny">START</text><text x="94" y="323" class="section">Triggers</text>
+    <rect x="94" y="350" width="168" height="42" rx="12" fill="#232730" stroke="#414754"/><circle cx="116" cy="371" r="6" fill="#ff7656"/><text x="136" y="377" class="item">HTTP Event</text>
+    <rect x="94" y="404" width="168" height="42" rx="12" fill="#232730" stroke="#414754"/><circle cx="116" cy="425" r="6" fill="#a78bfa"/><text x="136" y="431" class="item">Schedule</text>
+    <rect x="94" y="458" width="168" height="42" rx="12" fill="#232730" stroke="#414754"/><circle cx="116" cy="479" r="6" fill="#34d399"/><text x="136" y="485" class="item">Another flow</text>
+  </g>
+
+  <g>
+    <rect x="348" y="214" width="318" height="340" rx="28" fill="#1d1d22" stroke="#ff7656" stroke-width="2"/>
+    <rect x="378" y="244" width="68" height="68" rx="20" fill="url(#coral)" filter="url(#glow)"/>
+    <path d="M396 267h33M396 279h33M396 291h22" stroke="#15171b" stroke-width="5" stroke-linecap="round"/>
+    <text x="472" y="267" class="tiny">BUILD</text><text x="472" y="302" class="section">Request contract</text>
+    <rect x="378" y="340" width="258" height="50" rx="13" fill="#292327" stroke="#5d3c35"/><text x="404" y="371" class="item">1</text><text x="434" y="371" class="item">URL • method • body</text>
+    <rect x="378" y="404" width="258" height="50" rx="13" fill="#292327" stroke="#5d3c35"/><text x="404" y="435" class="item">2</text><text x="434" y="435" class="item">Headers • authentication</text>
+    <rect x="378" y="468" width="258" height="50" rx="13" fill="#292327" stroke="#5d3c35"/><text x="404" y="499" class="item">3</text><text x="434" y="499" class="item">Timeout • retry policy</text>
+  </g>
+
+  <g>
+    <rect x="722" y="246" width="314" height="276" rx="25" fill="#1d1c24" stroke="#5b5278" stroke-width="2"/>
+    <text x="752" y="288" class="tiny">CALL</text><text x="752" y="323" class="section">Connected service</text>
+    <rect x="752" y="350" width="254" height="42" rx="12" fill="#282534" stroke="#574e71"/><circle cx="776" cy="371" r="6" fill="#a78bfa"/><text x="798" y="377" class="item">REST and GraphQL APIs</text>
+    <rect x="752" y="404" width="254" height="42" rx="12" fill="#282534" stroke="#574e71"/><circle cx="776" cy="425" r="6" fill="#ff7656"/><text x="798" y="431" class="item">Platform connectors</text>
+    <rect x="752" y="458" width="254" height="42" rx="12" fill="#282534" stroke="#574e71"/><circle cx="776" cy="479" r="6" fill="#34d399"/><text x="798" y="485" class="item">External data sources</text>
+  </g>
+
+  <g>
+    <rect x="1092" y="214" width="284" height="340" rx="28" fill="#1b2422" stroke="#34d399" stroke-width="2"/>
+    <text x="1122" y="256" class="tiny">HANDLE</text><text x="1122" y="291" class="section">Typed response</text>
+    <rect x="1122" y="320" width="224" height="46" rx="12" fill="#202b28" stroke="#3e6759"/><path d="M1144 343l7 7 14-16" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round"/><text x="1180" y="350" class="item">Validate status</text>
+    <rect x="1122" y="378" width="224" height="46" rx="12" fill="#202b28" stroke="#3e6759"/><path d="M1143 393h23m-23 8h17m-17 8h20" stroke="#34d399" stroke-width="3"/><text x="1180" y="408" class="item">Parse and transform</text>
+    <rect x="1122" y="436" width="224" height="46" rx="12" fill="#202b28" stroke="#3e6759"/><path d="M1144 449h21v20h-21z" fill="none" stroke="#34d399" stroke-width="3"/><text x="1180" y="466" class="item">Store or route</text>
+    <text x="1234" y="522" text-anchor="middle" class="note">Log failures without exposing secrets.</text>
+  </g>
+  <text x="720" y="638" text-anchor="middle" class="sub">Use Secrets and provider authentication nodes so credentials stay out of request-building examples.</text>
+</svg>

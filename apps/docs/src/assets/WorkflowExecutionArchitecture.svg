@@ -1,0 +1,143 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+	<title id="title">Flow-Like workflow execution architecture</title>
+	<desc id="description">A board is authored and versioned, then an event invocation selects either local or remote execution. The runtime loads the board, node catalog, variables, and scoped credentials. The execution context follows typed pins and emits logs, state, A2UI updates, and stored artifacts.</desc>
+	<defs>
+		<linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#151519"/>
+			<stop offset="0.55" stop-color="#1b1b20"/>
+			<stop offset="1" stop-color="#111115"/>
+		</linearGradient>
+		<linearGradient id="engine" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#372520"/>
+			<stop offset="1" stop-color="#211d1e"/>
+		</linearGradient>
+		<pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+			<circle cx="2" cy="2" r="1.25" fill="#ffffff" opacity="0.065"/>
+		</pattern>
+		<filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+			<feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000000" flood-opacity="0.34"/>
+		</filter>
+		<filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1600" height="900">
+			<feGaussianBlur stdDeviation="10" result="blur"/>
+			<feMerge>
+				<feMergeNode in="blur"/>
+				<feMergeNode in="SourceGraphic"/>
+			</feMerge>
+		</filter>
+		<marker id="arrow-orange" markerWidth="22" markerHeight="22" refX="20" refY="11" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L22 11L0 22Z" fill="#ff7652"/>
+		</marker>
+		<marker id="arrow-orange-compact" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L12 6L0 12Z" fill="#ff7652"/>
+		</marker>
+		<marker id="arrow-cyan" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L14 7L0 14Z" fill="#59c7d8"/>
+		</marker>
+		<marker id="arrow-purple" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L14 7L0 14Z" fill="#a58aff"/>
+		</marker>
+		<marker id="arrow-amber" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L14 7L0 14Z" fill="#f1b35f"/>
+		</marker>
+	</defs>
+
+	<rect width="1600" height="900" fill="#111115"/>
+	<rect width="1600" height="900" rx="36" fill="url(#background)"/>
+	<rect x="28" y="28" width="1544" height="844" rx="28" fill="url(#dots)" stroke="#ffffff" stroke-opacity="0.08"/>
+	<circle cx="1000" cy="454" r="300" fill="#ff6744" opacity="0.04"/>
+
+	<text x="88" y="102" fill="#f4f0ec" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="42" font-weight="720">From event invocation to observable result</text>
+	<text x="88" y="143" fill="#aaa7a5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="21">Local and remote runs share the same board model, typed graph, and execution context.</text>
+	<text x="1480" y="106" text-anchor="end" fill="#ff7652" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700" letter-spacing="3">FLOW-LIKE · EXECUTION</text>
+
+	<!-- Author and persist -->
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="82" y="260" width="294" height="214" rx="25" fill="#202126" stroke="#59c7d8" stroke-opacity="0.56"/>
+		<rect x="116" y="294" width="94" height="28" rx="14" fill="#59c7d8" fill-opacity="0.13" stroke="#59c7d8" stroke-opacity="0.45"/>
+		<text x="163" y="314" text-anchor="middle" fill="#7ad8e7" font-size="12" font-weight="760" letter-spacing="1.5">AUTHOR</text>
+		<text x="116" y="371" fill="#f4f0ec" font-size="24" font-weight="700">Board</text>
+		<text x="116" y="402" fill="#aaa7a5" font-size="15">Nodes · pins · variables</text>
+		<line x1="116" y1="430" x2="342" y2="430" stroke="#ffffff" stroke-opacity="0.08"/>
+		<text x="116" y="457" fill="#cbc8c4" font-size="14">Edited in Desktop or Web</text>
+
+		<rect x="446" y="260" width="294" height="214" rx="25" fill="#202126" stroke="#4fd2a0" stroke-opacity="0.54"/>
+		<rect x="480" y="294" width="98" height="28" rx="14" fill="#4fd2a0" fill-opacity="0.12" stroke="#4fd2a0" stroke-opacity="0.43"/>
+		<text x="529" y="314" text-anchor="middle" fill="#73ddb5" font-size="12" font-weight="760" letter-spacing="1.5">PERSIST</text>
+		<text x="480" y="371" fill="#f4f0ec" font-size="24" font-weight="700">Board version</text>
+		<text x="480" y="402" fill="#aaa7a5" font-size="15">App metadata · board data</text>
+		<line x1="480" y1="430" x2="706" y2="430" stroke="#ffffff" stroke-opacity="0.08"/>
+		<text x="480" y="457" fill="#cbc8c4" font-size="14">Local or object-backed storage</text>
+	</g>
+	<path d="M376 367H420" fill="none" stroke="#ff7652" stroke-width="3.7" marker-end="url(#arrow-orange)" filter="url(#glow)"/>
+
+	<!-- Event -->
+	<path d="M740 367H784" fill="none" stroke="#ff7652" stroke-width="3.7" marker-end="url(#arrow-orange)" filter="url(#glow)"/>
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="810" y="238" width="316" height="258" rx="28" fill="#202126" stroke="#ff7652" stroke-opacity="0.64" stroke-width="2"/>
+		<rect x="844" y="272" width="98" height="28" rx="14" fill="#ff7652" fill-opacity="0.14" stroke="#ff7652" stroke-opacity="0.46"/>
+		<text x="893" y="292" text-anchor="middle" fill="#ff9a7e" font-size="12" font-weight="760" letter-spacing="1.5">INVOKE</text>
+		<text x="844" y="348" fill="#f4f0ec" font-size="24" font-weight="700">App event</text>
+		<text x="844" y="379" fill="#aaa7a5" font-size="15">Route · UI · API · schedule</text>
+		<line x1="844" y1="407" x2="1092" y2="407" stroke="#ffffff" stroke-opacity="0.08"/>
+		<text x="844" y="435" fill="#cbc8c4" font-size="14">Selects board, node, version</text>
+		<text x="844" y="459" fill="#cbc8c4" font-size="14">and Local or Remote mode</text>
+	</g>
+
+	<!-- Local/remote dispatch -->
+	<path d="M968 496V548H844V578" fill="none" stroke="#59c7d8" stroke-width="2.8" marker-end="url(#arrow-cyan)"/>
+	<path d="M968 496V548H1092V578" fill="none" stroke="#a58aff" stroke-width="2.8" marker-end="url(#arrow-purple)"/>
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="716" y="592" width="254" height="104" rx="20" fill="#202126" stroke="#59c7d8" stroke-opacity="0.56"/>
+		<text x="843" y="632" text-anchor="middle" fill="#7ad8e7" font-size="18" font-weight="700">Local</text>
+		<text x="843" y="658" text-anchor="middle" fill="#aaa7a5" font-size="14">Desktop runtime</text>
+		<text x="843" y="679" text-anchor="middle" fill="#aaa7a5" font-size="14">with local capabilities</text>
+
+		<rect x="990" y="592" width="254" height="104" rx="20" fill="#202126" stroke="#a58aff" stroke-opacity="0.56"/>
+		<text x="1117" y="632" text-anchor="middle" fill="#beaaff" font-size="18" font-weight="700">Remote</text>
+		<text x="1117" y="658" text-anchor="middle" fill="#aaa7a5" font-size="14">API dispatches to</text>
+		<text x="1117" y="679" text-anchor="middle" fill="#aaa7a5" font-size="14">an executor environment</text>
+	</g>
+
+	<!-- Engine -->
+	<path d="M843 696V742H980M1117 696V742H980" fill="none" stroke="#ff7652" stroke-width="2.7"/>
+	<path d="M980 742H1248V670H1264" fill="none" stroke="#ff7652" stroke-width="3.5" marker-end="url(#arrow-orange-compact)" filter="url(#glow)"/>
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="1268" y="238" width="250" height="458" rx="30" fill="url(#engine)" stroke="#ff7652" stroke-width="2.5"/>
+		<rect x="1302" y="272" width="112" height="28" rx="14" fill="#ff7652" fill-opacity="0.15" stroke="#ff7652" stroke-opacity="0.5"/>
+		<text x="1358" y="292" text-anchor="middle" fill="#ff9a7e" font-size="12" font-weight="760" letter-spacing="1.5">RUNTIME</text>
+		<text x="1302" y="347" fill="#f7f2ee" font-size="22" font-weight="720">ExecutionContext</text>
+		<text x="1302" y="379" fill="#b8b2ae" font-size="15">Run-scoped state and control</text>
+
+		<rect x="1302" y="416" width="182" height="50" rx="13" fill="#29262a" stroke="#4fd2a0" stroke-opacity="0.4"/>
+		<text x="1393" y="446" text-anchor="middle" fill="#d9d5d1" font-size="14">Load node catalog</text>
+		<rect x="1302" y="480" width="182" height="50" rx="13" fill="#29262a" stroke="#59c7d8" stroke-opacity="0.4"/>
+		<text x="1393" y="510" text-anchor="middle" fill="#d9d5d1" font-size="14">Resolve values</text>
+		<rect x="1302" y="544" width="182" height="50" rx="13" fill="#29262a" stroke="#a58aff" stroke-opacity="0.4"/>
+		<text x="1393" y="574" text-anchor="middle" fill="#d9d5d1" font-size="14">Follow typed pins</text>
+		<rect x="1302" y="608" width="182" height="50" rx="13" fill="#29262a" stroke="#f1b35f" stroke-opacity="0.4"/>
+		<text x="1393" y="638" text-anchor="middle" fill="#d9d5d1" font-size="14">Cancel · trace · log</text>
+	</g>
+
+	<!-- Outputs -->
+	<path d="M1393 696V738" fill="none" stroke="#ff7652" stroke-width="3.5" marker-end="url(#arrow-orange)"/>
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="1026" y="762" width="492" height="82" rx="20" fill="#202126" stroke="#ffffff" stroke-opacity="0.12"/>
+		<text x="1060" y="794" fill="#8e909a" font-size="12" font-weight="760" letter-spacing="1.4">EMIT + PERSIST</text>
+		<text x="1060" y="823" fill="#f4f0ec" font-size="17" font-weight="700">Logs · state · A2UI updates · artifacts</text>
+	</g>
+
+	<!-- Inputs callout -->
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="82" y="566" width="580" height="190" rx="24" fill="#202126" stroke="#f1b35f" stroke-opacity="0.5"/>
+		<text x="116" y="608" fill="#f6c779" font-size="13" font-weight="760" letter-spacing="1.5">RUNTIME INPUTS</text>
+		<text x="116" y="650" fill="#f4f0ec" font-size="19" font-weight="700">Board + catalog</text>
+		<text x="348" y="650" fill="#f4f0ec" font-size="19" font-weight="700">Variables + payload</text>
+		<text x="116" y="686" fill="#f4f0ec" font-size="19" font-weight="700">Scoped credentials</text>
+		<text x="348" y="686" fill="#f4f0ec" font-size="19" font-weight="700">User + OAuth context</text>
+		<line x1="116" y1="716" x2="628" y2="716" stroke="#ffffff" stroke-opacity="0.08"/>
+		<text x="116" y="740" fill="#aaa7a5" font-size="14">The selected environment supplies capabilities; the graph model stays the same.</text>
+	</g>
+	<path d="M662 662H700" fill="none" stroke="#f1b35f" stroke-width="2.6" marker-end="url(#arrow-amber)"/>
+
+	<text x="88" y="824" fill="#8e909a" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15">Execution architecture · one event runs in exactly one mode: Local or Remote</text>
+</svg>

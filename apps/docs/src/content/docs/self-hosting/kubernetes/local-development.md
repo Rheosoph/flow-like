@@ -1,220 +1,152 @@
 ---
 title: Local Development
-description: Run the Kubernetes backend locally using k3d.
+description: Build and run the Kubernetes backend locally with k3d.
 sidebar:
   order: 40
 ---
 
-k3d creates a lightweight Kubernetes cluster inside Docker, giving you a production-like environment locally with full observability (Prometheus, Grafana, Tempo).
+The checked-in k3d helper creates a local cluster and registry, builds the
+application images, writes a gitignored Helm values file, and installs the
+chart.
 
 ## Prerequisites
 
-Install the required tools:
+Install and start:
+
+- Docker
+- k3d
+- `kubectl`
+- Helm 3
+- OpenSSL
+
+Allocate enough Docker resources for the application, single-node database,
+Redis, and the enabled monitoring stack. Eight GB of memory is a practical
+starting point.
+
+## Configure Storage
+
+From `apps/backend/kubernetes`, create the ignored local environment file:
 
 ```bash
-# macOS
-brew install k3d kubectl helm docker
-
-# Linux (k3d)
-curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
-# Also install kubectl and helm from their official sources
+cp .env.example .env
 ```
 
-Make sure Docker is running with sufficient resources (8GB RAM recommended).
+Set `STORAGE_PROVIDER` and its credentials. Azure and GCP are the
+straight-through choices for the checked-in API build. The helper also accepts
+`aws` and `s3`, but that API target currently omits the `aws` runtime feature;
+those selections do not produce a ready API without rebuilding it. R2 is
+compiled in, but scoped operations additionally require `R2_API_TOKEN`, which
+the generated local values do not pass through.
 
-## Quick Start
+Also configure the meta, content, and logs bucket or container names. The
+setup script validates the selected provider; it does not install a local
+object store or create buckets.
+
+Create the ignored `helm/values-secrets.yaml` override so asynchronous
+requests use the implemented warm HTTP pool:
+
+```yaml
+execution:
+  backend: http
+  asyncBackend: http
+```
+
+The generated `values-local.yaml` inherits the chart's `redis` asynchronous
+default, but the checked-in executor pool does not consume that queue. The
+setup script automatically includes `values-secrets.yaml` when present.
+
+## Create the Cluster
 
 ```bash
 cd apps/backend/kubernetes
 ./scripts/k3d-setup.sh
 ```
 
-This creates a complete local Kubernetes environment in about 5 minutes.
+The script:
 
-## What Gets Deployed
+1. Creates a k3d cluster with one server and two agents.
+2. Creates a local registry exposed at `localhost:5111`.
+3. Builds and pushes API, web, executor, and migration images.
+4. Generates the `BACKEND_*` execution-key values.
+5. Writes `helm/values-local.yaml`, which is gitignored.
+6. Installs the chart with one internal CockroachDB pod, Redis, the warm
+   executor pool, and the monitoring stack.
 
-| Component | Description |
-|-----------|-------------|
-| **k3d cluster** | 1 server + 2 agents |
-| **Local registry** | `localhost:5111` (external) / `flow-like-registry:5000` (internal) |
-| **CockroachDB** | 3-node distributed database |
-| **Redis** | Job queue and execution state |
-| **API** | Flow-Like API service (port 8080) |
-| **Executor Pool** | Workflow execution workers |
-| **Prometheus** | Metrics collection |
-| **Grafana** | Dashboards and visualization |
-| **Tempo** | Distributed tracing |
+Kata is disabled locally. With the override above, the warm executor pool
+handles both synchronous and asynchronous execution.
 
-:::note[Storage]
-Storage is external by default. The k3d setup uses placeholder credentials—configure your own S3-compatible storage (AWS S3, Cloudflare R2, MinIO, etc.) in `values.yaml` or via `--set` flags.
-:::
+## Local Endpoints
 
-## Accessing Services
+| Service | Access |
+| --- | --- |
+| API | `http://localhost:8080` through the k3d load balancer and Traefik |
+| Grafana | `http://localhost:3002` |
+| Web | `kubectl port-forward -n flow-like service/flow-like-web 3001:3001` |
+| Prometheus | `kubectl port-forward -n flow-like service/flow-like-prometheus 9090:9090` |
+| Cockroach SQL | `kubectl port-forward -n flow-like service/flow-like-cockroachdb-public 26257:26257` |
 
-### Port Forwarding
+The generated local values set the Grafana login to `admin` / `admin`. Do not
+reuse that configuration outside local development.
 
-After deployment, access services via port-forwarding:
-
-```bash
-# API (main endpoint) - exposed via nodePort, no port-forward needed
-# Access at http://localhost:8080
-
-# Grafana (monitoring dashboards) - exposed via nodePort at 30002
-# Access at http://localhost:30002
-
-# Prometheus (raw metrics)
-kubectl port-forward -n flow-like svc/flow-like-prometheus 9090:9090 &
-```
-
-### Service URLs
-
-| Service | Access Method | URL |
-|---------|--------------|-----|
-| API | NodePort (automatic) | http://localhost:8080 |
-| Grafana | NodePort (automatic) | http://localhost:30002 |
-| Prometheus | `kubectl port-forward svc/flow-like-prometheus 9090:9090` | http://localhost:9090 |
-| CockroachDB | `kubectl port-forward svc/flow-like-cockroachdb-public 26257:26257` | localhost:26257 |
-
-### Grafana Access
-
-Default credentials:
-- **Username**: `admin`
-- **Password**: Retrieved from secret:
+## Rebuild and Inspect
 
 ```bash
-kubectl get secret -n flow-like flow-like-grafana \
-  -o jsonpath='{.data.admin-password}' | base64 -d && echo
-```
-
-## Monitoring Dashboards
-
-Grafana comes pre-configured with these dashboards:
-
-| Dashboard | Description |
-|-----------|-------------|
-| **System Overview** | CPU, memory, network across all pods |
-| **API Service** | Request rates, latencies, error rates |
-| **Executor Pool** | Job queue depth, execution times, worker status |
-| **CockroachDB** | Query performance, replication lag, storage |
-| **Redis** | Commands/sec, memory, connected clients |
-| **Tracing** | Request traces via Tempo integration |
-
-## Common Operations
-
-### View Logs
-
-```bash
-# API logs
-kubectl logs -f deployment/flow-like-api -n flow-like
-
-# Executor logs
-kubectl logs -f deployment/flow-like-executor-pool -n flow-like
-
-# All pods
-kubectl logs -f -l app.kubernetes.io/instance=flow-like -n flow-like
-```
-
-### Rebuild After Code Changes
-
-```bash
+# Rebuild all local images and restart Deployments
 ./scripts/k3d-setup.sh rebuild
-```
 
-This rebuilds Docker images, pushes to the local registry, and triggers a rolling restart.
-
-### Cluster Management
-
-```bash
-# Show status
+# Show cluster, pod, and service status
 ./scripts/k3d-setup.sh status
 
-# Delete cluster
-./scripts/k3d-setup.sh delete
-
-# Shell into API pod
-kubectl exec -it deployment/flow-like-api -n flow-like -- /bin/sh
-```
-
-### Helm Operations
-
-```bash
-# Check current values
+# Inspect the effective values
 helm get values flow-like -n flow-like
 
-# Upgrade with new values
-helm upgrade flow-like ./helm -n flow-like --set api.replicas=2
-
-# View release history
-helm history flow-like -n flow-like
+# Follow API or executor output
+kubectl logs -f deployment/flow-like-api -n flow-like
+kubectl logs -f deployment/flow-like-executor-pool -n flow-like
 ```
+
+The build script reuses the existing cluster and registry. Run the full setup
+again after changing chart resources that a Deployment restart cannot apply.
+
+## Verify Execution Keys
+
+The chart-generated Secret is `flow-like-api-keys` because local values set
+`fullnameOverride: flow-like`:
+
+```bash
+kubectl get secret flow-like-api-keys -n flow-like
+kubectl get deployment flow-like-executor-pool -n flow-like \
+  -o jsonpath='{.spec.template.spec.containers[0].env}'
+```
+
+Avoid printing the private `BACKEND_KEY`. The executor only reads
+`BACKEND_PUB` and `BACKEND_KID`; the API reads all three keys.
 
 ## Troubleshooting
 
-### Pods Not Starting
-
 ```bash
-# Check pod status
 kubectl get pods -n flow-like
-
-# Describe failing pod
-kubectl describe pod <pod-name> -n flow-like
-
-# Check events
-kubectl get events -n flow-like --sort-by='.lastTimestamp'
+kubectl get events -n flow-like --sort-by=.lastTimestamp
+helm status flow-like -n flow-like
 ```
 
-### Database Connection Issues
+Typical causes:
+
+- `ImagePullBackOff`: verify `curl http://localhost:5111/v2/_catalog`, then run
+  the rebuild action.
+- Storage startup failure: check the provider variables in
+  `apps/backend/kubernetes/.env` and confirm the buckets already exist.
+- Pending PVC: inspect the k3d default `StorageClass` and the associated PVC.
+- External request failure: inspect the generated NetworkPolicies and add
+  required egress ports to local values.
+- Migration failure: inspect the Helm release status and recent namespace
+  events; successful hook Jobs can be deleted automatically.
+
+## Remove the Cluster
 
 ```bash
-# Check CockroachDB logs
-kubectl logs -f statefulset/flow-like-cockroachdb -n flow-like
-
-# Verify database is ready
-kubectl exec -it flow-like-cockroachdb-0 -n flow-like -- cockroach sql --insecure \
-  -e "SHOW DATABASES;"
+./scripts/k3d-setup.sh delete
 ```
 
-### Image Pull Errors
-
-```bash
-# Verify local registry
-curl http://localhost:5111/v2/_catalog
-
-# Rebuild and push images
-./scripts/k3d-setup.sh rebuild
-```
-
-### Network Policy Issues
-
-If the API can't reach external services (like authentication providers), check the network policy:
-
-```bash
-# View network policies
-kubectl get networkpolicy -n flow-like
-
-# Test external connectivity from API pod
-kubectl exec -it deployment/flow-like-api -n flow-like -- \
-  wget -qO- --timeout=5 https://httpbin.org/ip || echo "Failed"
-```
-
-The network policy allows egress to external HTTPS (port 443) by default. If you need additional ports, update the `networkPolicy` section in your Helm values.
-
-### Executor JWT Verification
-
-If executions fail with authentication errors in the executor:
-
-```bash
-# Check executor logs
-kubectl logs -f deployment/flow-like-executor-pool -n flow-like
-
-# Verify BACKEND_PUB secret is set
-kubectl get secret flow-like-api-keys -n flow-like -o jsonpath='{.data.BACKEND_PUB}' | base64 -d
-```
-
-The executor needs `BACKEND_PUB` and `BACKEND_KID` environment variables from the API keys secret to verify execution JWTs.
-
-## Next Steps
-
-- [Configuration Reference](/self-hosting/kubernetes/configuration/) — All Helm values
-- [Production Deployment](/self-hosting/kubernetes/installation/) — Deploy to a real cluster
-- [Storage Setup](/self-hosting/kubernetes/storage/) — Configure S3-compatible storage
+This deletes the k3d cluster and its workloads. The local source tree,
+`.env`, generated execution-key PEM files, and Docker build cache remain.

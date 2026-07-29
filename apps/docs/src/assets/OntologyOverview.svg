@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like ontology architecture</title>
+  <desc id="desc">Existing data tables remain in place while ontology metadata maps them into object types, link types, and governed actions for search, graph traversal, and controlled operations.</desc>
+  <defs>
+    <linearGradient id="ontology-bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <linearGradient id="ontology-coral" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff8a68"/><stop offset="1" stop-color="#ff5d3d"/></linearGradient>
+    <pattern id="ontology-grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <marker id="ontology-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.ontology-kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.ontology-heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.ontology-sub{fill:#a7adb8;font-size:17px}.ontology-section{fill:#f7f8fa;font-size:22px;font-weight:720}.ontology-item{fill:#d8dbe1;font-size:16px;font-weight:650}.ontology-list{fill:#d8dbe1;font-size:15px;font-weight:650}.ontology-note{fill:#929aa7;font-size:14px}.ontology-tiny{fill:#89919e;font-size:13px;font-weight:700;letter-spacing:1.1px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#ontology-bg)"/><rect width="1440" height="720" rx="28" fill="url(#ontology-grid)"/>
+  <rect x="64" y="58" width="286" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="ontology-kicker">DATA STUDIO • ONTOLOGY</text>
+  <text x="64" y="136" class="ontology-heading">Map meaning onto data you already own</text>
+  <text x="64" y="169" class="ontology-sub">The ontology stores mappings and contracts; the source tables remain in place.</text>
+
+  <path d="M340 384H392" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#ontology-arrow)"/>
+  <path d="M962 384H1014" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#ontology-arrow)"/>
+
+  <g>
+    <rect x="64" y="234" width="276" height="300" rx="25" fill="#191c22" stroke="#373d48" stroke-width="2"/>
+    <text x="94" y="276" class="ontology-tiny">SOURCE</text><text x="94" y="311" class="ontology-section">Existing tables</text>
+    <rect x="94" y="340" width="216" height="46" rx="12" fill="#232730" stroke="#414754"/><circle cx="118" cy="363" r="6" fill="#ff7656"/><text x="140" y="369" class="ontology-item">People</text><text x="278" y="369" text-anchor="end" class="ontology-note">rows</text>
+    <rect x="94" y="398" width="216" height="46" rx="12" fill="#232730" stroke="#414754"/><circle cx="118" cy="421" r="6" fill="#a78bfa"/><text x="140" y="427" class="ontology-item">Vehicles</text><text x="278" y="427" text-anchor="end" class="ontology-note">rows</text>
+    <rect x="94" y="456" width="216" height="46" rx="12" fill="#232730" stroke="#414754"/><circle cx="118" cy="479" r="6" fill="#34d399"/><text x="140" y="485" class="ontology-item">Shipments</text><text x="278" y="485" text-anchor="end" class="ontology-note">rows</text>
+  </g>
+
+  <g>
+    <rect x="404" y="202" width="558" height="364" rx="30" fill="#1d1d22" stroke="#ff7656" stroke-width="2"/>
+    <rect x="434" y="232" width="68" height="68" rx="20" fill="url(#ontology-coral)"/>
+    <circle cx="458" cy="260" r="7" fill="#16181c"/><circle cx="480" cy="249" r="7" fill="#16181c"/><circle cx="480" cy="277" r="7" fill="#16181c"/><path d="M464 257l10-5m-10 12 10 8" stroke="#16181c" stroke-width="4" stroke-linecap="round"/>
+    <text x="528" y="255" class="ontology-tiny">SEMANTIC LAYER</text><text x="528" y="290" class="ontology-section">Ontology metadata</text>
+    <rect x="434" y="332" width="150" height="174" rx="18" fill="#292327" stroke="#5d3c35"/>
+    <text x="459" y="365" class="ontology-tiny">OBJECT TYPES</text><text x="459" y="400" class="ontology-list">Person</text><text x="459" y="431" class="ontology-list">Vehicle</text><text x="459" y="462" class="ontology-list">Shipment</text>
+    <rect x="608" y="332" width="150" height="174" rx="18" fill="#282534" stroke="#574e71"/>
+    <text x="633" y="365" class="ontology-tiny">LINK TYPES</text><text x="633" y="400" class="ontology-list">drives</text><text x="633" y="431" class="ontology-list">carries</text><text x="633" y="462" class="ontology-list">ships_to</text>
+    <rect x="782" y="332" width="150" height="174" rx="18" fill="#202b28" stroke="#3e6759"/>
+    <text x="807" y="365" class="ontology-tiny">ACTIONS</text><text x="807" y="400" class="ontology-list">Approve</text><text x="807" y="431" class="ontology-list">Enrich</text><text x="807" y="462" class="ontology-list">Dispatch</text>
+  </g>
+
+  <g>
+    <rect x="1026" y="234" width="350" height="300" rx="25" fill="#1b2422" stroke="#34d399" stroke-width="2"/>
+    <text x="1056" y="276" class="ontology-tiny">USE</text><text x="1056" y="311" class="ontology-section">Explore and act</text>
+    <rect x="1056" y="340" width="290" height="46" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="1080" cy="363" r="6" fill="#34d399"/><text x="1102" y="369" class="ontology-item">Search objects</text>
+    <rect x="1056" y="398" width="290" height="46" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="1080" cy="421" r="6" fill="#a78bfa"/><text x="1102" y="427" class="ontology-item">Traverse relationships</text>
+    <rect x="1056" y="456" width="290" height="46" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="1080" cy="479" r="6" fill="#ff7656"/><text x="1102" y="485" class="ontology-item">Run governed actions</text>
+  </g>
+
+  <rect x="250" y="612" width="940" height="54" rx="18" fill="#1d2026" stroke="#3a404a" stroke-width="2"/>
+  <circle cx="286" cy="639" r="7" fill="#34d399"/><text x="308" y="645" class="ontology-item">Metadata only</text><text x="470" y="645" class="ontology-note">No source rows are copied when the ontology is created.</text>
+</svg>

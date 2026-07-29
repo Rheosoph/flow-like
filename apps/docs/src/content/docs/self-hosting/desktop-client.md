@@ -25,6 +25,10 @@ set FLOW_LIKE_API_URL=https://your-api.example.com
 flow-like.exe
 ```
 
+The desktop uses the value exactly as provided. Do not define
+`FLOW_LIKE_API_URL` as an empty string; an explicitly empty value overrides the
+build-time and hosted defaults and is a configuration error.
+
 ## Configuration Options
 
 | Variable | Description | Example |
@@ -62,7 +66,11 @@ After configuring, verify the connection:
 Ensure your API is reachable from the desktop machine:
 
 ```bash
-curl -v https://your-api.example.com/health
+# Docker Compose public gateway
+curl -v https://your-compose.example.com/health
+
+# Kubernetes API / Ingress
+curl -v https://your-kubernetes-api.example.com/health/live
 ```
 
 ### SSL/TLS errors

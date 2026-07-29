@@ -1,364 +1,306 @@
 ---
 title: Widget Builder Guide
-description: Learn how to create and customize widgets using the visual Widget Builder
+description: Build and version reusable A2UI component trees with Flow-Like's visual Widget Builder
 ---
 
 import { Steps, Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
-# Widget Builder Guide
+A Widget is a reusable A2UI component tree owned by an app. Use one for a
+status card, navigation block, form, list item, or other interface pattern that
+should be inserted into one or more Pages without copying its internal
+components.
 
-The Widget Builder is a visual tool for creating reusable UI components (widgets) that can be embedded in your apps, pages, and flows.
+![The Widgets workspace with a rendered Widget preview and metadata](../../../assets/WidgetsOverview.webp)
 
-## Overview
-
-Widgets are self-contained UI components that:
-
-- Can be customized through **customization options**
-- Support **versioning** for safe updates
-- Can be shared across your organization
-- Render natively on all platforms
-
----
-
-## Getting Started
+## Open the builder
 
 <Steps>
-
-1. **Open the Widget Builder**
-
-   Navigate to **Studio > Widgets** and click **New Widget**.
-
-2. **Choose a Template**
-
-   Start from a blank widget or choose a template:
-   - **Card Widget** - Basic card layout
-   - **Form Widget** - Input form with validation
-   - **List Widget** - Dynamic list display
-   - **Dashboard Widget** - Stats and metrics display
-
-3. **Design Your Widget**
-
-   Use the visual canvas to drag and drop components.
-
-4. **Add Customization Options**
-
-   Define which properties users can customize.
-
-5. **Publish Your Widget**
-
-   Version and publish for use across your apps.
-
+1. Open an app and select **Widgets**.
+2. Select **Create Widget**, then enter a name and optional description.
+3. Open the new Widget's details view.
+4. Select **Open Builder**.
 </Steps>
 
----
+New Widgets are blank. The current creation flow does not include a template
+picker or a separate package-publishing wizard.
 
-## The Builder Interface
+![The current visual Widget Builder in dark mode](../../../assets/WidgetBuilder.webp)
 
-### Canvas
+## Builder workspace
 
-The main design area where you arrange components visually.
+| Area | What it controls |
+| --- | --- |
+| **Components** | Components that can be added to the Widget |
+| **Hierarchy** | The normalized component tree and selection |
+| **Canvas** | Live rendered Widget surface |
+| **Inspector** | Properties, bindings, layout, style, and actions for the selected component |
+| **Dev Mode** | Underlying normalized JSON for inspection or validated editing |
+| **Preview** | Rendered Widget at a selected responsive size |
+| **Settings** | Widget metadata, Events, Versions, and technical information |
 
-- **Drag & Drop** - Add components from the left panel
-- **Select** - Click to select and edit components
-- **Multi-select** - Shift+click for multiple components
-- **Resize** - Drag handles to resize
-- **Reorder** - Drag in the layer tree
+The header also provides copy, cut, paste, delete, save, and preview controls.
+Component changes are saved after a short debounce; **Save Now** flushes a
+pending change immediately.
 
-### Component Panel
+## Build a status card
 
-Browse available components organized by category:
-
-- **Layout** - Row, Column, Grid, Stack
-- **Display** - Text, Image, Icon, Divider
-- **Interactive** - Button, TextField, Select
-- **Container** - Card, Modal, Tabs
-
-### Properties Panel
-
-Edit the selected component's properties:
-
-- **Content** - Text, images, data bindings
-- **Style** - Tailwind classes, custom styles
-- **Actions** - Click handlers, form submissions
-- **Responsive** - Breakpoint-specific overrides
-
-### Data Panel
-
-Manage the widget's data model:
-
-- **Add Data** - Define data entries
-- **Bind Data** - Connect components to data paths
-- **Mock Data** - Preview with sample data
-
----
-
-## Building Your First Widget
-
-### Example: User Profile Card
-
-Let's build a user profile card widget:
+This example creates one focused, reusable surface.
 
 <Steps>
+1. **Create the outer layout**
 
-1. **Add a Card Container**
+   Add a `card` or `column` as the root. Use semantic theme classes such as
+   `bg-card`, `text-card-foreground`, and `border-border`.
 
-   Drag a **Card** component onto the canvas.
+2. **Add the visible content**
 
-2. **Add Layout**
+   Add a heading `text`, a value `text`, a `badge` for state, and an optional
+   `progress` component.
 
-   Inside the card, add a **Row** for horizontal layout.
+3. **Organize the hierarchy**
 
-3. **Add Avatar**
+   Put related text in a `column`, place the badge beside the heading with a
+   `row`, and keep the component tree shallow.
 
-   Add an **Image** component for the avatar:
-   ```
-   Binding: /user/avatar
-   Fallback: /default-avatar.png
-   Style: w-16 h-16 rounded-full
-   ```
+4. **Bind dynamic values**
 
-4. **Add User Info**
+   Select a supported property in the Inspector and bind it to the Widget data
+   model, or leave it as a useful literal default.
 
-   Add a **Column** next to the image:
-   - **Text** for name: `{ path: "/user/name" }`
-   - **Text** for role: `{ path: "/user/role" }`
+5. **Add an interaction**
 
-5. **Add Customization**
+   Define a named Widget Event in **Settings → Events**, add a `button`, and
+   configure the button action to emit that Event.
 
-   Go to **Customization** tab and add:
-   - `showRole` (boolean) - Toggle role visibility
-   - `avatarSize` (select) - sm, md, lg
+6. **Preview edge cases**
 
+   Check narrow width, long labels, empty values, loading state, keyboard
+   focus, and both themes.
 </Steps>
 
----
+## Current Widget model
 
-## Customization Options
+The persisted Widget contains:
 
-Customization options let users configure your widget without editing its structure.
+```typescript
+interface IWidget {
+  id: string;
+  name: string;
+  description?: string;
+  rootComponentId: string;
+  components: SurfaceComponent[];
+  dataModel: DataEntry[];
+  customizationOptions: CustomizationOption[];
+  exposedProps?: ExposedProp[];
+  actions?: WidgetAction[];
+  tags: string[];
+  version?: [number, number, number];
+  createdAt: string;
+  updatedAt: string;
+}
+```
 
-### Option Types
+`rootComponentId`, `components`, and `dataModel` form the renderable surface.
+`actions` is the public interaction contract. `exposedProps` describes values
+that an instance may override without editing the Widget definition.
 
-| Type | Description | Example |
-|------|-------------|---------|
-| `string` | Text input | Title, label |
-| `number` | Numeric input | Count, size |
-| `boolean` | Toggle switch | Show/hide features |
-| `select` | Dropdown | Size options, variants |
-| `color` | Color picker | Theme colors |
-| `image` | Image upload | Custom images |
-| `data` | Data path | Dynamic content source |
+## Data binding
 
-### Defining Options
+Static properties use literal `BoundValue` objects:
 
 ```json
 {
-  "customization": [
+  "type": "text",
+  "content": { "literalString": "Service status" },
+  "weight": { "literalString": "semibold" }
+}
+```
+
+A data-bound property uses a path:
+
+```json
+{
+  "type": "text",
+  "content": {
+    "path": "$.data.status.label",
+    "defaultValue": "Unknown"
+  }
+}
+```
+
+Use element-specific workflow nodes when a Flow owns the visible value:
+
+- **Set Element Text**, **Set Badge Content**, or **Set Markdown Content**
+- **Set Element Value**
+- **Set Progress**
+- **Push Data to Chart**
+- **Push CSV to Table** or **Update Table**
+
+Keep the Widget data model for values intentionally shared by several
+components.
+
+## Widget Events
+
+Open **Settings → Events** to define the interactions the Widget exposes:
+
+```typescript
+interface WidgetAction {
+  id: string;
+  label: string;
+  description?: string;
+  icon?: string;
+  contextSchema: WidgetActionContextField[];
+}
+```
+
+An interactive component inside the Widget triggers one of those IDs:
+
+```json
+{
+  "type": "button",
+  "label": { "literalString": "Acknowledge" },
+  "actions": [
     {
-      "id": "title",
-      "label": "Widget Title",
-      "type": "string",
-      "defaultValue": "My Widget"
-    },
-    {
-      "id": "variant",
-      "label": "Style Variant",
-      "type": "select",
-      "options": [
-        { "value": "default", "label": "Default" },
-        { "value": "compact", "label": "Compact" }
-      ],
-      "defaultValue": "default"
-    },
-    {
-      "id": "showFooter",
-      "label": "Show Footer",
-      "type": "boolean",
-      "defaultValue": true
+      "name": "widget_event",
+      "context": {
+        "actionId": "acknowledge"
+      }
     }
   ]
 }
 ```
 
-### Using Options in Components
+`widget_event` is the runtime action type; `context.actionId` selects the
+Widget action. That Widget-level action must exist before a containing Page
+can bind it to behavior. Use one descriptive action per purpose rather than
+routing every button through a generic catch-all.
 
-Reference customization options using the `$options` prefix:
-
-```json
-{
-  "type": "Text",
-  "props": {
-    "content": { "path": "$options/title" }
-  }
-}
-```
-
-Conditional rendering based on options:
-
-```json
-{
-  "type": "Column",
-  "condition": { "path": "$options/showFooter" },
-  "children": [...]
-}
-```
-
----
-
-## Data Binding
-
-### Widget Data Model
-
-Each widget has its own data model scoped to the widget instance:
-
-```
-/title          - Widget title
-/items          - List of items
-/items/0/name   - First item's name
-/user/avatar    - User avatar URL
-```
-
-### Binding to Data
-
-Use `BoundValue` objects to bind component props to data:
-
-```json
-{
-  "type": "Text",
-  "props": {
-    "content": { "path": "/title" }
-  }
-}
-```
-
-### External Data
-
-Widgets can receive data from parent contexts:
-
-```json
-{
-  "type": "WidgetInstance",
-  "props": {
-    "widgetId": "user-card",
-    "data": {
-      "user": { "path": "/currentUser" }
-    }
-  }
-}
-```
-
----
-
-## Styling Widgets
-
-### Tailwind CSS
-
-Use Tailwind classes for styling:
-
-```json
-{
-  "style": {
-    "className": "p-6 bg-white dark:bg-gray-800 rounded-xl shadow-lg hover:shadow-xl transition-all"
-  }
-}
-```
-
-### Responsive Design
-
-Add responsive breakpoints:
-
-```json
-{
-  "style": {
-    "className": "p-4 md:p-6 lg:p-8 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
-  }
-}
-```
-
-### Dark Mode
-
-Support dark mode with `dark:` prefix:
-
-```json
-{
-  "style": {
-    "className": "bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100"
-  }
-}
-```
-
----
-
-## Versioning
-
-Widgets support semantic versioning (major.minor.patch):
-
-### Version Numbers
-
-- **Major** (1.0.0 → 2.0.0): Breaking changes
-- **Minor** (1.0.0 → 1.1.0): New features, backward compatible
-- **Patch** (1.0.0 → 1.0.1): Bug fixes
-
-### Publishing Versions
-
-<Steps>
-
-1. Make your changes in the builder
-2. Click **Publish** in the toolbar
-3. Select version increment type
-4. Add release notes
-5. Confirm publish
-
-</Steps>
-
-<Aside type="caution">
-Major version changes may break existing widget instances. Users will be notified to update.
+<Aside type="note" title="Current instance-editor boundary">
+  The runtime supports exposed-property values and Widget action bindings.
+  The repository also contains a dedicated instance inspector, but the current
+  Page Builder does not mount that inspector. Normal drag-and-drop insertion
+  therefore creates empty instance overrides and bindings. Do not expect
+  per-instance controls in the Page Builder until that host integration is
+  enabled.
 </Aside>
 
----
+## Exposed properties
 
-## Best Practices
+An exposed property maps an instance-facing option to one internal component
+property:
 
-### Design Guidelines
+```typescript
+interface ExposedProp {
+  id: string;
+  label: string;
+  description?: string;
+  targetComponentId: string;
+  propertyPath: string;
+  propType:
+    | "String"
+    | "Number"
+    | "Boolean"
+    | "Color"
+    | "ImageUrl"
+    | "Icon"
+    | "Json"
+    | "TailwindClass"
+    | "StyleObject"
+    | "BoundValue"
+    | { Enum: { choices: string[] } };
+  group?: string;
+}
+```
 
-- **Keep widgets focused** - One purpose per widget
-- **Use semantic structure** - Proper heading hierarchy
-- **Support dark mode** - Test both themes
-- **Plan for responsiveness** - Test all breakpoints
+For example, expose the outer card's accent class, a heading's `content`, or a
+metric's bound value. Keep internal spacing and structure private unless a Page
+author genuinely needs to change them.
 
-### Performance
+At present, these definitions are mainly populated through validated JSON or
+agent tooling and displayed by the Widget details experience; the visual
+Settings panel does not provide a complete exposed-property editor.
 
-- **Minimize nesting** - Flatten component hierarchy
-- **Use lazy loading** - For images and heavy content
-- **Optimize data** - Only bind necessary data
+## Settings
 
-### Accessibility
+Select **Settings** in the builder header.
 
-- **Use semantic components** - Buttons, headings, labels
-- **Add alt text** - For all images
-- **Support keyboard** - All interactive elements
-- **Test with screen readers** - Verify announcements
+### General
 
----
+Edit the name, description, and tags, then select **Save Metadata**.
 
-## FlowPilot Integration
+### Events
 
-Use FlowPilot to generate or modify widgets with AI:
+Add, rename, describe, or remove Widget Events, then select **Save Events**.
 
-1. Select a widget or component
-2. Click **Edit with FlowPilot** in the toolbar
-3. Describe your changes:
-   - "Add a loading state to this button"
-   - "Make this card responsive with 2 columns on mobile"
-   - "Add hover animations to all cards"
+### Versions
 
-<Aside type="tip">
-FlowPilot understands context - it knows your current widget structure and can make targeted improvements.
-</Aside>
+The Versions tab loads existing snapshots and creates a new Patch, Minor, or
+Major snapshot. Creating a version saves the current Widget first.
 
----
+| Version | Use when |
+| --- | --- |
+| **Patch** | Correcting a compatible implementation detail |
+| **Minor** | Adding compatible content or behavior |
+| **Major** | Changing behavior or structure that existing uses should review |
 
-## Next Steps
+There is no release-note form or separate **Publish** step in the current
+builder.
 
-- [A2UI Component Reference](/reference/a2ui-components) - Full component documentation
-- [FlowPilot UI Generation](/reference/flowpilot-ui) - AI-powered UI generation
+### Advanced
+
+Advanced shows the Widget ID, root component ID, selected version, timestamps,
+component count, and data-model entry count. These fields are informational.
+
+## Insert a Widget into a Page
+
+Open a Page in the Page Builder, locate the Widget in the component palette,
+and drag it into a compatible container. The Page stores a Widget reference
+and creates a `widgetInstance` component:
+
+```json
+{
+  "type": "widgetInstance",
+  "instanceId": "widget-status-card-instance",
+  "widgetId": "status-card",
+  "appId": "app-id",
+  "exposedPropValues": {},
+  "actionBindings": {}
+}
+```
+
+The Page owns the instance reference and configuration; the original Widget
+continues to own its reusable component tree.
+
+## Design checklist
+
+<CardGrid>
+  <Card title="One reusable job" icon="puzzle">
+    Keep a Widget focused enough that its name and public actions are obvious.
+  </Card>
+  <Card title="Useful defaults" icon="approve-check">
+    A newly inserted Widget should render meaningful placeholder content before
+    data is connected.
+  </Card>
+  <Card title="Theme-safe color" icon="moon">
+    Prefer semantic theme tokens and verify light and dark mode.
+  </Card>
+  <Card title="Accessible states" icon="person">
+    Label inputs, describe images, preserve focus order, and make loading and
+    error states visible.
+  </Card>
+</CardGrid>
+
+- Use stable semantic component IDs.
+- Test empty, long, and narrow content.
+- Avoid deeply nested layout containers.
+- Declare every interactive action at the Widget level.
+- Use a Major version when existing instances may need review.
+- Verify the rendered Widget, not only the hierarchy view.
+
+## Related guides
+
+- [Widgets overview](/apps/widgets/)
+- [A2UI component reference](/reference/a2ui-components/)
+- [Visual Builder](/dev/a2ui/visual-builder/)
+- [Pages](/dev/a2ui/pages/)
+- [FlowPilot UI generation](/reference/flowpilot-ui/)

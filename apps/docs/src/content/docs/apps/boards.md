@@ -1,14 +1,19 @@
 ---
-title: Boards
-description: Build Flows with Boards
+title: Flows
+description: Create and manage project Flows
 sidebar:
   order: 25
 ---
 
-In the **Flows** section of your app, you can create and manage your *workflows* as **Boards**.
+In your app’s **Flows** section, the **Project Flows** screen lets you create
+and manage application workflows.
 
-Within an app, you can create any number of **Boards**, and each **Board** can contain multiple **Flows**.
+Each card represents one **Flow**, which is stored internally as a board. It
+summarizes the Flow’s stage, execution mode, log level, nodes, variables, and
+pages.
 
-By default, new apps include an **Initial Board**. Once you open it, you can start building your first **Flow** in our [Studio](/studio/overview/) builder environment. This is where the magic happens!
+An app can contain any number of Flows. Open an existing one, such as
+**Customer Support Automation** in the example below, or select **Create New
+Flow** to start another in the [Studio](/studio/overview/) builder.
 
-![A screenshot of Flow-Like Desktop showing the Boards section of a Flow-Like app with an initial Board](../../../assets/AppBoards.webp)
+![The Project Flows screen in Flow-Like Desktop, showing the Customer Support Automation Flow](../../../assets/AppBoards.webp)

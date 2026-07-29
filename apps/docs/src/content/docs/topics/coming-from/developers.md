@@ -1,241 +1,74 @@
 ---
 title: For Developers
-description: Translating programming concepts to Flow-Like's visual paradigm
+description: Translate programming concepts into Flow-Like's typed visual workflows
 sidebar:
   order: 3
 ---
 
-Coming from a **traditional coding background**? This guide translates familiar programming concepts to Flow-Like's visual workflow approach. Whether you're a Python dev, JavaScript engineer, or seasoned systems programmer, you'll find the mental models transfer well.
+Flow-Like is easiest to understand as a typed, event-driven programming
+environment whose source is a graph. Nodes perform work, pins define inputs and
+outputs, and wires carry execution or data between nodes.
 
-## The Core Paradigm Shift
+## Start with the object model
 
-Instead of writing code like:
+| Flow-Like concept | Closest programming concept |
+| --- | --- |
+| **App** | Project boundary containing executable logic, interfaces, data, and delivery settings |
+| **Flow** | Executable graph; stored internally as a board |
+| **Event node** | Entry function inside a Flow |
+| **App Event** | Trigger configuration that targets an event node |
+| **Node** | Typed operation or function call |
+| **Pins and wires** | Function arguments, return values, and control flow |
+| **Function** | Reusable, typed function defined within a Flow |
+| **Layer** | Nested or collapsed graph used for abstraction |
+| **Variable** | Board-level in-memory state |
+| **Page or Widget** | User-interface surface backed by Flow data and actions |
+
+These are working analogies, not serialization guarantees. For example, an App
+Event is configured outside the graph even though it points to an event node
+inside the Flow.
+
+## From function composition to a graph
+
+Traditional code often composes calls directly:
+
 ```javascript
-const result = processData(loadFile(path));
-saveOutput(result, outputPath);
+const raw = await loadFile(path);
+const result = normalize(raw);
+await saveOutput(result, outputPath);
 ```
 
-You build visual pipelines:
-```
-Load File ──▶ Process Data ──▶ Save Output
-```
+In Flow-Like, add nodes for the same operations, connect `loadFile` data to
+`normalize`, connect the normalized value to `saveOutput`, and connect the
+execution pins in the required order.
 
-The flow is the program. Nodes are functions. Wires are data passing.
+There are two distinct connection types:
 
-## Quick Concept Mapping
+| Connection | Meaning |
+| --- | --- |
+| **Execution wire** | Determines when a standard node runs |
+| **Data wire** | Supplies a typed value to an input pin |
 
-| Programming Concept | Flow-Like Equivalent |
-|--------------------|---------------------|
-| Function | Node |
-| Function call | Connect node output to input |
-| Variable | Variable (scoped to Board) |
-| Parameter | Input Pin (left side of node) |
-| Return value | Output Pin (right side of node) |
-| Module/Class | Board |
-| Import | Reference another Board |
-| Main function | Event (entry point) |
-| Loop | For Each / While nodes |
-| Conditional | Branch node |
-| Try/Catch | Try + Catch nodes |
-| Type | Pin type |
-| Struct/Object | Struct type |
-| Array | Array type |
-| Callback | Sub-flows |
-| Async/await | Automatic (execution pauses) |
-| Thread | Parallel branches |
+[Standard nodes](/studio/nodes/) run when execution reaches them. Pure nodes
+have data pins but no execution pins and evaluate when a downstream node needs
+their output. Event nodes are graph entry points.
 
-## Functions → Nodes
+Flow-Like does not infer that every disconnected branch should run in parallel.
+Use [Sequence](/nodes/control/control-sequence/) for ordered fan-out and
+[Parallel Execution](/nodes/control/control-par-execution/) or
+[Parallel For Each](/nodes/control/control-par-for-each/) when concurrency is
+intentional.
 
-Every node is essentially a function call.
+## Types, structs, and collections
 
-**Code:**
-```python
-def add(a: int, b: int) -> int:
-    return a + b
+Pins enforce data types when you connect them. Generic pins can resolve to a
+concrete type after a compatible connection is made, and complex values can
+also carry a schema.
 
-result = add(5, 3)
-```
+For example, this interface:
 
-**Flow-Like:**
-```
-┌─────────────────┐
-│      Add        │
-│  5 ──▶ a        │
-│  3 ──▶ b        │
-│         sum ──▶ │ 8
-└─────────────────┘
-```
-
-The inputs (a, b) are left-side pins. The output (sum) is a right-side pin.
-
-### Chaining Functions
-
-**Code:**
-```python
-value = step3(step2(step1(input)))
-```
-
-**Flow-Like:**
-```
-Input ──▶ Step 1 ──▶ Step 2 ──▶ Step 3 ──▶ Output
-```
-
-Data flows left-to-right through connected pins.
-
-## Variables
-
-Variables in Flow-Like are scoped to Boards (like class attributes):
-
-**Code:**
-```python
-class MyProcessor:
-    def __init__(self):
-        self.counter = 0
-        self.results = []
-
-    def process(self, item):
-        self.counter += 1
-        self.results.append(item)
-```
-
-**Flow-Like:**
-```
-Board Variables:
-├── counter: Integer (default: 0)
-└── results: Array<Item>
-
-Event: Process (item)
-    │
-    ├──▶ Get Variable: counter
-    │         │
-    │         ▼
-    │    Add (counter, 1)
-    │         │
-    │         ▼
-    │    Set Variable: counter
-    │
-    └──▶ Get Variable: results
-              │
-              ▼
-         Append (results, item)
-              │
-              ▼
-         Set Variable: results
-```
-
-### Variable Operations
-
-| Operation | Nodes |
-|-----------|-------|
-| Read | Get Variable |
-| Write | Set Variable |
-| Modify | Get → Transform → Set |
-
-## Control Flow
-
-### If/Else → Branch
-
-**Code:**
-```python
-if condition:
-    do_a()
-else:
-    do_b()
-```
-
-**Flow-Like:**
-```
-              True ──▶ Do A
-Condition ──▶ Branch ─┤
-              False ──▶ Do B
-```
-
-### Switch/Match → Multiple Branches
-
-**Code:**
-```python
-match status:
-    case "pending":
-        handle_pending()
-    case "approved":
-        handle_approved()
-    case "rejected":
-        handle_rejected()
-```
-
-**Flow-Like:**
-```
-                    ┌──▶ "pending" ──▶ Handle Pending
-Get Status ──▶ Switch ├──▶ "approved" ──▶ Handle Approved
-                    └──▶ "rejected" ──▶ Handle Rejected
-```
-
-### For Loops → For Each
-
-**Code:**
-```python
-for item in items:
-    process(item)
-```
-
-**Flow-Like:**
-```
-Items ──▶ For Each ──▶ Process (item) ──▶ Continue Loop
-              │
-              └──▶ (done) ──▶ Next Step
-```
-
-### While Loops
-
-**Code:**
-```python
-while condition:
-    do_work()
-    update_condition()
-```
-
-**Flow-Like:**
-```
-┌─────────────────────────────────────┐
-│                                     │
-│  ┌──────────────────┐               │
-│  │                  │               │
-└──┤ While (condition)├──▶ Do Work ──┤
-   │                  │               │
-   └────False─────────┼───────────────┘
-                      │
-                      ▼
-                 Next Step
-```
-
-## Error Handling
-
-**Code:**
-```python
-try:
-    result = risky_operation()
-except SpecificError as e:
-    handle_error(e)
-finally:
-    cleanup()
-```
-
-**Flow-Like:**
-```
-Try ──▶ Risky Operation ──▶ Continue
- │
- └──Catch ──▶ Handle Error
-           │
-           └──▶ (always runs) ──▶ Cleanup
-```
-
-## Types & Structs
-
-Flow-Like is strongly typed. Define structures for complex data:
-
-**Code:**
 ```typescript
-interface User {
+interface Customer {
   id: string;
   name: string;
   email: string;
@@ -243,337 +76,150 @@ interface User {
 }
 ```
 
-**Flow-Like:**
-```
-Struct: User
-├── id: String
-├── name: String
-├── email: String
-└── orders: Array<Order>
-```
+maps to a struct schema with string fields and a typed array field. Use
+[Make Struct](/nodes/structs/struct-make/), [Get Field](/nodes/structs/fields/struct-get/),
+and [Set Field](/nodes/structs/fields/struct-set/) to construct and transform
+that value.
 
-### Working with Structs
+| Code-level value | Flow-Like representation |
+| --- | --- |
+| Scalar | String, Integer, Float, Boolean, Date, or another pin type |
+| Array | Typed Array value |
+| Set or map | Typed Set or Map value |
+| Object or record | Struct, optionally constrained by a schema |
+| File path | Path value rather than an arbitrary string |
+| Runtime handle | Typed reference passed between compatible nodes |
 
-**Code:**
+Browse the [generated node catalog](/nodes/overview/) for the current pin and
+schema contract of every node.
+
+## Variables and durable state
+
+The Variables panel defines typed state shared by the Flow's graph. Read and
+write it with [Get Variable](/nodes/variable/variable-get/) and
+[Set Variable](/nodes/variable/variable-set/).
+
+Code such as:
+
 ```python
-user.name = "Alice"
-email = user.email
+counter += 1
+results.append(item)
 ```
 
-**Flow-Like:**
-```
-Set Field (user, "name", "Alice") ──▶ updated_user
-
-Get Field (user, "email") ──▶ email_value
-```
-
-## Async & Parallelism
-
-### Sequential (Await)
-
-**Code:**
-```python
-result1 = await step1()
-result2 = await step2(result1)
-```
-
-**Flow-Like:**
-```
-Step 1 ──▶ Step 2 ──▶ Done
-```
-
-Execution automatically waits. No async/await syntax needed.
-
-### Parallel Execution
-
-**Code:**
-```python
-results = await asyncio.gather(
-    task1(),
-    task2(),
-    task3()
-)
-```
-
-**Flow-Like:**
-```
-           ┌──▶ Task 1 ──┐
-Start ──▶ Split          ├──▶ Merge ──▶ Combined Results
-           ├──▶ Task 2 ──┤
-           └──▶ Task 3 ──┘
-```
-
-Branches without dependencies execute in parallel automatically.
-
-## Modules & Imports
-
-**Code:**
-```python
-from utils import helper_function
-
-result = helper_function(data)
-```
-
-**Flow-Like:**
-```
-Board: Utils
-└── Event: HelperFunction (data)
-        │
-        ▼
-    Process ──▶ Return Result
-
-Board: Main
-└── Event: Process
-        │
-        ▼
-    Call Board: Utils.HelperFunction (data)
-        │
-        ▼
-    Use Result
-```
-
-Boards are your modules. Quick Actions are your exported functions.
-
-## Common Patterns
-
-### Map/Transform
-
-**Code:**
-```python
-processed = [transform(item) for item in items]
-```
-
-**Flow-Like:**
-```
-Items ──▶ For Each ──▶ Transform ──▶ Collect ──▶ Processed Array
-```
-
-### Filter
-
-**Code:**
-```python
-filtered = [item for item in items if condition(item)]
-```
-
-**Flow-Like:**
-```
-Items ──▶ For Each ──▶ Branch (condition)
-                          │
-                     True │
-                          ▼
-                      Collect ──▶ Filtered Array
-```
-
-### Reduce/Aggregate
-
-**Code:**
-```python
-total = sum(item.value for item in items)
-```
-
-**Flow-Like:**
-```
-Variables: running_total = 0
-
-Items ──▶ For Each ──▶ Get Value ──▶ Add to running_total
-              │
-              └──(done)──▶ Get running_total ──▶ Final Total
-```
-
-### HTTP Client
-
-**Code:**
-```python
-response = requests.post(
-    "https://api.example.com/data",
-    json={"key": "value"},
-    headers={"Authorization": "Bearer token"}
-)
-data = response.json()
-```
-
-**Flow-Like:**
-```
-HTTP Request
-├── URL: "https://api.example.com/data"
-├── Method: POST
-├── Body: {"key": "value"}
-└── Headers: {"Authorization": "Bearer token"}
-    │
-    ▼
-Parse JSON ──▶ data
-```
-
-### File I/O
-
-**Code:**
-```python
-with open("file.txt", "r") as f:
-    content = f.read()
-
-with open("output.txt", "w") as f:
-    f.write(processed_content)
-```
-
-**Flow-Like:**
-```
-Read to String ("file.txt") ──▶ content
-                                    │
-                                    ▼
-                              Process Content
-                                    │
-                                    ▼
-Write String ("output.txt", processed_content)
-```
-
-### Database Queries
-
-**Code:**
-```python
-conn = psycopg2.connect(...)
-cursor = conn.cursor()
-cursor.execute("SELECT * FROM users WHERE active = true")
-users = cursor.fetchall()
-```
-
-**Flow-Like:**
-```
-Register PostgreSQL (connection_string)
-    │
-    ▼
-SQL Query ("SELECT * FROM users WHERE active = true")
-    │
-    ▼
-users (array of rows)
-```
-
-## Debugging
-
-| Programming | Flow-Like |
-|-------------|-----------|
-| `print(variable)` | Console Log node |
-| Breakpoint | Pause execution (click wire) |
-| Step through | Visual execution trace |
-| Stack trace | Follow execution path |
-| Watch variables | Inspect any pin value |
-
-### Debug Mode
-
-1. Run your flow
-2. Click any wire to see its current value
-3. Errors show red highlighting on the failing node
-4. Execution history shows the path taken
-
-## Testing
-
-**Code:**
-```python
-def test_add():
-    assert add(2, 3) == 5
-    assert add(-1, 1) == 0
-```
-
-**Flow-Like:**
-```
-Board: TestAdd
-├── Test Case 1:
-│   └── Add(2, 3) ──▶ Assert Equals (5)
-│
-└── Test Case 2:
-    └── Add(-1, 1) ──▶ Assert Equals (0)
-```
-
-Run test boards to validate logic.
-
-## Performance Considerations
-
-### What's Fast
-- Node execution (Rust runtime)
-- Data passing (zero-copy where possible)
-- Parallel branches (truly concurrent)
-- Native operations (files, HTTP, SQL)
-
-### What to Optimize
-- Minimize node count in hot paths
-- Use batch operations over loops when available
-- Leverage SQL for data filtering (don't load all data)
-- Cache expensive computations in variables
-
-## Creating Custom Nodes
-
-When built-in nodes aren't enough, create custom ones:
-
-### WASM Nodes (Rust/AssemblyScript)
-```rust
-#[wasm_bindgen]
-pub fn my_custom_function(input: String) -> String {
-    // Your logic here
-    format!("Processed: {}", input)
-}
-```
-
-This becomes a node you can use in any flow.
-
-## Code Integration
-
-### Calling External APIs
-Use HTTP Request nodes to call any REST API.
-
-### Running Scripts
-Use the Run Command node to execute shell commands.
-
-### Embedding in Apps
-Flow-Like flows can be triggered via API endpoints.
-
-## FAQ
-
-### Can I write code instead?
-Some complex logic may require custom WASM nodes. But most automations work visually.
-
-### Is it slower than code?
-The runtime is Rust—often faster than Python/JS. The overhead is negligible.
-
-### How do I version control?
-Flow-Like has built-in versioning. Boards also export as JSON for Git.
-
-### Can I collaborate?
-Yes—share boards, use version history, export/import packages.
-
-### What about code review?
-Visual diffs show what changed. It's different but reviewable.
-
-## Mental Model Tips
-
-### 1. Think Data Flow
-Code executes line-by-line. Flows execute node-by-node following wires.
-
-### 2. Nodes Are Pure (Mostly)
-Nodes take inputs, produce outputs. Side effects are explicit (file writes, HTTP calls).
-
-### 3. Variables Are State
-When you need persistent state, use variables. They're like class attributes.
-
-### 4. Boards Are Boundaries
-Each board is a unit of composition. Like modules or classes.
-
-### 5. Events Are Entry Points
-Nothing runs without an event trigger. They're your main() functions.
-
-## What You Gain
-
-| Pain Point in Code | Flow-Like Solution |
-|--------------------|--------------------|
-| Dependency management | Bundled in nodes |
-| Environment setup | Just download and run |
-| Deployment complexity | Click to publish |
-| Documentation | Visual is self-documenting |
-| Onboarding teammates | Lower barrier |
-| Debugging async flows | Visual trace |
-
-## Next Steps
-
-- **[Studio Overview](/studio/overview/)** – Learn the IDE
-- **[Working with Nodes](/studio/nodes/)** – Node deep dive
-- **[Variables](/studio/variables/)** – State management
-- **[Events](/apps/events/)** – Entry points and triggers
-- **[GenAI](/topics/genai/overview/)** – AI capabilities
+usually becomes a variable read, a typed math or array operation, and a
+variable write. Variables are useful for state needed during execution; they
+should not be treated as a general durable database.
+
+Choose storage by lifecycle:
+
+| Need | Use |
+| --- | --- |
+| Temporary execution state | Flow variable |
+| Per-device configuration or a secret | [Runtime-configured variable](/apps/runtime-variables/) |
+| Files owned by the App | [App Storage](/apps/storage/) |
+| Queryable or persistent records | Database nodes and [Data Studio](/apps/data-studio/) |
+| Chat conversation context | Chat Event history and session values |
+
+For credentials, mark a variable **Secret** and **Runtime Configured**, then set
+its value on the machine that will execute the Flow. Do not place credentials
+in ordinary node defaults.
+
+## Control flow
+
+| Programming construct | Current Flow-Like node or pattern |
+| --- | --- |
+| `if` / `else` | [Branch](/nodes/control/control-branch/) |
+| `for item in items` | [For Each](/nodes/control/control-for-each/) |
+| Loop with early exit | [For Each (Break)](/nodes/control/control-for-each-with-break/) |
+| `while` | [While Loop](/nodes/control/control-while-loop/) |
+| Ordered fan-out | [Sequence](/nodes/control/control-sequence/) |
+| Parallel work | [Parallel Execution](/nodes/control/control-par-execution/) or [Parallel For Each](/nodes/control/control-par-for-each/) |
+| Wait for parallel branches | [Gather](/nodes/control/parallel/control-gather/) |
+| Bounded operation | [Timeout](/nodes/control/control-timeout/) |
+| Run only once | [Do Once](/nodes/control/flow/control-do-once/) |
+| Alternate between two paths | [Flip Flop](/nodes/control/flow/control-flip-flop/) |
+
+Do not translate language-level `try`/`catch` mechanically. Some catalogs, such
+as desktop automation, provide explicit recovery nodes; other operations expose
+status or result pins that you should validate and branch on. Design the failure
+path from the contract of the specific node.
+
+## Functions, layers, and App boundaries
+
+Use the smallest boundary that expresses the intent:
+
+- Define a Flow function and invoke it with
+  [Call Function](/nodes/control/functions/control-call-function/) for reusable
+  typed logic within the same Flow.
+- Collapse a section into a [Layer](/studio/layers/) when it should read as one
+  higher-level operation.
+- Use an [App Event](/apps/events/) when a user, schedule, API, chat surface, or
+  another supported sink must enter the Flow.
+- Use [Pages](/apps/pages/) and [Widgets](/apps/widgets/) when the automation
+  needs a purpose-built interface.
+
+An event node is analogous to an entry function, but it does not become
+externally callable until an App Event is configured to target it.
+
+## I/O and integrations
+
+| Task | Current catalog area |
+| --- | --- |
+| Build and send an HTTP request | [Web/API nodes](/nodes/web/api/) |
+| Read or write file content | [Data/Files nodes](/nodes/data/files/) |
+| Send or receive email | [Email nodes](/nodes/email/) |
+| Query registered data with SQL | [DataFusion nodes](/nodes/data/datafusion/) |
+| Work with structured JSON | [JSON nodes](/nodes/utils/json/) and Struct nodes |
+| Record diagnostic output | [Logging nodes](/nodes/logging/) |
+
+Prefer a dedicated integration node when its contract matches the task. Use the
+HTTP nodes for an API that does not have a suitable catalog integration.
+
+## Debugging and change control
+
+The Studio keeps run history and node logs. Open a previous run to inspect its
+timing and logs or rerun it with the same payload. See
+[Logging and tracing](/studio/logging/).
+
+Saved Flow versions are explicit snapshots rather than an automatic commit for
+every edit. Production Events can target a saved version instead of the mutable
+latest Flow; see [Versioning](/studio/versioning/).
+
+When validating a migration:
+
+1. Run representative success, empty-input, invalid-input, and failure cases.
+2. Inspect the data contract at every external boundary.
+3. Confirm that local-only nodes run on a compatible machine.
+4. Configure runtime variables separately for each execution environment.
+5. Pin production Events only after the target Flow version is verified.
+
+## Extend or call Flow-Like from code
+
+If the catalog does not contain the operation you need, custom
+[WASM nodes](/dev/wasm-nodes/overview/) provide a documented extension model
+with multiple supported source languages. Review the sandbox and manifest
+requirements before granting filesystem, network, or other capabilities.
+
+If orchestration should remain in an application, the official
+[Node.js and Python SDKs](/dev/sdks/overview/) can trigger workflows, monitor
+executions, work with files and databases, and access supported AI endpoints.
+
+## A practical migration sequence
+
+1. Define the input and output types before recreating implementation details.
+2. Create one Flow and one event node for a representative entry point.
+3. Replace each source operation with a catalog node or a small typed layer.
+4. Add explicit Branch, loop, Sequence, or Parallel nodes where ordering matters.
+5. Move secrets and environment-specific values to Runtime Variables.
+6. Configure the App Event that will invoke the entry node.
+7. Exercise the Flow locally, inspect its run history, then choose its execution mode.
+8. Extract stable repeated sections into functions or layers.
+
+## Next steps
+
+- [Studio overview](/studio/overview/)
+- [Nodes and execution behavior](/studio/nodes/)
+- [Typed connections](/studio/connecting/)
+- [Variables](/studio/variables/)
+- [Events](/apps/events/)
+- [Local-only execution](/studio/local-execution/)

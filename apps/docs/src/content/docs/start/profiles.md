@@ -5,12 +5,16 @@ sidebar:
   order: 40
 ---
 
-In the top-left corner, you will find the *Profile Settings*. You can create multiple *Profiles* within your **Account** and *switch* between them:
+Select the Profile name in the upper-left navigation to switch Profiles, add a
+Profile, or edit the active one. Profiles can be used without signing in;
+signed-in Profiles can also carry account-backed settings.
 
-![A screenshot showing how to switch between different Profiles in Flow-Like Desktop](../../../assets/SwitchAndEditProfiles.webp)
-
-In Flow-Like, a **Profile** bundles configurations for language models, UI themes (*try Bubblegum!*) and other settings:
+A **Profile** groups preferences that should change together, including model
+assignments, interests, theme, and FlowPilot model settings:
 
 ![A screenshot of Flow-Like Desktop showing a preview of the Profile Settings page](../../../assets/ProfileSettings.webp)
 
-For example, you could create a profile for work and one for personal use, or create a profile that contains only *Gemma* language models and another that contains only reasoning models like *DeepSeek*.
+For example, keep separate work and personal Profiles, or create one Profile
+for lightweight local models and another for provider-backed reasoning models.
+Changing the Profile changes the active configuration; it does not move or
+duplicate your Apps.

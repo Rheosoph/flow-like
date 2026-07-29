@@ -87,7 +87,9 @@ impl GcpRuntimeCredentials {
 
     pub fn from_env() -> Self {
         let service_account_key = std::env::var("GOOGLE_APPLICATION_CREDENTIALS_JSON").ok();
-        let logs_bucket = std::env::var("GCP_LOG_BUCKET").unwrap_or_default();
+        let logs_bucket = std::env::var("GCP_LOG_BUCKET")
+            .or_else(|_| std::env::var("LOG_BUCKET"))
+            .unwrap_or_default();
         if logs_bucket.is_empty() {
             tracing::warn!(
                 "GCP_LOG_BUCKET environment variable is not set - logs will not be persisted"
@@ -97,8 +99,12 @@ impl GcpRuntimeCredentials {
         GcpRuntimeCredentials {
             service_account_key,
             access_token: None,
-            meta_bucket: std::env::var("GCP_META_BUCKET").unwrap_or_default(),
-            content_bucket: std::env::var("GCP_CONTENT_BUCKET").unwrap_or_default(),
+            meta_bucket: std::env::var("GCP_META_BUCKET")
+                .or_else(|_| std::env::var("META_BUCKET"))
+                .unwrap_or_default(),
+            content_bucket: std::env::var("GCP_CONTENT_BUCKET")
+                .or_else(|_| std::env::var("CONTENT_BUCKET"))
+                .unwrap_or_default(),
             logs_bucket,
             allowed_prefixes: Vec::new(),
             write_access: true,

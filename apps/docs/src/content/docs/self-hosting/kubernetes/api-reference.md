@@ -1,270 +1,160 @@
 ---
 title: API Reference
-description: Complete API endpoint reference for Flow-Like on Kubernetes.
+description: Inspect and test the Flow-Like API running on Kubernetes.
 sidebar:
   order: 61
 ---
 
-This page documents all API endpoints available when running Flow-Like on Kubernetes.
+The Kubernetes image uses the shared Flow-Like API router. The generated OpenAPI document in the running deployment is the authoritative endpoint reference; this page describes how to reach it and highlights the Kubernetes-specific routes.
 
-## Quick Start
+## Open the live reference
+
+Start a foreground port forward:
 
 ```bash
-# 1. Forward the API port to your local machine
-kubectl port-forward svc/flow-like-api 8083:8080 -n flow-like &
-
-# 2. Test the health endpoint
-curl http://localhost:8083/api/v1/health
-# Response: {"status":"ok"}
-
-# 3. Test the Kubernetes health probe
-curl http://localhost:8083/health/live
-# Response: {"status":"healthy","version":"0.1.0"}
+kubectl port-forward service/flow-like-api 8083:8080 -n flow-like
 ```
 
-## Understanding the Port
+Then open:
 
-**Why is the port 8080 inside the container but I use 8083 locally?**
+| URL | Purpose |
+|---|---|
+| `http://localhost:8083/swagger-ui` | Interactive Swagger UI |
+| `http://localhost:8083/api-doc/openapi.json` | Machine-readable OpenAPI document |
+| `http://localhost:8083/api/v1/` | Hub configuration |
+| `http://localhost:8083/api/v1/version` | API version route |
 
-```
-Your Machine                 Kubernetes Cluster
-┌────────────┐              ┌──────────────────────────────┐
-│            │  port-forward │  ┌──────────────────────┐   │
-│ localhost  │──────────────▶│  │   flow-like-api      │   │
-│   :8083    │              │  │   Port 8080          │   │
-│            │              │  └──────────────────────┘   │
-└────────────┘              └──────────────────────────────┘
-```
+`8083` is an arbitrary local port. `8080` is the API Service port in the chart:
 
-- **8080** is the port the API listens on *inside* the container
-- **8083** (or any port you choose) is the port on *your machine*
-- `kubectl port-forward` creates a tunnel between them
-
-You can use any local port:
 ```bash
-kubectl port-forward svc/flow-like-api 3000:8080 -n flow-like
-# Now access at http://localhost:3000
+kubectl port-forward service/flow-like-api 3000:8080 -n flow-like
 ```
 
----
+With that command, use `http://localhost:3000`.
 
-## Health Endpoints
+## Health endpoints
 
-These endpoints are used by Kubernetes to check if the service is running correctly.
+### Kubernetes probes
 
-### Kubernetes Health Probes
+These routes are added by the Kubernetes API binary and are outside `/api/v1`.
 
-| Endpoint | Purpose | Used By |
-|----------|---------|---------|
-| `GET /health/live` | Liveness probe | Kubernetes restarts the pod if this fails |
-| `GET /health/ready` | Readiness probe | Kubernetes stops sending traffic if this fails |
-| `GET /health/startup` | Startup probe | Kubernetes waits for this before other probes |
+| Endpoint | Expected success body | Kubernetes behavior |
+|---|---|---|
+| `GET /health/live` | `{"status":"healthy","version":"…"}` | Restarts the container after repeated failures |
+| `GET /health/ready` | `{"status":"ready","version":"…"}` | Removes the Pod from Service endpoints while failing |
+| `GET /health/startup` | `{"status":"started","version":"…"}` | Delays liveness and readiness checks during startup |
 
-**Example Response:**
-```json
-{
-  "status": "healthy",
-  "version": "0.1.0"
-}
+```bash
+curl -fsS http://localhost:8083/health/live
+curl -fsS http://localhost:8083/health/ready
+curl -fsS http://localhost:8083/health/startup
 ```
 
-### Application Health
+The current probe handlers report process state. They do not query the database.
+
+### Shared API health
 
 | Endpoint | Purpose |
-|----------|---------|
-| `GET /api/v1/health` | Basic health check |
-| `GET /api/v1/health/db` | Database connectivity check |
-
-**Example:**
-```bash
-# Basic health
-curl http://localhost:8083/api/v1/health
-# {"status":"ok"}
-
-# Database health (returns round-trip time)
-curl http://localhost:8083/api/v1/health/db
-# {"rtt":5}
-```
-
----
-
-## Job Management Endpoints
-
-These Kubernetes-specific endpoints manage workflow execution jobs.
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/jobs/submit` | Submit a new workflow job |
-| `GET` | `/jobs/{job_id}` | Get job status |
-| `POST` | `/jobs/{job_id}/cancel` | Cancel a running job |
-
-### Submit a Job
+|---|---|
+| `GET /api/v1/health` | Basic shared-router health check |
+| `GET /api/v1/health/db` | Database ping with round-trip time in milliseconds |
 
 ```bash
-curl -X POST http://localhost:8083/jobs/submit \
-  -H "Content-Type: application/json" \
-  -d '{
-    "app_id": "your-app-id",
-    "board_id": "your-board-id",
-    "version": "latest",
-    "payload": {"key": "value"},
-    "mode": "async"
-  }'
+curl -fsS http://localhost:8083/api/v1/health
+curl -fsS http://localhost:8083/api/v1/health/db
 ```
 
-**Response:**
+Example shapes:
+
 ```json
-{
-  "job_id": "job-abc123",
-  "status": "queued"
-}
+{"status":"ok"}
 ```
 
-### Check Job Status
-
-```bash
-curl http://localhost:8083/jobs/job-abc123
-```
-
-**Response:**
 ```json
-{
-  "job_id": "job-abc123",
-  "status": "running",
-  "started_at": "2025-01-01T12:00:00Z",
-  "completed_at": null,
-  "error": null
-}
+{"rtt":5}
 ```
 
-### Cancel a Job
+## API route groups
+
+The shared router currently mounts these high-level groups under `/api/v1`:
+
+| Prefix | Area |
+|---|---|
+| `/apps` | Apps and nested boards, events, pages, routes, data, roles, teams, and packages |
+| `/user`, `/profile` | User and profile operations |
+| `/execution` | Executor progress/events and run status |
+| `/sink` | Sink management and trigger delivery |
+| `/registry` | WASM package registry |
+| `/store`, `/solution`, `/courses` | Public catalogs and solution content |
+| `/auth`, `/oauth` | OpenID proxy/configuration and OAuth flows |
+| `/ai`, `/chat`, `/embeddings` | AI and chat services |
+| `/usage`, `/audit`, `/admin` | Usage, audit, and administration |
+| `/info`, `/health` | Hub information and shared health |
+
+Routes change as the shared API evolves. Use the live OpenAPI document for methods, request bodies, response schemas, and authentication requirements instead of copying a static endpoint list.
+
+## Inbound app routes
+
+Registered inbound interfaces are mounted separately:
+
+| Prefix | Interface |
+|---|---|
+| `/r/*` | App-defined inbound REST routes |
+| `/m/*` | App-defined inbound MCP routes |
+
+These routers bypass the API's general user-JWT middleware because each registration enforces its own authentication. Treat them as public-facing integration surfaces and configure every registration explicitly.
+
+## Metrics
+
+Metrics use a separate listener and Service port:
 
 ```bash
-curl -X POST http://localhost:8083/jobs/job-abc123/cancel
-# Returns: 204 No Content
+kubectl port-forward service/flow-like-api 9090:9090 -n flow-like
+curl -fsS http://localhost:9090/metrics
 ```
 
----
+Do not expose the metrics port publicly unless an authenticated monitoring path protects it.
 
-## Flow-Like API Endpoints
+## Test from inside the cluster
 
-All standard Flow-Like API endpoints are available under `/api/v1/`.
-
-### Public Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/v1/` | Hub information (platform config) |
-| `GET /api/v1/version` | API version |
-| `GET /api/v1/catalog` | Available node catalog |
-
-### Information Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/v1/info/legal` | Legal notice |
-| `GET /api/v1/info/privacy` | Privacy policy |
-| `GET /api/v1/info/terms` | Terms of service |
-| `GET /api/v1/info/contact` | Contact information |
-| `GET /api/v1/info/features` | Enabled features |
-| `GET /api/v1/info/profiles` | Profile templates |
-
-### Authentication Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `POST /api/v1/auth/login` | User login |
-| `POST /api/v1/auth/register` | User registration |
-| `POST /api/v1/auth/refresh` | Refresh access token |
-| `GET /api/v1/oauth/{provider}` | OAuth login redirect |
-
-### User Endpoints (Authenticated)
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/v1/user` | Get current user |
-| `PUT /api/v1/user` | Update current user |
-| `GET /api/v1/profile/{id}` | Get user profile |
-
-### Application Endpoints (Authenticated)
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/v1/apps` | List user's applications |
-| `POST /api/v1/apps` | Create new application |
-| `GET /api/v1/apps/{id}` | Get application details |
-| `PUT /api/v1/apps/{id}` | Update application |
-| `DELETE /api/v1/apps/{id}` | Delete application |
-
-### Execution Endpoints (Authenticated)
-
-| Endpoint | Description |
-|----------|-------------|
-| `POST /api/v1/execution/run` | Execute a workflow |
-| `GET /api/v1/execution/{id}` | Get execution status |
-
-### Store Endpoints
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/v1/store` | Browse marketplace |
-| `GET /api/v1/store/{id}` | Get store item details |
-
----
-
-## Testing the API
-
-### Quick Health Check
+Start an ephemeral curl Pod:
 
 ```bash
-# From your terminal
-kubectl port-forward svc/flow-like-api 8083:8080 -n flow-like &
-curl http://localhost:8083/api/v1/health
+kubectl run flow-like-debug \
+  --image=curlimages/curl \
+  --restart=Never \
+  --rm -it \
+  -n flow-like \
+  -- sh
 ```
 
-### Using HTTPie (alternative to curl)
+Inside the Pod:
 
 ```bash
-# Install: brew install httpie
-
-# Health check
-http GET localhost:8083/api/v1/health
-
-# Submit job
-http POST localhost:8083/jobs/submit \
-  app_id=myapp \
-  board_id=myboard
+curl -fsS http://flow-like-api:8080/health/ready
+curl -fsS http://flow-like-api:8080/api/v1/health/db
 ```
 
-### From Inside the Cluster
+The Service DNS name assumes the Helm release is named `flow-like`.
 
-```bash
-# Create a debug pod
-kubectl run curl --image=curlimages/curl -it --rm -- sh
-
-# Inside the pod
-curl http://flow-like-api:8080/api/v1/health
-```
-
----
-
-## Response Codes
+## Common response codes
 
 | Code | Meaning |
-|------|---------|
-| `200` | Success |
-| `201` | Created |
-| `204` | No Content (success with no body) |
-| `400` | Bad Request (invalid input) |
-| `401` | Unauthorized (missing/invalid token) |
-| `403` | Forbidden (insufficient permissions) |
-| `404` | Not Found |
-| `500` | Internal Server Error |
+|---:|---|
+| 200 | Request succeeded |
+| 201 | Resource created |
+| 204 | Request succeeded with no response body |
+| 400 | Invalid input |
+| 401 | Missing or invalid authentication |
+| 403 | Authenticated principal lacks permission |
+| 404 | Route or resource was not found |
+| 409 | Request conflicts with current state |
+| 429 | Usage or rate limit reached |
+| 500 | Internal server error |
+| 503 | Required service or feature is unavailable |
 
----
+## Related
 
-## Next Steps
-
-- [Configuration](/self-hosting/kubernetes/configuration/) — Environment variables and secrets
-- [Security](/self-hosting/kubernetes/security/) — Authentication setup
-- [Executor](/self-hosting/kubernetes/executor/) — How jobs are executed
+- [API Service](/self-hosting/kubernetes/api/)
+- [kubectl Basics](/self-hosting/kubernetes/kubectl-basics/)
+- [Security](/self-hosting/kubernetes/security/)
