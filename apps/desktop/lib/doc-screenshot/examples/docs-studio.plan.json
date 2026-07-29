@@ -1,0 +1,922 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-studio.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 600,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "flow-like-studio",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "capture",
+					"name": "FlowLikeStudio",
+					"output": "FlowLikeStudio.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "flow-like-nodes",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__node[data-id=\"docs-event-node\"]"
+				},
+				{
+					"type": "capture",
+					"name": "FlowLikeNodes",
+					"output": "FlowLikeNodes.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "node-catalog",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__pane",
+					"button": "right"
+				},
+				{
+					"type": "waitFor",
+					"selector": "input[type=\"search\"][placeholder=\"Search...\"]",
+					"state": "visible",
+					"timeoutMs": 15000
+				},
+				{
+					"type": "delay",
+					"ms": 250
+				},
+				{
+					"type": "fill",
+					"selector": "input[type=\"search\"][placeholder=\"Search...\"]",
+					"value": "mail"
+				},
+				{
+					"type": "waitFor",
+					"selector": "#docs-mail-copy",
+					"state": "visible"
+				},
+				{
+					"type": "hover",
+					"selector": "#docs-mail-copy"
+				},
+				{
+					"type": "capture",
+					"name": "NodeCatalog",
+					"output": "NodeCatalog.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "connections-wires",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "capture",
+					"name": "ConnectionsWires",
+					"output": "ConnectionsWires.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "generic-pin-types",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__node[data-id=\"docs-generic-target\"]"
+				},
+				{
+					"type": "capture",
+					"name": "GenericPinTypes",
+					"output": "GenericPinTypes.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "draw-pin",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__controls-fitview"
+				},
+				{
+					"type": "delay",
+					"ms": 500
+				},
+				{
+					"type": "drag",
+					"selector": ".react-flow__node[data-id=\"docs-string-source\"] .react-flow__handle[data-handleid=\"docs-string-draft-out\"] > span:first-child",
+					"targetSelector": ".react-flow__node[data-id=\"docs-event-node\"]",
+					"steps": 40,
+					"button": "left",
+					"release": false
+				},
+				{
+					"type": "capture",
+					"name": "DrawPin",
+					"output": "DrawPin.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "typed-catalog-suggestions",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__controls-fitview"
+				},
+				{
+					"type": "delay",
+					"ms": 500
+				},
+				{
+					"type": "drag",
+					"selector": ".react-flow__node[data-id=\"docs-string-source\"] .react-flow__handle[data-handleid=\"docs-string-draft-out\"] > span:first-child",
+					"targetSelector": ".react-flow__node[data-id=\"docs-event-node\"]",
+					"steps": 40,
+					"button": "left",
+					"release": true
+				},
+				{
+					"type": "waitFor",
+					"selector": "input[type=\"search\"][placeholder=\"Search...\"]",
+					"state": "visible",
+					"timeoutMs": 15000
+				},
+				{
+					"type": "delay",
+					"ms": 250
+				},
+				{
+					"type": "fill",
+					"selector": "input[type=\"search\"][placeholder=\"Search...\"]",
+					"value": "mail"
+				},
+				{
+					"type": "waitFor",
+					"selector": "#docs-mail-copy",
+					"state": "visible"
+				},
+				{
+					"type": "hover",
+					"selector": "#docs-mail-copy"
+				},
+				{
+					"type": "capture",
+					"name": "TypedCatalogSuggestions",
+					"output": "TypedCatalogSuggestions.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "collapsing-nodes",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__node[data-id=\"docs-string-source\"]"
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__node[data-id=\"docs-generic-target\"]",
+					"modifiers": ["Control"]
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node[data-id=\"docs-string-source\"].selected",
+					"state": "visible"
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node[data-id=\"docs-generic-target\"].selected",
+					"state": "visible"
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node[data-id=\"docs-string-source\"].selected button:has(svg.lucide-fold-vertical)",
+					"state": "visible"
+				},
+				{
+					"type": "hover",
+					"selector": ".react-flow__node[data-id=\"docs-string-source\"].selected button:has(svg.lucide-fold-vertical)"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"tooltip-content\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "CollapsingNodes",
+					"output": "CollapsingNodes.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "set-layer-name",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__node[data-id=\"docs-layer\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node[data-id=\"docs-layer\"] button:has(svg.lucide-square-pen)",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__node[data-id=\"docs-layer\"] button:has(svg.lucide-square-pen)"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] input",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "capture",
+					"name": "SetLayerName",
+					"output": "SetLayerName.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "editing-layer-pins",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__node[data-id=\"docs-layer\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node[data-id=\"docs-layer\"] button:has(svg.lucide-sliders-horizontal)",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__node[data-id=\"docs-layer\"] button:has(svg.lucide-sliders-horizontal)"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] [data-slot=\"tabs-list\"]",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "waitFor",
+					"text": "Edit Layer Pins",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "capture",
+					"name": "EditingLayerPins",
+					"output": "EditingLayerPins.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "inside-layers",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__node[data-id=\"docs-layer\"]",
+					"clickCount": 2
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node-layerInnerNode",
+					"state": "visible"
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node[data-id=\"docs-layer-child\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "InsideLayers",
+					"output": "InsideLayers.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "flow-with-layers",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "capture",
+					"name": "FlowWithLayers",
+					"output": "FlowWithLayers.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "placeholders-for-prototyping",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": ".react-flow__pane",
+					"button": "right"
+				},
+				{
+					"type": "waitFor",
+					"selector": "input[type=\"search\"][placeholder=\"Search...\"]",
+					"state": "visible"
+				},
+				{
+					"type": "delay",
+					"ms": 250
+				},
+				{
+					"type": "hover",
+					"selector": "[role=\"menuitem\"]",
+					"index": 2
+				},
+				{
+					"type": "capture",
+					"name": "PlaceholdersForPrototyping",
+					"output": "PlaceholdersForPrototyping.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "runs-and-logs",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": "div.mx-auto[class~=\"md:flex\"] button:has(svg.lucide-history)"
+				},
+				{
+					"type": "waitFor",
+					"selector": "#flow-runs h3",
+					"state": "visible",
+					"timeoutMs": 15000
+				},
+				{
+					"type": "waitFor",
+					"selector": "#flow-runs span[title=\"Local execution\"]",
+					"state": "visible",
+					"timeoutMs": 15000
+				},
+				{
+					"type": "click",
+					"selector": "#flow-runs span[title=\"Local execution\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": ".log-container",
+					"state": "visible",
+					"timeoutMs": 20000
+				},
+				{
+					"type": "waitFor",
+					"text": "Received onboarding request",
+					"timeoutMs": 20000
+				},
+				{
+					"type": "capture",
+					"name": "RunsAndLogs",
+					"output": "RunsAndLogs.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "board-versions",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": "div.mx-auto[class~=\"md:flex\"] button:has(svg.lucide-notebook-pen)"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] #version",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "click",
+					"selector": "[data-slot=\"dialog-content\"][data-state=\"open\"] [data-slot=\"dropdown-menu-trigger\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"dropdown-menu-content\"][data-state=\"open\"]",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "capture",
+					"name": "BoardVersions",
+					"output": "BoardVersions.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "working-with-variables",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": "div.mx-auto[class~=\"md:flex\"] button:has(svg.lucide-variable)"
+				},
+				{
+					"type": "waitFor",
+					"selector": "#flow-variables [role=\"button\"]:has(p)",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "waitFor",
+					"text": "Confidence",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "capture",
+					"name": "WorkingWithVariables",
+					"output": "WorkingWithVariables.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "set-variable-type",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": "div.mx-auto[class~=\"md:flex\"] button:has(svg.lucide-variable)"
+				},
+				{
+					"type": "waitFor",
+					"selector": "#flow-variables [role=\"button\"]:has(p)",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "waitFor",
+					"text": "Confidence",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "click",
+					"selector": "#flow-variables [role=\"button\"]:has(p)",
+					"index": 0
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"sheet-content\"][data-state=\"open\"] #var_type",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "click",
+					"selector": "[data-slot=\"sheet-content\"][data-state=\"open\"] #var_type"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"select-content\"][data-state=\"open\"]",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "capture",
+					"name": "SetVariableType",
+					"output": "SetVariableType.webp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "set-variable-value",
+			"path": "/flow",
+			"query": {
+				"app": "docs-app",
+				"id": "docs-board"
+			},
+			"localStorage": {
+				"tutorial-finished-new": "true"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__pane",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "waitFor",
+					"selector": ".react-flow__node",
+					"state": "visible",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": "div.mx-auto[class~=\"md:flex\"] button:has(svg.lucide-variable)"
+				},
+				{
+					"type": "waitFor",
+					"selector": "#flow-variables [role=\"button\"]:has(p)",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "waitFor",
+					"text": "Confidence",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "click",
+					"selector": "#flow-variables [role=\"button\"]:has(p)",
+					"index": 0
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"sheet-content\"][data-state=\"open\"] #var_type",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "click",
+					"selector": "[data-slot=\"sheet-content\"][data-state=\"open\"] #var_type + [data-slot=\"select-trigger\"]"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-slot=\"select-content\"][data-state=\"open\"]",
+					"state": "visible",
+					"timeoutMs": 10000
+				},
+				{
+					"type": "capture",
+					"name": "SetVariableValue",
+					"output": "SetVariableValue.webp",
+					"mode": "viewport"
+				}
+			]
+		}
+	]
+}

@@ -6,6 +6,7 @@ import {
 	type DocScreenshotCaptureStep,
 	type DocScreenshotDefaults,
 	type DocScreenshotFormat,
+	type DocScreenshotKeyboardModifier,
 	type DocScreenshotPlan,
 	type DocScreenshotScenario,
 	type DocScreenshotStep,
@@ -19,7 +20,44 @@ const MAX_STEPS = 100;
 const MAX_DELAY_MS = 30_000;
 const MAX_TIMEOUT_MS = 10 * 60_000;
 const MAX_OUTPUT_PIXELS = 100_000_000;
+const MAX_DRAG_STEPS = 100;
+const MAX_CLICK_MODIFIERS = 4;
 const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
+const STEP_KEYS: Record<DocScreenshotStep["type"], readonly string[]> = {
+	goto: ["type", "path", "query"],
+	click: ["type", "selector", "index", "button", "clickCount", "modifiers"],
+	drag: [
+		"type",
+		"selector",
+		"index",
+		"targetSelector",
+		"targetIndex",
+		"steps",
+		"button",
+		"release",
+	],
+	fill: ["type", "selector", "index", "value", "valueEnv"],
+	type: ["type", "selector", "index", "value", "valueEnv", "delayMs"],
+	press: ["type", "key", "selector", "index"],
+	select: ["type", "selector", "index", "values"],
+	check: ["type", "selector", "index", "checked"],
+	hover: ["type", "selector", "index"],
+	scroll: ["type", "selector", "index", "x", "y"],
+	waitFor: ["type", "selector", "urlIncludes", "text", "state", "timeoutMs"],
+	delay: ["type", "ms"],
+	capture: [
+		"type",
+		"name",
+		"mode",
+		"selector",
+		"index",
+		"padding",
+		"output",
+		"format",
+		"quality",
+		"hideSelectors",
+	],
+};
 
 export const DEFAULT_DOC_SCREENSHOT_OPTIONS: DocScreenshotDefaults = {
 	viewport: {
@@ -40,6 +78,19 @@ function record(value: unknown, label: string): Record<string, unknown> {
 		throw new Error(`${label} must be an object.`);
 	}
 	return value as Record<string, unknown>;
+}
+
+function rejectUnknownKeys(
+	input: Record<string, unknown>,
+	label: string,
+	type: DocScreenshotStep["type"],
+): void {
+	const allowed = new Set(STEP_KEYS[type]);
+	for (const key of Object.keys(input)) {
+		if (!allowed.has(key)) {
+			throw new Error(`${label}.${key} is not supported for a ${type} step.`);
+		}
+	}
 }
 
 function optionalString(value: unknown, label: string): string | undefined {
@@ -247,6 +298,34 @@ function targetValue(
 	return { selector, index };
 }
 
+function clickModifiersValue(
+	value: unknown,
+	label: string,
+): DocScreenshotKeyboardModifier[] | undefined {
+	if (value === undefined) return undefined;
+	if (
+		!Array.isArray(value) ||
+		value.length === 0 ||
+		value.length > MAX_CLICK_MODIFIERS
+	) {
+		throw new Error(
+			`${label} must contain from 1 to ${MAX_CLICK_MODIFIERS} keyboard modifiers.`,
+		);
+	}
+	const modifiers = value.map((modifier, index) =>
+		enumValue(modifier, `${label}[${index}]`, [
+			"Alt",
+			"Control",
+			"Meta",
+			"Shift",
+		] as const),
+	);
+	if (new Set(modifiers).size !== modifiers.length) {
+		throw new Error(`${label} cannot contain duplicate keyboard modifiers.`);
+	}
+	return modifiers;
+}
+
 function validateCaptureStep(
 	input: Record<string, unknown>,
 	label: string,
@@ -324,6 +403,9 @@ function validateCaptureStep(
 function validateStep(value: unknown, label: string): DocScreenshotStep {
 	const input = record(value, label);
 	const type = optionalString(input.type, `${label}.type`);
+	if (type && Object.hasOwn(STEP_KEYS, type)) {
+		rejectUnknownKeys(input, label, type as DocScreenshotStep["type"]);
+	}
 	switch (type) {
 		case "goto":
 			return {
@@ -348,6 +430,42 @@ function validateStep(value: unknown, label: string): DocScreenshotStep {
 					input.clickCount === undefined
 						? undefined
 						: integerInRange(input.clickCount, `${label}.clickCount`, 1, 3),
+				modifiers: clickModifiersValue(input.modifiers, `${label}.modifiers`),
+			};
+		}
+		case "drag": {
+			const target = targetValue(input, label);
+			const targetSelector = optionalString(
+				input.targetSelector,
+				`${label}.targetSelector`,
+			);
+			if (!targetSelector) {
+				throw new Error(`${label}.targetSelector is required.`);
+			}
+			return {
+				type,
+				...target,
+				targetSelector,
+				targetIndex:
+					input.targetIndex === undefined
+						? undefined
+						: integerInRange(input.targetIndex, `${label}.targetIndex`, 0, 999),
+				steps:
+					input.steps === undefined
+						? undefined
+						: integerInRange(input.steps, `${label}.steps`, 1, MAX_DRAG_STEPS),
+				button:
+					input.button === undefined
+						? undefined
+						: enumValue(input.button, `${label}.button`, [
+								"left",
+								"middle",
+								"right",
+							] as const),
+				release:
+					input.release === undefined
+						? undefined
+						: booleanValue(input.release, `${label}.release`),
 			};
 		}
 		case "fill":
@@ -566,6 +684,17 @@ export function validateDocScreenshotPlan(value: unknown): DocScreenshotPlan {
 		const steps = scenarioInput.steps.map((step, stepIndex) =>
 			validateStep(step, `${label}.steps[${stepIndex}]`),
 		);
+		for (const [stepIndex, step] of steps.entries()) {
+			if (
+				step.type === "drag" &&
+				step.release === false &&
+				steps[stepIndex + 1]?.type !== "capture"
+			) {
+				throw new Error(
+					`${label}.steps[${stepIndex}] with release false must be followed immediately by a capture step.`,
+				);
+			}
+		}
 		if (!steps.some((step) => step.type === "capture")) {
 			throw new Error(`${label} must contain at least one capture step.`);
 		}

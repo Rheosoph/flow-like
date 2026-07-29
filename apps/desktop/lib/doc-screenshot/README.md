@@ -30,6 +30,26 @@ Plan paths have two deliberately different bases:
   repository root, the example therefore writes to
   `tmp/doc-screenshots/onboarding`.
 
+## Refresh the checked-in documentation screenshots
+
+The documentation plans write directly to `apps/docs/src/assets` and use dark
+mode, a 1624 by 1060 CSS-pixel viewport, DPR 2, and lossless WebP:
+
+```sh
+bun apps/desktop/scripts/generate-doc-screenshot-fixtures.ts
+bun apps/desktop/scripts/generate-doc-studio-screenshot-fixture.ts
+
+bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json
+bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json
+bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-sharing.plan.json
+bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-roles.plan.json
+bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json
+```
+
+Each plan starts from application routes and performs the navigation and UI
+interactions needed to expose the documented state. A failed wait or action
+fails that scenario instead of silently writing a loading or error screen.
+
 ## Direct capture
 
 Use direct mode for one route and one capture:
@@ -68,7 +88,8 @@ The supported steps are:
 | Step | Fields | Behavior |
 | --- | --- | --- |
 | `waitFor` | one of `selector`, `urlIncludes`, or `text`; optional `state`, `timeoutMs` | Waits for a DOM, URL, or text condition. Selector states are `attached`, `visible`, `hidden`, and `detached`. |
-| `click` | `selector`, optional `index`, `button`, `clickCount` | Clicks the matching element. `index` is zero-based. |
+| `click` | `selector`, optional `index`, `button`, `clickCount`, `modifiers` | Clicks the matching element. `index` is zero-based. `modifiers` accepts a unique subset of `Alt`, `Control`, `Meta`, and `Shift`. |
+| `drag` | `selector`, `targetSelector`, optional `index`, `targetIndex`, `steps`, `button`, `release` | Drags between the centers of two matching elements. Both centers must be visible and unobscured. `steps` is 1–100 (default 20). `release` defaults to `true`; set it to `false` only when the next step captures the held-pointer state. The button is released after that capture. |
 | `fill` | `selector`, `value` or `valueEnv`, optional `index` | Replaces the value of an input. |
 | `type` | `selector`, `value` or `valueEnv`, optional `index`, `delayMs` | Types into an input. |
 | `press` | `key`, optional `selector`, `index` | Sends a keyboard key globally or to an element. |
@@ -80,7 +101,7 @@ The supported steps are:
 | `delay` | `ms` | Waits for an explicitly bounded interval. Prefer a semantic `waitFor` when possible. |
 | `capture` | `name`, optional `mode`, `selector`, `index`, `padding`, `output`, `format`, `quality`, `hideSelectors` | Writes a named `viewport`, `fullPage`, or `element` screenshot. Element mode requires a selector. |
 
-The full working contract is in
+One complete working example is in
 [`examples/onboarding.plan.json`](examples/onboarding.plan.json). Prefer a plan
 when documentation needs multiple states: it is easier to review and rerun
 than a sequence of shell commands.
@@ -125,6 +146,29 @@ must therefore be immutable fixture data, not stateful behavior. With
 `strict: true`, an unlisted command fails the scenario. With `strict: false`,
 an unlisted command resolves to `null`; list important calls explicitly even
 when their response is only a no-op.
+
+A response may model a bounded asynchronous command and emit Tauri events while
+it is pending. This is useful for real progress UI such as model downloads:
+
+```json
+{
+  "$value": [],
+  "$delayMs": 60000,
+  "$events": [
+    {
+      "afterMs": 500,
+      "name": "download:model-id",
+      "payload": {
+        "downloaded": 671088640,
+        "max": 2147483648
+      }
+    }
+  ]
+}
+```
+
+Event delays and the command delay are capped at 120 seconds, and at most 100
+events are scheduled for one invocation.
 
 Tauri HTTP uses two IPC commands. `plugin:http|fetch` returns a request resource
 ID, and `plugin:http|fetch_send` returns response metadata such as status,

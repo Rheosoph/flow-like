@@ -15,6 +15,8 @@ import {
 	type DocScreenshotArtifact,
 	type DocScreenshotCaptureStep,
 	type DocScreenshotFormat,
+	type DocScreenshotKeyboardModifier,
+	type DocScreenshotMouseButton,
 	type DocScreenshotPlan,
 	type DocScreenshotQueryValue,
 	type DocScreenshotResult,
@@ -54,6 +56,8 @@ interface ScenarioRuntime {
 	diagnostics: ScenarioDiagnostics;
 	originViolation?: string;
 	httpStatus?: number;
+	heldModifiers: Set<DocScreenshotKeyboardModifier>;
+	heldMouseButton?: DocScreenshotMouseButton;
 }
 
 const delay = (ms: number): Promise<void> =>
@@ -192,6 +196,58 @@ async function injectTauriFixture(
 				) {
 					throw new Error(String(response.$error));
 				}
+				if (
+					response &&
+					typeof response === "object" &&
+					!Array.isArray(response) &&
+					"$events" in response
+				) {
+					const descriptor = response as {
+						$value?: unknown;
+						$delayMs?: unknown;
+						$events?: unknown;
+					};
+					const events = Array.isArray(descriptor.$events)
+						? descriptor.$events.slice(0, 100)
+						: [];
+					const eventTasks = events.map(async (eventValue) => {
+						if (
+							!eventValue ||
+							typeof eventValue !== "object" ||
+							Array.isArray(eventValue)
+						) {
+							return;
+						}
+						const event = eventValue as Record<string, unknown>;
+						const afterMs =
+							typeof event.afterMs === "number" &&
+							Number.isFinite(event.afterMs)
+								? Math.min(120_000, Math.max(0, event.afterMs))
+								: 0;
+						await new Promise((resolveEvent) =>
+							setTimeout(resolveEvent, afterMs),
+						);
+						const name = String(event.name ?? "");
+						if (!name) return;
+						for (const id of eventListeners.get(name) ?? []) {
+							runCallback(id, {
+								event: name,
+								payload: clone(event.payload),
+								id,
+							});
+						}
+					});
+					const delayMs =
+						typeof descriptor.$delayMs === "number" &&
+						Number.isFinite(descriptor.$delayMs)
+							? Math.min(120_000, Math.max(0, descriptor.$delayMs))
+							: 0;
+					await Promise.all([
+						...eventTasks,
+						new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs)),
+					]);
+					return clone(descriptor.$value ?? null);
+				}
 				return clone(response);
 			}
 			if (fixtureValue.strict) {
@@ -258,9 +314,11 @@ async function injectDeterministicPresentation(
 				}
 			};
 			const applyDocument = (): void => {
-				document.documentElement.classList.remove("light", "dark");
-				document.documentElement.classList.add(settings.theme);
-				document.documentElement.style.colorScheme = settings.theme;
+				const root = document.documentElement;
+				if (!root) return;
+				root.classList.remove("light", "dark");
+				root.classList.add(settings.theme);
+				root.style.colorScheme = settings.theme;
 				if (document.getElementById("__doc_screenshot_determinism__")) return;
 				const style = document.createElement("style");
 				style.id = "__doc_screenshot_determinism__";
@@ -273,7 +331,7 @@ async function injectDeterministicPresentation(
 						? "html{scrollbar-width:none!important}::-webkit-scrollbar{display:none!important;width:0!important;height:0!important}"
 						: "",
 				].join("");
-				(document.head ?? document.documentElement).appendChild(style);
+				(document.head ?? root).appendChild(style);
 			};
 			applyStorage();
 			applyDocument();
@@ -297,7 +355,22 @@ async function targetHandle(
 	index: number,
 	timeoutMs: number,
 ): Promise<ElementHandle<Element>> {
-	await page.waitForSelector(selector, { visible: true, timeout: timeoutMs });
+	await page.waitForFunction(
+		(target) => {
+			const element = document.querySelectorAll(target.selector)[target.index];
+			if (!element) return false;
+			const style = getComputedStyle(element);
+			const bounds = element.getBoundingClientRect();
+			return (
+				style.display !== "none" &&
+				style.visibility !== "hidden" &&
+				bounds.width > 0 &&
+				bounds.height > 0
+			);
+		},
+		{ timeout: timeoutMs },
+		{ selector, index },
+	);
 	const handles = await page.$$(selector);
 	const handle = handles[index];
 	if (!handle) {
@@ -310,6 +383,78 @@ async function targetHandle(
 		if (itemIndex !== index) await item.dispose();
 	}
 	return handle;
+}
+
+async function isDragCenterHitTestable(
+	handle: ElementHandle<Element>,
+): Promise<boolean> {
+	return handle.evaluate((element) => {
+		const bounds = element.getBoundingClientRect();
+		const x = bounds.x + bounds.width / 2;
+		const y = bounds.y + bounds.height / 2;
+		if (x < 0 || y < 0 || x >= window.innerWidth || y >= window.innerHeight) {
+			return false;
+		}
+		const hit = document.elementFromPoint(x, y);
+		return Boolean(
+			hit &&
+				(hit === element || element.contains(hit) || hit.contains(element)),
+		);
+	});
+}
+
+async function withKeyboardModifiers<T>(
+	runtime: ScenarioRuntime,
+	modifiers: DocScreenshotKeyboardModifier[],
+	action: () => Promise<T>,
+): Promise<T> {
+	const pressed: DocScreenshotKeyboardModifier[] = [];
+	let actionFailed = false;
+	let actionError: unknown;
+	let result: T | undefined;
+	try {
+		for (const modifier of modifiers) {
+			pressed.push(modifier);
+			runtime.heldModifiers.add(modifier);
+			await runtime.page.keyboard.down(modifier as KeyInput);
+		}
+		result = await action();
+	} catch (error) {
+		actionFailed = true;
+		actionError = error;
+	}
+	let cleanupError: unknown;
+	for (const modifier of pressed.reverse()) {
+		try {
+			await runtime.page.keyboard.up(modifier as KeyInput);
+			runtime.heldModifiers.delete(modifier);
+		} catch (error) {
+			cleanupError ??= error;
+		}
+	}
+	if (actionFailed) throw actionError;
+	if (cleanupError) throw cleanupError;
+	return result as T;
+}
+
+async function releaseHeldMouse(runtime: ScenarioRuntime): Promise<void> {
+	const button = runtime.heldMouseButton;
+	if (!button) return;
+	await runtime.page.mouse.up({ button });
+	runtime.heldMouseButton = undefined;
+}
+
+async function releaseHeldInput(runtime: ScenarioRuntime): Promise<void> {
+	for (const modifier of [...runtime.heldModifiers].reverse()) {
+		try {
+			await runtime.page.keyboard.up(modifier as KeyInput);
+		} catch {
+			// Closing the browser context is the final fallback for input cleanup.
+		} finally {
+			runtime.heldModifiers.delete(modifier);
+		}
+	}
+	await releaseHeldMouse(runtime).catch(() => undefined);
 }
 
 function resolveSecretValue(step: {
@@ -583,12 +728,80 @@ async function runStep(
 				timeoutMs,
 			);
 			try {
-				await handle.click({
-					button: step.button,
-					clickCount: step.clickCount,
-				});
+				await withKeyboardModifiers(runtime, step.modifiers ?? [], () =>
+					handle.click({
+						button: step.button,
+						clickCount: step.clickCount,
+					}),
+				);
 			} finally {
 				await handle.dispose();
+			}
+			break;
+		}
+		case "drag": {
+			await releaseHeldMouse(runtime);
+			const sourceHandle = await targetHandle(
+				runtime.page,
+				step.selector,
+				step.index ?? 0,
+				timeoutMs,
+			);
+			let target: ElementHandle<Element> | undefined;
+			try {
+				target = await targetHandle(
+					runtime.page,
+					step.targetSelector,
+					step.targetIndex ?? 0,
+					timeoutMs,
+				);
+				const [sourceBox, targetBox] = await Promise.all([
+					sourceHandle.boundingBox(),
+					target.boundingBox(),
+				]);
+				if (!sourceBox || sourceBox.width <= 0 || sourceBox.height <= 0) {
+					throw new Error(
+						`Drag source has no visible bounds: ${step.selector}`,
+					);
+				}
+				if (!targetBox || targetBox.width <= 0 || targetBox.height <= 0) {
+					throw new Error(
+						`Drag target has no visible bounds: ${step.targetSelector}`,
+					);
+				}
+				if (!(await isDragCenterHitTestable(sourceHandle))) {
+					throw new Error(
+						`Drag source center is outside the viewport or obscured: ${step.selector}`,
+					);
+				}
+				if (!(await isDragCenterHitTestable(target))) {
+					throw new Error(
+						`Drag target center is outside the viewport or obscured: ${step.targetSelector}`,
+					);
+				}
+				const button = step.button ?? "left";
+				await runtime.page.mouse.move(
+					sourceBox.x + sourceBox.width / 2,
+					sourceBox.y + sourceBox.height / 2,
+				);
+				runtime.heldMouseButton = button;
+				await runtime.page.mouse.down({ button });
+				// Give pointer-driven canvases (including XYFlow) one frame to enter
+				// their drag state before the cursor starts moving.
+				await delay(50);
+				await runtime.page.mouse.move(
+					targetBox.x + targetBox.width / 2,
+					targetBox.y + targetBox.height / 2,
+					{ steps: step.steps ?? 20 },
+				);
+				await delay(50);
+				if (step.release ?? true) await releaseHeldMouse(runtime);
+			} catch (error) {
+				await releaseHeldMouse(runtime).catch(() => undefined);
+				throw error;
+			} finally {
+				await target?.dispose();
+				await sourceHandle.dispose();
 			}
 			break;
 		}
@@ -601,9 +814,9 @@ async function runStep(
 			);
 			try {
 				await handle.focus();
-				await runtime.page.keyboard.down("Control");
-				await runtime.page.keyboard.press("A");
-				await runtime.page.keyboard.up("Control");
+				await withKeyboardModifiers(runtime, ["Control"], () =>
+					runtime.page.keyboard.press("A"),
+				);
 				await runtime.page.keyboard.press("Backspace");
 				const value = resolveSecretValue(step);
 				if (value) await handle.type(value);
@@ -748,7 +961,11 @@ async function runStep(
 			await delay(step.ms);
 			break;
 		case "capture":
-			return captureScreenshot(runtime, step);
+			try {
+				return await captureScreenshot(runtime, step);
+			} finally {
+				await releaseHeldMouse(runtime);
+			}
 	}
 	if (runtime.originViolation) throw new Error(runtime.originViolation);
 	if (runtime.page.url() !== "about:blank") {
@@ -795,6 +1012,7 @@ async function runScenario(
 		defaults: plan.defaults,
 		viewport,
 		diagnostics,
+		heldModifiers: new Set(),
 	};
 	try {
 		await page.setViewport(viewport);
@@ -815,13 +1033,32 @@ async function runScenario(
 			await injectTauriFixture(page, options.tauriFixture);
 		}
 		page.on("console", (message) => {
-			if (message.type() === "error") diagnostics.consoleErrors += 1;
+			if (process.env.DOC_SCREENSHOT_DEBUG === "1") {
+				console.error(`[browser ${message.type()}] ${message.text()}`);
+			}
+			if (message.type() === "error") {
+				diagnostics.consoleErrors += 1;
+			}
 		});
-		page.on("pageerror", () => {
+		page.on("pageerror", (error) => {
 			diagnostics.pageErrors += 1;
+			if (process.env.DOC_SCREENSHOT_DEBUG === "1") {
+				console.error(
+					`[browser pageerror] ${
+						error instanceof Error
+							? (error.stack ?? error.message)
+							: String(error)
+					}`,
+				);
+			}
 		});
-		page.on("requestfailed", () => {
+		page.on("requestfailed", (request) => {
 			diagnostics.requestFailures += 1;
+			if (process.env.DOC_SCREENSHOT_DEBUG === "1") {
+				console.error(
+					`[browser requestfailed] ${request.method()} ${redactScreenshotUrl(request.url())}: ${request.failure()?.errorText ?? "unknown error"}`,
+				);
+			}
 		});
 		page.on("popup", (popup) => {
 			runtime.originViolation =
@@ -878,6 +1115,7 @@ async function runScenario(
 		title = await page.title().catch(() => "");
 		finalUrl = page.url();
 	} finally {
+		await releaseHeldInput(runtime);
 		await context.close();
 	}
 	return {

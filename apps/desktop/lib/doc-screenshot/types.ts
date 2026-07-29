@@ -9,6 +9,12 @@ export type DocScreenshotApp = "desktop" | "web";
 export type DocScreenshotTheme = "light" | "dark";
 export type DocScreenshotFormat = "png" | "webp" | "jpeg";
 export type DocScreenshotCaptureMode = "viewport" | "fullPage" | "element";
+export type DocScreenshotMouseButton = "left" | "middle" | "right";
+export type DocScreenshotKeyboardModifier =
+	| "Alt"
+	| "Control"
+	| "Meta"
+	| "Shift";
 
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue =
@@ -51,8 +57,18 @@ export interface DocScreenshotGotoStep {
 
 export interface DocScreenshotClickStep extends DocScreenshotTarget {
 	type: "click";
-	button?: "left" | "middle" | "right";
+	button?: DocScreenshotMouseButton;
 	clickCount?: number;
+	modifiers?: DocScreenshotKeyboardModifier[];
+}
+
+export interface DocScreenshotDragStep extends DocScreenshotTarget {
+	type: "drag";
+	targetSelector: string;
+	targetIndex?: number;
+	steps?: number;
+	button?: DocScreenshotMouseButton;
+	release?: boolean;
 }
 
 export interface DocScreenshotFillStep extends DocScreenshotTarget {
@@ -127,6 +143,7 @@ export interface DocScreenshotCaptureStep {
 export type DocScreenshotStep =
 	| DocScreenshotGotoStep
 	| DocScreenshotClickStep
+	| DocScreenshotDragStep
 	| DocScreenshotFillStep
 	| DocScreenshotTypeStep
 	| DocScreenshotPressStep

@@ -1,0 +1,183 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "desktop",
+	"outputDir": "apps/docs/src/assets",
+	"tauriFixture": "../fixtures/docs-apps.tauri.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 500,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "create-app",
+			"path": "/library",
+			"query": {
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Create Your First App",
+					"timeoutMs": 120000
+				},
+				{
+					"type": "click",
+					"selector": "main .max-w-md button",
+					"index": 0
+				},
+				{
+					"type": "waitFor",
+					"selector": "input[placeholder=\"My Awesome Project\"]",
+					"state": "visible"
+				},
+				{
+					"type": "fill",
+					"selector": "input[placeholder=\"My Awesome Project\"]",
+					"value": "Customer Support Copilot"
+				},
+				{
+					"type": "capture",
+					"name": "CreateApp",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "app-flows",
+			"path": "/library/config/flows",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Customer Support Automation"
+				},
+				{
+					"type": "capture",
+					"name": "AppBoards",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "app-storage",
+			"path": "/library/config/storage",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "input[placeholder=\"Search files and folders...\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "AppStorage",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "data-studio-source",
+			"path": "/library/config/explore",
+			"query": {
+				"id": "docs-app",
+				"view": "sources",
+				"table": "customers",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Avery Morgan"
+				},
+				{
+					"type": "capture",
+					"name": "AppDatabases",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "app-events",
+			"path": "/library/config/pages",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "input[placeholder=\"Search events...\"]",
+					"state": "visible"
+				},
+				{
+					"type": "waitFor",
+					"text": "Triage selected request"
+				},
+				{
+					"type": "capture",
+					"name": "AppEvents",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "quick-action-event",
+			"path": "/library/config/pages",
+			"viewport": {
+				"height": 1280
+			},
+			"query": {
+				"id": "docs-app",
+				"eventId": "triage-selected-request",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Basic Information"
+				},
+				{
+					"type": "capture",
+					"name": "QuickActionEvent",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "chat-ui",
+			"path": "/use",
+			"query": {
+				"id": "docs-app",
+				"eventId": "support-assistant",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "[data-fl-chat-welcome]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "ChatUI",
+					"mode": "viewport"
+				}
+			]
+		}
+	]
+}

@@ -100,15 +100,138 @@ describe("document screenshot plan validation", () => {
 		).toThrow("exceeds the 100 megapixel capture limit");
 	});
 
+	test("validates drag controls and click keyboard modifiers", () => {
+		const plan = validateDocScreenshotPlan(
+			planWithSteps([
+				{
+					type: "click",
+					selector: ".react-flow__node",
+					index: 1,
+					modifiers: ["Control", "Shift"],
+				},
+				{
+					type: "drag",
+					selector: ".react-flow__node",
+					index: 1,
+					targetSelector: ".react-flow__pane",
+					targetIndex: 0,
+					steps: 40,
+					button: "left",
+					release: false,
+				},
+				{ type: "capture", name: "after-drag" },
+			]),
+		);
+
+		expect(plan.scenarios[0]?.steps.slice(0, 2)).toEqual([
+			{
+				type: "click",
+				selector: ".react-flow__node",
+				index: 1,
+				button: undefined,
+				clickCount: undefined,
+				modifiers: ["Control", "Shift"],
+			},
+			{
+				type: "drag",
+				selector: ".react-flow__node",
+				index: 1,
+				targetSelector: ".react-flow__pane",
+				targetIndex: 0,
+				steps: 40,
+				button: "left",
+				release: false,
+			},
+		]);
+	});
+
+	test.each([0, 101, 1.5])("rejects unsafe drag step count %s", (steps) => {
+		expect(() =>
+			validateDocScreenshotPlan(
+				planWithSteps([
+					{
+						type: "drag",
+						selector: "#source",
+						targetSelector: "#destination",
+						steps,
+					},
+					{ type: "capture", name: "after-drag" },
+				]),
+			),
+		).toThrow("steps must be an integer from 1 to 100");
+	});
+
+	test.each([
+		[["Control", "Control"], "cannot contain duplicate"],
+		[["Control", "CapsLock"], "must be one of"],
+		[[], "must contain from 1 to 4"],
+	])("rejects invalid click modifiers %j", (modifiers, error) => {
+		expect(() =>
+			validateDocScreenshotPlan(
+				planWithSteps([
+					{ type: "click", selector: "#source", modifiers },
+					{ type: "capture", name: "after-click" },
+				]),
+			),
+		).toThrow(error);
+	});
+
+	test("requires a drag target selector", () => {
+		expect(() =>
+			validateDocScreenshotPlan(
+				planWithSteps([
+					{ type: "drag", selector: "#source" },
+					{ type: "capture", name: "after-drag" },
+				]),
+			),
+		).toThrow("targetSelector is required");
+	});
+
+	test("requires a held drag to be followed immediately by a capture", () => {
+		expect(() =>
+			validateDocScreenshotPlan(
+				planWithSteps([
+					{
+						type: "drag",
+						selector: "#source",
+						targetSelector: "#destination",
+						release: false,
+					},
+					{ type: "delay", ms: 10 },
+					{ type: "capture", name: "after-drag" },
+				]),
+			),
+		).toThrow("release false must be followed immediately by a capture step");
+	});
+
+	test.each([
+		[{ type: "click", selector: "#source", modifier: ["Control"] }, "modifier"],
+		[
+			{
+				type: "drag",
+				selector: "#source",
+				targetSelector: "#destination",
+				realease: false,
+			},
+			"realease",
+		],
+	])("rejects unknown step fields", (step, field) => {
+		expect(() =>
+			validateDocScreenshotPlan(
+				planWithSteps([step, { type: "capture", name: "after-action" }]),
+			),
+		).toThrow(`${field} is not supported`);
+	});
+
 	test("rejects unsupported actions", () => {
 		expect(() =>
 			validateDocScreenshotPlan(
 				planWithSteps([
-					{ type: "drag", selector: "#source", target: "#destination" },
-					{ type: "capture", name: "after-drag" },
+					{ type: "swipe", selector: "#source", target: "#destination" },
+					{ type: "capture", name: "after-swipe" },
 				]),
 			),
-		).toThrow("type is not supported: drag");
+		).toThrow("type is not supported: swipe");
 	});
 });
 

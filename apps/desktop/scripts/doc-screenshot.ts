@@ -64,8 +64,8 @@ Server and output:
   --json                  Reserve stdout for the result envelope
   --help                  Show this help
 
-Plans support goto, click, fill, type, press, select, check, hover, scroll, waitFor,
-delay, and capture steps. See apps/desktop/lib/doc-screenshot/README.md.`;
+Plans support goto, click, drag, fill, type, press, select, check, hover, scroll,
+waitFor, delay, and capture steps. See apps/desktop/lib/doc-screenshot/README.md.`;
 }
 
 function validatedLoopbackUrl(value: string): URL {
