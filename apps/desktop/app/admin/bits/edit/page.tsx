@@ -60,7 +60,12 @@ const ALL_BIT_TYPES = [
 	IBitTypes.ObjectDetection,
 ];
 
-const MODEL_BIT_TYPES = [IBitTypes.Llm, IBitTypes.Vlm, IBitTypes.Tts, IBitTypes.Stt] as const;
+const MODEL_BIT_TYPES = [
+	IBitTypes.Llm,
+	IBitTypes.Vlm,
+	IBitTypes.Tts,
+	IBitTypes.Stt,
+] as const;
 const HOSTED_FILTER = "hosted";
 const HOSTED_PROVIDER_OPTIONS = [
 	"Hosted",
@@ -97,6 +102,10 @@ function isHostedProviderName(providerName?: null | string) {
 	return normalized === "hosted" || normalized.startsWith("hosted:");
 }
 
+function isMlxProviderName(providerName?: null | string) {
+	return providerName?.trim().toLowerCase() === "mlx";
+}
+
 function getProviderParams(
 	provider: IModelProvider | Record<string, unknown> | undefined,
 ) {
@@ -108,6 +117,10 @@ function normalizeModelParameters(
 ): ILlmParameters | IVlmParameters {
 	const current = asRecord(parameters);
 	const provider = asRecord(current.provider);
+	const providerName =
+		typeof provider.provider_name === "string" && provider.provider_name.trim()
+			? provider.provider_name.trim()
+			: "Local";
 	return {
 		...current,
 		context_length:
@@ -120,10 +133,7 @@ function normalizeModelParameters(
 		},
 		provider: {
 			...provider,
-			provider_name:
-				typeof provider.provider_name === "string" && provider.provider_name
-					? provider.provider_name
-					: "Local",
+			provider_name: isMlxProviderName(providerName) ? "MLX" : providerName,
 			model_id:
 				typeof provider.model_id === "string" ? provider.model_id : null,
 			version: typeof provider.version === "string" ? provider.version : null,
@@ -470,11 +480,25 @@ export default function EditBitsPage() {
 			return;
 		}
 
+		const parsedModelParameters =
+			draft.type === IBitTypes.Llm || draft.type === IBitTypes.Vlm
+				? normalizeModelParameters(parsedParameters)
+				: undefined;
+		const nextIsMlx = isMlxProviderName(
+			parsedModelParameters?.provider?.provider_name,
+		);
+		const dependencies = parseDelimitedList(dependenciesText);
+		if (nextIsMlx && dependencies.length === 0) {
+			toast.error("MLX model roots require model-file dependencies");
+			return;
+		}
+
 		const nextDraft: IBit = {
 			...draft,
 			authors: parseDelimitedList(authorsText),
-			dependencies: parseDelimitedList(dependenciesText),
+			dependencies,
 			parameters: parsedParameters,
+			...(nextIsMlx ? { download_link: null, file_name: null, size: 0 } : {}),
 			meta: {
 				...draft.meta,
 				en: {
@@ -596,6 +620,9 @@ export default function EditBitsPage() {
 	}, [draft]);
 
 	const draftIsHosted = isHostedBit(draft);
+	const draftIsMlx =
+		(draft?.type === IBitTypes.Llm || draft?.type === IBitTypes.Vlm) &&
+		isMlxProviderName(modelParameters?.provider?.provider_name);
 	const canRepairTtsAssets = draft?.type === IBitTypes.Tts;
 
 	return (
@@ -963,6 +990,7 @@ export default function EditBitsPage() {
 															</SelectTrigger>
 															<SelectContent>
 																<SelectItem value="Local">Local</SelectItem>
+																<SelectItem value="MLX">MLX</SelectItem>
 																<SelectItem value="Premium">Premium</SelectItem>
 																{HOSTED_PROVIDER_OPTIONS.map((providerName) => (
 																	<SelectItem
@@ -1072,7 +1100,14 @@ export default function EditBitsPage() {
 													) : null}
 												</>
 											) : null}
-											{!draftIsHosted ? (
+											{draftIsMlx ? (
+												<div className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground md:col-span-2">
+													MLX LLM/VLM entries are virtual roots. Keep the root
+													artifact empty and list every model-bundle file bit
+													below as a dependency. Each dependency’s File Name is
+													its directory-relative path.
+												</div>
+											) : !draftIsHosted ? (
 												<>
 													<div className="space-y-2 md:col-span-2">
 														<Label htmlFor="bit-download-link">
@@ -1095,6 +1130,14 @@ export default function EditBitsPage() {
 																updateDraft("file_name", event.target.value)
 															}
 														/>
+														<p className="text-xs text-muted-foreground">
+															MLX dependency files may use safe relative paths,
+															such as{" "}
+															<code>
+																weights/model-00001-of-00002.safetensors
+															</code>
+															.
+														</p>
 													</div>
 													<div className="space-y-2">
 														<Label htmlFor="bit-size">Size (bytes)</Label>
@@ -1131,12 +1174,19 @@ export default function EditBitsPage() {
 												<Textarea
 													id="bit-dependencies"
 													rows={4}
-													placeholder="One dependency per line or comma separated"
+													placeholder="One model-file dependency bit per line or comma separated"
 													value={dependenciesText}
 													onChange={(event) =>
 														setDependenciesText(event.target.value)
 													}
 												/>
+												{draftIsMlx ? (
+													<p className="text-xs text-muted-foreground">
+														Include root config.json, tokenizer.json,
+														tokenizer_config.json, safetensors, and (for VLM) a
+														root processor-config dependency bit.
+													</p>
+												) : null}
 											</div>
 											<div className="space-y-2 md:col-span-2">
 												<Label htmlFor="bit-tags">Tags</Label>

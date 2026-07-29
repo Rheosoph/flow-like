@@ -926,6 +926,7 @@ pub fn run() {
             functions::ai::invoke::chat_completion,
             functions::ai::invoke::find_best_model,
             functions::system::get_system_info,
+            functions::system::can_host_mlx,
             functions::system::list_apps_for_file,
             functions::system::open_file_with_app,
             functions::storage_management::get_local_storage_overview,

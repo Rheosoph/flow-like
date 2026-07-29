@@ -376,10 +376,12 @@ async fn process_download_bit(
     let _rem = remove_download(bit, &app_state).await;
 
     let file_hash = hasher.finalize().to_hex().to_string().to_lowercase();
-    // User-created custom bits don't know their artifact hash upfront and use
-    // `hash == id` as a trust-on-first-use sentinel (curated downloadable bits
-    // always carry a real blake3 hash; link-less bits never reach this path).
-    let unverified_user_bit = bit.hash == bit.id;
+    // User-created custom bits don't know their artifact hash upfront. Legacy
+    // roots use `hash == id`; newer GGUF roots use a source-derived identity so
+    // edits to pinned URLs select a fresh cache target. Recompute the latter
+    // from the Bit before accepting it as trust-on-first-use.
+    let unverified_user_bit =
+        bit.hash == bit.id || bit.has_matching_user_source_artifact_identity();
     if unverified_user_bit {
         println!(
             "Skipping hash verification for user bit {} (computed blake3: {})",

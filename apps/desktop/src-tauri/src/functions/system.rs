@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::collections::HashSet;
-#[cfg(any(target_os = "windows", target_os = "linux"))]
+#[cfg(target_os = "windows")]
 use std::path::Path;
 use std::process::Command;
 
@@ -21,6 +21,40 @@ pub fn get_system_info() -> SystemInfo {
     let cores = get_cores().unwrap_or(0);
 
     SystemInfo { ram, cores }
+}
+
+/// Whether this build target can host Apple MLX models.
+///
+/// MLX requires Apple silicon. iOS simulator builds are excluded even when
+/// they run on an arm64 Mac because they are not deployable iOS devices. A
+/// macOS build also needs the bundled native helper next to the app executable.
+#[tauri::command]
+pub fn can_host_mlx() -> bool {
+    if !flow_like::bit::can_host_mlx() {
+        return false;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        return std::env::current_exe()
+            .ok()
+            .and_then(|executable| {
+                executable
+                    .parent()
+                    .map(|directory| directory.join("flow-like-mlx-service"))
+            })
+            .is_some_and(|sidecar| sidecar.is_file());
+    }
+
+    #[cfg(target_os = "ios")]
+    {
+        true
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    {
+        false
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

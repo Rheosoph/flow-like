@@ -242,7 +242,9 @@ export class BitState implements IBitState {
 		secrets?: Record<string, unknown>,
 	): Promise<IBit> {
 		const localBit = BitState.mergeSecretParams(bit, secrets);
-		await invoke("upsert_custom_bit", { bit: localBit });
+		const savedLocal = await invoke<IBit>("upsert_custom_bit", {
+			bit: localBit,
+		});
 
 		try {
 			const profile = this.backend.profile;
@@ -259,7 +261,7 @@ export class BitState implements IBitState {
 			);
 		}
 
-		return localBit;
+		return savedLocal;
 	}
 
 	async deleteCustomBit(bitId: string): Promise<void> {

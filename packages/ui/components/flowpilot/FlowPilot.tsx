@@ -1097,9 +1097,8 @@ function FlowPilotImpl({
 		[profile.data?.hub_profile.id],
 	);
 
-	// Filter bits models to those in the user's profile, dropping local-only
-	// models on hosts that cannot run llama.cpp (e.g. iOS).
-	const canHostLlamaCPP = backendContext.capabilities().canHostLlamaCPP;
+	// Filter profile and custom models to runtimes supported by this host.
+	const { canHostLlamaCPP, canHostMLX } = backendContext.capabilities();
 	const bitsModels = useMemo(() => {
 		if (!foundBits.data || !profile.data?.hub_profile.bits) return [];
 		const profileBitIds = new Set(profile.data.hub_profile.bits);
@@ -1112,15 +1111,16 @@ function FlowPilotImpl({
 				!seen.has(model.id) &&
 				(model.type === IBitTypes.Llm || model.type === IBitTypes.Vlm),
 		);
-		return filterHostableLlmModels(
-			[...ownModels, ...profileModels],
+		return filterHostableLlmModels([...ownModels, ...profileModels], {
 			canHostLlamaCPP,
-		);
+			canHostMLX,
+		});
 	}, [
 		foundBits.data,
 		customBits.data,
 		profile.data?.hub_profile.bits,
 		canHostLlamaCPP,
+		canHostMLX,
 	]);
 
 	const openFrontendToolDialog = useCallback(

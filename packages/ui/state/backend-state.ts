@@ -198,6 +198,7 @@ export type {
 export interface ICapabilities {
 	needsSignIn: boolean;
 	canHostLlamaCPP: boolean;
+	canHostMLX: boolean;
 	canHostEmbeddings: boolean;
 	canExecuteLocally: boolean;
 }
@@ -295,6 +296,7 @@ const serverBackend: IBackendState = {
 	capabilities: () => ({
 		needsSignIn: false,
 		canHostLlamaCPP: false,
+		canHostMLX: false,
 		canHostEmbeddings: false,
 		canExecuteLocally: false,
 	}),

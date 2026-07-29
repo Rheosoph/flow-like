@@ -81,6 +81,7 @@ export class EmptyBackend implements IBackendState {
 		return {
 			needsSignIn: false,
 			canHostLlamaCPP: false,
+			canHostMLX: false,
 			canHostEmbeddings: false,
 			canExecuteLocally: false,
 		};

@@ -7776,6 +7776,7 @@ dependencies = [
  "any-tts",
  "argon2",
  "async-trait",
+ "axum 0.8.8",
  "blake3",
  "canonical_json",
  "chacha20poly1305",

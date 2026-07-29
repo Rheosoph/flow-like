@@ -171,6 +171,11 @@ jobs:
           echo "ORT_LIB_LOCATION=${GITHUB_WORKSPACE}/apps/desktop/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64" >> "$GITHUB_ENV"
           echo "MACOSX_DEPLOYMENT_TARGET=14.0" >> "$GITHUB_ENV"
 
+      - name: Build Apple MLX helper
+        if: matrix.platform == 'macos-latest'
+        working-directory: apps/desktop
+        run: bun ./scripts/prepare-mlx.ts --configuration Release
+
       - name: Prepare Windows VC runtime DLLs
         if: runner.os == 'Windows'
         working-directory: apps/desktop

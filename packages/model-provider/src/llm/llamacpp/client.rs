@@ -17,10 +17,21 @@ struct ToolArgumentSpec {
     ordered_parameter_names: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct LlamaCppClient {
     base_url: String,
     http_client: reqwest::Client,
+    bearer_token: Option<String>,
+}
+
+impl std::fmt::Debug for LlamaCppClient {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("LlamaCppClient")
+            .field("base_url", &self.base_url)
+            .field("has_bearer_token", &self.bearer_token.is_some())
+            .finish()
+    }
 }
 
 impl LlamaCppClient {
@@ -28,12 +39,25 @@ impl LlamaCppClient {
         Self {
             base_url: base_url.to_string(),
             http_client: reqwest::Client::new(),
+            bearer_token: None,
+        }
+    }
+
+    pub fn new_with_bearer_token(base_url: &str, bearer_token: impl Into<String>) -> Self {
+        Self {
+            base_url: base_url.to_string(),
+            http_client: reqwest::Client::new(),
+            bearer_token: Some(bearer_token.into()),
         }
     }
 
     fn post(&self, path: &str) -> Result<reqwest::RequestBuilder, ClientBuilderError> {
         let url = format!("{}/{}", self.base_url, path);
-        Ok(self.http_client.post(url))
+        let request = self.http_client.post(url);
+        Ok(match self.bearer_token.as_deref() {
+            Some(bearer_token) => request.bearer_auth(bearer_token),
+            None => request,
+        })
     }
 
     pub fn completion_model(&self, model: &str) -> CompletionModel {
@@ -225,6 +249,17 @@ impl CompletionModel {
                 );
             }
         }
+    }
+
+    fn openai_error_message(payload: &str) -> Option<String> {
+        let value = serde_json::from_str::<Value>(payload).ok()?;
+        let error = value.get("error")?;
+        error
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| error.as_str())
+            .map(str::to_owned)
+            .or_else(|| (!error.is_null()).then(|| error.to_string()))
     }
 
     fn fallback_tool_calls_from_text(
@@ -1730,6 +1765,11 @@ impl completion::CompletionModel for CompletionModel {
                         if message.data.trim().is_empty() || message.data == "[DONE]" {
                             continue;
                         }
+                        if let Some(error) = Self::openai_error_message(&message.data) {
+                            event_source.close();
+                            yield Err(CompletionError::ProviderError(error));
+                            return;
+                        }
 
                         let chunk: Result<StreamingChunk, _> = serde_json::from_str(&message.data);
                         let Ok(chunk) = chunk else {
@@ -1931,6 +1971,36 @@ mod tests {
                     "include_usage": true,
                 }
             })
+        );
+    }
+
+    #[test]
+    fn bearer_token_is_attached_without_debug_exposure() {
+        let client = LlamaCppClient::new_with_bearer_token(DEFAULT_BASE_URL, "runtime-secret");
+        let request = client.post("v1/chat/completions").unwrap().build().unwrap();
+
+        assert_eq!(
+            request
+                .headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer runtime-secret")
+        );
+        assert!(!format!("{client:?}").contains("runtime-secret"));
+    }
+
+    #[test]
+    fn test_openai_stream_error_payload_is_detected() {
+        assert_eq!(
+            CompletionModel::openai_error_message(
+                r#"{"error":{"message":"native generation failed","type":"server_error"}}"#
+            )
+            .as_deref(),
+            Some("native generation failed")
+        );
+        assert_eq!(
+            CompletionModel::openai_error_message(r#"{"choices":[{"delta":{"content":"hello"}}]}"#),
+            None
         );
     }
 

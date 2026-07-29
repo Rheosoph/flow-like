@@ -26,6 +26,7 @@ import { useEffect, useState } from "react";
 
 const PROVIDER_OPTIONS = [
 	"Local",
+	"MLX",
 	"Premium",
 	"Hosted",
 	"hosted:openrouter",

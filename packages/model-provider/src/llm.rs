@@ -35,6 +35,7 @@ pub mod llamacpp;
 pub mod lmstudio;
 pub mod mira;
 pub mod mistral;
+pub mod mlx;
 pub mod moonshot;
 pub mod mozilla;
 pub mod ollama;

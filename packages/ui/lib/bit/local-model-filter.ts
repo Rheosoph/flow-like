@@ -1,23 +1,58 @@
 import type { IBit } from "../schema";
 
-/**
- * Provider names whose LLM/VLM models require a local llama.cpp runtime.
- * Hosts that cannot spawn llama.cpp (notably iOS) error when one of these is
- * selected, so they must be hidden from model pickers on such hosts.
- */
-export const LOCAL_LLM_PROVIDER_NAMES: ReadonlySet<string> = new Set([
+/** Provider names whose LLM/VLM models require a local llama.cpp runtime. */
+export const LLAMA_CPP_PROVIDER_NAMES: ReadonlySet<string> = new Set([
 	"local",
 	"llama.cpp",
 	"llamacpp",
 	"ollama",
 ]);
 
-export function isLocalLlmModel(bit: IBit): boolean {
+/** Provider names whose LLM/VLM models require Apple's MLX runtime. */
+export const MLX_PROVIDER_NAMES: ReadonlySet<string> = new Set(["mlx"]);
+
+/** @deprecated Prefer the runtime-specific provider sets. */
+export const LOCAL_LLM_PROVIDER_NAMES: ReadonlySet<string> =
+	LLAMA_CPP_PROVIDER_NAMES;
+
+export interface LocalModelHostCapabilities {
+	canHostLlamaCPP: boolean;
+	canHostMLX: boolean;
+}
+
+function normalizedProviderName(bit: IBit): string | undefined {
 	const providerName = bit.parameters?.provider?.provider_name;
+	return typeof providerName === "string"
+		? providerName.trim().toLowerCase()
+		: undefined;
+}
+
+export function isLlamaCppLlmModel(bit: IBit): boolean {
+	const providerName = normalizedProviderName(bit);
 	return (
 		typeof providerName === "string" &&
-		LOCAL_LLM_PROVIDER_NAMES.has(providerName.toLowerCase())
+		LLAMA_CPP_PROVIDER_NAMES.has(providerName)
 	);
+}
+
+export function isMlxLlmModel(bit: IBit): boolean {
+	const providerName = normalizedProviderName(bit);
+	return (
+		typeof providerName === "string" && MLX_PROVIDER_NAMES.has(providerName)
+	);
+}
+
+export function isLocalLlmModel(bit: IBit): boolean {
+	return isLlamaCppLlmModel(bit) || isMlxLlmModel(bit);
+}
+
+export function isHostableLlmModel(
+	bit: IBit,
+	capabilities: LocalModelHostCapabilities,
+): boolean {
+	if (isMlxLlmModel(bit)) return capabilities.canHostMLX;
+	if (isLlamaCppLlmModel(bit)) return capabilities.canHostLlamaCPP;
+	return true;
 }
 
 /** Return the normalized access tier declared by a hosted LLM/VLM bit. */
@@ -33,13 +68,12 @@ export function isFreeLlmModel(bit: IBit): boolean {
 }
 
 /**
- * Drop models that require a local llama.cpp runtime when the current host
- * cannot host one. On capable hosts the list is returned unchanged.
+ * Drop local models whose runtime is unavailable on the current host.
  */
 export function filterHostableLlmModels(
 	models: IBit[],
-	canHostLlamaCPP: boolean,
+	capabilities: LocalModelHostCapabilities,
 ): IBit[] {
-	if (canHostLlamaCPP) return models;
-	return models.filter((model) => !isLocalLlmModel(model));
+	if (capabilities.canHostLlamaCPP && capabilities.canHostMLX) return models;
+	return models.filter((model) => isHostableLlmModel(model, capabilities));
 }

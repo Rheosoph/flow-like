@@ -117,6 +117,7 @@ export function LLMConfiguration({
 								</SelectTrigger>
 								<SelectContent>
 									<SelectItem value="Local">Local</SelectItem>
+									<SelectItem value="MLX">MLX</SelectItem>
 									<SelectItem value="Premium">Premium</SelectItem>
 								</SelectContent>
 							</Select>

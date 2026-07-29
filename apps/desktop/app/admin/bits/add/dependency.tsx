@@ -88,7 +88,7 @@ export function DependencyConfiguration({
 						/>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="file-name">File Name</Label>
+						<Label htmlFor="file-name">Stored File Path</Label>
 						<Input
 							id="file-name"
 							value={bit.file_name ?? ""}
@@ -98,8 +98,12 @@ export function DependencyConfiguration({
 									file_name: e.target.value.trim(),
 								}));
 							}}
-							placeholder="Model file name"
+							placeholder="config.json or weights/model.safetensors"
 						/>
+						<p className="text-xs text-muted-foreground">
+							Directory-relative paths are preserved for multi-file model
+							bundles.
+						</p>
 					</div>
 					{typeof bit.size === "number" && bit.size > 0 && (
 						<div className="space-y-2">

@@ -404,11 +404,21 @@ pub async fn remove_bit(
 /// profiles use the bit is decided separately via `add_bit`/`remove_bit`.
 #[instrument(skip_all)]
 #[tauri::command(async)]
-pub async fn upsert_custom_bit(app_handle: AppHandle, bit: Bit) -> Result<(), TauriFunctionError> {
-    // Same normalization the API applies: user bits don't know their artifact
-    // hash upfront; `hash == id` is the trust-on-first-use download sentinel
-    // and doubles as the local storage path.
+pub async fn upsert_custom_bit(app_handle: AppHandle, bit: Bit) -> Result<Bit, TauriFunctionError> {
     let mut bit = bit;
+    let settings = TauriSettingsState::construct(&app_handle).await?;
+    let mut settings = settings.lock().await;
+    let previous = settings
+        .custom_bits
+        .iter()
+        .find(|existing| existing.id == bit.id)
+        .cloned();
+
+    // Keep offline/local-only behavior identical to the API: a pinned-source
+    // edit gets a fresh artifact, dependency-pack and runtime cache identity.
+    // If an edit form carried an old explicit checksum to a new source, clear
+    // it; an explicit checksum for an unchanged source remains verified.
+    bit.normalize_edited_user_local_artifact_identity(previous.as_ref());
     if bit.hash.is_empty() {
         bit.hash = bit.id.clone();
     }
@@ -416,20 +426,17 @@ pub async fn upsert_custom_bit(app_handle: AppHandle, bit: Bit) -> Result<(), Ta
         bit.dependency_tree_hash = bit.id.clone();
     }
 
-    let settings = TauriSettingsState::construct(&app_handle).await?;
-    let mut settings = settings.lock().await;
-
     match settings
         .custom_bits
         .iter_mut()
         .find(|existing| existing.id == bit.id)
     {
-        Some(existing) => *existing = bit,
-        None => settings.custom_bits.push(bit),
+        Some(existing) => *existing = bit.clone(),
+        None => settings.custom_bits.push(bit.clone()),
     }
 
     settings.serialize();
-    Ok(())
+    Ok(bit)
 }
 
 /// Deletes a bit from the library and drops it from every profile that used it.
@@ -474,7 +481,15 @@ pub async fn remove_custom_bit(
 pub async fn get_custom_bits(app_handle: AppHandle) -> Result<Vec<Bit>, TauriFunctionError> {
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let settings = settings.lock().await;
-    Ok(settings.custom_bits.clone())
+    Ok(settings
+        .custom_bits
+        .iter()
+        .cloned()
+        .map(|mut bit| {
+            bit.normalize_user_local_artifact_identity();
+            bit
+        })
+        .collect())
 }
 
 #[instrument(skip_all)]

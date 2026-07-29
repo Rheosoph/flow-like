@@ -3,5 +3,6 @@ export enum IProvider {
 	AzureOpenAI = "AzureOpenAI",
 	Bedrock = "Bedrock",
 	Local = "Local",
+	MLX = "MLX",
 	OpenAI = "OpenAI",
 }

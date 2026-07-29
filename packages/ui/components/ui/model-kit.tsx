@@ -295,6 +295,7 @@ const PROVIDER_NAMES: Record<string, string> = {
 	hyperbolic: "Hyperbolic",
 	lmstudio: "LM Studio",
 	local: "On-device",
+	mlx: "On-device",
 	mira: "Mira",
 	mistral: "Mistral",
 	moonshot: "Moonshot",

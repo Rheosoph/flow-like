@@ -100,6 +100,10 @@ app = ["bit", "model", "hub"]
 openapi = ["utoipa"]
 full = ["schema-gen", "flow-runtime", "flow", "hub", "bit", "model", "app"]
 default = ["schema-gen", "flow-runtime", "flow", "hub", "bit", "model", "app"]
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+axum.workspace = true
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

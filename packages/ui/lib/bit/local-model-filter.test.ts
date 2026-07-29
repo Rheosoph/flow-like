@@ -4,7 +4,10 @@ import {
 	filterHostableLlmModels,
 	getLlmModelTier,
 	isFreeLlmModel,
+	isHostableLlmModel,
+	isLlamaCppLlmModel,
 	isLocalLlmModel,
+	isMlxLlmModel,
 } from "./local-model-filter";
 function bit(providerName?: string): IBit {
 	return {
@@ -19,7 +22,14 @@ function bit(providerName?: string): IBit {
 
 describe("isLocalLlmModel", () => {
 	test("matches local provider names case-insensitively", () => {
-		for (const name of ["Local", "local", "Llama.cpp", "LLAMACPP", "Ollama"]) {
+		for (const name of [
+			"Local",
+			"local",
+			"Llama.cpp",
+			"LLAMACPP",
+			"Ollama",
+			"MLX",
+		]) {
 			expect(isLocalLlmModel(bit(name))).toBe(true);
 		}
 	});
@@ -35,18 +45,69 @@ describe("isLocalLlmModel", () => {
 	});
 });
 
-describe("filterHostableLlmModels", () => {
-	const models = [bit("Local"), bit("Hosted"), bit("llamacpp"), bit("OpenAI")];
-
-	test("returns the list unchanged when the host can run llama.cpp", () => {
-		expect(filterHostableLlmModels(models, true)).toEqual(models);
+describe("local runtime providers", () => {
+	test("distinguishes llama.cpp-compatible and MLX models", () => {
+		expect(isLlamaCppLlmModel(bit("Local"))).toBe(true);
+		expect(isLlamaCppLlmModel(bit("MLX"))).toBe(false);
+		expect(isMlxLlmModel(bit("mlx"))).toBe(true);
+		expect(isMlxLlmModel(bit("llama.cpp"))).toBe(false);
 	});
 
-	test("drops local-only models when the host cannot run llama.cpp", () => {
-		expect(filterHostableLlmModels(models, false)).toEqual([
-			bit("Hosted"),
-			bit("OpenAI"),
-		]);
+	test("checks the capability for the model's runtime", () => {
+		const llamaOnly = { canHostLlamaCPP: true, canHostMLX: false };
+		const mlxOnly = { canHostLlamaCPP: false, canHostMLX: true };
+
+		expect(isHostableLlmModel(bit("Local"), llamaOnly)).toBe(true);
+		expect(isHostableLlmModel(bit("MLX"), llamaOnly)).toBe(false);
+		expect(isHostableLlmModel(bit("Local"), mlxOnly)).toBe(false);
+		expect(isHostableLlmModel(bit("MLX"), mlxOnly)).toBe(true);
+		expect(isHostableLlmModel(bit("OpenAI"), mlxOnly)).toBe(true);
+	});
+});
+
+describe("filterHostableLlmModels", () => {
+	const models = [
+		bit("Local"),
+		bit("Hosted"),
+		bit("MLX"),
+		bit("llamacpp"),
+		bit("OpenAI"),
+	];
+
+	test("returns the list unchanged when the host can run both runtimes", () => {
+		expect(
+			filterHostableLlmModels(models, {
+				canHostLlamaCPP: true,
+				canHostMLX: true,
+			}),
+		).toEqual(models);
+	});
+
+	test("keeps only llama.cpp models on a non-Apple desktop", () => {
+		expect(
+			filterHostableLlmModels(models, {
+				canHostLlamaCPP: true,
+				canHostMLX: false,
+			}),
+		).toEqual([bit("Local"), bit("Hosted"), bit("llamacpp"), bit("OpenAI")]);
+	});
+
+	test("keeps only MLX models on iOS", () => {
+		expect(
+			filterHostableLlmModels(models, {
+				canHostLlamaCPP: false,
+				canHostMLX: true,
+			}),
+		).toEqual([bit("Hosted"), bit("MLX"), bit("OpenAI")]);
+	});
+
+	test("drops all local models on a remote-only host", () => {
+		expect(
+			filterHostableLlmModels(models, {
+				canHostLlamaCPP: false,
+				canHostMLX: false,
+			}),
+		).toEqual([bit("Hosted"), bit("OpenAI")]);
 	});
 });
 
@@ -69,4 +130,3 @@ describe("hosted model tiers", () => {
 		expect(isFreeLlmModel(paid)).toBe(false);
 	});
 });
-
