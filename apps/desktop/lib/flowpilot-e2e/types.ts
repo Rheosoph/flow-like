@@ -73,6 +73,12 @@ export interface FlowPilotE2ECaseRequirements {
 	requireSuccessfulCompilerReceipt: boolean;
 	validateReferenceIntegrity: boolean;
 	requiredSemanticTableAliases: readonly string[];
+	/**
+	 * Database aliases that must be opened by canonical FlowScript rather than resolved from the
+	 * setup-time table inventory. This preserves lazy stores whose schema depends on the first
+	 * runtime value, such as an embedding vector's model-specific width.
+	 */
+	requiredLazyDatabaseAliases: readonly string[];
 	requiredIdReferences: readonly FlowPilotE2ERequiredIdReference[];
 	requiredNodeCapabilities: readonly FlowPilotE2ERequiredNodeCapability[];
 }

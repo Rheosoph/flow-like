@@ -849,6 +849,12 @@ fn is_data_studio_tool(tool_name: &str) -> bool {
     )
 }
 
+/// Board context is a default for this tool, not an authority boundary: its explicit purpose is
+/// reading a referenced board in another app the user can access.
+fn is_cross_board_source_tool(tool_name: &str) -> bool {
+    tool_name == "read_flowscript_source"
+}
+
 fn fill_default_arg(arguments: &mut serde_json::Map<String, Value>, key: &str, value: &str) {
     let needs_fill = match arguments.get(key) {
         None | Some(Value::Null) => true,
@@ -872,8 +878,9 @@ fn apply_tool_context(
         return;
     };
     let data_studio = is_data_studio_tool(tool_name);
+    let cross_board_source = is_cross_board_source_tool(tool_name);
     if let Some(app_id) = context.app_id.as_ref() {
-        if data_studio {
+        if data_studio || cross_board_source {
             fill_default_arg(arguments, "app_id", app_id);
         } else {
             arguments.insert("app_id".to_string(), Value::String(app_id.clone()));
@@ -883,7 +890,11 @@ fn apply_tool_context(
         fill_default_arg(arguments, "overlay_id", overlay_id);
     }
     if let Some(board_id) = context.board_id.as_ref() {
-        arguments.insert("board_id".to_string(), Value::String(board_id.clone()));
+        if cross_board_source {
+            fill_default_arg(arguments, "board_id", board_id);
+        } else {
+            arguments.insert("board_id".to_string(), Value::String(board_id.clone()));
+        }
     }
 }
 
@@ -1394,6 +1405,7 @@ mod tests {
             board_id: Some("scoped-board".to_string()),
             overlay_id: None,
             parent_request_id: Some("outer-request".to_string()),
+            run_id: None,
             conversation_id: None,
             source_user_prompt: None,
             board_context_manifest: None,
@@ -1416,6 +1428,40 @@ mod tests {
     }
 
     #[test]
+    fn cross_board_source_context_preserves_explicit_target_and_fills_defaults() {
+        let context = FrontendToolContext {
+            app_id: Some("current-app".to_string()),
+            board_id: Some("current-board".to_string()),
+            ..Default::default()
+        };
+        let mut explicit = json!({
+            "app_id": "referenced-app",
+            "board_id": "referenced-board",
+            "locator": "helper"
+        });
+        apply_tool_context("read_flowscript_source", &mut explicit, Some(&context));
+        assert_eq!(
+            explicit.get("app_id").and_then(Value::as_str),
+            Some("referenced-app")
+        );
+        assert_eq!(
+            explicit.get("board_id").and_then(Value::as_str),
+            Some("referenced-board")
+        );
+
+        let mut defaulted = json!({});
+        apply_tool_context("read_flowscript_source", &mut defaulted, Some(&context));
+        assert_eq!(
+            defaulted.get("app_id").and_then(Value::as_str),
+            Some("current-app")
+        );
+        assert_eq!(
+            defaulted.get("board_id").and_then(Value::as_str),
+            Some("current-board")
+        );
+    }
+
+    #[test]
     fn debug_report_correlates_parent_and_never_contains_argument_values() {
         let arguments = json!({
             "app_id": "app-safe",
@@ -1429,6 +1475,7 @@ mod tests {
             board_id: Some("board-safe".to_string()),
             overlay_id: None,
             parent_request_id: Some("flowpilot-tool-parent-1".to_string()),
+            run_id: None,
             conversation_id: None,
             source_user_prompt: None,
             board_context_manifest: None,
@@ -1494,25 +1541,35 @@ mod tests {
     }
 
     #[test]
-    fn emitted_request_has_deadline_and_safe_nested_context() {
+    fn emitted_request_preserves_owner_run_context_and_deadline() {
+        let arguments = json!({ "operation": "list_tables" });
+        let approval = FrontendToolApproval::none();
+        let context = FrontendToolContext {
+            app_id: Some("app".to_string()),
+            board_id: Some("board".to_string()),
+            parent_request_id: Some("parent".to_string()),
+            run_id: Some("owning-run".to_string()),
+            ..Default::default()
+        };
+        let trace = FrontendToolTrace::new(
+            "child".to_string(),
+            "database_tool".to_string(),
+            GLOBAL_FRONTEND_TOOL_EVENT.to_string(),
+            &arguments,
+            &approval,
+            Some(&context),
+            Duration::from_secs(120),
+        );
         let request = FrontendToolRequest {
             request_id: "child".to_string(),
             tool_name: "database_tool".to_string(),
-            arguments: json!({ "operation": "list_tables" }),
-            approval: FrontendToolApproval::none(),
-            parent_request_id: Some("parent".to_string()),
-            context: Some(FrontendToolContext {
-                app_id: Some("app".to_string()),
-                board_id: Some("board".to_string()),
-                overlay_id: None,
-                parent_request_id: Some("parent".to_string()),
-                conversation_id: None,
-                source_user_prompt: None,
-                board_context_manifest: None,
-            }),
-            dispatched_at_ms: 1_000,
-            deadline_at_ms: 121_000,
-            timeout_ms: 120_000,
+            arguments,
+            approval,
+            parent_request_id: trace.parent_request_id.clone(),
+            context: safe_request_context(&trace.context),
+            dispatched_at_ms: trace.dispatched_at_ms,
+            deadline_at_ms: trace.deadline_at_ms,
+            timeout_ms: trace.configured_timeout_ms,
         };
         let serialized = serde_json::to_value(request).unwrap();
 
@@ -1522,13 +1579,17 @@ mod tests {
         );
         assert_eq!(
             serialized.get("deadlineAtMs").and_then(Value::as_u64),
-            Some(121_000)
+            Some(trace.deadline_at_ms)
         );
         assert_eq!(
             serialized
                 .pointer("/context/parentRequestId")
                 .and_then(Value::as_str),
             Some("parent")
+        );
+        assert_eq!(
+            serialized.pointer("/context/runId").and_then(Value::as_str),
+            Some("owning-run")
         );
     }
 

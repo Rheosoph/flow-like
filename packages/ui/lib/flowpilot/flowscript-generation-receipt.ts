@@ -1,4 +1,5 @@
 import type { FlowScriptWorkspaceCandidate } from "../../components/flowpilot/flowscript-workspace-candidates";
+import type { BoardEditJob } from "../schema/copilot";
 
 export const FLOWSCRIPT_GENERATION_RUN_SCHEMA =
 	"flowpilot.flowscript-generation-run/v1" as const;
@@ -493,6 +494,15 @@ export function flowScriptGenerationRunsForApp(
 		}
 	}
 	return runs.sort((left, right) => left.startedAtMs - right.startedAtMs);
+}
+
+export function boardEditJobAppliedCommandCount(
+	job: Pick<BoardEditJob, "phase" | "result" | "review">,
+): number {
+	if (job.phase !== "applied" && job.phase !== "applied_pending_delivery") {
+		return 0;
+	}
+	return job.result?.commands.length ?? job.review.commandCount;
 }
 
 /** Update a previously published run when an asynchronous native board-edit job settles. */

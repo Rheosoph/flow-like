@@ -31,6 +31,7 @@ import {
 	isDirectFlowPilotBoardEditJob,
 } from "../../lib/flowpilot/board-edit-job-delivery";
 import {
+	boardEditJobAppliedCommandCount,
 	createFlowScriptGenerationTrace,
 	updateFlowScriptGenerationRunReceipt,
 } from "../../lib/flowpilot/flowscript-generation-receipt";
@@ -126,6 +127,7 @@ import type {
 } from "../interfaces/chat-default/chat-db";
 import type { IAttachment, IMessage } from "../interfaces/chat-default/chat-db";
 import { processChatEvents } from "../interfaces/chat-default/event-processor";
+import { readFlowScriptSource } from "./read-flowscript-source";
 import {
 	scoutForkPreview,
 	scoutGetAppDetail,
@@ -137,6 +139,7 @@ import {
 import {
 	type RunnableWorkflowEventEntry,
 	WORKFLOW_EVENT_ENTRY_NODE_NAMES,
+	buildWorkflowBoardResultEnvelope,
 	collectRunnableWorkflowEventEntries,
 	isRunnableWorkflowEventEntry,
 } from "./workflow-event-entries";
@@ -218,6 +221,10 @@ export interface FrontendToolRequest {
 	parentRequestId?: string;
 	/** Nested tools inherit their parent request so cancellation/diagnostics remain one tree. */
 	context?: {
+		appId?: string;
+		app_id?: string;
+		boardId?: string;
+		board_id?: string;
 		parentRequestId?: string;
 		parent_request_id?: string;
 		conversationId?: string;
@@ -1552,9 +1559,7 @@ export function GlobalToolBridge() {
 							: applied
 								? "readback_mismatch"
 								: job.phase,
-					appliedCommands:
-						job.result?.commands.length ??
-						(job.result?.status === "applied" ? job.review.commandCount : 0),
+					appliedCommands: boardEditJobAppliedCommandCount(job),
 					persistedReadbackVerified,
 				},
 			);
@@ -1892,7 +1897,8 @@ export function GlobalToolBridge() {
 		async (request: FrontendToolRequest, scope: RunScope): Promise<unknown> => {
 			assertRequestActive(request, "tool execution");
 			const args = request.arguments ?? {};
-			// Only apps visible in the CURRENT profile are eligible for app-interface tools.
+			// Only apps visible in the CURRENT profile are eligible for app-interface and
+			// cross-board source tools.
 			const getProfileAppIds = async (): Promise<Set<string>> => {
 				try {
 					const profile = await backend.userState.getSettingsProfile();
@@ -1904,6 +1910,30 @@ export function GlobalToolBridge() {
 				}
 			};
 			switch (request.toolName) {
+				case "read_flowscript_source": {
+					const appId = argString(args, "app_id") || argString(args, "appId");
+					const boardId =
+						argString(args, "board_id") || argString(args, "boardId");
+					const scopedAppId = request.context?.appId ?? request.context?.app_id;
+					return readFlowScriptSource(
+						{
+							appId,
+							boardId,
+							scopedAppId,
+							locator: argString(args, "locator") || undefined,
+						},
+						{
+							getProfileAppIds,
+							getFlowScript: (targetAppId, targetBoardId) =>
+								backend.boardState.getFlowScript(
+									targetAppId,
+									targetBoardId,
+									undefined,
+									true,
+								),
+						},
+					);
+				}
 				case "database_tool":
 				case "storage_tool":
 				case "ui_inspect":
@@ -4140,7 +4170,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									// exact compiler batch; navigation merely detaches this presenter.
 									generationOutcome = "awaiting_approval";
 									generationFinalWorkspaceStatus = workspaceStatus;
-									generationAppliedCommands = job.review.commandCount;
+									generationAppliedCommands = 0;
 									nestedRunSettled = true;
 									void presentBoardEditJob(job).catch((error) =>
 										console.warn(
@@ -4750,12 +4780,17 @@ Completion contract: build complete helper logic first and add the Event entry l
 										"These functions were committed with the correct interface but no implementation, because they could not be built. Tell the user which ones they are and what logic each one needs.",
 								}
 							: {};
+						const boardResultEnvelope = buildWorkflowBoardResultEnvelope({
+							specialistMessage: response.message,
+							appliedCommands,
+							persistedReadbackVerified,
+							eventNodes,
+						});
 						publishWorkflowLane(resultStatus === "error" ? "failed" : "done");
 						publishSubSteps();
 						const result = {
 							status: resultStatus,
-							message: response.message,
-							applied_commands: appliedCommands,
+							...boardResultEnvelope,
 							...scopePlanResult,
 							...manualStepsResult,
 							...(timeBudget && timeBudget.grantedExtensions > 0
@@ -4767,7 +4802,6 @@ Completion contract: build complete helper logic first and add the Event entry l
 							...(finalBoardNodeCount !== undefined
 								? { final_board_node_count: finalBoardNodeCount }
 								: {}),
-							...(eventNodes.length > 0 ? { event_nodes: eventNodes } : {}),
 							...(partialWorkingSlice
 								? {
 										flowscript_status: "partial",

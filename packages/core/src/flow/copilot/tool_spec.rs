@@ -1574,6 +1574,12 @@ Requires the user to be a member of the source app with board read access; a ref
     }]
 }
 
+pub fn find_cross_board_source_tool_spec(name: &str) -> Option<PlatformToolSpec> {
+    cross_board_source_tool_specs()
+        .into_iter()
+        .find(|spec| spec.name == name)
+}
+
 pub fn data_studio_tool_specs() -> Vec<PlatformToolSpec> {
     vec![
         PlatformToolSpec {

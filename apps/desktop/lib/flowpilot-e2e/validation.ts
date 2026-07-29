@@ -265,6 +265,26 @@ function flowScriptStringValues(source: string | undefined): readonly string[] {
 	return values;
 }
 
+function flowScriptDatabaseLiteralAliases(source: string): ReadonlySet<string> {
+	const aliases = new Set<string>();
+	const databaseCall = /\b(?:database|openLocalDb)\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
+	for (const call of source.matchAll(databaseCall)) {
+		const argumentsSource = call[1];
+		if (!argumentsSource) continue;
+		const nameLiteral = argumentsSource.match(
+			/\bname\s*:\s*("(?:\\.|[^"\\])*")/,
+		)?.[1];
+		if (!nameLiteral) continue;
+		try {
+			const value = JSON.parse(nameLiteral);
+			if (typeof value === "string") aliases.add(value);
+		} catch {
+			// Native lint reports malformed literals; alias matching stays conservative.
+		}
+	}
+	return aliases;
+}
+
 function sourceContainsReference(
 	kind: FlowPilotE2EEntityKind,
 	source: FlowScriptReferenceSource,
@@ -1042,6 +1062,26 @@ export function evaluateAppCreationCase(
 						? `Resolved semantic table alias ${JSON.stringify(alias)} to ${resolution.entity.id}.`
 						: `Missing semantic table alias ${JSON.stringify(alias)}.`,
 				{ expected: alias, actual: resolution.entity?.id ?? "unresolved" },
+			),
+		);
+	}
+
+	const canonicalDatabaseAliases =
+		flowScriptDatabaseLiteralAliases(canonicalSource);
+	for (const alias of requirements.requiredLazyDatabaseAliases) {
+		const opened = canonicalDatabaseAliases.has(alias);
+		checks.push(
+			check(
+				`flowscript.lazy_database_alias.${normalizeSemanticAlias(alias)}`,
+				opened,
+				opened
+					? `Canonical FlowScript opens lazy database alias ${JSON.stringify(alias)}.`
+					: `Canonical FlowScript does not open exact lazy database alias ${JSON.stringify(alias)} via database(...) or openLocalDb(...).`,
+				{
+					path: "boards[].flowScript",
+					expected: alias,
+					actual: opened ? alias : "missing",
+				},
 			),
 		);
 	}

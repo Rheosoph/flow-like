@@ -26,11 +26,17 @@ import {
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useCopilotSDK, useInvoke } from "../../hooks";
+import { copilotBackendConnectionCoordinator } from "../../hooks/copilot-backend-coordinator";
 import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime-tool-executor";
 import { IBitTypes, filterHostableLlmModels, isFreeLlmModel } from "../../lib";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { flowPilotCommandApplyDiagnostics } from "../../lib/flowpilot-command-apply";
 import { buildFlowPilotBoardContextAugmentation } from "../../lib/flowpilot/board-context-manifest";
+import {
+	classifyAgentBackendError,
+	formatAgentBackendDiagnostic,
+	shouldPersistAgentBackendDiagnostic,
+} from "../../lib/flowpilot/agent-backend-diagnostics";
 import {
 	DIRECT_FLOWPILOT_BOARD_EDIT_REQUEST_PREFIX,
 	boardEditJobResolutionHistoryMode,
@@ -2363,8 +2369,8 @@ function FlowPilotImpl({
 					...prev,
 					{
 						role: "assistant",
-						content: copilotSDK.error
-							? `Agent backend is not ready yet: ${copilotSDK.error}`
+						content: copilotSDK.diagnostic
+							? formatAgentBackendDiagnostic(copilotSDK.diagnostic)
 							: "Agent backend is not ready yet. Connect the selected backend and choose a model before sending.",
 					},
 				]);
@@ -3482,14 +3488,26 @@ function FlowPilotImpl({
 					const lastMessage = newMessages[newMessages.length - 1];
 					if (lastMessage?.role === "assistant") {
 						let errorMessage =
-							error instanceof Error ? error.message : "Unknown error";
+							error instanceof Error
+								? error.message
+								: typeof error === "string"
+									? error
+									: String(error ?? "Unknown error");
 
-						if (
-							errorMessage.includes("401 Unauthorized") ||
-							errorMessage.includes("status code 401")
-						) {
-							errorMessage =
-								"Authentication failed. Please check if you are signed in and your session is active.";
+						if (isAgentBackendProvider(normalizedProvider)) {
+							const backendDiagnostic = classifyAgentBackendError(
+								normalizedProvider,
+								errorMessage,
+							);
+							if (backendDiagnostic) {
+								if (shouldPersistAgentBackendDiagnostic(backendDiagnostic)) {
+									copilotBackendConnectionCoordinator.reportFailure(
+										normalizedProvider,
+										error,
+									);
+								}
+								errorMessage = formatAgentBackendDiagnostic(backendDiagnostic);
+							}
 						}
 
 						lastMessage.content = `Error: ${errorMessage}`;
@@ -3545,6 +3563,7 @@ function FlowPilotImpl({
 			provider,
 			normalizedProvider,
 			copilotSDK.isRunning,
+			copilotSDK.diagnostic,
 			currentConversationId,
 			flowscriptWorkspace,
 			flowscriptWorkspaceStatus,
@@ -4497,11 +4516,12 @@ const Header = memo(function Header({
 		},
 		[copilotSDK.isRunning, onProviderChange, onStartCopilot, provider],
 	);
-	const connectionStatus = isAgentBackendProvider(normalizedProvider)
-		? copilotSDK.authStatus?.authenticated && copilotSDK.authStatus.login
-			? `Signed in as ${copilotSDK.authStatus.login}${copilotSDK.authStatus.message ? ` · ${copilotSDK.authStatus.message}` : ""}`
-			: copilotSDK.authStatus?.message
-		: undefined;
+	const connectionStatus =
+		isAgentBackendProvider(normalizedProvider) && !copilotSDK.diagnostic
+			? copilotSDK.authStatus?.authenticated && copilotSDK.authStatus.login
+				? `Signed in as ${copilotSDK.authStatus.login}${copilotSDK.authStatus.message ? ` · ${copilotSDK.authStatus.message}` : ""}`
+				: copilotSDK.authStatus?.message
+			: undefined;
 
 	return (
 		<div className="relative overflow-hidden shrink-0">
@@ -4662,6 +4682,12 @@ const Header = memo(function Header({
 					connected={
 						copilotSDK.isRunning && isAgentBackendProvider(normalizedProvider)
 					}
+					diagnostic={
+						isAgentBackendProvider(normalizedProvider)
+							? copilotSDK.diagnostic
+							: null
+					}
+					onRetry={copilotSDK.retry}
 					onDisconnect={onStopCopilot}
 					statusText={connectionStatus}
 					showProviderSection={!forceProvider}

@@ -3875,13 +3875,15 @@ fn frontend_platform_tool_spec(
     tool_name: &str,
 ) -> Option<flow_like::flow::copilot::tool_spec::PlatformToolSpec> {
     use flow_like::flow::copilot::tool_spec::{
-        find_global_tool_spec, find_runtime_execution_tool_spec, find_workflow_context_tool_spec,
+        find_cross_board_source_tool_spec, find_global_tool_spec, find_runtime_execution_tool_spec,
+        find_workflow_context_tool_spec,
     };
 
     match tool_set {
         FrontendPlatformToolSet::Global => find_global_tool_spec(tool_name),
         FrontendPlatformToolSet::BoardRuntime => find_runtime_execution_tool_spec(tool_name)
-            .or_else(|| find_workflow_context_tool_spec(tool_name)),
+            .or_else(|| find_workflow_context_tool_spec(tool_name))
+            .or_else(|| find_cross_board_source_tool_spec(tool_name)),
     }
 }
 
@@ -4008,6 +4010,25 @@ enum ExternalAgentExitKind {
     Permanent,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExternalAgentFailureCategory {
+    CliMissing,
+    CliNotExecutable,
+    LocalPermission,
+    Authentication,
+    AccountAccess,
+    RateLimit,
+    Network,
+    Model,
+    McpConnection,
+    Protocol,
+    HostWorkflow,
+    UserCancelled,
+    Input,
+    LocalEnvironment,
+    Process,
+}
+
 fn classify_external_agent_failure(error: &str, cancelled: bool) -> ExternalAgentExitKind {
     if cancelled {
         return ExternalAgentExitKind::UserCancelled;
@@ -4071,6 +4092,515 @@ fn classify_external_agent_failure(error: &str, cancelled: bool) -> ExternalAgen
         ExternalAgentExitKind::TransientInfrastructure
     } else {
         ExternalAgentExitKind::Permanent
+    }
+}
+
+fn classify_external_agent_user_failure(error: &str) -> ExternalAgentFailureCategory {
+    let normalized = error.to_ascii_lowercase();
+
+    if [
+        "flowpilot external agent run was cancelled",
+        "flowpilot run was cancelled",
+        "cancelled by user",
+        "canceled by user",
+        "user cancelled",
+        "user canceled",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentFailureCategory::UserCancelled;
+    }
+
+    if [
+        "nested_run_wall_clock_budget_exhausted",
+        "pre-draft source checkpoint",
+        "zero-progress circuit",
+        "provider continuation budget",
+        "workflow draft needs attention",
+        "workflow validation",
+        "compiler diagnostics",
+        "no board commands were queued",
+        "the external agent exhausted its",
+        "without queueing changes",
+        "retained the most complete flowscript draft",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentFailureCategory::HostWorkflow;
+    }
+
+    if [
+        "prompt image",
+        "failed to decode prompt image",
+        "unsupported prompt image",
+        "invalid image attachment",
+        "context length",
+        "context_length",
+        "prompt is too long",
+        "request too large",
+        "maximum context",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentFailureCategory::Input;
+    }
+
+    if [
+        "failed to create attachment directory",
+        "failed to write attachment",
+        "failed to write claude mcp config",
+        "failed to serialize claude mcp config",
+        "no space left on device",
+        "temporary directory",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentFailureCategory::LocalEnvironment;
+    }
+
+    let local_execution_context = [
+        "failed to start",
+        "failed to run",
+        "cli at ",
+        "executable",
+        "spawn",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker));
+    let local_permission = [
+        "permission denied",
+        "operation not permitted",
+        "access is denied",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker));
+
+    if [
+        "not executable",
+        "os error 13",
+        "bad cpu type",
+        "exec format error",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+        || (local_execution_context && local_permission)
+    {
+        return ExternalAgentFailureCategory::CliNotExecutable;
+    }
+
+    let explicit_cli_resolution_failure = [
+        "cli was not found",
+        "executable was not found",
+        "executable does not exist",
+        "does not contain an executable",
+        "executable was not found on",
+        "cli cannot be resolved",
+        "codex_cli_path",
+        "claude_code_cli_path",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker));
+    let missing_cli_file = [
+        "no such file or directory",
+        "cannot find the file",
+        "could not find executable",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+        && local_execution_context;
+    if explicit_cli_resolution_failure || missing_cli_file {
+        return ExternalAgentFailureCategory::CliMissing;
+    }
+
+    let local_data_context = [
+        "configuration",
+        "config file",
+        "settings file",
+        "credentials file",
+        "credential store",
+        "keychain",
+        "filesystem",
+        "failed to read",
+        "failed to open",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker));
+    if local_permission && local_data_context {
+        return ExternalAgentFailureCategory::LocalPermission;
+    }
+
+    if normalized.contains("cli probe timed out")
+        || normalized.contains("--version exited")
+        || normalized.contains("authentication status check timed out")
+    {
+        return ExternalAgentFailureCategory::Process;
+    }
+
+    let protocol_failure = [
+        "unknown option",
+        "unexpected argument",
+        "unrecognized option",
+        "unknown subcommand",
+        "unsupported command",
+        "protocol",
+        "app-server closed",
+        "control session closed",
+        "before returning models",
+        "initialize failed",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker));
+    let explicit_auth_or_access_failure = [
+        "authentication failed",
+        "failed to authenticate",
+        "not authenticated",
+        "not logged in",
+        "login expired",
+        "invalid api key",
+        "invalid authentication credentials",
+        "oauth",
+        "token expired",
+        "token revoked",
+        "token_invalidated",
+        "unauthorized",
+        "401",
+        "forbidden",
+        "403",
+        "organization",
+        "billing",
+        "subscription",
+        "entitlement",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker));
+    if protocol_failure && !explicit_auth_or_access_failure {
+        return ExternalAgentFailureCategory::Protocol;
+    }
+
+    if [
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "http 429",
+        "status 429",
+        "429:",
+        "429)",
+        "code 429",
+        "overloaded",
+        "http 529",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentFailureCategory::RateLimit;
+    }
+
+    if [
+        "forbidden",
+        "http 403",
+        "status 403",
+        "403:",
+        "403)",
+        "code 403",
+        "http 402",
+        "status 402",
+        "402:",
+        "402)",
+        "code 402",
+        "payment required",
+        "organization has been disabled",
+        "organization is disabled",
+        "org_not_allowed",
+        "oauth_org_not_allowed",
+        "billing",
+        "insufficient quota",
+        "insufficient_quota",
+        "credit balance",
+        "subscription access",
+        "subscription required",
+        "eligible plan",
+        "not available on your plan",
+        "entitlement",
+        "does not have access",
+        "access has been disabled",
+        "permission denied by policy",
+        "account access denied",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentFailureCategory::AccountAccess;
+    }
+
+    if [
+        "authentication failed",
+        "failed to authenticate",
+        "unauthorized",
+        "not authenticated",
+        "not logged in",
+        "login required",
+        "login expired",
+        "sign in required",
+        "invalid api key",
+        "invalid_api_key",
+        "authentication_failed",
+        "oauth session expired",
+        "oauth token",
+        "token expired",
+        "token revoked",
+        "token_invalidated",
+        "invalid authentication credentials",
+        "http 401",
+        "status 401",
+        "401 unauthorized",
+        "401:",
+        "401)",
+        "code 401",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentFailureCategory::Authentication;
+    }
+
+    if [
+        "mcp server connection failed",
+        "mcp connection",
+        "mcp server",
+        "flowpilot tools are unavailable",
+        "flowpilot mcp",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentFailureCategory::McpConnection;
+    }
+
+    if [
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "connection lost",
+        "unable to connect",
+        "could not connect",
+        "network error",
+        "network unavailable",
+        "dns error",
+        "name resolution",
+        "proxy",
+        "certificate",
+        "tls",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "http 502",
+        "http 503",
+        "http 504",
+    ]
+    .iter()
+    .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentFailureCategory::Network;
+    }
+
+    let contextual_model_failure = normalized.contains("model")
+        && [
+            "does not exist",
+            "could not find",
+            "do not have access",
+            "don't have access",
+        ]
+        .iter()
+        .any(|marker| normalized.contains(marker));
+    if contextual_model_failure
+        || [
+            "model not found",
+            "model is not available",
+            "model unavailable",
+            "unsupported model",
+            "unknown model",
+            "invalid model",
+            "selected model",
+        ]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+    {
+        return ExternalAgentFailureCategory::Model;
+    }
+
+    ExternalAgentFailureCategory::Process
+}
+
+fn external_agent_login_command(kind: FlowPilotAgentBackendKind) -> &'static str {
+    match kind {
+        FlowPilotAgentBackendKind::Codex => "codex login",
+        FlowPilotAgentBackendKind::ClaudeCode => "claude auth login",
+        FlowPilotAgentBackendKind::GithubCopilot => "copilot login",
+    }
+}
+
+fn external_agent_auth_status_command(kind: FlowPilotAgentBackendKind) -> &'static str {
+    match kind {
+        FlowPilotAgentBackendKind::Codex => "codex login status",
+        FlowPilotAgentBackendKind::ClaudeCode => "claude auth status --text",
+        FlowPilotAgentBackendKind::GithubCopilot => "copilot status",
+    }
+}
+
+fn actionable_external_agent_failure(kind: FlowPilotAgentBackendKind, error: &str) -> String {
+    let label = kind.label();
+    let cli_name = kind.cli_name();
+    let category = classify_external_agent_user_failure(error);
+    let (title, action) = match category {
+        ExternalAgentFailureCategory::CliMissing => (
+            format!("{label} CLI was not found."),
+            format!(
+                "Install {label}, fully quit and reopen Flow-Like, then verify `{cli_name} --version`. If it is installed in a custom location, set {} to the full executable path.",
+                kind.env_path_var()
+            ),
+        ),
+        ExternalAgentFailureCategory::CliNotExecutable => (
+            format!("Flow-Like cannot run the {label} CLI."),
+            format!(
+                "Verify `{cli_name} --version` in a terminal. Reinstall the CLI or fix the executable selected by {}; then fully quit and reopen Flow-Like.",
+                kind.env_path_var()
+            ),
+        ),
+        ExternalAgentFailureCategory::LocalPermission => (
+            format!("{label} cannot access its local configuration or credentials."),
+            format!(
+                "Check file and keychain permissions for the signed-in user, then verify `{}`. Reinstall the CLI only if its own status command still fails.",
+                external_agent_auth_status_command(kind)
+            ),
+        ),
+        ExternalAgentFailureCategory::Authentication => (
+            format!("{label} needs you to sign in again."),
+            if [
+                "invalid api key",
+                "invalid_api_key",
+                "missing api key",
+                "anthropic_api_key",
+                "anthropic_auth_token",
+                "openai_api_key",
+            ]
+            .iter()
+            .any(|marker| error.to_ascii_lowercase().contains(marker))
+            {
+                match kind {
+                    FlowPilotAgentBackendKind::ClaudeCode => format!(
+                        "Update or unset the invalid `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` environment credential, fully quit and reopen Flow-Like, then verify with `{}`. Run `{}` if you want to switch back to subscription sign-in.",
+                        external_agent_auth_status_command(kind),
+                        external_agent_login_command(kind)
+                    ),
+                    FlowPilotAgentBackendKind::Codex => format!(
+                        "Store a valid API key again with `codex login --with-api-key`, or switch to account sign-in with `{}`. Verify with `{}`, then retry in Flow-Like.",
+                        external_agent_login_command(kind),
+                        external_agent_auth_status_command(kind)
+                    ),
+                    FlowPilotAgentBackendKind::GithubCopilot => format!(
+                        "Replace the invalid API credential, run `{}`, and verify with `{}` before retrying.",
+                        external_agent_login_command(kind),
+                        external_agent_auth_status_command(kind)
+                    ),
+                }
+            } else {
+                format!(
+                    "Run `{}`, complete sign-in, verify with `{}`, then retry in Flow-Like.",
+                    external_agent_login_command(kind),
+                    external_agent_auth_status_command(kind)
+                )
+            },
+        ),
+        ExternalAgentFailureCategory::AccountAccess => (
+            format!("{label} account access was denied."),
+            format!(
+                "Check that the signed-in account has an eligible plan, billing, model access, and organization permission. Verify the active account with `{}`; sign in with a different account if needed.",
+                external_agent_auth_status_command(kind)
+            ),
+        ),
+        ExternalAgentFailureCategory::RateLimit => (
+            format!("{label} is temporarily rate-limited."),
+            "Wait a moment and retry. If it continues, check the provider's usage limits or service status."
+                .to_string(),
+        ),
+        ExternalAgentFailureCategory::Network => (
+            format!("{label} could not reach its service."),
+            format!(
+                "Check your internet connection, VPN, proxy, firewall, and TLS certificate settings. Confirm `{}` completes in the same environment, then retry.",
+                external_agent_auth_status_command(kind)
+            ),
+        ),
+        ExternalAgentFailureCategory::Model => (
+            format!("The selected {label} model is unavailable."),
+            "Refresh the model list and choose an available model. If the catalog still fails, update the CLI and verify your account's model access."
+                .to_string(),
+        ),
+        ExternalAgentFailureCategory::McpConnection => (
+            format!("{label} could not connect to FlowPilot tools."),
+            "Retry once. If it repeats, fully quit and reopen Flow-Like and make sure local security software is not blocking loopback connections."
+                .to_string(),
+        ),
+        ExternalAgentFailureCategory::Protocol => (
+            format!("The installed {label} CLI is not compatible with FlowPilot."),
+            format!(
+                "Update or reinstall {label}, verify `{cli_name} --version`, fully quit and reopen Flow-Like, then retry."
+            ),
+        ),
+        ExternalAgentFailureCategory::HostWorkflow => (
+            format!("{label} stopped before completing the requested workflow."),
+            "Review the retained FlowScript or compiler diagnostics, then continue or retry the workflow. The CLI installation and sign-in do not need to be changed for this host-side limit."
+                .to_string(),
+        ),
+        ExternalAgentFailureCategory::UserCancelled => (
+            "FlowPilot run was cancelled.".to_string(),
+            "Start a new request when you are ready to continue.".to_string(),
+        ),
+        ExternalAgentFailureCategory::Input => {
+            if [
+                "context length",
+                "context_length",
+                "prompt is too long",
+                "request too large",
+                "maximum context",
+            ]
+            .iter()
+            .any(|marker| error.to_ascii_lowercase().contains(marker))
+            {
+                (
+                    format!("The request is too large for {label}."),
+                    "Start a new conversation or shorten the prompt/history. Remove large attachments or unnecessary context, then retry."
+                        .to_string(),
+                )
+            } else {
+                (
+                    format!("{label} could not use an attached image."),
+                    "Remove and re-attach the image in PNG, JPEG, GIF, or WebP format. Compress or resize it if it exceeds 64 MB, then retry."
+                        .to_string(),
+                )
+            }
+        }
+        ExternalAgentFailureCategory::LocalEnvironment => (
+            "Flow-Like could not prepare the local agent session.".to_string(),
+            "Check available disk space and permissions for the system temporary directory, then fully quit and reopen Flow-Like before retrying."
+                .to_string(),
+        ),
+        ExternalAgentFailureCategory::Process => (
+            format!("{label} stopped unexpectedly."),
+            format!(
+                "Run `{cli_name} --version` and `{}` in a terminal. Update or reinstall the CLI if either command fails, then retry.",
+                external_agent_auth_status_command(kind)
+            ),
+        ),
+    };
+    let detail = flow_like::flow::copilot::stream::safe_text_preview(error.trim(), 1_200);
+    if detail.is_empty() {
+        format!("{title}\n\nHow to fix: {action}")
+    } else {
+        format!("{title}\n\nHow to fix: {action}\n\nTechnical details: {detail}")
     }
 }
 
@@ -4146,11 +4676,7 @@ async fn external_code_agent_chat_internal(
     let _side_effect_cleanup = SideEffectCommandQueueCleanup(surface.side_effect_commands.clone());
 
     let cli = find_cli_resolution(backend, Some(&app_handle)).ok_or_else(|| {
-        format!(
-            "{} CLI was not found. Install it or set {} to the executable path.",
-            backend.label(),
-            backend.env_path_var()
-        )
+        actionable_external_agent_failure(backend, &external_agent_cli_resolution_failure(backend))
     })?;
 
     let workflow_edit_request = surface.workflow_edit_request;
@@ -4631,10 +5157,13 @@ async fn external_code_agent_chat_internal(
         abandon_side_effect_commands(&surface.side_effect_commands);
     }
 
-    let error_note = match &agent_result {
+    let raw_error_note = match &agent_result {
         Ok(output) => output.error.clone(),
         Err(error) => Some(error.clone()),
     };
+    let error_note = raw_error_note
+        .as_deref()
+        .map(|error| actionable_external_agent_failure(backend, error));
     let debug_error_note = error_note
         .as_deref()
         .map(|error| flow_like::flow::copilot::stream::safe_text_preview(error, 1_200));
@@ -4672,15 +5201,18 @@ async fn external_code_agent_chat_internal(
             text: String::new(),
             error: Some(error),
         },
-        Err(error) => return Err(error),
+        Err(error) => return Err(actionable_external_agent_failure(backend, &error)),
     };
     let text = agent_output.text.trim().to_string();
-    let message = match (agent_output.error, text.is_empty()) {
+    let display_error = agent_output
+        .error
+        .map(|error| actionable_external_agent_failure(backend, &error));
+    let message = match (display_error, text.is_empty()) {
         (Some(error), true) if has_retained_candidate => format!(
             "{} retained the most complete FlowScript draft for repair, but did not queue it because validation is still failing: {error}",
             backend.label()
         ),
-        (Some(error), true) => return Err(format!("{} failed: {error}", backend.label())),
+        (Some(error), true) => return Err(error),
         (Some(error), false) => format!(
             "{text}\n\n> Note: {} ended with an error after this partial response: {error}",
             backend.label()
@@ -6909,11 +7441,24 @@ fn build_flowpilot_sdk_tools(
         .as_ref()
         .and_then(|context| context.run_id.clone());
 
+    // Build the runtime bridge once so every path carries the owning run context. Global and
+    // nested tools share the global event listener; ordinary board tools keep the board listener.
+    let runtime_bridge = if global || nested {
+        FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT)
+    } else {
+        FrontendToolBridge::new(app_handle)
+    }
+    .with_context(tool_context);
+
     // The global assistant is not bound to a board/surface: it gets the curated global tool set on
     // its own bridge event so its tool requests reach the global listener, not the board copilot's.
     if global {
-        let bridge = FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT);
-        return create_global_assistant_tools(bridge, memory, user_prompt, run_scope_id.as_deref());
+        return create_global_assistant_tools(
+            runtime_bridge,
+            memory,
+            user_prompt,
+            run_scope_id.as_deref(),
+        );
     }
 
     let mut tools = match scope {
@@ -6946,12 +7491,6 @@ fn build_flowpilot_sdk_tools(
         // added from the runtime bridge below.
         CopilotScope::DataStudio | CopilotScope::Scout | CopilotScope::Research => Vec::new(),
     };
-    let runtime_bridge = if nested {
-        FrontendToolBridge::new_with_event(app_handle, GLOBAL_FRONTEND_TOOL_EVENT)
-    } else {
-        FrontendToolBridge::new(app_handle)
-    }
-    .with_context(tool_context);
     match scope {
         CopilotScope::Board | CopilotScope::Both => {
             tools.extend(create_board_support_tools(runtime_bridge));
@@ -13022,16 +13561,22 @@ async fn run_external_agent_invocation(
                     continue;
                 }
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) {
-                    if let Some(error) = external_agent_error_text(&value) {
+                    let event_error = external_agent_error_text(&value);
+                    if let Some(error) = event_error.as_deref() {
+                        let safe_error =
+                            flow_like::flow::copilot::stream::safe_text_preview(error, 1_200);
                         // Keep draining the stream so partial/final text is preserved; the error is
                         // surfaced after the process exits instead of aborting the run mid-stream.
                         send_external_progress_event(
                             &channel,
                             EXTERNAL_AGENT_TOOL_CALL_ID,
-                            &format!("{} reported an error: {error}", invocation.backend.label()),
+                            &format!(
+                                "{} reported an error: {safe_error}",
+                                invocation.backend.label()
+                            ),
                             parent_request_id.as_deref(),
                         );
-                        fatal_error.get_or_insert(error);
+                        fatal_error.get_or_insert(safe_error);
                     }
 
                     // A failed FlowPilot MCP connection leaves the agent tool-less: it will answer
@@ -13090,7 +13635,9 @@ async fn run_external_agent_invocation(
                         );
                         let _ = channel.send(delta);
                     }
-                    if let Some(result) = external_agent_result_text(invocation.backend, &value) {
+                    if event_error.is_none()
+                        && let Some(result) = external_agent_result_text(invocation.backend, &value)
+                    {
                         final_text.clear();
                         append_bounded_text(
                             &mut final_text,
@@ -14101,6 +14648,64 @@ fn external_agent_error_text(value: &serde_json::Value) -> Option<String> {
         .or_else(|| value.get("event"))
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
+
+    // Claude Code's stream-json protocol reports terminal failures as a `result` frame with
+    // `is_error: true` and an error subtype. The process itself may still exit successfully, so
+    // failing to inspect this frame turns an authentication/model error into a normal answer.
+    if event_type == "result" {
+        let subtype = value
+            .get("subtype")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let failed = value
+            .get("is_error")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            || subtype.starts_with("error")
+            || matches!(subtype, "failed" | "failure");
+        if failed {
+            let direct = value
+                .get("error")
+                .and_then(|error| {
+                    error
+                        .as_str()
+                        .or_else(|| error.get("message").and_then(serde_json::Value::as_str))
+                })
+                .or_else(|| value.get("message").and_then(serde_json::Value::as_str))
+                .or_else(|| value.get("result").and_then(serde_json::Value::as_str))
+                .map(str::trim)
+                .filter(|message| !message.is_empty())
+                .map(str::to_string);
+            if direct.is_some() {
+                return direct;
+            }
+
+            let errors = value
+                .get("errors")
+                .and_then(serde_json::Value::as_array)
+                .map(|errors| {
+                    errors
+                        .iter()
+                        .filter_map(|error| {
+                            error.as_str().or_else(|| {
+                                error.get("message").and_then(serde_json::Value::as_str)
+                            })
+                        })
+                        .map(str::trim)
+                        .filter(|message| !message.is_empty())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+                .filter(|errors| !errors.is_empty());
+            return Some(errors.unwrap_or_else(|| {
+                if subtype.is_empty() {
+                    "Claude Code reported an unknown execution error".to_string()
+                } else {
+                    format!("Claude Code reported {subtype}")
+                }
+            }));
+        }
+    }
 
     if event_type == "turn.failed" {
         return value
@@ -15253,7 +15858,10 @@ trait FlowPilotAgentBackend: Send + Sync {
     async fn start(&self, options: FlowPilotBackendStartOptions) -> Result<(), String>;
     async fn stop(&self) -> Result<(), String>;
     async fn is_running(&self) -> Result<bool, String>;
-    async fn list_models(&self) -> Result<Vec<CopilotModelInfo>, String>;
+    async fn list_models(
+        &self,
+        app_handle: Option<&AppHandle>,
+    ) -> Result<Vec<CopilotModelInfo>, String>;
     async fn get_auth_status(
         &self,
         app_handle: Option<&AppHandle>,
@@ -15646,6 +16254,11 @@ fn find_cli_resolution(
         {
             return Some(CliResolution::new(found, CliResolutionSource::EnvOverride));
         }
+
+        // An explicit override is authoritative. Falling through to another
+        // installation would hide the invalid configured path and make the
+        // remediation point at a different executable than the one in use.
+        return None;
     }
 
     if kind == FlowPilotAgentBackendKind::Codex {
@@ -15968,20 +16581,64 @@ fn is_executable_file(path: &std::path::Path) -> bool {
     }
 }
 
+fn external_agent_cli_resolution_failure(kind: FlowPilotAgentBackendKind) -> String {
+    if let Ok(override_value) = std::env::var(kind.env_path_var()) {
+        let trimmed = override_value.trim();
+        if trimmed.is_empty() {
+            return format!(
+                "{} is set but empty, so the {} CLI cannot be resolved.",
+                kind.env_path_var(),
+                kind.label()
+            );
+        }
+
+        let path = PathBuf::from(trimmed);
+        if path.is_file() {
+            return format!(
+                "{} points to {}, but that file is not executable.",
+                kind.env_path_var(),
+                path.display()
+            );
+        }
+        if path.is_dir() {
+            return format!(
+                "{} points to {}, but that directory does not contain an executable named {}.",
+                kind.env_path_var(),
+                path.display(),
+                kind.cli_name()
+            );
+        }
+        if path.components().count() > 1 {
+            return format!(
+                "{} points to {}, but that executable does not exist.",
+                kind.env_path_var(),
+                path.display()
+            );
+        }
+        return format!(
+            "{} names `{trimmed}`, but that executable was not found on Flow-Like's PATH.",
+            kind.env_path_var()
+        );
+    }
+
+    format!("{} CLI was not found.", kind.label())
+}
+
 async fn probe_external_agent_cli(
     kind: FlowPilotAgentBackendKind,
     executable: &std::path::Path,
     path_dirs: &[PathBuf],
 ) -> Result<String, String> {
     let output = tokio::time::timeout(
-        Duration::from_secs(5),
+        Duration::from_secs(4),
         tokio::process::Command::new(executable)
             .arg("--version")
             .env("PATH", augmented_path_with_dirs(path_dirs))
+            .kill_on_drop(true)
             .output(),
     )
     .await
-    .map_err(|_| format!("{} CLI probe timed out after 5s", kind.label()))?
+    .map_err(|_| format!("{} CLI probe timed out after 4s", kind.label()))?
     .map_err(|e| {
         format!(
             "Failed to run {} CLI at {}: {e}",
@@ -16018,13 +16675,262 @@ async fn probe_external_agent_cli(
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExternalAgentAuthProbe {
+    authenticated: bool,
+    login: Option<String>,
+    detail: String,
+}
+
+fn process_output_detail(output: &std::process::Output) -> String {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let detail = if stderr.trim().is_empty() {
+        stdout.trim()
+    } else {
+        stderr.trim()
+    };
+    flow_like::flow::copilot::stream::safe_text_preview(detail, 1_200)
+}
+
+async fn read_bounded_process_stderr(mut stderr: tokio::process::ChildStderr) -> String {
+    use tokio::io::AsyncReadExt;
+
+    let mut retained = String::new();
+    let mut buffer = [0u8; 4 * 1024];
+    loop {
+        match stderr.read(&mut buffer).await {
+            Ok(0) => break,
+            Ok(read) => append_bounded_tail(
+                &mut retained,
+                &String::from_utf8_lossy(&buffer[..read]),
+                32 * 1024,
+            ),
+            Err(error) => {
+                append_bounded_tail(
+                    &mut retained,
+                    &format!("\n[failed reading stderr: {error}]"),
+                    32 * 1024,
+                );
+                break;
+            }
+        }
+    }
+    retained.trim().to_string()
+}
+
+async fn stop_external_discovery_process(
+    child: &mut tokio::process::Child,
+    mut stderr_handle: tokio::task::JoinHandle<String>,
+) -> String {
+    let _ = child.start_kill();
+    match tokio::time::timeout(Duration::from_secs(1), async {
+        let (_, stderr) = tokio::join!(child.wait(), &mut stderr_handle);
+        stderr.unwrap_or_default()
+    })
+    .await
+    {
+        Ok(stderr) => stderr,
+        Err(_) => {
+            stderr_handle.abort();
+            String::new()
+        }
+    }
+}
+
+fn claude_auth_probe_from_success(stdout: &str) -> Result<ExternalAgentAuthProbe, String> {
+    let parsed = serde_json::from_str::<serde_json::Value>(stdout.trim()).map_err(|error| {
+        format!("Claude Code auth status protocol error: expected JSON with `loggedIn`: {error}")
+    })?;
+    let authenticated = parsed
+        .get("loggedIn")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| {
+            "Claude Code auth status protocol error: response omitted boolean `loggedIn`"
+                .to_string()
+        })?;
+    let login = parsed
+        .get("email")
+        .or_else(|| parsed.get("login"))
+        .or_else(|| parsed.get("account"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string);
+
+    let mut summary = Vec::new();
+    for (label, keys) in [
+        ("method", &["authMethod", "auth_method", "method"][..]),
+        (
+            "subscription",
+            &["subscriptionType", "subscription_type"][..],
+        ),
+        ("provider", &["apiProvider", "api_provider"][..]),
+    ] {
+        if let Some(detail) = keys
+            .iter()
+            .find_map(|key| parsed.get(*key))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|detail| !detail.is_empty())
+        {
+            summary.push(format!("{label}: {detail}"));
+        }
+    }
+
+    Ok(ExternalAgentAuthProbe {
+        authenticated,
+        login,
+        detail: if summary.is_empty() {
+            if authenticated {
+                "Claude Code is signed in.".to_string()
+            } else {
+                "Claude Code reported that it is not signed in.".to_string()
+            }
+        } else {
+            format!(
+                "Claude Code is {} ({}).",
+                if authenticated {
+                    "signed in"
+                } else {
+                    "not signed in"
+                },
+                summary.join(", ")
+            )
+        },
+    })
+}
+
+fn external_agent_auth_output_is_signed_out(
+    kind: FlowPilotAgentBackendKind,
+    stdout: &[u8],
+    detail: &str,
+) -> bool {
+    let claude_reported_signed_out = kind == FlowPilotAgentBackendKind::ClaudeCode
+        && serde_json::from_slice::<serde_json::Value>(stdout)
+            .ok()
+            .and_then(|value| value.get("loggedIn").and_then(serde_json::Value::as_bool))
+            == Some(false);
+    let normalized = detail.to_ascii_lowercase();
+    claude_reported_signed_out
+        || [
+            "not logged in",
+            "not signed in",
+            "logged out",
+            "login required",
+            "sign in required",
+            "authentication required",
+            "no stored credentials",
+            "credentials not found",
+        ]
+        .iter()
+        .any(|marker| normalized.contains(marker))
+}
+
+async fn probe_external_agent_auth(
+    kind: FlowPilotAgentBackendKind,
+    cli: &CliResolution,
+) -> Result<ExternalAgentAuthProbe, String> {
+    let args: &[&str] = match kind {
+        FlowPilotAgentBackendKind::Codex => &["login", "status"],
+        FlowPilotAgentBackendKind::ClaudeCode => &["auth", "status"],
+        FlowPilotAgentBackendKind::GithubCopilot => {
+            return Err("GitHub Copilot authentication uses the SDK status API.".to_string());
+        }
+    };
+    let output = tokio::time::timeout(
+        Duration::from_secs(6),
+        tokio::process::Command::new(&cli.executable)
+            .args(args)
+            .current_dir(std::env::temp_dir())
+            .env("PATH", augmented_path_with_dirs(&cli.path_dirs))
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "{} authentication status check timed out after 6 seconds",
+            kind.label()
+        )
+    })?
+    .map_err(|error| {
+        format!(
+            "Failed to run {} authentication status check at {}: {error}",
+            kind.label(),
+            cli.executable.display()
+        )
+    })?;
+
+    if !output.status.success() {
+        let detail = process_output_detail(&output);
+        let claude_reported_signed_out = kind == FlowPilotAgentBackendKind::ClaudeCode
+            && serde_json::from_slice::<serde_json::Value>(&output.stdout)
+                .ok()
+                .and_then(|value| value.get("loggedIn").and_then(serde_json::Value::as_bool))
+                == Some(false);
+        let known_signed_out =
+            external_agent_auth_output_is_signed_out(kind, &output.stdout, &detail);
+        if known_signed_out {
+            if claude_reported_signed_out {
+                let mut auth =
+                    claude_auth_probe_from_success(&String::from_utf8_lossy(&output.stdout))?;
+                auth.login = None;
+                return Ok(auth);
+            }
+            return Ok(ExternalAgentAuthProbe {
+                authenticated: false,
+                login: None,
+                detail: if detail.is_empty() {
+                    format!("{} is not signed in.", kind.label())
+                } else {
+                    detail
+                },
+            });
+        }
+
+        return Err(if detail.is_empty() {
+            format!(
+                "{} authentication status command exited with {}",
+                kind.label(),
+                output.status
+            )
+        } else {
+            format!(
+                "{} authentication status command exited with {}: {detail}",
+                kind.label(),
+                output.status
+            )
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    match kind {
+        FlowPilotAgentBackendKind::Codex => {
+            let detail = process_output_detail(&output);
+            Ok(ExternalAgentAuthProbe {
+                authenticated: true,
+                login: None,
+                detail: if detail.is_empty() {
+                    "Codex is signed in.".to_string()
+                } else {
+                    flow_like::flow::copilot::stream::safe_text_preview(&detail, 600)
+                },
+            })
+        }
+        FlowPilotAgentBackendKind::ClaudeCode => claude_auth_probe_from_success(stdout.as_ref()),
+        FlowPilotAgentBackendKind::GithubCopilot => unreachable!(),
+    }
+}
+
 /// Discover the Codex models available for the current authentication mode by
 /// driving the installed `codex` CLI's `app-server` JSON-RPC protocol.
 ///
 /// Codex model availability is auth-, policy-, and version-dependent, so the set
 /// is read from Codex itself rather than hard-coded. Any failure (missing
 /// `app-server` subcommand, unauthenticated session, timeout) is returned as an
-/// error and the caller falls back to Codex's configured default.
+/// actionable backend error; the frontend keeps its static default only as a
+/// visibly degraded fallback.
 async fn list_codex_models_via_app_server(
     cli: &CliResolution,
 ) -> Result<Vec<CopilotModelInfo>, String> {
@@ -16035,7 +16941,7 @@ async fn list_codex_models_via_app_server(
         .env("PATH", augmented_path_with_dirs(&cli.path_dirs))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to start codex app-server: {e}"))?;
@@ -16048,6 +16954,11 @@ async fn list_codex_models_via_app_server(
         .stdout
         .take()
         .ok_or_else(|| "codex app-server did not expose stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "codex app-server did not expose stderr".to_string())?;
+    let stderr_handle = tokio::spawn(read_bounded_process_stderr(stderr));
 
     // Newline-delimited JSON-RPC 2.0 (without the "jsonrpc" field), matching the
     // codex app-server framing: initialize -> initialized -> model/list.
@@ -16110,18 +17021,35 @@ async fn list_codex_models_via_app_server(
                 .and_then(|result| result.get("data"))
                 .and_then(serde_json::Value::as_array)
                 .cloned()
-                .unwrap_or_default();
-            return Ok(parse_codex_model_catalog(&entries));
+                .ok_or_else(|| {
+                    "codex app-server protocol error: model/list response omitted the result.data array"
+                        .to_string()
+                })?;
+            let models = parse_codex_model_catalog(&entries);
+            if models.is_empty() {
+                return Err(
+                    "Codex model unavailable: model/list returned no usable model entries"
+                        .to_string(),
+                );
+            }
+            return Ok(models);
         }
         Err("codex app-server closed before returning models".to_string())
     };
 
-    let outcome = tokio::time::timeout(Duration::from_secs(8), read_models).await;
-    let _ = child.start_kill();
-    match outcome {
+    let outcome = tokio::time::timeout(Duration::from_secs(7), read_models).await;
+    let stderr = stop_external_discovery_process(&mut child, stderr_handle).await;
+    let result = match outcome {
         Ok(result) => result,
         Err(_) => Err("codex app-server model listing timed out".to_string()),
-    }
+    };
+    result.map_err(|error| {
+        if stderr.is_empty() {
+            error
+        } else {
+            format!("{error}: {stderr}")
+        }
+    })
 }
 
 fn reasoning_effort_display_name(id: &str) -> String {
@@ -16284,7 +17212,7 @@ fn codex_models_with_configured_default(
 /// model-listing subcommand, so this is the only auth-aware, version-current
 /// source; nothing about the model set is hard-coded. Any failure (CLI missing,
 /// unauthenticated, protocol change, timeout) surfaces as an error and the
-/// caller falls back to the CLI's configured default.
+/// frontend keeps its static default only as a visibly degraded fallback.
 async fn list_claude_models_via_control_protocol(
     cli: &CliResolution,
 ) -> Result<Vec<CopilotModelInfo>, String> {
@@ -16306,7 +17234,7 @@ async fn list_claude_models_via_control_protocol(
         .env("PATH", augmented_path_with_dirs(&cli.path_dirs))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to start claude control session: {e}"))?;
@@ -16319,6 +17247,11 @@ async fn list_claude_models_via_control_protocol(
         .stdout
         .take()
         .ok_or_else(|| "claude control session did not expose stdout".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "claude control session did not expose stderr".to_string())?;
+    let stderr_handle = tokio::spawn(read_bounded_process_stderr(stderr));
 
     // Newline-delimited control protocol: send one `initialize` control_request;
     // the success control_response carries the model catalog at
@@ -16371,21 +17304,35 @@ async fn list_claude_models_via_control_protocol(
                 .and_then(|inner| inner.get("models"))
                 .and_then(serde_json::Value::as_array)
                 .cloned()
-                .unwrap_or_default();
-            if entries.is_empty() {
-                continue;
+                .ok_or_else(|| {
+                    "claude control protocol error: initialize response omitted the models array"
+                        .to_string()
+                })?;
+            let models = parse_claude_model_catalog(&entries);
+            if models.is_empty() {
+                return Err(
+                    "Claude Code model unavailable: initialize returned no usable model entries"
+                        .to_string(),
+                );
             }
-            return Ok(parse_claude_model_catalog(&entries));
+            return Ok(models);
         }
         Err("claude control session closed before returning models".to_string())
     };
 
-    let outcome = tokio::time::timeout(Duration::from_secs(12), read_models).await;
-    let _ = child.start_kill();
-    match outcome {
+    let outcome = tokio::time::timeout(Duration::from_secs(11), read_models).await;
+    let stderr = stop_external_discovery_process(&mut child, stderr_handle).await;
+    let result = match outcome {
         Ok(result) => result,
         Err(_) => Err("claude model listing timed out".to_string()),
-    }
+    };
+    result.map_err(|error| {
+        if stderr.is_empty() {
+            error
+        } else {
+            format!("{error}: {stderr}")
+        }
+    })
 }
 
 /// Convert the Claude Code `initialize` handshake's `models` array into FlowPilot
@@ -16529,7 +17476,10 @@ impl FlowPilotAgentBackend for GithubCopilotBackend {
         Ok(guard.is_some())
     }
 
-    async fn list_models(&self) -> Result<Vec<CopilotModelInfo>, String> {
+    async fn list_models(
+        &self,
+        _app_handle: Option<&AppHandle>,
+    ) -> Result<Vec<CopilotModelInfo>, String> {
         let client = COPILOT_CLIENT
             .lock()
             .await
@@ -16603,13 +17553,27 @@ impl FlowPilotAgentBackend for ExternalCodeAgentBackend {
 
     async fn start(&self, options: FlowPilotBackendStartOptions) -> Result<(), String> {
         let cli = find_cli_resolution(self.kind, options.app_handle.as_ref()).ok_or_else(|| {
-            format!(
-                "{} CLI was not found. Install it or set {} to its executable path.",
-                self.kind.label(),
-                self.kind.env_path_var()
+            actionable_external_agent_failure(
+                self.kind,
+                &external_agent_cli_resolution_failure(self.kind),
             )
         })?;
-        let version = probe_external_agent_cli(self.kind, &cli.executable, &cli.path_dirs).await?;
+        let version = probe_external_agent_cli(self.kind, &cli.executable, &cli.path_dirs)
+            .await
+            .map_err(|error| actionable_external_agent_failure(self.kind, &error))?;
+        let auth = probe_external_agent_auth(self.kind, &cli)
+            .await
+            .map_err(|error| actionable_external_agent_failure(self.kind, &error))?;
+        if !auth.authenticated {
+            return Err(actionable_external_agent_failure(
+                self.kind,
+                &format!(
+                    "{} authentication failed: {}",
+                    self.kind.label(),
+                    auth.detail
+                ),
+            ));
+        }
         let mut guard = EXTERNAL_AGENT_BACKENDS.lock().await;
         guard.insert(self.kind);
         tracing::info!(
@@ -16633,7 +17597,10 @@ impl FlowPilotAgentBackend for ExternalCodeAgentBackend {
         Ok(guard.contains(&self.kind))
     }
 
-    async fn list_models(&self) -> Result<Vec<CopilotModelInfo>, String> {
+    async fn list_models(
+        &self,
+        app_handle: Option<&AppHandle>,
+    ) -> Result<Vec<CopilotModelInfo>, String> {
         let mut models = Vec::new();
         match self.kind {
             FlowPilotAgentBackendKind::Codex => {
@@ -16643,21 +17610,15 @@ impl FlowPilotAgentBackend for ExternalCodeAgentBackend {
                 // are discovered from Codex itself (its `app-server` `model/list`)
                 // rather than hard-coded. "default" is always offered first so the
                 // user can defer to Codex's own configured/runtime model.
-                let mut discovered_models = Vec::new();
-                if let Some(cli) = find_cli_resolution(self.kind, None) {
-                    match list_codex_models_via_app_server(&cli).await {
-                        Ok(discovered) => {
-                            discovered_models = discovered;
-                        }
-                        Err(_error) => {
-                            flowpilot_debug_trace!(
-                                backend = self.kind.label(),
-                                error = %_error,
-                                "codex model discovery unavailable; offering configured default only"
-                            );
-                        }
-                    }
-                }
+                let cli = find_cli_resolution(self.kind, app_handle).ok_or_else(|| {
+                    actionable_external_agent_failure(
+                        self.kind,
+                        &external_agent_cli_resolution_failure(self.kind),
+                    )
+                })?;
+                let discovered_models = list_codex_models_via_app_server(&cli)
+                    .await
+                    .map_err(|error| actionable_external_agent_failure(self.kind, &error))?;
                 models = codex_models_with_configured_default(discovered_models);
             }
             FlowPilotAgentBackendKind::ClaudeCode => {
@@ -16666,22 +17627,18 @@ impl FlowPilotAgentBackend for ExternalCodeAgentBackend {
                 // handshake (the same list the Agent SDK's `supportedModels()`
                 // returns) rather than hard-coded. That catalog already includes
                 // a "default (recommended)" entry, so nothing is prepended.
-                if let Some(cli) = find_cli_resolution(self.kind, None) {
-                    match list_claude_models_via_control_protocol(&cli).await {
-                        Ok(discovered) => {
-                            for model in discovered {
-                                if !models.iter().any(|existing| existing.id == model.id) {
-                                    models.push(model);
-                                }
-                            }
-                        }
-                        Err(_error) => {
-                            flowpilot_debug_trace!(
-                                backend = self.kind.label(),
-                                error = %_error,
-                                "claude model discovery unavailable; offering configured default only"
-                            );
-                        }
+                let cli = find_cli_resolution(self.kind, app_handle).ok_or_else(|| {
+                    actionable_external_agent_failure(
+                        self.kind,
+                        &external_agent_cli_resolution_failure(self.kind),
+                    )
+                })?;
+                let discovered = list_claude_models_via_control_protocol(&cli)
+                    .await
+                    .map_err(|error| actionable_external_agent_failure(self.kind, &error))?;
+                for model in discovered {
+                    if !models.iter().any(|existing| existing.id == model.id) {
+                        models.push(model);
                     }
                 }
                 if models.is_empty() {
@@ -16705,26 +17662,46 @@ impl FlowPilotAgentBackend for ExternalCodeAgentBackend {
         &self,
         app_handle: Option<&AppHandle>,
     ) -> Result<CopilotAuthStatus, String> {
-        let resolution = find_cli_resolution(self.kind, app_handle);
-        let executable = resolution
-            .as_ref()
-            .map(|resolution| resolution.executable.display().to_string());
-        Ok(CopilotAuthStatus {
-            authenticated: executable.is_some(),
-            login: None,
-            message: Some(match executable {
-                Some(path) => format!(
-                    "{} CLI found at {path} ({:?}). Authentication is delegated to that CLI.",
+        let Some(resolution) = find_cli_resolution(self.kind, app_handle) else {
+            return Ok(CopilotAuthStatus {
+                authenticated: false,
+                login: None,
+                message: Some(actionable_external_agent_failure(
+                    self.kind,
+                    &external_agent_cli_resolution_failure(self.kind),
+                )),
+            });
+        };
+        let executable = resolution.executable.display().to_string();
+        match probe_external_agent_auth(self.kind, &resolution).await {
+            Ok(auth) if auth.authenticated => Ok(CopilotAuthStatus {
+                authenticated: true,
+                login: auth.login,
+                message: Some(format!(
+                    "{} CLI is ready at {executable} ({:?}). {}",
                     self.kind.label(),
-                    resolution.map(|resolution| resolution.source)
-                ),
-                None => format!(
-                    "{} CLI was not found. Set {} to its executable path.",
-                    self.kind.label(),
-                    self.kind.env_path_var()
-                ),
+                    resolution.source,
+                    auth.detail
+                )),
             }),
-        })
+            Ok(auth) => Ok(CopilotAuthStatus {
+                authenticated: false,
+                login: auth.login,
+                message: Some(actionable_external_agent_failure(
+                    self.kind,
+                    &format!(
+                        "{} authentication failed: {}",
+                        self.kind.label(),
+                        auth.detail
+                    ),
+                )),
+            }),
+            Err(error) => Ok(CopilotAuthStatus {
+                authenticated: false,
+                login: None,
+                message: Some(actionable_external_agent_failure(self.kind, &error)),
+            }),
+        }
     }
 
     async fn status(&self, app_handle: Option<&AppHandle>) -> FlowPilotBackendStatus {
@@ -16795,10 +17772,11 @@ pub async fn flowpilot_agent_backend_is_running(backend: String) -> Result<bool,
 
 #[tauri::command]
 pub async fn flowpilot_agent_backend_list_models(
+    app_handle: AppHandle,
     backend: String,
 ) -> Result<Vec<CopilotModelInfo>, String> {
     agent_backend(parse_agent_backend(backend)?)
-        .list_models()
+        .list_models(Some(&app_handle))
         .await
 }
 
@@ -16862,8 +17840,10 @@ pub async fn copilot_sdk_is_running() -> Result<bool, String> {
 
 /// List available GitHub Copilot models
 #[tauri::command]
-pub async fn copilot_sdk_list_models() -> Result<Vec<CopilotModelInfo>, String> {
-    flowpilot_agent_backend_list_models("github-copilot".to_string()).await
+pub async fn copilot_sdk_list_models(
+    app_handle: AppHandle,
+) -> Result<Vec<CopilotModelInfo>, String> {
+    flowpilot_agent_backend_list_models(app_handle, "github-copilot".to_string()).await
 }
 
 /// Get GitHub Copilot authentication status
@@ -22558,6 +23538,187 @@ eventsSimple() {
     }
 
     #[test]
+    fn external_agent_failures_map_to_actionable_user_diagnostics() {
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "Codex turn failed with 401 Unauthorized: token_invalidated"
+            ),
+            ExternalAgentFailureCategory::Authentication
+        );
+        assert_eq!(
+            classify_external_agent_user_failure("Claude Code CLI was not found."),
+            ExternalAgentFailureCategory::CliMissing
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "CODEX_CLI_PATH is set but empty, so the Codex CLI cannot be resolved.",
+            ),
+            ExternalAgentFailureCategory::CliMissing
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "CLAUDE_CODE_CLI_PATH points to /opt/claude, but that directory does not contain an executable named claude.",
+            ),
+            ExternalAgentFailureCategory::CliMissing
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "Failed to start Claude Code: Permission denied (os error 13)"
+            ),
+            ExternalAgentFailureCategory::CliNotExecutable
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "CODEX_CLI_PATH points to /opt/codex, but that file is not executable."
+            ),
+            ExternalAgentFailureCategory::CliNotExecutable
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "MCP server connection failed: flowpilot disconnected"
+            ),
+            ExternalAgentFailureCategory::McpConnection
+        );
+        assert_eq!(
+            classify_external_agent_user_failure("HTTP 403: organization has been disabled"),
+            ExternalAgentFailureCategory::AccountAccess
+        );
+        assert_eq!(
+            classify_external_agent_user_failure("Request failed (403)"),
+            ExternalAgentFailureCategory::AccountAccess
+        );
+        assert_eq!(
+            classify_external_agent_user_failure("HTTP 402 Payment Required"),
+            ExternalAgentFailureCategory::AccountAccess
+        );
+        assert_eq!(
+            classify_external_agent_user_failure("Request failed (429)"),
+            ExternalAgentFailureCategory::RateLimit
+        );
+        assert_eq!(
+            classify_external_agent_user_failure("Could not find model codex-future"),
+            ExternalAgentFailureCategory::Model
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "Failed to read configuration: No such file or directory"
+            ),
+            ExternalAgentFailureCategory::Process
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "Failed to read credentials file: permission denied"
+            ),
+            ExternalAgentFailureCategory::LocalPermission
+        );
+        assert_eq!(
+            classify_external_agent_user_failure("FlowPilot MCP server connection timed out"),
+            ExternalAgentFailureCategory::McpConnection
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "authentication status command exited with 2: unknown subcommand 'status'"
+            ),
+            ExternalAgentFailureCategory::Protocol
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "Codex authentication status command exited with 2"
+            ),
+            ExternalAgentFailureCategory::Process
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "Codex authentication status command exited with 1: network error"
+            ),
+            ExternalAgentFailureCategory::Network
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "Codex authentication status check timed out after 6 seconds"
+            ),
+            ExternalAgentFailureCategory::Process
+        );
+        assert_eq!(
+            classify_external_agent_user_failure("Request failed (401)"),
+            ExternalAgentFailureCategory::Authentication
+        );
+        assert_eq!(
+            classify_external_agent_user_failure("FlowPilot external agent run was cancelled"),
+            ExternalAgentFailureCategory::UserCancelled
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "NESTED_RUN_WALL_CLOCK_BUDGET_EXHAUSTED: compiler diagnostics retained"
+            ),
+            ExternalAgentFailureCategory::HostWorkflow
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "The external agent exhausted its FlowScript source operation budget (24/24) without queueing changes."
+            ),
+            ExternalAgentFailureCategory::HostWorkflow
+        );
+        assert_eq!(
+            classify_external_agent_user_failure("Prompt image 1 is too large (70 MB, max 64 MB)"),
+            ExternalAgentFailureCategory::Input
+        );
+        assert_eq!(
+            classify_external_agent_user_failure(
+                "Failed to write Claude MCP config: No space left on device"
+            ),
+            ExternalAgentFailureCategory::LocalEnvironment
+        );
+
+        let codex_auth = actionable_external_agent_failure(
+            FlowPilotAgentBackendKind::Codex,
+            "turn failed: token_invalidated",
+        );
+        assert!(codex_auth.contains("needs you to sign in again"));
+        assert!(codex_auth.contains("`codex login`"));
+        assert!(codex_auth.contains("`codex login status`"));
+        assert!(codex_auth.contains("Technical details"));
+
+        let claude_api_key = actionable_external_agent_failure(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            "Invalid API key from ANTHROPIC_API_KEY",
+        );
+        assert!(claude_api_key.contains("ANTHROPIC_API_KEY"));
+        assert!(
+            claude_api_key.contains("update or unset")
+                || claude_api_key.contains("Update or unset")
+        );
+
+        let claude_missing = actionable_external_agent_failure(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            "Claude Code CLI was not found.",
+        );
+        assert!(claude_missing.contains("`claude --version`"));
+        assert!(claude_missing.contains("CLAUDE_CODE_CLI_PATH"));
+
+        let cancelled = actionable_external_agent_failure(
+            FlowPilotAgentBackendKind::Codex,
+            "FlowPilot external agent run was cancelled",
+        );
+        assert!(cancelled.contains("FlowPilot run was cancelled"));
+        assert!(!cancelled.contains("codex --version"));
+
+        let host_limit = actionable_external_agent_failure(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            "NESTED_RUN_WALL_CLOCK_BUDGET_EXHAUSTED: compiler diagnostics retained",
+        );
+        assert!(host_limit.contains("stopped before completing"));
+        assert!(host_limit.contains("CLI installation and sign-in do not need to be changed"));
+
+        let bad_image = actionable_external_agent_failure(
+            FlowPilotAgentBackendKind::Codex,
+            "Failed to decode prompt image 1: invalid base64",
+        );
+        assert!(bad_image.contains("could not use an attached image"));
+        assert!(!bad_image.contains("codex --version"));
+    }
+
+    #[test]
     fn exact_source_recovery_seeds_authoritative_loop_coordinates_only() {
         use flow_like::flow::copilot::{
             FlowIrDraftRecoveryStatus, FlowScriptDraftRecovery, FlowScriptEditableDraftContext,
@@ -23324,7 +24485,12 @@ eventsSimple() {
             );
         }
 
-        for name in ["execute_event", "execute_node", "query_execution_logs"] {
+        for name in [
+            "execute_event",
+            "execute_node",
+            "query_execution_logs",
+            "read_flowscript_source",
+        ] {
             assert!(
                 frontend_platform_tool_spec(FrontendPlatformToolSet::BoardRuntime, name).is_some(),
                 "Bits board bridge must expose the shared runtime spec for {name}"
@@ -24641,6 +25807,92 @@ eventsSimple() {
             external_agent_error_text(&event).as_deref(),
             Some("not authenticated")
         );
+    }
+
+    #[test]
+    fn claude_result_parser_surfaces_successful_process_failures() {
+        let authentication_failure = serde_json::json!({
+            "type": "result",
+            "subtype": "error_during_execution",
+            "is_error": true,
+            "result": "Failed to authenticate: OAuth session expired and could not be refreshed"
+        });
+        assert_eq!(
+            external_agent_error_text(&authentication_failure).as_deref(),
+            Some("Failed to authenticate: OAuth session expired and could not be refreshed")
+        );
+
+        let structured_failure = serde_json::json!({
+            "type": "result",
+            "subtype": "failed",
+            "is_error": true,
+            "errors": [
+                { "message": "Invalid API key" },
+                "Run /login"
+            ]
+        });
+        assert_eq!(
+            external_agent_error_text(&structured_failure).as_deref(),
+            Some("Invalid API key\nRun /login")
+        );
+
+        let success = serde_json::json!({
+            "type": "result",
+            "subtype": "success",
+            "is_error": false,
+            "result": "Done"
+        });
+        assert!(external_agent_error_text(&success).is_none());
+    }
+
+    #[test]
+    fn claude_auth_status_parser_reports_login_state_without_exposing_raw_json() {
+        let ready = claude_auth_probe_from_success(
+            r#"{
+                "loggedIn": true,
+                "email": "user@example.com",
+                "authMethod": "claudeai",
+                "subscriptionType": "max"
+            }"#,
+        )
+        .expect("valid Claude auth status");
+        assert!(ready.authenticated);
+        assert_eq!(ready.login.as_deref(), Some("user@example.com"));
+        assert!(ready.detail.contains("method: claudeai"));
+        assert!(ready.detail.contains("subscription: max"));
+        assert!(!ready.detail.contains("user@example.com"));
+
+        let signed_out = claude_auth_probe_from_success(r#"{ "loggedIn": false }"#)
+            .expect("valid signed-out Claude auth status");
+        assert!(!signed_out.authenticated);
+        assert!(signed_out.detail.contains("not signed in"));
+
+        assert!(claude_auth_probe_from_success("{}").is_err());
+        assert!(claude_auth_probe_from_success("not-json").is_err());
+    }
+
+    #[test]
+    fn auth_status_nonzero_only_means_signed_out_for_known_outputs() {
+        assert!(external_agent_auth_output_is_signed_out(
+            FlowPilotAgentBackendKind::Codex,
+            b"",
+            "Not logged in"
+        ));
+        assert!(external_agent_auth_output_is_signed_out(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            br#"{ "loggedIn": false }"#,
+            r#"{ "loggedIn": false }"#
+        ));
+        assert!(!external_agent_auth_output_is_signed_out(
+            FlowPilotAgentBackendKind::Codex,
+            b"",
+            "error: unknown subcommand 'status'"
+        ));
+        assert!(!external_agent_auth_output_is_signed_out(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            b"",
+            "failed to read credentials file: permission denied"
+        ));
     }
 
     #[test]

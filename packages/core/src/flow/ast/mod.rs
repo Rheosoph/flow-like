@@ -771,6 +771,7 @@ mod lower_tests {
     use crate::flow::execution::LogLevel;
     use crate::flow::node::Node;
     use crate::flow::variable::{VariableType, infer_schema_from_json};
+    use flow_like_ast::model::Stmt;
     use flow_like_storage::Path;
     use flow_like_types::Value;
     use std::collections::HashMap;
@@ -808,6 +809,477 @@ mod lower_tests {
             board, from_node, from_pin, to_node, to_pin,
         )
         .expect("connect pins");
+    }
+
+    fn exec_log(id: &str, layer: Option<&str>, message: &str) -> (Node, String, String) {
+        let mut log = Node::new("log_info", "Log Info", "", "debug");
+        log.id = id.to_string();
+        log.layer = layer.map(str::to_string);
+        let exec_in = log
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        log.add_input_pin("message", "Message", "", VariableType::String)
+            .set_default_value(Some(Value::String(message.to_string())));
+        let exec_out = log
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        (log, exec_in, exec_out)
+    }
+
+    #[test]
+    fn if_else_shared_query_join_stays_at_function_scope_before_return() {
+        let mut board = empty_board();
+        let layer_id = "read-threads-layer";
+        let mut layer = Layer::new(
+            layer_id.to_string(),
+            "readThreads".to_string(),
+            LayerType::Function,
+        );
+        let mut boundary = Node::new("boundary", "Boundary", "", "test");
+        let rows_return = boundary.add_output_pin("rows", "Rows", "", VariableType::Struct);
+        rows_return.set_value_type(crate::flow::pin::ValueType::Array);
+        let rows_return = rows_return.clone();
+        layer
+            .pins
+            .insert(rows_return.id.clone(), rows_return.clone());
+        board.layers.insert(layer.id.clone(), layer);
+
+        let mut branch = Node::new("control_branch", "Branch", "", "control");
+        branch.id = "branch".to_string();
+        branch.layer = Some(layer_id.to_string());
+        branch.add_input_pin("exec_in", "In", "", VariableType::Execution);
+        branch
+            .add_input_pin("condition", "Condition", "", VariableType::Boolean)
+            .set_default_value(Some(Value::Bool(true)));
+        let branch_true = branch
+            .add_output_pin("true", "True", "", VariableType::Execution)
+            .id
+            .clone();
+        let branch_false = branch
+            .add_output_pin("false", "False", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(branch.id.clone(), branch);
+
+        let (then_log, then_in, then_out) = exec_log("then-log", Some(layer_id), "then branch");
+        board.nodes.insert(then_log.id.clone(), then_log);
+        let (else_log, else_in, else_out) = exec_log("else-log", Some(layer_id), "else branch");
+        board.nodes.insert(else_log.id.clone(), else_log);
+
+        let mut query = Node::new("df_sql_query", "SQL Query", "", "data");
+        query.id = "query".to_string();
+        query.layer = Some(layer_id.to_string());
+        let query_in = query
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        query
+            .add_input_pin("query", "Query", "", VariableType::String)
+            .set_default_value(Some(Value::String("SELECT * FROM threads".to_string())));
+        query.add_output_pin("exec_out", "Out", "", VariableType::Execution);
+        let query_rows = query.add_output_pin("rows", "Rows", "", VariableType::Struct);
+        query_rows.set_value_type(crate::flow::pin::ValueType::Array);
+        let query_rows = query_rows.id.clone();
+        board.nodes.insert(query.id.clone(), query);
+
+        connect(&mut board, "branch", &branch_true, "then-log", &then_in);
+        connect(&mut board, "branch", &branch_false, "else-log", &else_in);
+        connect(&mut board, "then-log", &then_out, "query", &query_in);
+        connect(&mut board, "else-log", &else_out, "query", &query_in);
+        connect(&mut board, "query", &query_rows, layer_id, &rows_return.id);
+
+        let ast = lower_to_ast(&board);
+        let function = ast
+            .functions
+            .iter()
+            .find(|function| function.name == "readThreads")
+            .expect("readThreads function");
+        assert_eq!(
+            function.body.stmts.len(),
+            3,
+            "branch, shared query, and return must be siblings: {:?}",
+            function.body.stmts
+        );
+        let Stmt::Branch { arms, .. } = &function.body.stmts[0] else {
+            panic!("first statement must be the if/else");
+        };
+        assert_eq!(arms.len(), 2);
+        assert!(
+            arms.iter().all(|arm| arm.body.stmts.len() == 1),
+            "each arm must contain only its own log: {arms:?}"
+        );
+        assert!(matches!(
+            &function.body.stmts[1],
+            Stmt::Let {
+                anchor: Some(anchor),
+                ..
+            } if anchor == "query"
+        ));
+        assert!(matches!(&function.body.stmts[2], Stmt::Return { .. }));
+
+        let text = board_to_flowscript(
+            &board,
+            &RenderOptions {
+                anchors: true,
+                ..Default::default()
+            },
+        );
+        let branch_end = text.find("    const sQLQuery").expect("top-level query");
+        let return_start = text
+            .find("    return sQLQuery.rows")
+            .expect("return query rows");
+        assert!(
+            branch_end < return_start,
+            "rendered query and return must remain top-level siblings:\n{text}"
+        );
+        let roundtrip = reconcile_text(&board, &text);
+        assert!(
+            roundtrip.diagnostics.is_empty(),
+            "canonical readback must resolve the post-branch query return:\n{text}\n{:?}",
+            roundtrip.diagnostics
+        );
+        assert!(
+            roundtrip.commands.is_empty(),
+            "canonical readback must remain a no-op:\n{text}\n{:?}",
+            roundtrip.commands
+        );
+    }
+
+    #[test]
+    fn lone_if_shared_continuation_stays_after_the_branch() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Run", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut branch = Node::new("control_branch", "Branch", "", "control");
+        branch.id = "branch".to_string();
+        let branch_in = branch
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        branch
+            .add_input_pin("condition", "Condition", "", VariableType::Boolean)
+            .set_default_value(Some(Value::Bool(true)));
+        let branch_true = branch
+            .add_output_pin("true", "True", "", VariableType::Execution)
+            .id
+            .clone();
+        let branch_false = branch
+            .add_output_pin("false", "False", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(branch.id.clone(), branch);
+
+        let (then_log, then_in, then_out) = exec_log("then-log", None, "yes");
+        board.nodes.insert(then_log.id.clone(), then_log);
+        let (after_log, after_in, _) = exec_log("after-log", None, "after");
+        board.nodes.insert(after_log.id.clone(), after_log);
+
+        connect(&mut board, "event", &event_out, "branch", &branch_in);
+        connect(&mut board, "branch", &branch_true, "then-log", &then_in);
+        connect(&mut board, "then-log", &then_out, "after-log", &after_in);
+        connect(&mut board, "branch", &branch_false, "after-log", &after_in);
+
+        let ast = lower_to_ast(&board);
+        let body = &ast.events[0].body.stmts;
+        assert_eq!(
+            body.len(),
+            2,
+            "the post-if log must be an event-body sibling: {body:?}"
+        );
+        let Stmt::Branch { arms, .. } = &body[0] else {
+            panic!("first event statement must be the if");
+        };
+        assert_eq!(arms.len(), 2);
+        assert_eq!(arms[0].body.stmts.len(), 1);
+        assert!(arms[1].body.stmts.is_empty());
+        assert!(matches!(
+            &body[1],
+            Stmt::Call {
+                anchor: Some(anchor),
+                ..
+            } if anchor == "after-log"
+        ));
+    }
+
+    #[test]
+    fn nested_if_arms_leave_the_outer_shared_continuation_unconsumed() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Run", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut outer = Node::new("control_branch", "Outer Branch", "", "control");
+        outer.id = "outer".to_string();
+        let outer_in = outer
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        outer
+            .add_input_pin("condition", "Condition", "", VariableType::Boolean)
+            .set_default_value(Some(Value::Bool(true)));
+        let outer_true = outer
+            .add_output_pin("true", "True", "", VariableType::Execution)
+            .id
+            .clone();
+        let outer_false = outer
+            .add_output_pin("false", "False", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(outer.id.clone(), outer);
+
+        let mut inner = Node::new("control_branch", "Inner Branch", "", "control");
+        inner.id = "inner".to_string();
+        let inner_in = inner
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        inner
+            .add_input_pin("condition", "Condition", "", VariableType::Boolean)
+            .set_default_value(Some(Value::Bool(false)));
+        let inner_true = inner
+            .add_output_pin("true", "True", "", VariableType::Execution)
+            .id
+            .clone();
+        let inner_false = inner
+            .add_output_pin("false", "False", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(inner.id.clone(), inner);
+
+        let (inner_true_log, inner_true_in, inner_true_out) =
+            exec_log("inner-true-log", None, "inner true");
+        board
+            .nodes
+            .insert(inner_true_log.id.clone(), inner_true_log);
+        let (inner_false_log, inner_false_in, inner_false_out) =
+            exec_log("inner-false-log", None, "inner false");
+        board
+            .nodes
+            .insert(inner_false_log.id.clone(), inner_false_log);
+        let (outer_false_log, outer_false_in, outer_false_out) =
+            exec_log("outer-false-log", None, "outer false");
+        board
+            .nodes
+            .insert(outer_false_log.id.clone(), outer_false_log);
+        let (after_log, after_in, _) = exec_log("after-log", None, "after");
+        board.nodes.insert(after_log.id.clone(), after_log);
+
+        connect(&mut board, "event", &event_out, "outer", &outer_in);
+        connect(&mut board, "outer", &outer_true, "inner", &inner_in);
+        connect(
+            &mut board,
+            "outer",
+            &outer_false,
+            "outer-false-log",
+            &outer_false_in,
+        );
+        connect(
+            &mut board,
+            "inner",
+            &inner_true,
+            "inner-true-log",
+            &inner_true_in,
+        );
+        connect(
+            &mut board,
+            "inner",
+            &inner_false,
+            "inner-false-log",
+            &inner_false_in,
+        );
+        connect(
+            &mut board,
+            "inner-true-log",
+            &inner_true_out,
+            "after-log",
+            &after_in,
+        );
+        connect(
+            &mut board,
+            "inner-false-log",
+            &inner_false_out,
+            "after-log",
+            &after_in,
+        );
+        connect(
+            &mut board,
+            "outer-false-log",
+            &outer_false_out,
+            "after-log",
+            &after_in,
+        );
+
+        let ast = lower_to_ast(&board);
+        let body = &ast.events[0].body.stmts;
+        assert_eq!(body.len(), 2, "outer join must remain top-level: {body:?}");
+        let Stmt::Branch {
+            arms: outer_arms, ..
+        } = &body[0]
+        else {
+            panic!("outer branch");
+        };
+        let Stmt::Branch {
+            arms: inner_arms, ..
+        } = &outer_arms[0].body.stmts[0]
+        else {
+            panic!("inner branch must stay inside the outer true arm");
+        };
+        assert!(inner_arms.iter().all(|arm| arm.body.stmts.len() == 1));
+        assert_eq!(outer_arms[1].body.stmts.len(), 1);
+        assert!(matches!(
+            &body[1],
+            Stmt::Call {
+                anchor: Some(anchor),
+                ..
+            } if anchor == "after-log"
+        ));
+    }
+
+    #[test]
+    fn generic_multi_exec_shared_continuation_stays_after_its_arms() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_simple", "Run", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let event_out = event
+            .add_output_pin("exec_out", "Out", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let mut choice = Node::new("http_fetch", "Fetch", "", "http");
+        choice.id = "choice".to_string();
+        let choice_in = choice
+            .add_input_pin("exec_in", "In", "", VariableType::Execution)
+            .id
+            .clone();
+        let success = choice
+            .add_output_pin("success", "Success", "", VariableType::Execution)
+            .id
+            .clone();
+        let error = choice
+            .add_output_pin("error", "Error", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(choice.id.clone(), choice);
+
+        let (success_log, success_in, success_out) = exec_log("success-log", None, "success");
+        board.nodes.insert(success_log.id.clone(), success_log);
+        let (error_log, error_in, error_out) = exec_log("error-log", None, "error");
+        board.nodes.insert(error_log.id.clone(), error_log);
+        let (after_log, after_in, _) = exec_log("after-log", None, "after");
+        board.nodes.insert(after_log.id.clone(), after_log);
+
+        connect(&mut board, "event", &event_out, "choice", &choice_in);
+        connect(&mut board, "choice", &success, "success-log", &success_in);
+        connect(&mut board, "choice", &error, "error-log", &error_in);
+        connect(
+            &mut board,
+            "success-log",
+            &success_out,
+            "after-log",
+            &after_in,
+        );
+        connect(&mut board, "error-log", &error_out, "after-log", &after_in);
+
+        let ast = lower_to_ast(&board);
+        let body = &ast.events[0].body.stmts;
+        assert_eq!(
+            body.len(),
+            2,
+            "the shared continuation must follow the generic arm block: {body:?}"
+        );
+        let Stmt::Branch { arms, anchor, .. } = &body[0] else {
+            panic!("generic multi-exec node must render as an arm block");
+        };
+        assert_eq!(anchor.as_deref(), Some("choice"));
+        assert!(arms.iter().all(|arm| arm.body.stmts.len() == 1));
+        assert!(matches!(
+            &body[1],
+            Stmt::Call {
+                anchor: Some(anchor),
+                ..
+            } if anchor == "after-log"
+        ));
+    }
+
+    #[test]
+    fn multi_exec_entry_shared_continuation_stays_after_its_arms() {
+        let mut board = empty_board();
+
+        let mut event = Node::new("events_routed", "Run", "", "events");
+        event.id = "event".to_string();
+        event.set_start(true);
+        let accepted = event
+            .add_output_pin("accepted", "Accepted", "", VariableType::Execution)
+            .id
+            .clone();
+        let rejected = event
+            .add_output_pin("rejected", "Rejected", "", VariableType::Execution)
+            .id
+            .clone();
+        board.nodes.insert(event.id.clone(), event);
+
+        let (accepted_log, accepted_in, accepted_out) = exec_log("accepted-log", None, "accepted");
+        board.nodes.insert(accepted_log.id.clone(), accepted_log);
+        let (rejected_log, rejected_in, rejected_out) = exec_log("rejected-log", None, "rejected");
+        board.nodes.insert(rejected_log.id.clone(), rejected_log);
+        let (after_log, after_in, _) = exec_log("after-log", None, "after");
+        board.nodes.insert(after_log.id.clone(), after_log);
+
+        connect(&mut board, "event", &accepted, "accepted-log", &accepted_in);
+        connect(&mut board, "event", &rejected, "rejected-log", &rejected_in);
+        connect(
+            &mut board,
+            "accepted-log",
+            &accepted_out,
+            "after-log",
+            &after_in,
+        );
+        connect(
+            &mut board,
+            "rejected-log",
+            &rejected_out,
+            "after-log",
+            &after_in,
+        );
+
+        let ast = lower_to_ast(&board);
+        let body = &ast.events[0].body.stmts;
+        assert_eq!(
+            body.len(),
+            2,
+            "the entry's common continuation must follow its arm block: {body:?}"
+        );
+        let Stmt::Branch { arms, anchor, .. } = &body[0] else {
+            panic!("multi-exec entry must render as an arm block");
+        };
+        assert_eq!(anchor.as_deref(), Some("event"));
+        assert!(arms.iter().all(|arm| arm.body.stmts.len() == 1));
+        assert!(matches!(
+            &body[1],
+            Stmt::Call {
+                anchor: Some(anchor),
+                ..
+            } if anchor == "after-log"
+        ));
     }
 
     #[test]

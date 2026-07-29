@@ -1,8 +1,18 @@
 import { createId } from "@paralleldrive/cuid2";
 import {
+	isAgentBackendProvider,
+	normalizeAIProvider,
+} from "../../components/flowpilot/types";
+import { copilotBackendConnectionCoordinator } from "../../hooks/copilot-backend-coordinator";
+import {
 	FLOWPILOT_DEBUG_ENABLED,
 	stripFlowPilotDebugReport,
 } from "../../lib/flowpilot-debug";
+import {
+	classifyAgentBackendError,
+	formatAgentBackendFailure,
+	shouldPersistAgentBackendDiagnostic,
+} from "../../lib/flowpilot/agent-backend-diagnostics";
 import { isTauri } from "../../lib/platform";
 import { IRole } from "../../lib/schema/llm/history";
 import {
@@ -337,7 +347,18 @@ export async function driveGlobalChatStream({
 	try {
 		invokeResult = await start(onChunk);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const normalizedProvider = normalizeAIProvider(turnSelection.provider);
+		let message = error instanceof Error ? error.message : String(error);
+		if (isAgentBackendProvider(normalizedProvider)) {
+			const diagnostic = classifyAgentBackendError(normalizedProvider, error);
+			if (diagnostic && shouldPersistAgentBackendDiagnostic(diagnostic)) {
+				copilotBackendConnectionCoordinator.reportFailure(
+					normalizedProvider,
+					error,
+				);
+			}
+			message = formatAgentBackendFailure(turnSelection.provider, error);
+		}
 		streamFailure = message;
 		store.getState().recordDebugEvent(responseMessage.id, {
 			id: `main:${responseMessage.id}:lifecycle:stream-error`,
@@ -463,7 +484,10 @@ export async function driveGlobalChatStream({
 		if (!resumeMissed) {
 			// Settle this run's own steps, push them through the store so the sub-agent buffers fold
 			// in one last time, then read the folded bubble back as the message to commit.
-			responseMessage.inner = { ...responseMessage.inner, content: acc.content };
+			responseMessage.inner = {
+				...responseMessage.inner,
+				content: acc.content,
+			};
 			responseMessage.plan_steps = orderedSteps(acc);
 			responseMessage.current_step_id = undefined;
 			responseMessage.tools = [];

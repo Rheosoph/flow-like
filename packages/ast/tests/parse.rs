@@ -228,6 +228,32 @@ fn roundtrip_member_vs_field() {
 }
 
 #[test]
+fn bracketed_string_is_a_member_while_numeric_bracket_is_an_index() {
+    let text = "onStart() {\n    consume({ reason: inputValues[\"row-rejection-reason\"], first: rows[0] })\n}\n";
+    let ast = parse(text).expect("bracket access should parse");
+    let flow_like_ast::Stmt::Call { call, .. } = &ast.events[0].body.stmts[0] else {
+        panic!("expected call statement")
+    };
+
+    assert!(matches!(
+        &call.args[0].value,
+        flow_like_ast::Expr::Member { base, field }
+            if field == "row-rejection-reason"
+                && matches!(base.as_ref(), flow_like_ast::Expr::Ref(name) if name == "inputValues")
+    ));
+    assert!(matches!(
+        &call.args[1].value,
+        flow_like_ast::Expr::Index { base, index }
+            if matches!(base.as_ref(), flow_like_ast::Expr::Ref(name) if name == "rows")
+                && matches!(
+                    index.as_ref(),
+                    flow_like_ast::Expr::Literal(flow_like_ast::Literal::Int(0))
+                )
+    ));
+    assert_eq!(render(&ast, &RenderOptions::default()), text);
+}
+
+#[test]
 fn parses_const_alias_sugar_for_non_call_exprs() {
     let text = "onStart() {\n    const date = mail.date\n    const label = \"ready\"\n}\n";
     let ast = parse(text).expect("const aliases should parse even when the RHS is not a call");

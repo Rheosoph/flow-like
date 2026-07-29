@@ -6055,6 +6055,20 @@ fn derive_request_acceptance_contract(prompt: &str) -> RequestAcceptanceContract
         objects.sort();
         objects.dedup();
 
+        // Authoring-format guidance is not a runtime capability prohibition. In particular,
+        // "do not substitute command JSON" tells the agent to use FlowScript instead of raw
+        // command payloads; treating it as "no reachable JSON node" rejects legitimate JSON
+        // parsing and chart configuration. Keep the omission visible for human review, while
+        // retaining action-scoped runtime bans such as "never parse JSON".
+        if forbidden
+            && authoring_representation_prohibition_requires_human_review(
+                &tokens, &actions, &objects,
+            )
+        {
+            record_omitted_prohibition(&mut omitted_prohibitions, bounded_summary(&clause));
+            continue;
+        }
+
         // Prose is accepted only when it contains an explicit operation. A marked list is a
         // stronger host signal, so noun-only entries such as "Slack notification" are retained.
         if actions.is_empty() && (!explicit_list_item || objects.is_empty()) {
@@ -6182,6 +6196,29 @@ fn forbidden_criterion_is_presence_only(criterion: &RequestAcceptanceCriterion) 
             .actions
             .iter()
             .all(|action| action == "create" || action == "change")
+}
+
+fn authoring_representation_prohibition_requires_human_review(
+    tokens: &[String],
+    actions: &[String],
+    objects: &[String],
+) -> bool {
+    actions.is_empty()
+        && objects == ["json"]
+        && tokens
+            .iter()
+            .any(|token| matches!(token.as_str(), "command" | "commands"))
+        && tokens.iter().any(|token| {
+            matches!(
+                token.as_str(),
+                "substitute"
+                    | "substitutes"
+                    | "substituted"
+                    | "substituting"
+                    | "placeholder"
+                    | "placeholders"
+            )
+        })
 }
 
 fn record_omitted_prohibition(omitted: &mut Vec<String>, summary: String) {
@@ -11379,6 +11416,43 @@ eventsSimple() {
         assert!(
             contract.omitted_prohibitions.is_empty(),
             "manner-scoped clauses are whitelisted by the exclusivity/manner guard, not dropped as contradictions: {:#?}",
+            contract.omitted_prohibitions
+        );
+    }
+
+    #[test]
+    fn command_json_authoring_ban_is_deferred_without_banning_runtime_json() {
+        let contract = derive_request_acceptance_contract(
+            "- Send a Slack notification.\n\
+             - Do not substitute command JSON or leave placeholder logic.",
+        );
+        assert!(
+            contract
+                .criteria
+                .iter()
+                .all(|criterion| !criterion.objects.iter().any(|object| object == "json")),
+            "authoring-format guidance must not ban runtime JSON capabilities: {:#?}",
+            contract.criteria
+        );
+        assert_eq!(
+            contract.omitted_prohibitions,
+            ["Do not substitute command JSON or leave placeholder logic"],
+            "{:#?}",
+            contract.omitted_prohibitions
+        );
+    }
+
+    #[test]
+    fn explicit_runtime_json_parse_ban_remains_enforced() {
+        let contract = derive_request_acceptance_contract("Never parse JSON.");
+        assert_eq!(contract.criteria.len(), 1, "{:#?}", contract.criteria);
+        let ban = &contract.criteria[0];
+        assert!(ban.forbidden, "{ban:#?}");
+        assert_eq!(ban.actions, ["parse"], "{ban:#?}");
+        assert_eq!(ban.objects, ["json"], "{ban:#?}");
+        assert!(
+            contract.omitted_prohibitions.is_empty(),
+            "{:#?}",
             contract.omitted_prohibitions
         );
     }

@@ -48,7 +48,7 @@ describe("copilot backend connection coordinator", () => {
 
 		await expect(
 			coordinator.start("github-copilot", async () => undefined, Date.now()),
-		).rejects.toThrow("cooling down");
+		).rejects.toThrow(/native start failed[\s\S]*cooling down/);
 	});
 
 	test("waits for an in-flight start before stopping to avoid a late orphan", async () => {
@@ -72,5 +72,37 @@ describe("copilot backend connection coordinator", () => {
 		await stop;
 		expect(stopOperation).toHaveBeenCalledTimes(1);
 		expect(coordinator.snapshot("codex").isRunning).toBe(false);
+	});
+
+	test("retains a runtime failure for every mounted backend picker", async () => {
+		const coordinator = new CopilotBackendConnectionCoordinator();
+		await coordinator.start("claude-code", async () => undefined);
+
+		coordinator.reportFailure(
+			"claude-code",
+			new Error("OAuth session expired"),
+		);
+
+		expect(coordinator.snapshot("claude-code")).toMatchObject({
+			isRunning: false,
+			isConnecting: false,
+			error: "OAuth session expired",
+			retryAtMs: 0,
+		});
+
+		// A newly mounted hook observes the native backend marker, which can
+		// remain alive after a per-request failure. That probe must not erase the
+		// diagnosis before the user retries.
+		coordinator.reconcile("claude-code", true);
+		expect(coordinator.snapshot("claude-code")).toMatchObject({
+			isRunning: false,
+			error: "OAuth session expired",
+		});
+
+		await coordinator.start("claude-code", async () => undefined);
+		expect(coordinator.snapshot("claude-code")).toMatchObject({
+			isRunning: true,
+			error: null,
+		});
 	});
 });

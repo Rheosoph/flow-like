@@ -94,12 +94,29 @@ export class CopilotBackendConnectionCoordinator {
 
 	reconcile(backend: AgentBackendProvider, isRunning: boolean) {
 		const record = this.record(backend);
+		// A per-request agent failure does not necessarily tear down the native
+		// backend marker. Do not let a later mounted hook's `is_running` probe
+		// erase the retained root cause or advertise the backend as ready again.
+		// An explicit successful start/retry clears the failure below.
+		if (isRunning && record.error) {
+			this.publish(record);
+			return;
+		}
 		record.isRunning = isRunning;
 		if (isRunning) {
 			record.failureCount = 0;
 			record.retryAtMs = 0;
 			record.error = null;
 		}
+		this.publish(record);
+	}
+
+	reportFailure(backend: AgentBackendProvider, error: unknown) {
+		const record = this.record(backend);
+		record.isRunning = false;
+		record.isConnecting = false;
+		record.retryAtMs = 0;
+		record.error = errorMessage(error);
 		this.publish(record);
 	}
 
@@ -119,9 +136,10 @@ export class CopilotBackendConnectionCoordinator {
 			);
 		}
 		if (record.retryAtMs > nowMs) {
+			const rootCause = record.error ? `${record.error}\n\n` : "";
 			return Promise.reject(
 				new Error(
-					`${backend} startup is cooling down for ${record.retryAtMs - nowMs}ms after a failure.`,
+					`${rootCause}${backend} startup is cooling down for ${record.retryAtMs - nowMs}ms after that failure.`,
 				),
 			);
 		}

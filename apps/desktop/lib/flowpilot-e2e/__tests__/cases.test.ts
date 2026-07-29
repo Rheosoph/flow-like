@@ -115,8 +115,15 @@ describe("FlowPilot app-creation E2E cases", () => {
 		).toBe(DEFAULT_CASE_RUN_TIMEOUT_MS);
 		expect(requirements.minPages).toBe(3);
 		expect(requirements.minWidgets).toBe(2);
-		expect(requirements.requiredSemanticTableAliases).toContain(
+		expect(requirements.minTables).toBe(5);
+		expect(requirements.requiredSemanticTableAliases).not.toContain(
 			"adventure_memory",
+		);
+		expect(requirements.requiredLazyDatabaseAliases).toEqual([
+			"adventure_memory",
+		]);
+		expect(built.prompt).toContain(
+			"do not pre-create it with a guessed vector size",
 		);
 		expect(
 			requirements.requiredNodeCapabilities.map(({ alias }) => alias),

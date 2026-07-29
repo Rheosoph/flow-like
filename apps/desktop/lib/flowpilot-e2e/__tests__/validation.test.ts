@@ -49,6 +49,7 @@ function caseDefinition(
 			requireSuccessfulCompilerReceipt: true,
 			validateReferenceIntegrity: true,
 			requiredSemanticTableAliases: ["expense_requests", "expense_audit"],
+			requiredLazyDatabaseAliases: [],
 			requiredIdReferences: [
 				{
 					entity: "table",
@@ -439,6 +440,40 @@ describe("FlowPilot app-creation artifact validation", () => {
 		expect(codes).toContain("tables.count");
 		expect(codes).toContain("tables.semantic_alias.expense_audit");
 		expect(codes).toContain("flowscript.id_reference.widget.expense_row");
+	});
+
+	test("requires an exact canonical database call for lazy aliases", () => {
+		const definition = caseDefinition({
+			requiredLazyDatabaseAliases: ["adventure_memory"],
+		});
+		const exact = snapshot();
+		exact.boards = [
+			{
+				...exact.boards[0],
+				flowScript: `${source}
+function memory() { return database({ name: "adventure_memory" }) }`,
+			},
+		];
+		expect(
+			evaluateAppCreationCase(definition, exact).failures.map(
+				({ code }) => code,
+			),
+		).not.toContain("flowscript.lazy_database_alias.adventure_memory");
+
+		const unrelatedLiteral = snapshot();
+		unrelatedLiteral.boards = [
+			{
+				...unrelatedLiteral.boards[0],
+				flowScript: `${source}
+const memoryName = "adventure_memory"
+function memory() { return database({ name: "prefix-adventure_memory" }) }`,
+			},
+		];
+		expect(
+			evaluateAppCreationCase(definition, unrelatedLiteral).failures.map(
+				({ code }) => code,
+			),
+		).toContain("flowscript.lazy_database_alias.adventure_memory");
 	});
 
 	test("requires scenario capabilities in the persisted workflow graph", () => {

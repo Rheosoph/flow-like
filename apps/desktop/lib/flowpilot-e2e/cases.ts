@@ -105,6 +105,7 @@ function requirements(
 		requireSuccessfulCompilerReceipt: true,
 		validateReferenceIntegrity: true,
 		requiredSemanticTableAliases: [],
+		requiredLazyDatabaseAliases: [],
 		requiredIdReferences: [],
 		requiredNodeCapabilities: [],
 		...overrides,
@@ -541,7 +542,7 @@ Create three pages named exactly "Adventure Menu", "Save Games", and "Play Scene
 
 "Play Scene" renders whatever the current scene needs and nothing else: narration plus a continue control for a story scene, a choice list for single- and multiple-choice scenes, and a text input for free-form decisions. It also offers "Save" (a savepoint may be taken at any point) and "Restore last savepoint". When the player dies or fails, restoring must put the run back on the last savepoint's scene and state.
 
-Use tables named exactly "Adventures", "Campaign Outline", "Scenes", "Decisions", "Save Games", and "Adventure Memory". Every row must carry its adventure id so each adventure keeps its own isolated database. "Adventure Memory" is the embedded lookup store: chunk the campaign outline, every played scene, every character a scene introduces (kind "character"), and every recorded decision, embed those chunks, and persist them with their vector so the agent can retrieve them semantically.
+Set up physical scalar tables named exactly "Adventures", "Campaign Outline", "Scenes", "Decisions", and "Save Games". Every row must carry its adventure id so each adventure keeps its own isolated database. "Adventure Memory" is the lazy embedded lookup store: open it with the exact database alias \`adventure_memory\`, but do not pre-create it with a guessed vector size. Its first real embedding upsert must create it with a complete row and the embedding model's actual vector width. Chunk the campaign outline, every played scene, every character a scene introduces (kind "character"), and every recorded decision, embed those chunks, and persist them with their vector so the agent can retrieve them semantically.
 
 Creating an adventure must generate the campaign BEFORE the first scene is played: from the description, genre and toggles, have the story agent produce the global campaign goal, a storyline outline, and a list of planned scene ideas, and persist them in "Adventures" and "Campaign Outline".
 
@@ -558,7 +559,7 @@ Keep everything on one coherent workflow board. This app is far larger than one 
 			minTotalNodes: 30,
 			minPages: 3,
 			minWidgets: 2,
-			minTables: 6,
+			minTables: 5,
 			minEvents: 5,
 			requiredSemanticTableAliases: [
 				"adventures",
@@ -566,8 +567,8 @@ Keep everything on one coherent workflow board. This app is far larger than one 
 				"scenes",
 				"decisions",
 				"save_games",
-				"adventure_memory",
 			],
+			requiredLazyDatabaseAliases: ["adventure_memory"],
 			requiredIdReferences: [
 				{ entity: "page", alias: "adventure_menu", source: "canonical" },
 				{ entity: "page", alias: "play_scene", source: "canonical" },
@@ -578,7 +579,6 @@ Keep everything on one coherent workflow board. This app is far larger than one 
 				{ entity: "table", alias: "adventures", source: "canonical" },
 				{ entity: "table", alias: "scenes", source: "canonical" },
 				{ entity: "table", alias: "save_games", source: "canonical" },
-				{ entity: "table", alias: "adventure_memory", source: "canonical" },
 			],
 			requiredNodeCapabilities: [
 				{ alias: "page_entry", anyOf: ["events_simple"] },
