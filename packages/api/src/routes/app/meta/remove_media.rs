@@ -42,7 +42,7 @@ use sea_orm::{ActiveModelTrait, ActiveValue::Set, TransactionTrait};
 )]
 #[tracing::instrument(
     name = "DELETE /apps/{app_id}/meta/media/{media_id}",
-    skip(state, user)
+    skip(state, user, query)
 )]
 pub async fn remove_media(
     State(state): State<AppState>,

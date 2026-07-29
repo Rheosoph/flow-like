@@ -83,7 +83,7 @@ pub fn routes() -> Router<AppState> {
 )]
 #[tracing::instrument(
     name = "GET /tmp",
-    skip(state, user),
+    skip(state, user, params),
     fields(user_sub = tracing::field::Empty, key = tracing::field::Empty, ext = tracing::field::Empty)
 )]
 pub async fn get_temporary_upload(

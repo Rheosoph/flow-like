@@ -69,7 +69,7 @@ impl From<lancegraph::ValidationReport> for ValidationResult {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/graph/{overlay_id}/validate",
-    skip(state, user, draft)
+    skip(state, user, scope, draft)
 )]
 pub async fn validate_overlay(
     State(state): State<AppState>,

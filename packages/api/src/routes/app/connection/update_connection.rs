@@ -45,7 +45,7 @@ pub struct UpdateConnectionRequest {
 )]
 #[tracing::instrument(
     name = "PUT /apps/{app_id}/connections/{connection_id}",
-    skip(state, user)
+    skip(state, user, payload)
 )]
 pub async fn update_connection(
     State(state): State<AppState>,

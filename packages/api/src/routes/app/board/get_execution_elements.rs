@@ -47,7 +47,7 @@ pub struct GetExecutionElementsResponse {
 )]
 #[tracing::instrument(
     name = "GET /apps/{app_id}/board/{board_id}/elements",
-    skip(state, user)
+    skip(state, user, query)
 )]
 pub async fn get_execution_elements(
     State(state): State<AppState>,

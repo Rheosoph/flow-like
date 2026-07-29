@@ -2677,6 +2677,253 @@ impl FlowPilotModelSelection {
     }
 }
 
+// =============================================================================
+// Agent backend telemetry (aggregate-only)
+//
+// The external agent CLIs run on the user's machine against their own prompts,
+// files and credentials, so nothing observed here may be reported verbatim. Only
+// the closed vocabularies below plus a duration ever reach the telemetry buffer:
+// no path, argument, environment value, prompt, model output, stderr text or
+// user name. Failures are classified into `AGENT_ERROR_CLASSES` and the matched
+// constant — never the message that produced it — is what gets emitted.
+// =============================================================================
+
+const AGENT_BACKEND_LIFECYCLE_EVENT: &str = "agent_backend_start";
+const AGENT_BACKEND_ERROR_EVENT: &str = "agent_backend_error";
+
+const AGENT_STAGE_SPAWN: &str = "spawn";
+const AGENT_STAGE_AUTH: &str = "auth";
+const AGENT_STAGE_MODELS: &str = "models";
+const AGENT_STAGE_RUN: &str = "run";
+const AGENT_STAGE_STOP: &str = "stop";
+
+/// Ordered failure vocabulary. The first class whose markers appear in the
+/// lowercased failure text wins, so broader markers must come last: timeouts
+/// wrap whichever operation they interrupted, and `no such file` would otherwise
+/// swallow `model not found`.
+const AGENT_ERROR_CLASSES: &[(&str, &[&str])] = &[
+    (
+        "timeout",
+        &["timed out", "timeout", "deadline exceeded", "etimedout"],
+    ),
+    (
+        "unsupported_model",
+        &[
+            "unsupported model",
+            "unknown model",
+            "model not found",
+            "invalid model",
+            "no such model",
+            "model is not supported",
+        ],
+    ),
+    (
+        "auth_expired",
+        &[
+            "token expired",
+            "session expired",
+            "credentials expired",
+            "expired credential",
+            "auth expired",
+            "re-authenticate",
+            "reauthenticate",
+            "refresh token",
+        ],
+    ),
+    (
+        "auth_required",
+        &[
+            "not authenticated",
+            "unauthenticated",
+            "authentication required",
+            "authentication failed",
+            "requires authentication",
+            "unauthorized",
+            "forbidden",
+            "not logged in",
+            "login required",
+            "please log in",
+            "please sign in",
+            "invalid api key",
+            "missing api key",
+            "http 401",
+            "http 403",
+        ],
+    ),
+    (
+        "permission_denied",
+        &[
+            "permission denied",
+            "access is denied",
+            "operation not permitted",
+            "eacces",
+            "eperm",
+        ],
+    ),
+    (
+        "binary_not_found",
+        &[
+            "was not found",
+            "not installed",
+            "no such file",
+            "enoent",
+            "command not found",
+            "cannot find the file",
+            "cannot find the path",
+            "is not recognized as an internal or external command",
+        ],
+    ),
+    (
+        "non_zero_exit",
+        &[
+            "exited with",
+            "exit code",
+            "exit status",
+            "non-zero exit",
+            "killed by signal",
+            "terminated by signal",
+        ],
+    ),
+    (
+        "protocol_error",
+        &[
+            "protocol",
+            "unexpected eof",
+            "broken pipe",
+            "invalid json",
+            "malformed",
+            "jsonrpc",
+            "json-rpc",
+            "handshake",
+            "stream closed",
+            "connection closed",
+            "connection reset",
+            "unexpected message",
+            "parse error",
+            "decode error",
+        ],
+    ),
+];
+
+fn backend_label(kind: FlowPilotAgentBackendKind) -> &'static str {
+    match kind {
+        FlowPilotAgentBackendKind::GithubCopilot => "github_copilot",
+        FlowPilotAgentBackendKind::Codex => "codex",
+        FlowPilotAgentBackendKind::ClaudeCode => "claude_code",
+    }
+}
+
+/// Maps a backend failure onto the closed error vocabulary. The returned value is
+/// always a `'static` constant, so the failure text itself cannot escape.
+fn classify_agent_error(error: &str) -> &'static str {
+    let normalized = error.to_ascii_lowercase();
+    for (class, markers) in AGENT_ERROR_CLASSES {
+        if markers.iter().any(|marker| normalized.contains(marker)) {
+            return class;
+        }
+    }
+    "unknown"
+}
+
+fn agent_backend_lifecycle_props(
+    backend: FlowPilotAgentBackendKind,
+    stage: &'static str,
+    error_kind: Option<&'static str>,
+    duration_ms: u64,
+) -> serde_json::Value {
+    let mut props = serde_json::Map::new();
+    props.insert("backend".to_string(), backend_label(backend).into());
+    props.insert("stage".to_string(), stage.into());
+    props.insert(
+        "outcome".to_string(),
+        if error_kind.is_some() { "error" } else { "ok" }.into(),
+    );
+    props.insert("duration_ms".to_string(), duration_ms.into());
+    if let Some(error_kind) = error_kind {
+        props.insert("error_kind".to_string(), error_kind.into());
+    }
+    serde_json::Value::Object(props)
+}
+
+fn agent_backend_error_props(
+    backend: FlowPilotAgentBackendKind,
+    stage: &'static str,
+    error_kind: &'static str,
+    duration_ms: Option<u64>,
+) -> serde_json::Value {
+    let mut props = serde_json::Map::new();
+    props.insert("backend".to_string(), backend_label(backend).into());
+    props.insert("stage".to_string(), stage.into());
+    props.insert("error_kind".to_string(), error_kind.into());
+    if let Some(duration_ms) = duration_ms {
+        props.insert("duration_ms".to_string(), duration_ms.into());
+    }
+    serde_json::Value::Object(props)
+}
+
+/// Fire-and-forget capture of one backend stage outcome. Detached onto the
+/// runtime so neither the buffer write nor a panic inside it can reach the
+/// backend call path, and a silent no-op without usage consent. Without a live
+/// runtime handle nothing is recorded rather than panicking, so instrumentation
+/// can never become a failure mode of the backend it observes.
+fn record_agent_backend_stage(
+    app_handle: &AppHandle,
+    backend: FlowPilotAgentBackendKind,
+    stage: &'static str,
+    error: Option<&str>,
+    started: Instant,
+) {
+    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+        return;
+    };
+    let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let error_kind = error.map(classify_agent_error);
+    let lifecycle = agent_backend_lifecycle_props(backend, stage, error_kind, duration_ms);
+    let failure =
+        error_kind.map(|kind| agent_backend_error_props(backend, stage, kind, Some(duration_ms)));
+    let app_handle = app_handle.clone();
+    runtime.spawn(async move {
+        crate::functions::telemetry::track(
+            &app_handle,
+            AGENT_BACKEND_LIFECYCLE_EVENT,
+            Some(lifecycle),
+        )
+        .await;
+        if let Some(failure) = failure {
+            crate::functions::telemetry::track(
+                &app_handle,
+                AGENT_BACKEND_ERROR_EVENT,
+                Some(failure),
+            )
+            .await;
+        }
+    });
+}
+
+/// Awaits one backend stage and records its aggregate outcome afterwards. The
+/// stage result is returned untouched, so instrumentation can neither alter
+/// control flow nor add a failure mode.
+async fn instrumented_agent_stage<T, F>(
+    app_handle: &AppHandle,
+    backend: FlowPilotAgentBackendKind,
+    stage: &'static str,
+    stage_future: F,
+) -> Result<T, String>
+where
+    F: std::future::Future<Output = Result<T, String>>,
+{
+    let started = Instant::now();
+    let result = stage_future.await;
+    record_agent_backend_stage(
+        app_handle,
+        backend,
+        stage,
+        result.as_ref().err().map(String::as_str),
+        started,
+    );
+    result
+}
+
 fn copilot_attachment_extension(media_type: &str) -> &'static str {
     match media_type.to_lowercase().as_str() {
         "image/jpeg" | "jpeg" | "jpg" => "jpg",
@@ -2912,28 +3159,33 @@ pub async fn copilot_chat(
                     .filter(|model_id| !model_id.trim().is_empty())
                     .ok_or_else(|| "GitHub Copilot backend requires a model id".to_string())?;
 
-                copilot_sdk_chat_internal(
-                    app_handle.clone(),
-                    model_id,
-                    reasoning_effort.as_deref(),
-                    scope,
-                    board.as_ref(),
-                    catalog_nodes,
-                    selected_node_ids.as_deref().unwrap_or(&[]),
-                    current_surface.as_ref(),
-                    user_prompt,
-                    raw_user_prompt,
-                    request_identity_prompt,
-                    host_context_guidance,
-                    current_images,
-                    history.unwrap_or_default(),
-                    channel,
-                    None,
-                    None,
-                    tool_context,
-                    request_id,
-                    nested,
-                    read_only,
+                instrumented_agent_stage(
+                    &app_handle,
+                    agent_backend,
+                    AGENT_STAGE_RUN,
+                    copilot_sdk_chat_internal(
+                        app_handle.clone(),
+                        model_id,
+                        reasoning_effort.as_deref(),
+                        scope,
+                        board.as_ref(),
+                        catalog_nodes,
+                        selected_node_ids.as_deref().unwrap_or(&[]),
+                        current_surface.as_ref(),
+                        user_prompt,
+                        raw_user_prompt,
+                        request_identity_prompt,
+                        host_context_guidance,
+                        current_images,
+                        history.unwrap_or_default(),
+                        channel,
+                        None,
+                        None,
+                        tool_context,
+                        request_id,
+                        nested,
+                        read_only,
+                    ),
                 )
                 .await
             }
@@ -2943,29 +3195,34 @@ pub async fn copilot_chat(
                     .clone()
                     .unwrap_or_else(|| "default".to_string());
 
-                external_code_agent_chat_internal(
-                    app_handle.clone(),
+                instrumented_agent_stage(
+                    &app_handle,
                     agent_backend,
-                    &model_id,
-                    reasoning_effort.as_deref(),
-                    scope,
-                    board.as_ref(),
-                    catalog_nodes,
-                    selected_node_ids.as_deref().unwrap_or(&[]),
-                    current_surface.as_ref(),
-                    user_prompt,
-                    raw_user_prompt,
-                    request_identity_prompt,
-                    host_context_guidance,
-                    current_images,
-                    history.unwrap_or_default(),
-                    channel,
-                    None,
-                    None,
-                    tool_context,
-                    request_id,
-                    nested,
-                    read_only,
+                    AGENT_STAGE_RUN,
+                    external_code_agent_chat_internal(
+                        app_handle.clone(),
+                        agent_backend,
+                        &model_id,
+                        reasoning_effort.as_deref(),
+                        scope,
+                        board.as_ref(),
+                        catalog_nodes,
+                        selected_node_ids.as_deref().unwrap_or(&[]),
+                        current_surface.as_ref(),
+                        user_prompt,
+                        raw_user_prompt,
+                        request_identity_prompt,
+                        host_context_guidance,
+                        current_images,
+                        history.unwrap_or_default(),
+                        channel,
+                        None,
+                        None,
+                        tool_context,
+                        request_id,
+                        nested,
+                        read_only,
+                    ),
                 )
                 .await
             }
@@ -3583,30 +3840,35 @@ pub async fn global_chat(
                     .ok_or_else(|| "GitHub Copilot backend requires a model id".to_string())?;
                 let context = context_with_memory(context, memory.as_ref(), &user_prompt).await;
 
-                copilot_sdk_chat_internal(
-                    app_handle.clone(),
-                    model_id,
-                    reasoning_effort.as_deref(),
-                    scope,
-                    None,
-                    None,
-                    &[],
-                    None,
-                    user_prompt,
-                    source_user_prompt.clone(),
-                    source_user_prompt.clone(),
-                    None,
-                    current_images,
-                    history,
-                    sink,
-                    Some(context),
-                    memory,
-                    Some(global_tool_context.clone()),
-                    // Register under the frontend run id so cancel_copilot_chat can stop this
-                    // run (the e2e runner and the UI stop button both cancel by that id).
-                    run_id.clone(),
-                    false,
-                    false,
+                instrumented_agent_stage(
+                    &app_handle,
+                    FlowPilotAgentBackendKind::GithubCopilot,
+                    AGENT_STAGE_RUN,
+                    copilot_sdk_chat_internal(
+                        app_handle.clone(),
+                        model_id,
+                        reasoning_effort.as_deref(),
+                        scope,
+                        None,
+                        None,
+                        &[],
+                        None,
+                        user_prompt,
+                        source_user_prompt.clone(),
+                        source_user_prompt.clone(),
+                        None,
+                        current_images,
+                        history,
+                        sink,
+                        Some(context),
+                        memory,
+                        Some(global_tool_context.clone()),
+                        // Register under the frontend run id so cancel_copilot_chat can stop this
+                        // run (the e2e runner and the UI stop button both cancel by that id).
+                        run_id.clone(),
+                        false,
+                        false,
+                    ),
                 )
                 .await
             }
@@ -3617,31 +3879,36 @@ pub async fn global_chat(
                     .unwrap_or_else(|| "default".to_string());
                 let context = context_with_memory(context, memory.as_ref(), &user_prompt).await;
 
-                external_code_agent_chat_internal(
-                    app_handle.clone(),
+                instrumented_agent_stage(
+                    &app_handle,
                     agent_backend,
-                    &model_id,
-                    reasoning_effort.as_deref(),
-                    scope,
-                    None,
-                    None,
-                    &[],
-                    None,
-                    user_prompt,
-                    source_user_prompt.clone(),
-                    source_user_prompt,
-                    None,
-                    current_images,
-                    history,
-                    sink,
-                    Some(context),
-                    memory,
-                    Some(global_tool_context.clone()),
-                    // Register under the frontend run id so cancel_copilot_chat can stop this
-                    // run (the e2e runner and the UI stop button both cancel by that id).
-                    run_id.clone(),
-                    false,
-                    false,
+                    AGENT_STAGE_RUN,
+                    external_code_agent_chat_internal(
+                        app_handle.clone(),
+                        agent_backend,
+                        &model_id,
+                        reasoning_effort.as_deref(),
+                        scope,
+                        None,
+                        None,
+                        &[],
+                        None,
+                        user_prompt,
+                        source_user_prompt.clone(),
+                        source_user_prompt,
+                        None,
+                        current_images,
+                        history,
+                        sink,
+                        Some(context),
+                        memory,
+                        Some(global_tool_context.clone()),
+                        // Register under the frontend run id so cancel_copilot_chat can stop this
+                        // run (the e2e runner and the UI stop button both cancel by that id).
+                        run_id.clone(),
+                        false,
+                        false,
+                    ),
                 )
                 .await
             }
@@ -15677,19 +15944,24 @@ pub async fn flowpilot_agent_backend_start(
     use_stdio: Option<bool>,
     cli_url: Option<String>,
 ) -> Result<(), String> {
-    let backend = agent_backend(parse_agent_backend(backend)?);
-    backend
-        .start(FlowPilotBackendStartOptions {
-            use_stdio: use_stdio.unwrap_or(true),
-            cli_url,
-            app_handle: Some(app_handle),
-        })
-        .await
+    let kind = parse_agent_backend(backend)?;
+    let backend = agent_backend(kind);
+    let options = FlowPilotBackendStartOptions {
+        use_stdio: use_stdio.unwrap_or(true),
+        cli_url,
+        app_handle: Some(app_handle.clone()),
+    };
+    instrumented_agent_stage(&app_handle, kind, AGENT_STAGE_SPAWN, backend.start(options)).await
 }
 
 #[tauri::command]
-pub async fn flowpilot_agent_backend_stop(backend: String) -> Result<(), String> {
-    agent_backend(parse_agent_backend(backend)?).stop().await
+pub async fn flowpilot_agent_backend_stop(
+    app_handle: AppHandle,
+    backend: String,
+) -> Result<(), String> {
+    let kind = parse_agent_backend(backend)?;
+    let backend = agent_backend(kind);
+    instrumented_agent_stage(&app_handle, kind, AGENT_STAGE_STOP, backend.stop()).await
 }
 
 #[tauri::command]
@@ -15701,11 +15973,12 @@ pub async fn flowpilot_agent_backend_is_running(backend: String) -> Result<bool,
 
 #[tauri::command]
 pub async fn flowpilot_agent_backend_list_models(
+    app_handle: AppHandle,
     backend: String,
 ) -> Result<Vec<CopilotModelInfo>, String> {
-    agent_backend(parse_agent_backend(backend)?)
-        .list_models()
-        .await
+    let kind = parse_agent_backend(backend)?;
+    let backend = agent_backend(kind);
+    instrumented_agent_stage(&app_handle, kind, AGENT_STAGE_MODELS, backend.list_models()).await
 }
 
 #[tauri::command]
@@ -15713,9 +15986,15 @@ pub async fn flowpilot_agent_backend_get_auth_status(
     app_handle: AppHandle,
     backend: String,
 ) -> Result<CopilotAuthStatus, String> {
-    agent_backend(parse_agent_backend(backend)?)
-        .get_auth_status(Some(&app_handle))
-        .await
+    let kind = parse_agent_backend(backend)?;
+    let backend = agent_backend(kind);
+    instrumented_agent_stage(
+        &app_handle,
+        kind,
+        AGENT_STAGE_AUTH,
+        backend.get_auth_status(Some(&app_handle)),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -15756,8 +16035,8 @@ pub async fn copilot_sdk_start(
 
 /// Stop the GitHub Copilot SDK client
 #[tauri::command]
-pub async fn copilot_sdk_stop() -> Result<(), String> {
-    flowpilot_agent_backend_stop("github-copilot".to_string()).await
+pub async fn copilot_sdk_stop(app_handle: AppHandle) -> Result<(), String> {
+    flowpilot_agent_backend_stop(app_handle, "github-copilot".to_string()).await
 }
 
 /// Check if the Copilot SDK client is running
@@ -15768,8 +16047,10 @@ pub async fn copilot_sdk_is_running() -> Result<bool, String> {
 
 /// List available GitHub Copilot models
 #[tauri::command]
-pub async fn copilot_sdk_list_models() -> Result<Vec<CopilotModelInfo>, String> {
-    flowpilot_agent_backend_list_models("github-copilot".to_string()).await
+pub async fn copilot_sdk_list_models(
+    app_handle: AppHandle,
+) -> Result<Vec<CopilotModelInfo>, String> {
+    flowpilot_agent_backend_list_models(app_handle, "github-copilot".to_string()).await
 }
 
 /// Get GitHub Copilot authentication status
@@ -15852,6 +16133,183 @@ pub async fn copilot_sdk_create_agent_session(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sorted_prop_keys(props: &serde_json::Value) -> Vec<&str> {
+        let mut keys: Vec<&str> = props
+            .as_object()
+            .expect("agent backend props are an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        keys
+    }
+
+    #[test]
+    fn agent_backend_labels_are_stable_snake_case() {
+        assert_eq!(
+            backend_label(FlowPilotAgentBackendKind::ClaudeCode),
+            "claude_code"
+        );
+        assert_eq!(backend_label(FlowPilotAgentBackendKind::Codex), "codex");
+        assert_eq!(
+            backend_label(FlowPilotAgentBackendKind::GithubCopilot),
+            "github_copilot"
+        );
+    }
+
+    #[test]
+    fn agent_errors_map_onto_the_closed_vocabulary() {
+        assert_eq!(
+            classify_agent_error(
+                "Claude Code CLI was not found. Install it or set CLAUDE_CODE_CLI_PATH to its executable path."
+            ),
+            "binary_not_found"
+        );
+        assert_eq!(
+            classify_agent_error("spawn codex: No such file or directory (os error 2)"),
+            "binary_not_found"
+        );
+        assert_eq!(
+            classify_agent_error("failed to spawn agent: permission denied (os error 13)"),
+            "permission_denied"
+        );
+        assert_eq!(
+            classify_agent_error("Not authenticated. Run the CLI login flow first."),
+            "auth_required"
+        );
+        assert_eq!(
+            classify_agent_error("stored credentials expired; please re-authenticate"),
+            "auth_expired"
+        );
+        assert_eq!(
+            classify_agent_error("Codex CLI probe timed out after 5s"),
+            "timeout"
+        );
+        assert_eq!(
+            classify_agent_error("Codex --version exited with status exit status: 127"),
+            "non_zero_exit"
+        );
+        assert_eq!(
+            classify_agent_error("app-server returned a malformed JSON-RPC frame"),
+            "protocol_error"
+        );
+        assert_eq!(
+            classify_agent_error("unsupported model: opus-does-not-exist"),
+            "unsupported_model"
+        );
+        assert_eq!(
+            classify_agent_error("something nobody predicted"),
+            "unknown"
+        );
+        assert_eq!(classify_agent_error(""), "unknown");
+    }
+
+    #[test]
+    fn agent_error_classification_never_echoes_the_failure_text() {
+        let sensitive = "Failed to run Claude Code CLI at /home/alice/.local/bin/claude --resume s3cr3t: No such file or directory";
+        let error_kind = classify_agent_error(sensitive);
+        assert_eq!(error_kind, "binary_not_found");
+
+        let rendered = agent_backend_lifecycle_props(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            AGENT_STAGE_SPAWN,
+            Some(error_kind),
+            12,
+        )
+        .to_string();
+        assert!(!rendered.contains("/home/alice"));
+        assert!(!rendered.contains("--resume"));
+        assert!(!rendered.contains("s3cr3t"));
+    }
+
+    #[test]
+    fn agent_backend_props_carry_only_aggregate_keys() {
+        let ok = agent_backend_lifecycle_props(
+            FlowPilotAgentBackendKind::ClaudeCode,
+            AGENT_STAGE_SPAWN,
+            None,
+            42,
+        );
+        assert_eq!(
+            sorted_prop_keys(&ok),
+            vec!["backend", "duration_ms", "outcome", "stage"]
+        );
+        assert_eq!(ok["backend"], "claude_code");
+        assert_eq!(ok["stage"], "spawn");
+        assert_eq!(ok["outcome"], "ok");
+        assert_eq!(ok["duration_ms"], 42);
+
+        let failed = agent_backend_lifecycle_props(
+            FlowPilotAgentBackendKind::Codex,
+            AGENT_STAGE_RUN,
+            Some("timeout"),
+            7,
+        );
+        assert_eq!(
+            sorted_prop_keys(&failed),
+            vec!["backend", "duration_ms", "error_kind", "outcome", "stage"]
+        );
+        assert_eq!(failed["backend"], "codex");
+        assert_eq!(failed["outcome"], "error");
+        assert_eq!(failed["error_kind"], "timeout");
+
+        let timed = agent_backend_error_props(
+            FlowPilotAgentBackendKind::GithubCopilot,
+            AGENT_STAGE_AUTH,
+            "auth_required",
+            Some(3),
+        );
+        assert_eq!(
+            sorted_prop_keys(&timed),
+            vec!["backend", "duration_ms", "error_kind", "stage"]
+        );
+        assert_eq!(timed["backend"], "github_copilot");
+        assert_eq!(timed["stage"], "auth");
+
+        let untimed = agent_backend_error_props(
+            FlowPilotAgentBackendKind::Codex,
+            AGENT_STAGE_STOP,
+            "unknown",
+            None,
+        );
+        assert_eq!(
+            sorted_prop_keys(&untimed),
+            vec!["backend", "error_kind", "stage"]
+        );
+    }
+
+    #[test]
+    fn agent_backend_stage_vocabulary_is_closed() {
+        for stage in [
+            AGENT_STAGE_SPAWN,
+            AGENT_STAGE_AUTH,
+            AGENT_STAGE_MODELS,
+            AGENT_STAGE_RUN,
+            AGENT_STAGE_STOP,
+        ] {
+            assert!(matches!(
+                stage,
+                "spawn" | "auth" | "models" | "run" | "stop"
+            ));
+        }
+        for (class, markers) in AGENT_ERROR_CLASSES {
+            assert!(matches!(
+                *class,
+                "binary_not_found"
+                    | "permission_denied"
+                    | "auth_required"
+                    | "auth_expired"
+                    | "timeout"
+                    | "non_zero_exit"
+                    | "protocol_error"
+                    | "unsupported_model"
+            ));
+            for marker in *markers {
+                assert_eq!(classify_agent_error(marker), *class);
+            }
+        }
+    }
 
     #[test]
     fn resolves_matching_copilot_app_contexts() {

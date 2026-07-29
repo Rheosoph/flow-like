@@ -87,7 +87,7 @@ impl UserLookupResponse {
         ("bearer_auth" = [])
     )
 )]
-#[tracing::instrument(name = "GET /user/lookup/{sub}", skip(state, user))]
+#[tracing::instrument(name = "GET /user/lookup/{sub}", skip_all)]
 pub async fn user_lookup(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -235,7 +235,7 @@ async fn ensure_executor_lookup_permission(
         ("bearer_auth" = [])
     )
 )]
-#[tracing::instrument(name = "GET /user/search/{query}", skip(state, user))]
+#[tracing::instrument(name = "GET /user/search/{query}", skip_all)]
 pub async fn user_search(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

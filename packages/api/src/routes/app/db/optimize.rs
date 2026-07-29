@@ -40,7 +40,10 @@ pub struct OptimizePayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/db/{table}/optimize", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/db/{table}/optimize",
+    skip(state, user, scope, payload)
+)]
 pub async fn optimize_table(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

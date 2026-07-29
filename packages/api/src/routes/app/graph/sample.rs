@@ -55,7 +55,7 @@ impl SampleParams {
 )]
 #[tracing::instrument(
     name = "GET /apps/{app_id}/graph/{overlay_id}/sample",
-    skip(state, user)
+    skip(state, user, params)
 )]
 pub async fn sample_nodes(
     State(state): State<AppState>,

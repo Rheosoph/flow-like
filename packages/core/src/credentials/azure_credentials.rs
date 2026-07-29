@@ -162,7 +162,7 @@ impl SharedCredentialsTrait for AzureSharedCredentials {
 
     #[tracing::instrument(
         name = "AzureSharedCredentials::to_db_scoped",
-        skip(self),
+        skip(self, sub),
         level = "debug"
     )]
     async fn to_db_scoped(&self, sub: &str, app_id: &str) -> Result<ConnectBuilder> {

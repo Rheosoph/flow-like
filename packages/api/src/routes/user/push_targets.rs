@@ -264,7 +264,7 @@ pub async fn register_push_target(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "GET /user/push-targets/{device_id}", skip(state, user))]
+#[tracing::instrument(name = "GET /user/push-targets/{device_id}", skip_all)]
 pub async fn get_push_target_status(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -299,7 +299,7 @@ pub async fn get_push_target_status(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "PATCH /user/push-targets/{device_id}", skip(state, user, body))]
+#[tracing::instrument(name = "PATCH /user/push-targets/{device_id}", skip_all)]
 pub async fn update_push_target_status(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -388,7 +388,7 @@ pub async fn update_push_target_status(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "DELETE /user/push-targets/{device_id}", skip(state, user))]
+#[tracing::instrument(name = "DELETE /user/push-targets/{device_id}", skip_all)]
 pub async fn unregister_push_target(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

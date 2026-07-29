@@ -34,7 +34,7 @@ pub struct VerifyParams {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "GET /audit/verify", skip(state, user))]
+#[tracing::instrument(name = "GET /audit/verify", skip_all)]
 pub async fn verify_chain(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

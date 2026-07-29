@@ -35,7 +35,7 @@ use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
 )]
 #[tracing::instrument(
     name = "DELETE /apps/{app_id}/db/{table}/index/{index_name}",
-    skip(state, user)
+    skip(state, user, scope)
 )]
 pub async fn drop_index(
     State(state): State<AppState>,

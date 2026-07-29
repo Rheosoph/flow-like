@@ -40,7 +40,10 @@ pub struct UpdatePayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/db/{table}/update", skip(state, user))]
+#[tracing::instrument(
+    name = "PUT /apps/{app_id}/db/{table}/update",
+    skip(state, user, scope, payload)
+)]
 pub async fn update_table(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

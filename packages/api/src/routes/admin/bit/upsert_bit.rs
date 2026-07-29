@@ -204,7 +204,7 @@ pub async fn upsert_bit(
     Ok(sse)
 }
 
-#[tracing::instrument(name = "download_and_hash_bit", skip(bit, state))]
+#[tracing::instrument(name = "download_and_hash_bit", skip(bit, state, tx))]
 async fn download_and_hash(
     bit: &mut bit::Model,
     state: AppState,
@@ -484,7 +484,7 @@ async fn download_and_hash(
     Ok(())
 }
 
-#[tracing::instrument(name = "build_dependency_hash", skip(bit, state))]
+#[tracing::instrument(name = "build_dependency_hash", skip(bit, state, tx))]
 async fn build_dependency_hash(
     bit: &mut bit::Model,
     state: AppState,

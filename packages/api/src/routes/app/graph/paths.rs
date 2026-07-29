@@ -52,7 +52,7 @@ fn default_max_depth() -> usize {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/graph/{overlay_id}/paths",
-    skip(state, user, payload)
+    skip(state, user, scope, payload)
 )]
 pub async fn find_paths(
     State(state): State<AppState>,

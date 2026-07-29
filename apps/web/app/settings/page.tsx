@@ -15,6 +15,7 @@ import {
 	type LucideIcon,
 	Package,
 	Scroll,
+	ShieldCheck,
 	User,
 	Zap,
 } from "lucide-react";
@@ -88,6 +89,12 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 				description: "Node usage, category distribution, and board analytics",
 				href: "/settings/statistics",
 				icon: BarChart3,
+			},
+			{
+				title: "Privacy & Telemetry",
+				description: "Control anonymous usage telemetry and your install id",
+				href: "/settings/privacy",
+				icon: ShieldCheck,
 			},
 			{
 				title: "Third-Party Licenses",

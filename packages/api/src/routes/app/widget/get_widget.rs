@@ -39,7 +39,10 @@ pub struct VersionQuery {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/widgets/{widget_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/widgets/{widget_id}",
+    skip(state, user, params)
+)]
 pub async fn get_widget(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

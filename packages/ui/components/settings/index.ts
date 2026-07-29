@@ -10,6 +10,7 @@ export * from "./model-catalog";
 export * from "./app-general";
 export * from "./visibility-status";
 export * from "./profile";
+export * from "./privacy";
 export * from "./sinks";
 export * from "./sales";
 export * from "./endpoints/endpoints-page";

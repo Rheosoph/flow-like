@@ -92,7 +92,10 @@ fn build_response(payload: &PrerunPayload, can_execute_locally: bool) -> PrerunB
         (status = 404, description = "Board not found")
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/board/{board_id}/prerun", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/board/{board_id}/prerun",
+    skip(state, user, query)
+)]
 pub async fn prerun_board(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

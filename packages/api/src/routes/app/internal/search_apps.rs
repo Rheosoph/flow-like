@@ -37,7 +37,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
         (status = 401, description = "Unauthorized")
     )
 )]
-#[tracing::instrument(name = "GET /apps/search", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/search", skip_all)]
 pub async fn search_apps(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

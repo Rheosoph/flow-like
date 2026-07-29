@@ -40,7 +40,7 @@ pub struct SearchNodesPayload {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/graph/{overlay_id}/search",
-    skip(state, user, payload)
+    skip(state, user, scope, payload)
 )]
 pub async fn search_nodes(
     State(state): State<AppState>,

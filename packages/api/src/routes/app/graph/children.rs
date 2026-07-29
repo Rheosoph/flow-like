@@ -41,7 +41,7 @@ pub struct ChildrenPayload {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/graph/{overlay_id}/children",
-    skip(state, user, payload)
+    skip(state, user, scope, payload)
 )]
 pub async fn children(
     State(state): State<AppState>,

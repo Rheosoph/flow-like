@@ -41,7 +41,7 @@ pub struct SqlPayload {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/graph/{overlay_id}/sql",
-    skip(state, user, payload)
+    skip(state, user, scope, payload)
 )]
 pub async fn run_sql(
     State(state): State<AppState>,

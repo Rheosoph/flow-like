@@ -129,7 +129,7 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/events/{event_id}/invoke",
-    skip(state, user, params)
+    skip(state, user, query, params)
 )]
 pub async fn invoke_event(
     State(state): State<AppState>,

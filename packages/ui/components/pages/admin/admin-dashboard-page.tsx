@@ -4,12 +4,15 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Activity,
 	AlertTriangle,
+	BellRing,
 	BookOpen,
 	Box,
+	Bug,
 	CheckCircle,
 	Clock,
 	Cpu,
 	Download,
+	GitBranch,
 	GraduationCap,
 	Key,
 	Lightbulb,
@@ -22,6 +25,7 @@ import {
 	Scale,
 	Shield,
 	ShieldAlert,
+	SlidersHorizontal,
 	UserCog,
 	Users,
 	Waypoints,
@@ -81,6 +85,10 @@ import {
 	UserProfileLink,
 } from "../../ui";
 import { DashboardChainWidget, DashboardErrorWidget } from "./logs";
+import { DashboardTelemetryAlertsWidget } from "./telemetry/alerts-dashboard-widget";
+import { DashboardTelemetryWidget } from "./telemetry/dashboard-telemetry-widget";
+import { DashboardTelemetryIssuesWidget } from "./telemetry/issues-dashboard-widget";
+import { DashboardTelemetryTracesWidget } from "./telemetry/traces-dashboard-widget";
 
 const PERIODS: IUsageLimitPeriod[] = ["weekly", "monthly", "yearly"];
 
@@ -329,6 +337,73 @@ const ADMIN_SECTIONS: AdminSection[] = [
 		links: [
 			{ label: "Errors", href: "/admin/logs" },
 			{ label: "Audit chain", href: "/admin/logs?tab=audit" },
+		],
+	},
+	{
+		title: "Telemetry",
+		description:
+			"Anonymous opt-in product metrics: events, active installs, and version adoption.",
+		icon: Activity,
+		href: "/admin/telemetry",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Telemetry",
+		color: "text-emerald-500",
+		feature: "telemetry",
+		links: [
+			{ label: "Overview", href: "/admin/telemetry" },
+			{ label: "Issues", href: "/admin/telemetry/issues" },
+			{ label: "Traces", href: "/admin/telemetry/traces" },
+			{ label: "Alerts", href: "/admin/telemetry/alerts" },
+			{ label: "Query builder", href: "/admin/telemetry/query" },
+			{ label: "Dashboards", href: "/admin/telemetry/dashboards" },
+		],
+	},
+	{
+		title: "Issues & Crashes",
+		description:
+			"Grouped crash and error reports with release health, symbolicated stacks, and triage.",
+		icon: Bug,
+		href: "/admin/telemetry/issues",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Issues",
+		color: "text-amber-500",
+		feature: "telemetry",
+	},
+	{
+		title: "Traces & Performance",
+		description:
+			"Sampled distributed traces, span flamegraphs, and Core Web Vitals per path.",
+		icon: GitBranch,
+		href: "/admin/telemetry/traces",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Traces",
+		color: "text-violet-500",
+		feature: "telemetry",
+	},
+	{
+		title: "Alerts",
+		description:
+			"Threshold and anomaly rules over anonymous telemetry with an in-app alert inbox.",
+		icon: BellRing,
+		href: "/admin/telemetry/alerts",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Alerts",
+		color: "text-rose-500",
+		feature: "telemetry",
+	},
+	{
+		title: "Query builder",
+		description:
+			"Ad-hoc breakdowns over anonymous telemetry with saved queries and pinned dashboards.",
+		icon: SlidersHorizontal,
+		href: "/admin/telemetry/query",
+		permission: GlobalPermission.Admin,
+		actionLabel: "Open Query Builder",
+		color: "text-cyan-500",
+		feature: "telemetry",
+		links: [
+			{ label: "Query builder", href: "/admin/telemetry/query" },
+			{ label: "Dashboards", href: "/admin/telemetry/dashboards" },
 		],
 	},
 ];
@@ -2534,6 +2609,15 @@ export function AdminDashboardPage({
 							loading={statsLoading}
 						/>
 					</div>
+
+					{hasAdminAccess && features?.telemetry === true && (
+						<div className="grid gap-4">
+							<DashboardTelemetryWidget profile={profile.data} />
+							<DashboardTelemetryIssuesWidget profile={profile.data} />
+							<DashboardTelemetryTracesWidget profile={profile.data} />
+							<DashboardTelemetryAlertsWidget profile={profile.data} />
+						</div>
+					)}
 
 					{perms.hasPermission(GlobalPermission.ReadLogs) && (
 						<div className="grid gap-4 lg:grid-cols-2">

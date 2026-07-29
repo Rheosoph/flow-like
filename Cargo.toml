@@ -9,6 +9,7 @@ members = [
     "apps/backend/aws/executor",
     "apps/backend/aws/executor-async",
     "apps/backend/aws/event-bridge",
+    "apps/backend/aws/maintenance",
     "apps/backend/aws/media-transformer",
     "apps/backend/aws/file-tracker",
     "apps/backend/aws/compiler-lambda",
@@ -162,6 +163,7 @@ toml_edit = "0.23.9"
 flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 getrandom = "0.4.1"
 dashmap = "6"
+sourcemap = "9.3"
 
 rdev = { git = "https://github.com/Rheosoph/rdev", branch = "macos-thread-safety" }
 

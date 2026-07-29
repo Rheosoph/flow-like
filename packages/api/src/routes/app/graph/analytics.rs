@@ -40,7 +40,7 @@ pub struct AnalyticsParams {
 )]
 #[tracing::instrument(
     name = "GET /apps/{app_id}/graph/{overlay_id}/analytics",
-    skip(state, user)
+    skip(state, user, params)
 )]
 pub async fn graph_analytics(
     State(state): State<AppState>,

@@ -37,7 +37,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, TransactionTrait, prelude::
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/roles/{role_id}/assign/{sub}",
-    skip(state, user)
+    skip(state, user, sub)
 )]
 pub async fn assign_role(
     State(state): State<AppState>,

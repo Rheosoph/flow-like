@@ -147,7 +147,7 @@ pub struct ListRegistrationsResponse {
 )]
 #[tracing::instrument(
     name = "GET /apps/{app_id}/events/{event_id}/registrations",
-    skip(state, user)
+    skip(state, user, query)
 )]
 pub async fn list_registrations(
     State(state): State<AppState>,

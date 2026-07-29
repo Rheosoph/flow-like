@@ -42,7 +42,10 @@ pub struct AlterColumnPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/db/{table}/columns", skip(state, user))]
+#[tracing::instrument(
+    name = "PUT /apps/{app_id}/db/{table}/columns",
+    skip(state, user, scope, payload)
+)]
 pub async fn alter_column(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -45,7 +45,7 @@ pub struct TableViewResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/db/{table}/view", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/db/{table}/view", skip(state, user, params))]
 pub async fn table_view(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -35,7 +35,7 @@ pub struct UpsertInfoResponse {
         ("bearer_auth" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /user/info", skip(state, user))]
+#[tracing::instrument(name = "PUT /user/info", skip_all)]
 pub async fn upsert_info(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

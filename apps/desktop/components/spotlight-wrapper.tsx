@@ -1,19 +1,20 @@
 "use client";
 
-import * as Sentry from "@sentry/nextjs";
-import { invoke } from "@tauri-apps/api/core";
 import {
+	CrashReportDialog,
 	IBitTypes,
 	type ProjectQuickLink,
 	type SpotlightItem,
 	SpotlightProvider,
 	nowSystemTime,
 	useBackend,
+	useFeatures,
 	useInvalidateInvoke,
 	useInvoke,
 	useSpotlightStore,
 } from "@flow-like/flow-like-ui";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { invoke } from "@tauri-apps/api/core";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	Bookmark,
@@ -25,10 +26,16 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { type IShortcut, appsDB } from "../lib/apps-db";
+import {
+	type ITelemetrySettings,
+	getTelemetrySettings,
+	isCrashReportingEnabled,
+	onTelemetrySettingsChange,
+} from "../lib/telemetry-settings";
 import { useTauriInvoke } from "./useInvoke";
 
 interface SpotlightWrapperProps {
@@ -42,7 +49,23 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const { setTheme } = useTheme();
 	const auth = useAuth();
 	const backend = useBackend();
+	const features = useFeatures();
 	const invalidate = useInvalidateInvoke();
+	const [crashReportOpen, setCrashReportOpen] = useState(false);
+	const [telemetrySettings, setTelemetrySettings] = useState<
+		ITelemetrySettings | undefined
+	>();
+
+	useEffect(() => {
+		getTelemetrySettings()
+			.then(setTelemetrySettings)
+			.catch(() => undefined);
+		return onTelemetrySettingsChange(setTelemetrySettings);
+	}, []);
+
+	const crashReportingEnabled =
+		features.data?.telemetry === true &&
+		isCrashReportingEnabled(telemetrySettings);
 
 	const currentProfile = useInvoke(
 		backend.userState.getSettingsProfile,
@@ -221,17 +244,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	);
 
 	const handleReportBug = useCallback(() => {
-		Sentry.showReportDialog({
-			title: "Report a Bug",
-			subtitle: "Please describe the bug you encountered",
-			subtitle2: "",
-			labelName: "Name (optional)",
-			labelEmail: "Email (optional)",
-			labelComments: "What happened?",
-			labelSubmit: "Send Report",
-			errorFormEntry: "Some fields are invalid. Please correct them.",
-			successMessage: "Thank you for your feedback!",
-		});
+		setCrashReportOpen(true);
 	}, []);
 
 	const handleAddShortcut = useCallback(async () => {
@@ -637,6 +650,11 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			onQuickCreateProject={handleQuickCreateProject}
 		>
 			{children}
+			<CrashReportDialog
+				open={crashReportOpen}
+				onOpenChange={setCrashReportOpen}
+				reportingEnabled={crashReportingEnabled}
+			/>
 		</SpotlightProvider>
 	);
 }

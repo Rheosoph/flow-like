@@ -40,7 +40,10 @@ pub struct AddColumnPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/db/{table}/columns", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/db/{table}/columns",
+    skip(state, user, scope, payload)
+)]
 pub async fn add_column(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

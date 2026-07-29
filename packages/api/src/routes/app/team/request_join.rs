@@ -41,7 +41,7 @@ pub struct RequestJoinParams {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/team/queue", skip(state, user))]
+#[tracing::instrument(name = "PUT /apps/{app_id}/team/queue", skip(state, user, params))]
 pub async fn request_join(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

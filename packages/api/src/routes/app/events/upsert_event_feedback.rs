@@ -52,7 +52,7 @@ pub struct FeedbackResponse {
 )]
 #[tracing::instrument(
     name = "PUT /apps/{app_id}/events/{event_id}/feedback",
-    skip(state, user)
+    skip(state, user, body)
 )]
 pub async fn upsert_event_feedback(
     State(state): State<AppState>,

@@ -35,7 +35,7 @@ pub struct PageWithBoardId {
         (status = 401, description = "Unauthorized")
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/pages/by-route", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/pages/by-route", skip(state, user, params))]
 pub async fn get_page_by_route(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

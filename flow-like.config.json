@@ -33,7 +33,8 @@
 		"unauthorized_read": true,
 		"admin_interface": true,
 		"premium": true,
-		"wasm_registry": true
+		"wasm_registry": true,
+		"telemetry": true
 	},
 	"wasm_registry_config": {
 		"on_member_leave": "stale"

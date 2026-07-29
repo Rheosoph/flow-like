@@ -136,7 +136,7 @@ impl AzureRuntimeCredentials {
 
     #[tracing::instrument(
         name = "AzureRuntimeCredentials::scoped_credentials",
-        skip(self, _state),
+        skip(self, sub, _state),
         level = "debug"
     )]
     pub async fn scoped_credentials(

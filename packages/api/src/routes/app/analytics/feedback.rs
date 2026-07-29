@@ -213,7 +213,10 @@ pub struct PaginatedFeedback {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/analytics/feedback", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/analytics/feedback",
+    skip(state, user, query)
+)]
 pub async fn list_feedback(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

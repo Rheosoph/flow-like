@@ -28,7 +28,7 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
         ("bearer_auth" = [])
     )
 )]
-#[tracing::instrument(name = "GET /user/invites", skip(state, user))]
+#[tracing::instrument(name = "GET /user/invites", skip_all)]
 pub async fn get_invites(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

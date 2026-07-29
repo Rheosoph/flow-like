@@ -37,7 +37,7 @@ use sea_orm::{
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "DELETE /apps/{app_id}/team/{sub}", skip(state, user))]
+#[tracing::instrument(name = "DELETE /apps/{app_id}/team/{sub}", skip(state, user, sub))]
 pub async fn remove_user(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

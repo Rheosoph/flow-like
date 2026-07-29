@@ -218,7 +218,7 @@ async fn check_course_read_access(
         (status = 200, description = "Returns the list of available learning courses", body = Vec<CourseListItem>)
     )
 )]
-#[tracing::instrument(name = "GET /courses", skip(state, user))]
+#[tracing::instrument(name = "GET /courses", skip_all)]
 pub async fn list_courses(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -345,7 +345,7 @@ pub struct CourseDetail {
         (status = 404, description = "Course not found")
     )
 )]
-#[tracing::instrument(name = "GET /courses/{course_id}", skip(state, user))]
+#[tracing::instrument(name = "GET /courses/{course_id}", skip(state, user, q))]
 pub async fn get_course(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -584,7 +584,7 @@ pub struct CourseStructure {
         (status = 404, description = "Course not found")
     )
 )]
-#[tracing::instrument(name = "GET /courses/{course_id}/structure", skip(state, user))]
+#[tracing::instrument(name = "GET /courses/{course_id}/structure", skip(state, user, q))]
 pub async fn get_course_structure(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -733,7 +733,7 @@ pub struct PushCourseMediaResponse {
         (status = 404, description = "Course or metadata not found")
     )
 )]
-#[tracing::instrument(name = "PUT /courses/{course_id}/meta/media", skip(state, user))]
+#[tracing::instrument(name = "PUT /courses/{course_id}/meta/media", skip(state, user, query))]
 pub async fn push_course_media(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
