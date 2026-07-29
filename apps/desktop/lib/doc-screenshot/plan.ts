@@ -1,11 +1,14 @@
 import { readFile } from "node:fs/promises";
 import { extname, isAbsolute, relative, resolve } from "node:path";
 import {
+	DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
 	DOC_SCREENSHOT_PLAN_SCHEMA,
 	DOC_SCREENSHOT_TAURI_FIXTURE_SCHEMA,
 	type DocScreenshotCaptureStep,
 	type DocScreenshotDefaults,
 	type DocScreenshotFormat,
+	type DocScreenshotHttpFixture,
+	type DocScreenshotHttpFixtureResponse,
 	type DocScreenshotKeyboardModifier,
 	type DocScreenshotPlan,
 	type DocScreenshotScenario,
@@ -22,7 +25,10 @@ const MAX_TIMEOUT_MS = 10 * 60_000;
 const MAX_OUTPUT_PIXELS = 100_000_000;
 const MAX_DRAG_STEPS = 100;
 const MAX_CLICK_MODIFIERS = 4;
+const MAX_HTTP_FIXTURE_ROUTES = 500;
+const MAX_HTTP_FIXTURE_BLOCKED_ORIGINS = 100;
 const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
+const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Z]+$/;
 const STEP_KEYS: Record<DocScreenshotStep["type"], readonly string[]> = {
 	goto: ["type", "path", "query"],
 	click: ["type", "selector", "index", "button", "clickCount", "modifiers"],
@@ -89,6 +95,19 @@ function rejectUnknownKeys(
 	for (const key of Object.keys(input)) {
 		if (!allowed.has(key)) {
 			throw new Error(`${label}.${key} is not supported for a ${type} step.`);
+		}
+	}
+}
+
+function rejectUnknownObjectKeys(
+	input: Record<string, unknown>,
+	label: string,
+	allowedKeys: readonly string[],
+): void {
+	const allowed = new Set(allowedKeys);
+	for (const key of Object.keys(input)) {
+		if (!allowed.has(key)) {
+			throw new Error(`${label}.${key} is not supported.`);
 		}
 	}
 }
@@ -657,6 +676,7 @@ export function validateDocScreenshotPlan(value: unknown): DocScreenshotPlan {
 		optionalString(input.outputDir, "plan.outputDir") ?? "tmp/doc-screenshots";
 	const baseUrl = optionalString(input.baseUrl, "plan.baseUrl");
 	const tauriFixture = optionalString(input.tauriFixture, "plan.tauriFixture");
+	const httpFixture = optionalString(input.httpFixture, "plan.httpFixture");
 	if (!Array.isArray(input.scenarios) || input.scenarios.length === 0) {
 		throw new Error("plan.scenarios must be a non-empty array.");
 	}
@@ -740,6 +760,7 @@ export function validateDocScreenshotPlan(value: unknown): DocScreenshotPlan {
 		baseUrl,
 		outputDir,
 		tauriFixture,
+		httpFixture,
 		defaults,
 		scenarios,
 	};
@@ -769,6 +790,286 @@ function isJsonValue(value: unknown): value is JsonValue {
 	if (Array.isArray(value)) return value.every(isJsonValue);
 	if (!value || typeof value !== "object") return false;
 	return Object.values(value).every(isJsonValue);
+}
+
+function httpFixtureUrl(value: unknown, label: string): string {
+	const rawUrl = optionalString(value, label);
+	if (!rawUrl) throw new Error(`${label} is required.`);
+	let url: URL;
+	try {
+		url = new URL(rawUrl);
+	} catch {
+		throw new Error(`${label} must be an absolute HTTP or HTTPS URL.`);
+	}
+	if (url.protocol !== "http:" && url.protocol !== "https:") {
+		throw new Error(`${label} must be an absolute HTTP or HTTPS URL.`);
+	}
+	if (url.username || url.password) {
+		throw new Error(`${label} cannot contain credentials.`);
+	}
+	if (url.hash) {
+		throw new Error(`${label} cannot contain a fragment.`);
+	}
+	return url.toString();
+}
+
+function httpFixtureMethod(value: unknown, label: string): string {
+	const method = optionalString(value, label);
+	if (
+		!method ||
+		method !== method.toUpperCase() ||
+		!HTTP_TOKEN_PATTERN.test(method)
+	) {
+		throw new Error(`${label} must be an uppercase HTTP method token.`);
+	}
+	return method;
+}
+
+function httpFixtureBlockedOrigins(value: unknown, label: string): string[] {
+	if (value === undefined) return [];
+	if (
+		!Array.isArray(value) ||
+		value.length > MAX_HTTP_FIXTURE_BLOCKED_ORIGINS
+	) {
+		throw new Error(
+			`${label} must be an array with at most ${MAX_HTTP_FIXTURE_BLOCKED_ORIGINS} origins.`,
+		);
+	}
+	const origins = value.map((originValue, index) => {
+		const itemLabel = `${label}[${index}]`;
+		const rawOrigin = optionalString(originValue, itemLabel);
+		if (!rawOrigin) throw new Error(`${itemLabel} is required.`);
+		let url: URL;
+		try {
+			url = new URL(rawOrigin);
+		} catch {
+			throw new Error(`${itemLabel} must be an absolute HTTP or HTTPS origin.`);
+		}
+		if (
+			(url.protocol !== "http:" && url.protocol !== "https:") ||
+			url.username ||
+			url.password ||
+			url.pathname !== "/" ||
+			url.search ||
+			url.hash
+		) {
+			throw new Error(`${itemLabel} must be an absolute HTTP or HTTPS origin.`);
+		}
+		return url.origin;
+	});
+	if (new Set(origins).size !== origins.length) {
+		throw new Error(`${label} cannot contain duplicate origins.`);
+	}
+	return origins;
+}
+
+function httpFixtureBlockedEndpoints(value: unknown, label: string): string[] {
+	if (value === undefined) return [];
+	if (
+		!Array.isArray(value) ||
+		value.length > MAX_HTTP_FIXTURE_BLOCKED_ORIGINS
+	) {
+		throw new Error(
+			`${label} must be an array with at most ${MAX_HTTP_FIXTURE_BLOCKED_ORIGINS} endpoints.`,
+		);
+	}
+	const endpoints = value.map((endpointValue, index) => {
+		const itemLabel = `${label}[${index}]`;
+		const rawEndpoint = optionalString(endpointValue, itemLabel);
+		if (!rawEndpoint) {
+			throw new Error(`${itemLabel} must be an absolute HTTP or HTTPS URL.`);
+		}
+		let url: URL;
+		try {
+			url = new URL(rawEndpoint);
+		} catch {
+			throw new Error(`${itemLabel} must be an absolute HTTP or HTTPS URL.`);
+		}
+		if (
+			(url.protocol !== "http:" && url.protocol !== "https:") ||
+			url.username ||
+			url.password ||
+			url.search ||
+			url.hash
+		) {
+			throw new Error(
+				`${itemLabel} must be an absolute HTTP or HTTPS URL without query or fragment.`,
+			);
+		}
+		return `${url.origin}${url.pathname}`;
+	});
+	if (new Set(endpoints).size !== endpoints.length) {
+		throw new Error(`${label} cannot contain duplicate endpoints.`);
+	}
+	return endpoints;
+}
+
+function httpFixtureHeaders(
+	value: unknown,
+	label: string,
+): Record<string, string> {
+	if (value === undefined) return {};
+	const input = record(value, label);
+	const output: Record<string, string> = {};
+	const normalizedNames = new Set<string>();
+	for (const [name, headerValue] of Object.entries(input)) {
+		if (!HTTP_TOKEN_PATTERN.test(name.toUpperCase())) {
+			throw new Error(`${label} contains an invalid header name: ${name}`);
+		}
+		if (typeof headerValue !== "string" || /[\r\n]/.test(headerValue)) {
+			throw new Error(`${label}.${name} must be a single-line string.`);
+		}
+		const normalizedName = name.toLowerCase();
+		if (normalizedNames.has(normalizedName)) {
+			throw new Error(`${label} contains a duplicate header: ${name}`);
+		}
+		normalizedNames.add(normalizedName);
+		output[name] = headerValue;
+	}
+	return output;
+}
+
+function httpFixtureResponse(
+	value: unknown,
+	label: string,
+): DocScreenshotHttpFixtureResponse {
+	const input = record(value, label);
+	rejectUnknownObjectKeys(input, label, ["status", "headers", "body", "json"]);
+	const status =
+		input.status === undefined
+			? 200
+			: integerInRange(input.status, `${label}.status`, 200, 599);
+	const body =
+		input.body === undefined
+			? undefined
+			: typeof input.body === "string"
+				? input.body
+				: (() => {
+						throw new Error(`${label}.body must be a string.`);
+					})();
+	if (body !== undefined && input.json !== undefined) {
+		throw new Error(`${label} cannot define both body and json.`);
+	}
+	const json =
+		input.json === undefined
+			? undefined
+			: isJsonValue(input.json)
+				? input.json
+				: (() => {
+						throw new Error(`${label}.json is not JSON-serializable.`);
+					})();
+	if (
+		(status === 204 || status === 205 || status === 304) &&
+		(body !== undefined || json !== undefined)
+	) {
+		throw new Error(`${label} cannot include a body for status ${status}.`);
+	}
+	return {
+		status,
+		headers: httpFixtureHeaders(input.headers, `${label}.headers`),
+		body,
+		json,
+	};
+}
+
+export function validateDocScreenshotHttpFixture(
+	value: unknown,
+): DocScreenshotHttpFixture {
+	const input = record(value, "fixture");
+	rejectUnknownObjectKeys(input, "fixture", [
+		"schema",
+		"strict",
+		"blockedOrigins",
+		"blockedEndpoints",
+		"routes",
+	]);
+	if (input.schema !== DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA) {
+		throw new Error(
+			`fixture.schema must be ${DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA}.`,
+		);
+	}
+	if (
+		!Array.isArray(input.routes) ||
+		input.routes.length === 0 ||
+		input.routes.length > MAX_HTTP_FIXTURE_ROUTES
+	) {
+		throw new Error(
+			`fixture.routes must contain from 1 to ${MAX_HTTP_FIXTURE_ROUTES} routes.`,
+		);
+	}
+	const routeMatches = new Map<string, Array<string | undefined>>();
+	const routes = input.routes.map((routeValue, routeIndex) => {
+		const label = `fixture.routes[${routeIndex}]`;
+		const routeInput = record(routeValue, label);
+		rejectUnknownObjectKeys(routeInput, label, ["request", "response"]);
+		const requestInput = record(routeInput.request, `${label}.request`);
+		rejectUnknownObjectKeys(requestInput, `${label}.request`, [
+			"method",
+			"url",
+			"body",
+		]);
+		const body =
+			requestInput.body === undefined
+				? undefined
+				: typeof requestInput.body === "string"
+					? requestInput.body
+					: (() => {
+							throw new Error(`${label}.request.body must be a string.`);
+						})();
+		const request = {
+			method: httpFixtureMethod(requestInput.method, `${label}.request.method`),
+			url: httpFixtureUrl(requestInput.url, `${label}.request.url`),
+			body,
+		};
+		const routeKey = JSON.stringify([request.method, request.url]);
+		const earlierBodies = routeMatches.get(routeKey) ?? [];
+		if (
+			earlierBodies.some(
+				(earlierBody) =>
+					earlierBody === undefined ||
+					request.body === undefined ||
+					earlierBody === request.body,
+			)
+		) {
+			throw new Error(
+				`${label}.request overlaps an earlier exact request match.`,
+			);
+		}
+		earlierBodies.push(request.body);
+		routeMatches.set(routeKey, earlierBodies);
+		return {
+			request,
+			response: httpFixtureResponse(routeInput.response, `${label}.response`),
+		};
+	});
+	return {
+		schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+		strict:
+			input.strict === undefined
+				? true
+				: booleanValue(input.strict, "fixture.strict"),
+		blockedOrigins: httpFixtureBlockedOrigins(
+			input.blockedOrigins,
+			"fixture.blockedOrigins",
+		),
+		blockedEndpoints: httpFixtureBlockedEndpoints(
+			input.blockedEndpoints,
+			"fixture.blockedEndpoints",
+		),
+		routes,
+	};
+}
+
+export async function loadDocScreenshotHttpFixture(
+	path: string,
+): Promise<DocScreenshotHttpFixture> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(await readFile(path, "utf8"));
+	} catch (error) {
+		throw new Error(`Could not read HTTP fixture ${path}: ${String(error)}`);
+	}
+	return validateDocScreenshotHttpFixture(parsed);
 }
 
 export function validateDocScreenshotTauriFixture(

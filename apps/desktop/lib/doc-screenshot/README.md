@@ -24,8 +24,9 @@ The three lossless WebP files are written below
 
 Plan paths have two deliberately different bases:
 
-- `tauriFixture` is resolved relative to the plan file. This keeps a plan and
-  its fixtures portable when the command is launched from another directory.
+- `tauriFixture` and `httpFixture` are resolved relative to the plan file. This
+  keeps a plan and its fixtures portable when the command is launched from
+  another directory.
 - `outputDir` is resolved relative to the process working directory. From the
   repository root, the example therefore writes to
   `tmp/doc-screenshots/onboarding`.
@@ -41,9 +42,11 @@ bun apps/desktop/scripts/generate-doc-studio-screenshot-fixture.ts
 
 bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-start.plan.json
 bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-apps.plan.json
+bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-ontology.plan.json
 bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-sharing.plan.json
 bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-roles.plan.json
 bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json
+bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-reference.plan.json
 ```
 
 Each plan starts from application routes and performs the navigation and UI
@@ -79,9 +82,9 @@ The CLI starts the selected Next app automatically. Use
 ## Plan format
 
 Plans use the `flow-like.doc-screenshot-plan/v1` schema. A plan declares its
-app, output directory, optional desktop Tauri fixture, render defaults, and
-one or more scenarios. Each scenario starts at `path` plus an optional `query`
-object and runs its `steps` in order.
+app, output directory, optional desktop Tauri fixture, optional browser HTTP
+fixture, render defaults, and one or more scenarios. Each scenario starts at
+`path` plus an optional `query` object and runs its `steps` in order.
 
 The supported steps are:
 
@@ -99,7 +102,7 @@ The supported steps are:
 | `scroll` | optional `selector`, `index`, `x`, `y` | Scrolls the page or a matching element. |
 | `goto` | `path`, optional `query` | Navigates to another same-app route and waits for it to settle. |
 | `delay` | `ms` | Waits for an explicitly bounded interval. Prefer a semantic `waitFor` when possible. |
-| `capture` | `name`, optional `mode`, `selector`, `index`, `padding`, `output`, `format`, `quality`, `hideSelectors` | Writes a named `viewport`, `fullPage`, or `element` screenshot. Element mode requires a selector. |
+| `capture` | `name`, optional `mode`, `selector`, `index`, `padding`, `output`, `format`, `quality`, `hideSelectors` | Writes a named `viewport`, `fullPage`, or `element` screenshot. Element mode requires a selector and scrolls the target into view before measuring it. |
 
 One complete working example is in
 [`examples/onboarding.plan.json`](examples/onboarding.plan.json). Prefer a plan
@@ -180,6 +183,74 @@ See
 profile, bit, download, event, updater, notification, registry, tray, and HTTP
 responses.
 
+## Browser HTTP fixtures
+
+A plan can set `httpFixture` to serve deterministic browser responses without
+starting an API. This is separate from Tauri IPC HTTP mocking and works for
+normal `fetch`, XHR, images, and other Chromium requests.
+
+Fixtures use exact request matches:
+
+```json
+{
+  "schema": "flow-like.doc-screenshot-http-fixture/v1",
+  "strict": true,
+  "blockedOrigins": [
+    "https://telemetry.example.test"
+  ],
+  "blockedEndpoints": [
+    "http://localhost:8080/api/v1/og"
+  ],
+  "routes": [
+    {
+      "request": {
+        "method": "GET",
+        "url": "http://localhost:8080/api/v1/auth/openid"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "access-control-allow-origin": "*"
+        },
+        "json": {
+          "authority": "http://localhost:8080",
+          "client_id": "flow-like-doc-screenshot"
+        }
+      }
+    }
+  ]
+}
+```
+
+A match compares the uppercase HTTP method, canonical absolute URL (including
+query order), and, when declared, the raw request body. Omitting `request.body`
+accepts any body for that exact method and URL, which is useful for
+non-deterministic telemetry envelopes that should be absorbed rather than sent.
+There are no URL wildcard or regular-expression matches. A response can
+contain either a raw string `body` or a JSON-serializable `json` value; JSON
+responses receive an `application/json` content type unless the fixture
+declares one.
+
+Same-origin frontend requests always continue so Next.js pages, chunks, and
+local assets can load. `blockedOrigins` lists exact HTTP origins whose requests
+are intentionally aborted without failing the scenario; use it for product
+telemetry that must never leave a documentation capture. `blockedEndpoints`
+does the same for one exact origin and path while ignoring its query string,
+which is useful for non-essential preview endpoints with dynamic URL
+parameters. With `strict: true`, any other unmatched cross-origin HTTP request
+is blocked and fails the scenario with its method and redacted URL.
+`strict: false` lets unmatched cross-origin requests use the network and should
+be reserved for exploratory captures. Cross-origin requests that trigger CORS
+preflight need an exact `OPTIONS` route as well as the application request.
+
+The reference plan uses
+[`fixtures/docs-reference.http.json`](fixtures/docs-reference.http.json) to
+provide the OpenID configuration required by
+`/debug/markdown`. The route is public, including when opened without the
+plan's `capture=docs` marker, but the app's OpenID fetch remains mandatory: a
+missing, mismatched, or invalid fixture response still fails instead of
+falling back to an unauthenticated render.
+
 ## JSON output and safety
 
 Pass `--json` for a `flow-like.doc-screenshot-result/v1` result suitable for
@@ -189,10 +260,11 @@ page error counts. Exit code `0` means every scenario passed, `1` means a
 scenario, action, or capture failed, and `2` means the CLI, server, browser, or
 input contract failed.
 
-Both input formats are versioned and validated before the browser starts:
+All input formats are versioned and validated before the browser starts:
 
 - Plans: `flow-like.doc-screenshot-plan/v1`
 - Tauri fixtures: `flow-like.doc-screenshot-tauri-fixture/v1`
+- Browser HTTP fixtures: `flow-like.doc-screenshot-http-fixture/v1`
 
 Plans are declarative by design. They cannot execute JavaScript or shell
 commands. Navigation is limited to application routes, selectors and waits

@@ -2,11 +2,14 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 
 import {
+	loadDocScreenshotHttpFixture,
 	loadDocScreenshotPlan,
+	validateDocScreenshotHttpFixture,
 	validateDocScreenshotPlan,
 	validateDocScreenshotTauriFixture,
 } from "../plan";
 import {
+	DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
 	DOC_SCREENSHOT_PLAN_SCHEMA,
 	DOC_SCREENSHOT_TAURI_FIXTURE_SCHEMA,
 } from "../types";
@@ -261,5 +264,235 @@ describe("Tauri screenshot fixture validation", () => {
 				responses: { invalid: response },
 			}),
 		).toThrow("fixture.responses.invalid is not JSON-serializable");
+	});
+});
+
+describe("HTTP screenshot fixture validation", () => {
+	test("loads and normalizes the checked-in reference fixture", async () => {
+		const fixturePath = fileURLToPath(
+			new URL("../fixtures/docs-reference.http.json", import.meta.url),
+		);
+		const fixture = await loadDocScreenshotHttpFixture(fixturePath);
+
+		expect(fixture.schema).toBe(DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA);
+		expect(fixture.strict).toBe(true);
+		expect(fixture.routes).toHaveLength(10);
+		expect(fixture.blockedOrigins).toEqual([
+			"https://o4507505692901376.ingest.de.sentry.io",
+			"https://a.basemaps.cartocdn.com",
+			"https://b.basemaps.cartocdn.com",
+			"https://c.basemaps.cartocdn.com",
+			"https://img.youtube.com",
+			"https://www.youtube-nocookie.com",
+			"https://open.spotify.com",
+			"https://platform.twitter.com",
+			"https://www.redditmedia.com",
+			"https://opengraph.githubassets.com",
+			"https://www.linkedin.com",
+			"https://www.google.com",
+		]);
+		expect(fixture.blockedEndpoints).toEqual([
+			"http://localhost:8080/api/v1/og",
+		]);
+		expect(fixture.routes[1]?.request).toEqual({
+			method: "GET",
+			url: "http://localhost:8080/api/v1/auth/openid",
+			body: undefined,
+		});
+		expect(fixture.routes[1]?.response.headers).toEqual({
+			"access-control-allow-origin": "*",
+		});
+	});
+
+	test("defaults strict handling, status, and headers", () => {
+		const fixture = validateDocScreenshotHttpFixture({
+			schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+			routes: [
+				{
+					request: {
+						method: "GET",
+						url: "https://api.example.test/config",
+					},
+					response: {
+						json: { enabled: true },
+					},
+				},
+			],
+		});
+
+		expect(fixture.strict).toBe(true);
+		expect(fixture.blockedOrigins).toEqual([]);
+		expect(fixture.blockedEndpoints).toEqual([]);
+		expect(fixture.routes[0]?.response).toEqual({
+			status: 200,
+			headers: {},
+			body: undefined,
+			json: { enabled: true },
+		});
+	});
+
+	test("validates blocked endpoints without accepting query strings", () => {
+		const route = {
+			request: {
+				method: "GET",
+				url: "https://api.example.test/config",
+			},
+			response: {},
+		};
+		expect(() =>
+			validateDocScreenshotHttpFixture({
+				schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+				blockedEndpoints: [
+					"https://api.example.test/og?url=https%3A%2F%2Fexample.test",
+				],
+				routes: [route],
+			}),
+		).toThrow("without query or fragment");
+		expect(() =>
+			validateDocScreenshotHttpFixture({
+				schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+				blockedEndpoints: [
+					"https://api.example.test/og",
+					"https://api.example.test/og",
+				],
+				routes: [route],
+			}),
+		).toThrow("cannot contain duplicate endpoints");
+	});
+
+	test("validates blocked origins without accepting paths or duplicates", () => {
+		const route = {
+			request: {
+				method: "GET",
+				url: "https://api.example.test/config",
+			},
+			response: {},
+		};
+		expect(() =>
+			validateDocScreenshotHttpFixture({
+				schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+				blockedOrigins: ["https://telemetry.example.test/envelope"],
+				routes: [route],
+			}),
+		).toThrow("absolute HTTP or HTTPS origin");
+		expect(() =>
+			validateDocScreenshotHttpFixture({
+				schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+				blockedOrigins: [
+					"https://telemetry.example.test",
+					"https://telemetry.example.test/",
+				],
+				routes: [route],
+			}),
+		).toThrow("cannot contain duplicate origins");
+	});
+
+	test.each([
+		[
+			{
+				method: "get",
+				url: "https://api.example.test/config",
+			},
+			"uppercase HTTP method",
+		],
+		[
+			{
+				method: "GET",
+				url: "/api/config",
+			},
+			"absolute HTTP or HTTPS URL",
+		],
+		[
+			{
+				method: "GET",
+				url: "https://user:password@api.example.test/config",
+			},
+			"cannot contain credentials",
+		],
+	])("rejects an invalid exact request match %#", (request, error) => {
+		expect(() =>
+			validateDocScreenshotHttpFixture({
+				schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+				routes: [{ request, response: {} }],
+			}),
+		).toThrow(error);
+	});
+
+	test("rejects duplicate exact request matches", () => {
+		const route = {
+			request: {
+				method: "POST",
+				url: "https://api.example.test/config",
+				body: "{}",
+			},
+			response: { status: 200 },
+		};
+		expect(() =>
+			validateDocScreenshotHttpFixture({
+				schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+				routes: [route, structuredClone(route)],
+			}),
+		).toThrow("overlaps an earlier exact request match");
+	});
+
+	test("rejects a body-agnostic route that overlaps a body-specific route", () => {
+		expect(() =>
+			validateDocScreenshotHttpFixture({
+				schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+				routes: [
+					{
+						request: {
+							method: "POST",
+							url: "https://api.example.test/envelope",
+							body: "{}",
+						},
+						response: {},
+					},
+					{
+						request: {
+							method: "POST",
+							url: "https://api.example.test/envelope",
+						},
+						response: {},
+					},
+				],
+			}),
+		).toThrow("overlaps an earlier exact request match");
+	});
+
+	test("rejects ambiguous response bodies and unknown fields", () => {
+		expect(() =>
+			validateDocScreenshotHttpFixture({
+				schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+				routes: [
+					{
+						request: {
+							method: "GET",
+							url: "https://api.example.test/config",
+						},
+						response: {
+							body: "{}",
+							json: {},
+						},
+					},
+				],
+			}),
+		).toThrow("cannot define both body and json");
+
+		expect(() =>
+			validateDocScreenshotHttpFixture({
+				schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+				routes: [
+					{
+						request: {
+							method: "GET",
+							url: "https://api.example.test/config",
+							methodPattern: "G.*",
+						},
+						response: {},
+					},
+				],
+			}),
+		).toThrow("methodPattern is not supported");
 	});
 });

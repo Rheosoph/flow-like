@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like data pipeline architecture</title>
+  <desc id="desc">A three-stage pipeline moves data from APIs, databases, files, and streams through cleaning, mapping, aggregation, and enrichment into databases, data lakes, APIs, and files.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101216"/>
+      <stop offset="1" stop-color="#17191f"/>
+    </linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#ff8a68"/>
+      <stop offset="1" stop-color="#ff5d3d"/>
+    </linearGradient>
+    <linearGradient id="violet" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#b9a5ff"/>
+      <stop offset="1" stop-color="#8b6ee8"/>
+    </linearGradient>
+    <linearGradient id="emerald" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#64e7b7"/>
+      <stop offset="1" stop-color="#21b985"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/>
+    </pattern>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1440" height="720">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff7656"/>
+    </marker>
+    <style>
+      text { font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .kicker { fill:#ff8a68; font-size:15px; font-weight:750; letter-spacing:2.4px; }
+      .heading { fill:#f7f8fa; font-size:34px; font-weight:720; letter-spacing:-.7px; }
+      .sub { fill:#a7adb8; font-size:17px; }
+      .stage { fill:#f7f8fa; font-size:27px; font-weight:720; }
+      .number { fill:#111318; font-size:18px; font-weight:800; }
+      .chip { fill:#d8dbe1; font-size:17px; font-weight:620; }
+      .foot { fill:#7f8794; font-size:14px; font-weight:620; letter-spacing:.8px; }
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/>
+  <rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="232" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/>
+  <circle cx="84" cy="75" r="5" fill="#ff7656"/>
+  <text x="99" y="81" class="kicker">FLOW-LIKE PIPELINE</text>
+  <text x="64" y="136" class="heading">Extract. Transform. Deliver.</text>
+  <text x="64" y="169" class="sub">A reliable path from source systems to useful, synchronized data.</text>
+
+  <path d="M 444 390 C 468 390 482 390 506 390" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <path d="M 920 390 C 944 390 958 390 982 390" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)" filter="url(#glow)"/>
+
+  <g>
+    <rect x="64" y="208" width="380" height="388" rx="26" fill="#191c22" stroke="#373d48" stroke-width="2"/>
+    <rect x="64" y="208" width="380" height="8" rx="4" fill="url(#coral)"/>
+    <circle cx="116" cy="270" r="24" fill="url(#coral)"/>
+    <text x="116" y="277" text-anchor="middle" class="number">01</text>
+    <text x="156" y="279" class="stage">Extract</text>
+    <text x="100" y="326" class="sub">Connect to the systems that own the data.</text>
+    <rect x="100" y="360" width="142" height="54" rx="14" fill="#232730" stroke="#414754"/>
+    <text x="171" y="393" text-anchor="middle" class="chip">APIs</text>
+    <rect x="260" y="360" width="148" height="54" rx="14" fill="#232730" stroke="#414754"/>
+    <text x="334" y="393" text-anchor="middle" class="chip">Databases</text>
+    <rect x="100" y="432" width="142" height="54" rx="14" fill="#232730" stroke="#414754"/>
+    <text x="171" y="465" text-anchor="middle" class="chip">Files</text>
+    <rect x="260" y="432" width="148" height="54" rx="14" fill="#232730" stroke="#414754"/>
+    <text x="334" y="465" text-anchor="middle" class="chip">Streams</text>
+    <text x="254" y="548" text-anchor="middle" class="foot">SCHEDULED • EVENT-DRIVEN • ON DEMAND</text>
+  </g>
+
+  <g>
+    <rect x="520" y="208" width="400" height="388" rx="26" fill="#191c22" stroke="#413a59" stroke-width="2"/>
+    <rect x="520" y="208" width="400" height="8" rx="4" fill="url(#violet)"/>
+    <circle cx="572" cy="270" r="24" fill="url(#violet)"/>
+    <text x="572" y="277" text-anchor="middle" class="number">02</text>
+    <text x="612" y="279" class="stage">Transform</text>
+    <text x="556" y="326" class="sub">Shape, validate, and enrich every record.</text>
+    <rect x="556" y="360" width="150" height="54" rx="14" fill="#252331" stroke="#514b6c"/>
+    <text x="631" y="393" text-anchor="middle" class="chip">Clean</text>
+    <rect x="724" y="360" width="160" height="54" rx="14" fill="#252331" stroke="#514b6c"/>
+    <text x="804" y="393" text-anchor="middle" class="chip">Map</text>
+    <rect x="556" y="432" width="150" height="54" rx="14" fill="#252331" stroke="#514b6c"/>
+    <text x="631" y="465" text-anchor="middle" class="chip">Aggregate</text>
+    <rect x="724" y="432" width="160" height="54" rx="14" fill="#252331" stroke="#514b6c"/>
+    <text x="804" y="465" text-anchor="middle" class="chip">Enrich</text>
+    <text x="720" y="548" text-anchor="middle" class="foot">TYPED NODES • SQL • AI-ASSISTED</text>
+  </g>
+
+  <g>
+    <rect x="996" y="208" width="380" height="388" rx="26" fill="#191c22" stroke="#315145" stroke-width="2"/>
+    <rect x="996" y="208" width="380" height="8" rx="4" fill="url(#emerald)"/>
+    <circle cx="1048" cy="270" r="24" fill="url(#emerald)"/>
+    <text x="1048" y="277" text-anchor="middle" class="number">03</text>
+    <text x="1088" y="279" class="stage">Load</text>
+    <text x="1032" y="326" class="sub">Deliver trusted data where it is needed.</text>
+    <rect x="1032" y="360" width="142" height="54" rx="14" fill="#202b28" stroke="#3e6759"/>
+    <text x="1103" y="393" text-anchor="middle" class="chip">Database</text>
+    <rect x="1192" y="360" width="148" height="54" rx="14" fill="#202b28" stroke="#3e6759"/>
+    <text x="1266" y="393" text-anchor="middle" class="chip">Data lake</text>
+    <rect x="1032" y="432" width="142" height="54" rx="14" fill="#202b28" stroke="#3e6759"/>
+    <text x="1103" y="465" text-anchor="middle" class="chip">API</text>
+    <rect x="1192" y="432" width="148" height="54" rx="14" fill="#202b28" stroke="#3e6759"/>
+    <text x="1266" y="465" text-anchor="middle" class="chip">Files</text>
+    <text x="1186" y="548" text-anchor="middle" class="foot">REPEATABLE • OBSERVABLE • RECOVERABLE</text>
+  </g>
+  <text x="720" y="660" text-anchor="middle" class="sub">Compose the stages visually, then run them locally or on your configured backend.</text>
+</svg>

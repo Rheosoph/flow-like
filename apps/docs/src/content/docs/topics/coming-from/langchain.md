@@ -1,538 +1,248 @@
 ---
 title: For LangChain Users
-description: How LangChain concepts translate to Flow-Like's visual AI workflow
+description: Move LangChain workloads into Flow-Like or connect them through the SDK
 sidebar:
   order: 2
 ---
 
-Coming from **LangChain** (Python)? This guide maps your AI orchestration knowledge to Flow-Like's visual approach. You'll find familiar patterns, but with a drag-and-drop interface instead of code.
+LangChain and Flow-Like can meet in two different places:
 
-## Quick Concept Mapping
+1. Keep orchestration in LangChain and use Flow-Like's official chat-model and
+   embedding adapters.
+2. Rebuild the orchestration as a typed visual Flow and expose it through App
+   Events, chat, pages, or an API.
 
-| LangChain Concept | Flow-Like Equivalent |
-|-------------------|---------------------|
-| Chain | Flow (sequence of nodes) |
-| Agent | Agent node + Tools |
-| Tool | Quick Action / Callable flow |
-| Memory | Variables + History arrays |
-| Prompt Template | Prompt node |
-| LLM | Model Provider + Invoke |
-| Retriever | Vector Search nodes |
-| VectorStore | LanceDB + Embeddings |
-| Document Loader | Read nodes + Parse |
-| Output Parser | Extract Knowledge |
-| Runnable | Node or subflow |
-| Callbacks | Console Log (debug mode) |
+The current Studio importer does not translate a LangChain graph. Choose the
+path based on who should own orchestration, state, deployment, and debugging.
 
-## Core Patterns Compared
+## Choose an integration path
 
-### Chains → Flows
+| Keep LangChain code | Move orchestration into a Flow |
+| --- | --- |
+| Existing application already owns routing and lifecycle | Teammates should edit and inspect the logic visually |
+| LangChain-specific components remain important | Typed node contracts should define the pipeline |
+| Only model or embedding access should move | The workflow needs Flow-Like Events, Pages, Widgets, storage, or automation nodes |
+| Existing tests and deployment stay in code | Run history and App-level configuration should live together |
 
-In LangChain, you build **Chains** by composing components:
+You can use both approaches: a LangChain service can call a Flow-Like Event,
+and a Flow can call an external API that is implemented with LangChain.
 
-**LangChain:**
+## Keep LangChain and use the SDK
+
+The Python and Node.js SDKs include LangChain-compatible chat-model and
+embedding wrappers. With the Python SDK, a chain can use a model configured in
+Flow-Like:
+
 ```python
-from langchain import PromptTemplate, LLMChain
-from langchain.llms import OpenAI
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
 
-prompt = PromptTemplate(
-    input_variables=["product"],
-    template="What is a good name for a company that makes {product}?"
+chat_model = client.as_langchain_chat("your-model-bit-id")
+
+chain = (
+    ChatPromptTemplate.from_messages([
+        ("system", "You are a helpful assistant."),
+        ("human", "{input}"),
+    ])
+    | chat_model
+    | StrOutputParser()
 )
 
-chain = LLMChain(llm=OpenAI(), prompt=prompt)
-result = chain.run("eco-friendly water bottles")
+response = chain.invoke({"input": "What is Flow-Like?"})
 ```
 
-**Flow-Like:**
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Quick Action   │     │     Prompt      │     │   Invoke LLM    │
-│   (product)     ├────▶│  "What is..."   ├────▶│    OpenAI       │
-└─────────────────┘     └─────────────────┘     └────────┬────────┘
-                                                         │
-                                                         ▼
-                                                    [company_name]
-```
+The equivalent factory methods are documented for
+[Python](/dev/sdks/python/) and [Node.js/TypeScript](/dev/sdks/nodejs/).
+Authentication, model access, and data handling still follow the Flow-Like
+backend and credential configuration used by that SDK client.
 
-The visual flow is the chain—each node is a step in the pipeline.
+## Translate the mental model
 
-### Agents → Agent Nodes
+| LangChain concept | Current Flow-Like concept |
+| --- | --- |
+| Runnable or chain | Connected nodes in a Flow |
+| LCEL pipe | Typed data and execution wires |
+| Chat model | Configured model plus [Invoke Model](/nodes/ai/generative/ai-generative-invoke/) |
+| Prompt template | History/message nodes and, when needed, [Render Template](/nodes/utils/string/string-render-template/) |
+| Agent | [Agent from Model](/nodes/ai/agents/builder/agent-from-model/) plus registered tools and [Invoke Agent](/nodes/ai/agents/agent-invoke/) |
+| Tool | Typed Flow function registered with the agent |
+| Conversation history | History output from [Chat Event](/nodes/events/events-chat/) |
+| Session state | Chat local/global session values |
+| Durable agent memory | [Register Memory](/nodes/ai/agents/builder/agent-register-memory/) or an explicit data store |
+| Retriever | Vector, full-text, or hybrid database search |
+| Vector store | Flow-Like database opened and populated by database nodes |
+| Output parser | [AI Extractor](/nodes/ai/generative/llm-extractor/) with a JSON schema |
+| Callback or trace | Flow run history and node logs |
 
-LangChain **Agents** make decisions about tool usage. Flow-Like has dedicated Agent nodes:
+The mapping is conceptual. A wire is not a serialized `Runnable`, and a board
+variable is not automatically equivalent to a LangChain memory implementation.
 
-**LangChain:**
-```python
-from langchain.agents import initialize_agent, Tool
+## Chains become typed graph stages
 
-tools = [
-    Tool(name="Calculator", func=calculator_func, description="..."),
-    Tool(name="Search", func=search_func, description="...")
-]
-
-agent = initialize_agent(
-    tools=tools,
-    llm=llm,
-    agent=AgentType.ZERO_SHOT_REACT_DESCRIPTION
-)
-result = agent.run("What is 25 * 48, then search for that number")
-```
-
-**Flow-Like:**
-```
-┌─────────────────────────────────────────────────────────┐
-│ Board: CalculatorTool                                   │
-│  Quick Action Event ──▶ Calculate ──▶ Return Result    │
-└─────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│ Board: SearchTool                                       │
-│  Quick Action Event ──▶ Web Search ──▶ Return Result   │
-└─────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────┐
-│ Main Flow:                                              │
-│                                                         │
-│  Chat Event ──▶ Make Agent ──▶ Run Agent ──▶ Response  │
-│                     │                                   │
-│                     ├── Tool: CalculatorTool            │
-│                     └── Tool: SearchTool                │
-└─────────────────────────────────────────────────────────┘
-```
-
-Each **Tool** is a separate Board with a Quick Action Event—the agent can call it when needed.
-
-### Prompts → Prompt Nodes
-
-**LangChain PromptTemplate:**
-```python
-prompt = PromptTemplate(
-    input_variables=["context", "question"],
-    template="""Answer based on this context:
-    {context}
-
-    Question: {question}
-    Answer:"""
-)
-```
-
-**Flow-Like Prompt Node:**
-```
-┌─────────────────────────────────────────────────────────┐
-│ Prompt Node                                             │
-│                                                         │
-│ Template:                                               │
-│   "Answer based on this context:                        │
-│    {context}                                            │
-│                                                         │
-│    Question: {question}                                 │
-│    Answer:"                                             │
-│                                                         │
-│ Inputs:                                                 │
-│   ◀── context                                           │
-│   ◀── question                                          │
-│                                                         │
-│ Outputs:                                                │
-│   ──▶ formatted_prompt                                  │
-└─────────────────────────────────────────────────────────┘
-```
-
-Variables are auto-extracted from `{variable}` placeholders in your template.
-
-### Memory → Variables + Arrays
-
-**LangChain Memory:**
-```python
-from langchain.memory import ConversationBufferMemory
-
-memory = ConversationBufferMemory()
-chain = ConversationChain(llm=llm, memory=memory)
-```
-
-**Flow-Like:**
-```
-Variables Panel:
-├── chat_history: Array<Message>
-└── user_context: String
-
-Chat Event
-    │
-    ▼
-Get Variable: chat_history
-    │
-    ▼
-Build Messages (system + history + new)
-    │
-    ▼
-Invoke LLM
-    │
-    ▼
-Append to Variable: chat_history
-```
-
-Memory persists in Board Variables. Use arrays for conversation history.
-
-### RAG Retrievers → Vector Search
-
-**LangChain RAG:**
-```python
-from langchain.vectorstores import Chroma
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.chains import RetrievalQA
-
-embeddings = OpenAIEmbeddings()
-vectorstore = Chroma(embedding_function=embeddings)
-
-qa_chain = RetrievalQA.from_chain_type(
-    llm=llm,
-    chain_type="stuff",
-    retriever=vectorstore.as_retriever(search_kwargs={"k": 5})
-)
-```
-
-**Flow-Like RAG:**
-```
-Ingest Pipeline:
-┌─────────────────────────────────────────────────────────┐
-│ Read Documents ──▶ Chunk ──▶ Embed ──▶ Insert to LanceDB│
-└─────────────────────────────────────────────────────────┘
-
-Query Pipeline:
-┌─────────────────────────────────────────────────────────┐
-│ Chat Event                                              │
-│     │                                                   │
-│     ▼                                                   │
-│ Embed Query                                             │
-│     │                                                   │
-│     ▼                                                   │
-│ Vector Search (LanceDB, k=5)                           │
-│     │                                                   │
-│     ▼                                                   │
-│ Build Context Prompt                                    │
-│     │                                                   │
-│     ▼                                                   │
-│ Invoke LLM ──▶ Response                                │
-└─────────────────────────────────────────────────────────┘
-```
-
-### Document Loaders → Read + Parse Nodes
-
-| LangChain Loader | Flow-Like Nodes |
-|------------------|-----------------|
-| `TextLoader` | Read to String |
-| `PyPDFLoader` | Read to String (PDF) |
-| `CSVLoader` | Buffered CSV Reader |
-| `JSONLoader` | Read to String + Parse JSON |
-| `DirectoryLoader` | List Paths + For Each + Read |
-| `WebBaseLoader` | HTTP Request |
-| `UnstructuredLoader` | Read + Chunk |
-
-**Example PDF Loading:**
-```
-List Paths (*.pdf)
-    │
-    ▼
-For Each path
-    │
-    ▼
-Read to String (path)
-    │
-    ▼
-Chunk Document
-    │
-    ▼
-Embed Document ──▶ Insert to LanceDB
-```
-
-### Output Parsers → Extract Knowledge
-
-**LangChain Structured Output:**
-```python
-from langchain.output_parsers import PydanticOutputParser
-from pydantic import BaseModel
-
-class Person(BaseModel):
-    name: str
-    age: int
-    occupation: str
-
-parser = PydanticOutputParser(pydantic_object=Person)
-prompt = PromptTemplate(
-    template="Extract person info:\n{text}\n{format_instructions}",
-    input_variables=["text"],
-    partial_variables={"format_instructions": parser.get_format_instructions()}
-)
-```
-
-**Flow-Like Extract Knowledge:**
-```
-┌─────────────────────────────────────────────────────────┐
-│ Extract Knowledge Node                                  │
-│                                                         │
-│ Schema:                                                 │
-│   {                                                     │
-│     "name": "string",                                   │
-│     "age": "number",                                    │
-│     "occupation": "string"                              │
-│   }                                                     │
-│                                                         │
-│ Input: ◀── document_text                                │
-│ Output: ──▶ Person (typed struct)                       │
-└─────────────────────────────────────────────────────────┘
-```
-
-The node handles prompting, parsing, and validation automatically.
-
-## LCEL → Visual Pipelines
-
-LangChain Expression Language (LCEL) chains look like:
+An LCEL pipeline such as:
 
 ```python
-chain = prompt | llm | parser
+chain = prompt | model | parser
 result = chain.invoke({"topic": "AI"})
 ```
 
-**Flow-Like:**
-```
-Input ──▶ Prompt ──▶ LLM ──▶ Parser ──▶ Output
-```
+usually becomes these graph stages:
 
-The pipe (`|`) becomes a visual wire. Parallel execution uses multiple branches:
+| Stage | Flow-Like implementation |
+| --- | --- |
+| Receive input | Event-node output pin |
+| Build instructions and messages | Make or update chat history |
+| Invoke | Configured model into Invoke Model |
+| Validate output | AI Extractor, JSON parsing, or ordinary typed nodes |
+| Return | Event-specific response or result node |
 
-**LCEL Parallel:**
-```python
-chain = RunnableParallel(summary=summarize_chain, translation=translate_chain)
-```
+Connect execution wires only where ordering or side effects require them.
+Connect data wires for the values each stage consumes.
 
-**Flow-Like Parallel:**
-```
-              ┌──▶ Summarize ──┐
-Input ──▶ Split                 ├──▶ Merge ──▶ Output
-              └──▶ Translate ──┘
-```
+For ordered fan-out use [Sequence](/nodes/control/control-sequence/). For
+intentional concurrency use
+[Parallel Execution](/nodes/control/control-par-execution/) or
+[Parallel For Each](/nodes/control/control-par-for-each/), followed by
+[Gather](/nodes/control/parallel/control-gather/) when all branches must finish.
 
-## Common Patterns
+## Prompts and chat history
 
-### Conversational RAG
+Flow-Like model invocation is history-oriented. A typical chat Flow:
 
-**LangChain:**
-```python
-memory = ConversationBufferMemory()
-qa_chain = ConversationalRetrievalChain.from_llm(
-    llm=llm,
-    retriever=retriever,
-    memory=memory
-)
-```
+1. starts with Chat Event;
+2. reads the event's current History output;
+3. applies a system instruction with
+   [Set System Message](/nodes/ai/generative/history/ai-generative-set-system-prompt-message/);
+4. invokes the configured model;
+5. returns a complete response or streams response chunks to chat.
 
-**Flow-Like:**
-```
-Variables:
-├── chat_history: Array<Message>
-└── active_context: String
+Use [Push Message](/nodes/ai/generative/history/ai-generative-add-history-message/)
+to add messages. Configure the Chat UI Event's history window deliberately, or
+construct a smaller history before invocation when the Flow should use only a
+subset. See [Chat and conversations](/topics/genai/chat/) for the complete
+event, session, attachment, and streaming contract.
 
-Chat Event (user_message)
-    │
-    ├──▶ Embed Query ──▶ Vector Search
-    │                         │
-    │                         ▼
-    │                   Retrieve Context
-    │                         │
-    └─────────────────────────┤
-                              ▼
-                    Build Messages:
-                    [system + context + history + query]
-                              │
-                              ▼
-                         Invoke LLM
-                              │
-                              ├──▶ Append to history
-                              │
-                              └──▶ Response
-```
+Do not copy prompt variables into a single opaque template when the values need
+validation. Keep important inputs as typed pins and assemble the message only
+after those inputs pass their checks.
 
-### Function Calling
+## Agents and tools
 
-**LangChain Tools with OpenAI:**
-```python
-tools = [get_weather_tool, search_tool]
-llm_with_tools = llm.bind_tools(tools)
-result = llm_with_tools.invoke("What's the weather in Paris?")
-```
+A visual agent is assembled explicitly:
 
-**Flow-Like:**
-```
-Make Agent
-    │
-    ├── Tool: GetWeather (Board with Quick Action)
-    ├── Tool: Search (Board with Quick Action)
-    │
-    ▼
-Run Agent (handles tool calling loop)
-    │
-    ▼
-Final Response
-```
+| Responsibility | Node |
+| --- | --- |
+| Create the agent from a configured model | [Agent from Model](/nodes/ai/agents/builder/agent-from-model/) |
+| Set operating instructions | [Set Agent System Prompt](/nodes/ai/agents/builder/agent-set-system-prompt/) |
+| Add Flow functions as tools | [Register Function Tools](/nodes/ai/agents/builder/agent-register-function-tools/) |
+| Add MCP tools | [Register MCP Tools](/nodes/ai/agents/builder/agent-register-mcp-tools/) |
+| Invoke once and return a complete result | [Invoke Agent](/nodes/ai/agents/agent-invoke/) |
+| Stream the result | [Stream Invoke Agent](/nodes/ai/agents/agent-stream-invoke/) |
 
-### Map-Reduce
+Flow functions should expose small typed operations, validate their arguments,
+and enforce authorization outside the prompt. Keep side effects, retries, and
+confirmation visible in the surrounding Flow.
 
-**LangChain:**
-```python
-from langchain.chains import MapReduceDocumentsChain
+## Memory is a lifecycle decision
 
-map_reduce_chain = MapReduceDocumentsChain(
-    llm_chain=map_chain,
-    reduce_documents_chain=reduce_chain
-)
-```
+LangChain's “memory” label can refer to several different lifecycles. Map the
+requirement, not the class name:
 
-**Flow-Like:**
-```
-Split Documents
-    │
-    ▼
-For Each document
-    │
-    ▼
-Map: Summarize ──▶ Collect Summaries
-                        │
-                        ▼
-                   Reduce: Final Summary
-```
+| Required lifecycle | Flow-Like choice |
+| --- | --- |
+| Current conversation messages | Chat Event History |
+| State for one chat | Local Session |
+| User-level chat state | Global Session |
+| Agent-managed persistent recall | Register Memory |
+| Durable application records | Database or App Storage |
+| Temporary graph state | Flow variable |
 
-## Feature Comparison
+Limit history before model invocation, define retention for session and memory
+data, and never use restored conversational state as proof of authorization.
 
-| Feature | LangChain | Flow-Like |
-|---------|-----------|-----------|
-| **Interface** | Python code | Visual drag-and-drop |
-| **Learning curve** | Python required | Lower barrier |
-| **Flexibility** | Very flexible | Visual constraints |
-| **Debugging** | Print statements | Visual execution trace |
-| **Versioning** | Git | Built-in + Git |
-| **Deployment** | Custom infrastructure | Desktop/Cloud included |
-| **RAG** | Many vector store options | LanceDB native |
-| **Agents** | Multiple implementations | Unified Agent nodes |
-| **Streaming** | Callback-based | Native streaming |
+## RAG becomes two Flows
 
-## What Flow-Like Adds
+Keep indexing and query execution separate.
 
-### Visual Debugging
-- Watch data flow in real-time
-- Inspect any wire's value
-- Step through execution
+### Indexing Flow
 
-### Data Processing
-- Native DataFusion SQL engine
-- Chart visualizations
-- ML models (no Python needed)
+| Step | Current nodes or guide |
+| --- | --- |
+| Extract text and preserve provenance | [Document processing](/topics/document-processing/overview/) |
+| Split text | [Chunk Text](/nodes/ai/preprocessing/chunk-text/) |
+| Load the embedding model | [Load Embedding Model](/nodes/ai/embedding/load-model/) |
+| Embed each chunk | [Embed Document](/nodes/ai/embedding/embed-document/) |
+| Open and populate the index | [Open Database](/nodes/data/database/open-local-db/) and database write nodes |
 
-### Full Application Stack
-- UI pages (A2UI)
-- Event-driven architecture
-- Built-in deployment
+### Query Flow
 
-### Type Safety
-- Strongly typed pins
-- Compile-time validation
-- Schema enforcement
+| Step | Current node |
+| --- | --- |
+| Embed the question | [Embed Query](/nodes/ai/embedding/embed-query/) |
+| Semantic retrieval | [Vector Search](/nodes/data/database/search/vector-search-local-db/) |
+| Exact-term retrieval | [Full-Text Search](/nodes/data/database/search/fts-search-local-db/) |
+| Combined retrieval | [Hybrid Search](/nodes/data/database/search/hybrid-search-local-db/) |
+| Generate from selected evidence | History nodes plus Invoke Model |
 
-## Migration Tips
+Retain source IDs and locations through retrieval so the final response can
+cite its evidence. Apply access filters before retrieved content enters model
+context. The full operating guidance is in
+[RAG and knowledge bases](/topics/genai/rag/).
 
-### 1. Think in Nodes, Not Functions
-Each LangChain function call becomes a node. Chain composition becomes wiring.
+## Structured output
 
-### 2. Use Extract Knowledge Instead of Parsers
-The Extract Knowledge node is your Pydantic output parser—just define the schema.
+Use AI Extractor when the model must return a known shape. Its schema is JSON
+Schema, for example:
 
-### 3. Boards Are Your Modules
-Each Python module can become a Board. Import/export via Quick Actions.
-
-### 4. Variables Replace State
-Where you'd use class attributes or memory, use Board Variables.
-
-### 5. Embrace Visual Loops
-For Each nodes with visual branches often work better than Python list comprehensions.
-
-## Example Migration
-
-### LangChain: Q&A Bot
-
-**Original Python:**
-```python
-from langchain.chains import RetrievalQA
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import Chroma
-from langchain.chat_models import ChatOpenAI
-
-embeddings = OpenAIEmbeddings()
-vectorstore = Chroma(
-    persist_directory="./db",
-    embedding_function=embeddings
-)
-
-qa = RetrievalQA.from_chain_type(
-    llm=ChatOpenAI(model="gpt-4"),
-    chain_type="stuff",
-    retriever=vectorstore.as_retriever(k=5),
-    return_source_documents=True
-)
-
-def answer(question: str):
-    result = qa({"query": question})
-    return result["result"], result["source_documents"]
+```json
+{
+  "type": "object",
+  "properties": {
+    "name": { "type": "string" },
+    "priority": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    }
+  },
+  "required": ["name", "priority"]
+}
 ```
 
-**Flow-Like Equivalent:**
-```
-Board: QABot
-├── Variables:
-│   └── db: LanceDB connection
-│
-└── Events:
-    └── Chat Event (question)
-            │
-            ▼
-        Embed Query (OpenAI)
-            │
-            ▼
-        Vector Search (db, k=5)
-            │
-            ├──▶ sources: Get Metadata
-            │
-            ▼
-        Build Context Prompt
-            │
-            ▼
-        Invoke LLM (GPT-4)
-            │
-            ▼
-        Return: {answer, sources}
-```
+Treat schema validation as one boundary, not proof that the extracted facts are
+correct. Validate identifiers, permissions, ranges, and business rules before
+using the result in a side effect.
 
-**Deployment:**
-- LangChain: Set up FastAPI, Docker, hosting
-- Flow-Like: Click "Publish" → Done
+## Observability and evaluation
 
-## FAQ
+[Run history](/studio/logging/) records executions and node logs. It is the
+nearest Flow-Like inspection surface to callbacks or traces, but it is not a
+drop-in replacement for every LangChain observability product.
 
-### Can I import my existing chains?
-Not directly. You'll rebuild them visually, which often simplifies the logic.
+During migration, test the layers independently:
 
-### What about custom LLM providers?
-Flow-Like supports OpenAI, Anthropic, Google, Ollama, and any OpenAI-compatible API.
+- prompt and structured-output behavior;
+- tool selection and tool arguments;
+- retrieval rank and source propagation;
+- history and session boundaries;
+- timeout, cancellation, and partial failure;
+- final response and externally visible side effects.
 
-### Is performance comparable?
-Yes—Flow-Like's runtime is Rust-based and often faster than Python.
+## Migration checklist
 
-### Can I use my existing vector database?
-Flow-Like uses LanceDB natively. You can re-embed your documents or connect external databases via SQL.
+1. Decide whether LangChain or Flow-Like will own orchestration.
+2. Inventory models, prompts, tools, retrievers, memory, and callbacks.
+3. Define typed inputs and outputs for each target Flow function and Event.
+4. Split RAG indexing from query execution.
+5. Choose explicit storage for every memory lifecycle.
+6. Move secrets into [Runtime Variables](/apps/runtime-variables/).
+7. Rebuild one representative path and compare its outputs with the source.
+8. Add App Events or chat only after the underlying Flow passes its tests.
 
-### What about LangSmith?
-Flow-Like has built-in execution tracing. View logs, timing, and data at each node.
+## Next steps
 
-## Next Steps
-
-- **[GenAI Overview](/topics/genai/overview/)** – Full AI capabilities guide
-- **[RAG Setup](/topics/genai/rag/)** – Vector search and retrieval
-- **[Agents](/topics/genai/agents/)** – Building AI agents
-- **[Extraction](/topics/genai/extraction/)** – Structured data extraction
+- [SDK overview](/dev/sdks/overview/)
+- [Models](/topics/genai/models/)
+- [Chat and conversations](/topics/genai/chat/)
+- [RAG and knowledge bases](/topics/genai/rag/)
+- [AI agents](/topics/genai/agents/)
+- [Extraction and structured output](/topics/genai/extraction/)

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Guide to choosing a Flow-Like summarization strategy</title>
+  <desc id="desc">Choose MapReduce for speed, Refine for coherence, Hierarchical for structured documents, SlidingWindow for very long documents, Hybrid for a balance of speed and quality, and Chain of Density step three when information density is the priority.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.need{fill:#9da4b0;font-size:14px;font-weight:700;letter-spacing:.7px}.strategy{fill:#f7f8fa;font-size:20px;font-weight:740}.note{fill:#9199a6;font-size:14px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/><rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="272" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="kicker">STRATEGY SELECTOR</text>
+  <text x="64" y="136" class="heading">Start with the outcome you value most</text>
+  <text x="64" y="169" class="sub">The document shape, latency target, and model size determine the best first choice.</text>
+
+  <g><rect x="64" y="224" width="400" height="120" rx="23" fill="#191c22" stroke="#4d3a36" stroke-width="2"/><circle cx="105" cy="265" r="16" fill="#ff7656"/><text x="134" y="266" class="need">MAXIMUM SPEED</text><text x="96" y="307" class="strategy">MapReduce</text><text x="245" y="307" class="note">Parallel map, then reduce</text></g>
+  <g><rect x="520" y="224" width="400" height="120" rx="23" fill="#1d1c24" stroke="#5b5278" stroke-width="2"/><circle cx="561" cy="265" r="16" fill="#a78bfa"/><text x="590" y="266" class="need">BEST COHERENCE</text><text x="552" y="307" class="strategy">Refine</text><text x="674" y="307" class="note">Sequential rolling summary</text></g>
+  <g><rect x="976" y="224" width="400" height="120" rx="23" fill="#1b2422" stroke="#3e6759" stroke-width="2"/><circle cx="1017" cy="265" r="16" fill="#34d399"/><text x="1046" y="266" class="need">CLEAR HEADINGS</text><text x="1008" y="307" class="strategy">Hierarchical</text><text x="1160" y="307" class="note">Preserve document structure</text></g>
+  <g><rect x="64" y="376" width="400" height="120" rx="23" fill="#1b2422" stroke="#3e6759" stroke-width="2"/><circle cx="105" cy="417" r="16" fill="#34d399"/><text x="134" y="418" class="need">VERY LONG DOCUMENT</text><text x="96" y="459" class="strategy">SlidingWindow</text><text x="255" y="459" class="note">Bounded rolling memory</text></g>
+  <g><rect x="520" y="376" width="400" height="120" rx="23" fill="#191c22" stroke="#4d3a36" stroke-width="2"/><circle cx="561" cy="417" r="16" fill="#ff7656"/><text x="590" y="418" class="need">SPEED + QUALITY</text><text x="552" y="459" class="strategy">Hybrid</text><text x="666" y="459" class="note">Parallel map, coherent polish</text></g>
+  <g><rect x="976" y="376" width="400" height="120" rx="23" fill="#1d1c24" stroke="#5b5278" stroke-width="2"/><circle cx="1017" cy="417" r="16" fill="#a78bfa"/><text x="1046" y="418" class="need">MAXIMUM DENSITY</text><text x="1008" y="459" class="strategy">Any + CoD step 3</text><text x="1198" y="459" class="note">Compress after summary</text></g>
+  <rect x="64" y="544" width="1312" height="88" rx="22" fill="#1b1e24" stroke="#373d48"/>
+  <circle cx="104" cy="588" r="18" fill="#ff7656" opacity=".9"/><text x="104" y="594" text-anchor="middle" class="strategy" fill="#14161a">!</text>
+  <text x="142" y="582" class="strategy">Small-model default</text><text x="142" y="610" class="sub">Start with Refine; skip Chain of Density and entity tracking until the model handles nuanced revision reliably.</text>
+  <text x="1376" y="676" text-anchor="end" class="note">Short document? Any strategy works; optional compression is usually unnecessary.</text>
+</svg>

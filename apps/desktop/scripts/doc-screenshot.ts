@@ -10,6 +10,7 @@ import {
 	parseDocScreenshotArgs,
 } from "../lib/doc-screenshot/cli";
 import {
+	loadDocScreenshotHttpFixture,
 	loadDocScreenshotPlan,
 	loadDocScreenshotTauriFixture,
 } from "../lib/doc-screenshot/plan";
@@ -254,6 +255,15 @@ async function run(options: DocScreenshotCliOptions): Promise<number> {
 	const fixture = fixturePath
 		? await loadDocScreenshotTauriFixture(fixturePath)
 		: undefined;
+	const httpFixturePath =
+		plan.httpFixture && planPath
+			? resolve(dirname(planPath), plan.httpFixture)
+			: plan.httpFixture
+				? resolve(process.cwd(), plan.httpFixture)
+				: undefined;
+	const httpFixture = httpFixturePath
+		? await loadDocScreenshotHttpFixture(httpFixturePath)
+		: undefined;
 	let stopping = false;
 	const stopForSignal = (exitCode: number) => {
 		if (stopping) return;
@@ -279,6 +289,7 @@ async function run(options: DocScreenshotCliOptions): Promise<number> {
 			baseUrl: frontendUrl.origin,
 			outputDir,
 			tauriFixture: fixture,
+			httpFixture,
 		});
 		printResult(result, options.json);
 		return result.passed ? 0 : 1;

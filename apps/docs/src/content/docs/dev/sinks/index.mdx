@@ -1,126 +1,84 @@
 ---
 title: Event Sinks
-description: Understanding event sinks and trigger mechanisms in Flow-Like
+description: Understanding event sinks and trigger delivery in Flow-Like
 sidebar:
   order: 1
 ---
 
-Event sinks are the entry points that trigger flow executions. They define how external events (HTTP requests, scheduled tasks, bot messages) invoke your workflows.
+An event sink connects an external signal to an event in a Flow-Like app. The event identifies the board and start node; the sink defines how the signal arrives and whether that event is active.
 
-## Overview
+## Delivery models
 
-Flow-Like supports multiple sink types, each with different characteristics:
+The same event can be delivered locally, remotely, or both when the event configuration and hub support it.
 
-| Sink Type | Trigger Mechanism | Local Support | Remote Support |
-|-----------|-------------------|---------------|----------------|
-| HTTP | REST API calls | ✅ Polling | ✅ Webhook |
-| Telegram | Bot messages | ✅ Long Polling | ✅ Webhook |
-| Discord | Bot interactions | ✅ Gateway | ✅ Interactions Webhook |
-| Cron | Scheduled time | ✅ Local scheduler | ✅ Server scheduler |
-| Webhook | Generic webhooks | ❌ | ✅ Webhook |
+| Sink | Desktop delivery | Hosted delivery |
+|---|---|---|
+| HTTP / API | Local HTTP listener | Public HTTP sink endpoint |
+| Telegram | Bot API long polling | Telegram webhook; a self-hosted sink service can also poll |
+| Discord | Discord Gateway messages | Interactions webhook; a self-hosted sink service can also use the Gateway |
+| Cron | In-process desktop scheduler | Configured server scheduler, such as a sink service, EventBridge Scheduler, or a Kubernetes CronJob |
 
-## Local vs Remote Execution
+Flow-Like also has adapters for sources such as email, RSS, files, deep links, and device events. Their availability depends on the current client and the hub's advertised capabilities.
 
-Flow-Like can run workflows in two modes:
+![HTTP, bot, and schedule signals reaching desktop or hosted adapters before converging on the same active event sink and workflow dispatcher](../../../../assets/SinkExecutionArchitecture.svg)
 
-### Local Mode (Desktop App)
+## What happens on a trigger
 
-When running the desktop application:
-- **HTTP**: The app exposes a local server (default port 9657) that accepts requests
-- **Telegram**: Uses long polling to fetch messages from Telegram's API
-- **Discord**: Connects via Discord Gateway (WebSocket) to receive events
-- **Cron**: Uses local system scheduler to trigger at specified times
+1. A desktop adapter, public webhook, or trusted sink service receives the signal.
+2. Flow-Like verifies the delivery mechanism. For example, an HTTP sink may require a bearer token and a Discord interaction requires a valid signature.
+3. The runtime resolves an active sink by event ID and checks that the sink type matches.
+4. Configured event data and trigger data are combined where that delivery path supports a payload.
+5. Flow-Like creates and dispatches a workflow run, then exposes its status and logs through the normal execution APIs.
 
-**Advantages:**
-- No server infrastructure needed
-- Direct access to local resources (files, applications)
-- Lower latency for local operations
-- Privacy - data stays on your machine
+The exact payload is sink-specific. Do not assume that local polling, a hosted bot worker, and a public webhook produce identical JSON.
 
-**Limitations:**
-- Computer must be running
-- Not accessible from the internet (without tunneling)
-- Limited scalability
+## Local, remote, and hybrid execution
 
-### Remote Mode (Server/Cloud)
+| Target | When to use it | Operational requirement |
+|---|---|---|
+| **Local** | The flow needs files, applications, or other resources on the user's machine | The desktop app must be running |
+| **Remote** | The trigger must be available continuously or from the public internet | The hub and its sink infrastructure must be running |
+| **Hybrid** | Both environments should register the event | Design the workflow to tolerate duplicate real-world signals |
 
-When deployed to a backend server:
-- **HTTP**: Server exposes public endpoints that accept webhooks
-- **Telegram**: Telegram sends webhooks directly to your server
-- **Discord**: Discord sends interaction webhooks to your server
-- **Cron**: Server-side scheduler triggers executions
+The event editor only offers targets that are available in the current environment.
 
-**Advantages:**
-- Always available (24/7)
-- Publicly accessible
-- Scalable infrastructure
-- Handles high volume
+## Hub capabilities
 
-**Limitations:**
-- Requires server infrastructure
-- Additional hosting costs
-- Network latency for operations
+`supported_sinks` tells clients which sink types the hub can execute remotely. It does not start the required worker or configure a third-party webhook by itself.
 
-## Hub Configuration
-
-The hub's `supported_sinks` configuration determines which sinks are available:
-
-```json
+```json title="flow-like.config.json"
 {
   "supported_sinks": {
     "http": true,
-    "telegram": true,
-    "discord": true,
+    "webhook": true,
     "cron": true,
-    "webhook": true
+    "mqtt": false,
+    "github": true,
+    "rss": true,
+    "discord": true,
+    "slack": true,
+    "telegram": true,
+    "email": true
   }
 }
 ```
 
-When a sink type is disabled in the hub configuration, the corresponding event types will only be available for local execution.
+For the Docker Compose sink service, `cron`, `discord`, and `telegram` also control which long-running workers start. Other sink types are handled by their API route, another service, or a client-side adapter.
 
-## Sink Architecture
+## Security boundaries
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                      External Trigger                            │
-│  (HTTP Request / Telegram Message / Discord Interaction / Cron)  │
-└────────────────────────────────┬────────────────────────────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │      Sink Endpoint       │
-                    │  /sink/trigger/{type}/   │
-                    └────────────┬────────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │    Authentication &      │
-                    │      Verification        │
-                    │  (Tokens, Signatures)    │
-                    └────────────┬────────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │    Event Lookup &        │
-                    │    Sink Resolution       │
-                    └────────────┬────────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │      Dispatcher          │
-                    │  (async/streaming)       │
-                    └────────────┬────────────┘
-                                 │
-                    ┌────────────▼────────────┐
-                    │    Flow Execution        │
-                    └─────────────────────────┘
-```
+| Delivery path | Primary check |
+|---|---|
+| Public HTTP sink | Optional sink bearer token and configured method/path |
+| Telegram webhook | Telegram secret token and source-IP validation in hosted mode |
+| Discord interactions webhook | Ed25519 signature over the timestamp and request body |
+| Internal sink service | Bearer JWT scoped to allowed sink types, with optional app restrictions |
+| Local adapter | Local event registration and the desktop execution context |
 
-## Security
+Store bot tokens, webhook secrets, personal access tokens, and OAuth material through the event or deployment secret mechanisms. Never place them in a board, screenshot, or committed config file.
 
-Each sink type has its own security mechanisms:
+## Related
 
-- **HTTP**: Optional Bearer token authentication
-- **Telegram**: Secret token header verification + IP allowlist
-- **Discord**: Ed25519 signature verification
-- **Cron**: Internal scheduling (no external access)
-- **Webhook**: Configurable authentication
-
-See the individual sink documentation for detailed security configuration.
+- [Cron Sink](/dev/sinks/cron/)
+- [Telegram Sink](/dev/sinks/telegram/)
+- [Discord Sink](/dev/sinks/discord/)

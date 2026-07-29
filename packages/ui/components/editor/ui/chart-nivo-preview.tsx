@@ -19,13 +19,25 @@ interface ChartInfo {
 	loader: () => Promise<ChartModule | null>;
 }
 
+export function isRenderableChartExport(value: unknown): boolean {
+	if (typeof value === "function") return true;
+	return Boolean(
+		value &&
+			typeof value === "object" &&
+			"$$typeof" in value &&
+			("render" in value || "type" in value),
+	);
+}
+
 const loadChart = async (
 	component: string,
-	importFn: () => Promise<any>,
+	importFn: () => Promise<unknown>,
 ): Promise<ChartModule | null> => {
 	try {
 		const mod = await importFn();
-		return (mod[component] as ChartModule) ?? null;
+		if (!mod || typeof mod !== "object") return null;
+		const chart = (mod as Record<string, unknown>)[component];
+		return isRenderableChartExport(chart) ? (chart as ChartModule) : null;
 	} catch {
 		return null;
 	}
@@ -202,7 +214,6 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 			theme: chartTheme ?? defaultTheme,
 			margin: DEFAULT_MARGIN,
 			animate: input.config.animate !== false,
-			...props,
 		};
 
 		// Add chart-type specific defaults
@@ -221,6 +232,7 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 					enableGridY: true,
 					axisBottom: { tickRotation: 0 },
 					axisLeft: {},
+					...props,
 				};
 			case "line":
 				return {
@@ -236,6 +248,7 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 					enableCrosshair: true,
 					axisBottom: {},
 					axisLeft: {},
+					...props,
 				};
 			case "pie":
 				return {
@@ -248,6 +261,7 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 					arcLinkLabelsSkipAngle: 10,
 					arcLinkLabelsThickness: 2,
 					arcLabelsSkipAngle: 10,
+					...props,
 				};
 			case "radar":
 				return {
@@ -257,12 +271,14 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 					dotSize: 10,
 					dotBorderWidth: 2,
 					motionConfig: "wobbly",
+					...props,
 				};
 			case "heatmap":
 				return {
 					...baseProps,
 					axisTop: { tickRotation: -45 },
 					axisLeft: {},
+					...props,
 				};
 			case "scatter":
 				return {
@@ -272,6 +288,7 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 					nodeSize: 10,
 					axisBottom: {},
 					axisLeft: {},
+					...props,
 				};
 			case "funnel":
 				return {
@@ -280,9 +297,10 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 					shapeBlending: 0.66,
 					borderWidth: 20,
 					labelColor: { from: "color", modifiers: [["darker", 3]] },
+					...props,
 				};
 			default:
-				return baseProps;
+				return { ...baseProps, ...props };
 		}
 	}, [data, chartType, props, input.config.animate, defaultTheme, isDark]);
 

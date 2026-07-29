@@ -555,8 +555,12 @@
 			"boards": ["docs-board"],
 			"events": ["triage-selected-request", "support-assistant"],
 			"templates": [],
-			"page_ids": [],
-			"widget_ids": [],
+			"page_ids": [
+				"support-operations-page",
+				"customer-intake-page",
+				"escalation-console-page"
+			],
+			"widget_ids": ["support-health-widget"],
 			"packages": {},
 			"rating_sum": 48,
 			"rating_count": 12,
@@ -1358,8 +1362,8 @@
 						"data_type": "String",
 						"value_type": "Normal",
 						"default_value": [
-							104, 101, 108, 112, 64, 97, 99, 109, 101, 46, 101, 120, 97, 109,
-							112, 108, 101
+							34, 104, 101, 108, 112, 64, 97, 99, 109, 101, 46, 101, 120, 97,
+							109, 112, 108, 101, 34
 						],
 						"editable": true,
 						"exposed": true,
@@ -1371,10 +1375,34 @@
 						"description": "Voice used for generated replies",
 						"data_type": "String",
 						"value_type": "Normal",
-						"default_value": [70, 114, 105, 101, 110, 100, 108, 121],
+						"default_value": [34, 70, 114, 105, 101, 110, 100, 108, 121, 34],
 						"editable": true,
 						"exposed": true,
 						"secret": false
+					},
+					"crm_api_token": {
+						"id": "crm-api-token",
+						"name": "CRM_API_TOKEN",
+						"description": "Credential used to load customer account context",
+						"data_type": "String",
+						"value_type": "Normal",
+						"default_value": [34, 34],
+						"editable": true,
+						"exposed": false,
+						"secret": true,
+						"runtime_configured": true
+					},
+					"support_api_url": {
+						"id": "support-api-url",
+						"name": "SUPPORT_API_URL",
+						"description": "Environment-specific endpoint for the support service",
+						"data_type": "String",
+						"value_type": "Normal",
+						"default_value": [34, 34],
+						"editable": true,
+						"exposed": false,
+						"secret": false,
+						"runtime_configured": true
 					}
 				},
 				"comments": {
@@ -1455,7 +1483,11 @@
 					"secs_since_epoch": 1785283200,
 					"nanos_since_epoch": 0
 				},
-				"page_ids": []
+				"page_ids": [
+					"support-operations-page",
+					"customer-intake-page",
+					"escalation-console-page"
+				]
 			}
 		],
 		"get_board": {
@@ -2211,8 +2243,8 @@
 					"data_type": "String",
 					"value_type": "Normal",
 					"default_value": [
-						104, 101, 108, 112, 64, 97, 99, 109, 101, 46, 101, 120, 97, 109,
-						112, 108, 101
+						34, 104, 101, 108, 112, 64, 97, 99, 109, 101, 46, 101, 120, 97, 109,
+						112, 108, 101, 34
 					],
 					"editable": true,
 					"exposed": true,
@@ -2224,10 +2256,34 @@
 					"description": "Voice used for generated replies",
 					"data_type": "String",
 					"value_type": "Normal",
-					"default_value": [70, 114, 105, 101, 110, 100, 108, 121],
+					"default_value": [34, 70, 114, 105, 101, 110, 100, 108, 121, 34],
 					"editable": true,
 					"exposed": true,
 					"secret": false
+				},
+				"crm_api_token": {
+					"id": "crm-api-token",
+					"name": "CRM_API_TOKEN",
+					"description": "Credential used to load customer account context",
+					"data_type": "String",
+					"value_type": "Normal",
+					"default_value": [34, 34],
+					"editable": true,
+					"exposed": false,
+					"secret": true,
+					"runtime_configured": true
+				},
+				"support_api_url": {
+					"id": "support-api-url",
+					"name": "SUPPORT_API_URL",
+					"description": "Environment-specific endpoint for the support service",
+					"data_type": "String",
+					"value_type": "Normal",
+					"default_value": [34, 34],
+					"editable": true,
+					"exposed": false,
+					"secret": false,
+					"runtime_configured": true
 				}
 			},
 			"comments": {
@@ -2308,7 +2364,11 @@
 				"secs_since_epoch": 1785283200,
 				"nanos_since_epoch": 0
 			},
-			"page_ids": []
+			"page_ids": [
+				"support-operations-page",
+				"customer-intake-page",
+				"escalation-console-page"
+			]
 		},
 		"get_catalog": [
 			{
@@ -3187,7 +3247,872 @@
 				"eventId": "triage-selected-request"
 			}
 		],
-		"get_pages": [],
+		"get_pages": [
+			{
+				"appId": "docs-app",
+				"pageId": "support-operations-page",
+				"boardId": "docs-board",
+				"name": "Support Operations Dashboard",
+				"description": "Live queue health, response quality, and SLA risk."
+			},
+			{
+				"appId": "docs-app",
+				"pageId": "customer-intake-page",
+				"boardId": "docs-board",
+				"name": "Customer Intake",
+				"description": "Capture account context before a support conversation."
+			},
+			{
+				"appId": "docs-app",
+				"pageId": "escalation-console-page",
+				"boardId": "docs-board",
+				"name": "Escalation Console",
+				"description": "Review priority cases and hand them to a specialist."
+			}
+		],
+		"get_page": {
+			"id": "support-operations-page",
+			"name": "Support Operations Dashboard",
+			"route": "/support",
+			"title": "Support Operations",
+			"canvasSettings": {
+				"backgroundColor": "#09090b",
+				"padding": "0px"
+			},
+			"content": [],
+			"layoutType": "Grid",
+			"components": [
+				{
+					"id": "root",
+					"style": {
+						"className": "min-h-full w-full bg-background text-foreground p-6 md:p-8"
+					},
+					"component": {
+						"type": "column",
+						"gap": {
+							"literalString": "24px"
+						},
+						"children": {
+							"explicitList": [
+								"dashboard-header",
+								"metrics-grid",
+								"operations-grid"
+							]
+						}
+					}
+				},
+				{
+					"id": "dashboard-header",
+					"style": {
+						"className": "w-full"
+					},
+					"component": {
+						"type": "row",
+						"align": {
+							"literalString": "center"
+						},
+						"justify": {
+							"literalString": "between"
+						},
+						"children": {
+							"explicitList": ["dashboard-heading", "live-status"]
+						}
+					}
+				},
+				{
+					"id": "dashboard-heading",
+					"component": {
+						"type": "column",
+						"gap": {
+							"literalString": "4px"
+						},
+						"children": {
+							"explicitList": ["dashboard-title", "dashboard-subtitle"]
+						}
+					}
+				},
+				{
+					"id": "dashboard-title",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "Support operations"
+						},
+						"variant": {
+							"literalString": "heading"
+						},
+						"size": {
+							"literalString": "2xl"
+						},
+						"weight": {
+							"literalString": "bold"
+						}
+					}
+				},
+				{
+					"id": "dashboard-subtitle",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "Queue health, response quality, and SLA risk at a glance"
+						},
+						"variant": {
+							"literalString": "body"
+						},
+						"size": {
+							"literalString": "sm"
+						},
+						"color": {
+							"literalString": "muted"
+						}
+					}
+				},
+				{
+					"id": "live-status",
+					"component": {
+						"type": "badge",
+						"content": {
+							"literalString": "Live · updated now"
+						},
+						"variant": {
+							"literalString": "secondary"
+						}
+					}
+				},
+				{
+					"id": "metrics-grid",
+					"style": {
+						"className": "w-full grid-cols-1 md:grid-cols-3"
+					},
+					"component": {
+						"type": "grid",
+						"columns": {
+							"literalNumber": 3
+						},
+						"gap": {
+							"literalString": "16px"
+						},
+						"children": {
+							"explicitList": [
+								"open-tickets-card",
+								"first-response-card",
+								"sla-card"
+							]
+						}
+					}
+				},
+				{
+					"id": "open-tickets-card",
+					"style": {
+						"className": "border border-border bg-card shadow-sm"
+					},
+					"component": {
+						"type": "card",
+						"title": {
+							"literalString": "Open tickets"
+						},
+						"description": {
+							"literalString": "Across email and chat"
+						},
+						"variant": {
+							"literalString": "bordered"
+						},
+						"children": {
+							"explicitList": ["open-tickets-value", "open-tickets-note"]
+						}
+					}
+				},
+				{
+					"id": "open-tickets-value",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "24"
+						},
+						"variant": {
+							"literalString": "heading"
+						},
+						"size": {
+							"literalString": "3xl"
+						},
+						"weight": {
+							"literalString": "bold"
+						}
+					}
+				},
+				{
+					"id": "open-tickets-note",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "6 need attention"
+						},
+						"size": {
+							"literalString": "sm"
+						},
+						"color": {
+							"literalString": "muted"
+						}
+					}
+				},
+				{
+					"id": "first-response-card",
+					"style": {
+						"className": "border border-border bg-card shadow-sm"
+					},
+					"component": {
+						"type": "card",
+						"title": {
+							"literalString": "First response"
+						},
+						"description": {
+							"literalString": "Median today"
+						},
+						"variant": {
+							"literalString": "bordered"
+						},
+						"children": {
+							"explicitList": ["first-response-value", "first-response-note"]
+						}
+					}
+				},
+				{
+					"id": "first-response-value",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "4m 18s"
+						},
+						"variant": {
+							"literalString": "heading"
+						},
+						"size": {
+							"literalString": "3xl"
+						},
+						"weight": {
+							"literalString": "bold"
+						}
+					}
+				},
+				{
+					"id": "first-response-note",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "12% faster than last week"
+						},
+						"size": {
+							"literalString": "sm"
+						},
+						"color": {
+							"literalString": "muted"
+						}
+					}
+				},
+				{
+					"id": "sla-card",
+					"style": {
+						"className": "border border-border bg-card shadow-sm"
+					},
+					"component": {
+						"type": "card",
+						"title": {
+							"literalString": "Within SLA"
+						},
+						"description": {
+							"literalString": "Rolling 24 hours"
+						},
+						"variant": {
+							"literalString": "bordered"
+						},
+						"children": {
+							"explicitList": ["sla-value", "sla-progress"]
+						}
+					}
+				},
+				{
+					"id": "sla-value",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "94%"
+						},
+						"variant": {
+							"literalString": "heading"
+						},
+						"size": {
+							"literalString": "3xl"
+						},
+						"weight": {
+							"literalString": "bold"
+						}
+					}
+				},
+				{
+					"id": "sla-progress",
+					"component": {
+						"type": "progress",
+						"value": {
+							"literalNumber": 94
+						},
+						"max": {
+							"literalNumber": 100
+						},
+						"showLabel": {
+							"literalBool": false
+						},
+						"variant": {
+							"literalString": "success"
+						}
+					}
+				},
+				{
+					"id": "operations-grid",
+					"style": {
+						"className": "w-full grid-cols-1 lg:grid-cols-2"
+					},
+					"component": {
+						"type": "grid",
+						"columns": {
+							"literalNumber": 2
+						},
+						"gap": {
+							"literalString": "16px"
+						},
+						"children": {
+							"explicitList": ["priority-queue-card", "automation-card"]
+						}
+					}
+				},
+				{
+					"id": "priority-queue-card",
+					"style": {
+						"className": "border border-border bg-card shadow-sm"
+					},
+					"component": {
+						"type": "card",
+						"title": {
+							"literalString": "Priority queue"
+						},
+						"description": {
+							"literalString": "Tickets closest to their SLA"
+						},
+						"variant": {
+							"literalString": "bordered"
+						},
+						"children": {
+							"explicitList": ["ticket-one", "ticket-two"]
+						}
+					}
+				},
+				{
+					"id": "ticket-one",
+					"style": {
+						"className": "w-full rounded-lg border border-border bg-muted/30 p-3"
+					},
+					"component": {
+						"type": "row",
+						"align": {
+							"literalString": "center"
+						},
+						"justify": {
+							"literalString": "between"
+						},
+						"children": {
+							"explicitList": ["ticket-one-copy", "ticket-one-status"]
+						}
+					}
+				},
+				{
+					"id": "ticket-one-copy",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "CUS-1042 · Billing access"
+						},
+						"size": {
+							"literalString": "sm"
+						},
+						"weight": {
+							"literalString": "medium"
+						}
+					}
+				},
+				{
+					"id": "ticket-one-status",
+					"component": {
+						"type": "badge",
+						"content": {
+							"literalString": "12 min"
+						},
+						"variant": {
+							"literalString": "destructive"
+						}
+					}
+				},
+				{
+					"id": "ticket-two",
+					"style": {
+						"className": "w-full rounded-lg border border-border bg-muted/30 p-3"
+					},
+					"component": {
+						"type": "row",
+						"align": {
+							"literalString": "center"
+						},
+						"justify": {
+							"literalString": "between"
+						},
+						"children": {
+							"explicitList": ["ticket-two-copy", "ticket-two-status"]
+						}
+					}
+				},
+				{
+					"id": "ticket-two-copy",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "CUS-1027 · Onboarding blocker"
+						},
+						"size": {
+							"literalString": "sm"
+						},
+						"weight": {
+							"literalString": "medium"
+						}
+					}
+				},
+				{
+					"id": "ticket-two-status",
+					"component": {
+						"type": "badge",
+						"content": {
+							"literalString": "28 min"
+						},
+						"variant": {
+							"literalString": "outline"
+						}
+					}
+				},
+				{
+					"id": "automation-card",
+					"style": {
+						"className": "border border-border bg-card shadow-sm"
+					},
+					"component": {
+						"type": "card",
+						"title": {
+							"literalString": "Automation coverage"
+						},
+						"description": {
+							"literalString": "Resolution steps handled by Flows"
+						},
+						"variant": {
+							"literalString": "bordered"
+						},
+						"children": {
+							"explicitList": [
+								"automation-value",
+								"automation-progress",
+								"automation-note"
+							]
+						}
+					}
+				},
+				{
+					"id": "automation-value",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "68%"
+						},
+						"variant": {
+							"literalString": "heading"
+						},
+						"size": {
+							"literalString": "3xl"
+						},
+						"weight": {
+							"literalString": "bold"
+						}
+					}
+				},
+				{
+					"id": "automation-progress",
+					"component": {
+						"type": "progress",
+						"value": {
+							"literalNumber": 68
+						},
+						"max": {
+							"literalNumber": 100
+						},
+						"showLabel": {
+							"literalBool": false
+						}
+					}
+				},
+				{
+					"id": "automation-note",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "184 conversations assisted this week"
+						},
+						"size": {
+							"literalString": "sm"
+						},
+						"color": {
+							"literalString": "muted"
+						}
+					}
+				}
+			],
+			"version": [1, 2, 0],
+			"createdAt": "2026-07-20T09:00:00Z",
+			"updatedAt": "2026-07-28T14:00:00Z",
+			"boardId": "docs-board",
+			"meta": {
+				"description": "Live support queue health and SLA risk.",
+				"keywords": ["support", "operations", "SLA"],
+				"themeColor": "#7c3aed"
+			},
+			"cache": true
+		},
+		"get_open_pages": [],
+		"get_widgets": [
+			{
+				"id": "support-health-widget",
+				"name": "Support Health Card",
+				"description": "A reusable SLA and response-time summary for support pages.",
+				"rootComponentId": "root",
+				"components": [
+					{
+						"id": "root",
+						"style": {
+							"className": "w-full max-w-lg mx-auto border border-border bg-card shadow-sm"
+						},
+						"component": {
+							"type": "card",
+							"title": {
+								"literalString": "Support health"
+							},
+							"description": {
+								"literalString": "Live performance across customer channels"
+							},
+							"variant": {
+								"literalString": "bordered"
+							},
+							"children": {
+								"explicitList": [
+									"health-summary",
+									"health-progress",
+									"health-footer"
+								]
+							}
+						}
+					},
+					{
+						"id": "health-summary",
+						"style": {
+							"className": "w-full"
+						},
+						"component": {
+							"type": "row",
+							"align": {
+								"literalString": "center"
+							},
+							"justify": {
+								"literalString": "between"
+							},
+							"children": {
+								"explicitList": ["health-score", "health-status"]
+							}
+						}
+					},
+					{
+						"id": "health-score",
+						"component": {
+							"type": "text",
+							"content": {
+								"literalString": "94%"
+							},
+							"variant": {
+								"literalString": "heading"
+							},
+							"size": {
+								"literalString": "3xl"
+							},
+							"weight": {
+								"literalString": "bold"
+							}
+						}
+					},
+					{
+						"id": "health-status",
+						"component": {
+							"type": "badge",
+							"content": {
+								"literalString": "On target"
+							},
+							"variant": {
+								"literalString": "secondary"
+							}
+						}
+					},
+					{
+						"id": "health-progress",
+						"component": {
+							"type": "progress",
+							"value": {
+								"literalNumber": 94
+							},
+							"max": {
+								"literalNumber": 100
+							},
+							"showLabel": {
+								"literalBool": false
+							},
+							"variant": {
+								"literalString": "success"
+							}
+						}
+					},
+					{
+						"id": "health-footer",
+						"component": {
+							"type": "text",
+							"content": {
+								"literalString": "Median first response · 4m 18s"
+							},
+							"size": {
+								"literalString": "sm"
+							},
+							"color": {
+								"literalString": "muted"
+							}
+						}
+					}
+				],
+				"dataModel": [
+					{
+						"path": "$.health.score",
+						"value": 94
+					},
+					{
+						"path": "$.health.responseTime",
+						"value": "4m 18s"
+					}
+				],
+				"customizationOptions": [],
+				"exposedProps": [
+					{
+						"id": "title",
+						"label": "Card title",
+						"description": "Heading shown above the support metrics.",
+						"targetComponentId": "root",
+						"propertyPath": "component.title",
+						"propType": "String",
+						"defaultValue": [
+							34, 83, 117, 112, 112, 111, 114, 116, 32, 104, 101, 97, 108, 116,
+							104, 34
+						],
+						"group": "Content"
+					}
+				],
+				"tags": ["support", "metrics", "SLA"],
+				"version": [1, 1, 0],
+				"createdAt": "2026-07-20T09:00:00Z",
+				"updatedAt": "2026-07-28T14:00:00Z",
+				"actions": [
+					{
+						"id": "open-priority-queue",
+						"label": "Open priority queue",
+						"description": "Navigate to the queue that needs attention.",
+						"contextSchema": []
+					}
+				]
+			}
+		],
+		"get_widget": {
+			"id": "support-health-widget",
+			"name": "Support Health Card",
+			"description": "A reusable SLA and response-time summary for support pages.",
+			"rootComponentId": "root",
+			"components": [
+				{
+					"id": "root",
+					"style": {
+						"className": "w-full max-w-lg mx-auto border border-border bg-card shadow-sm"
+					},
+					"component": {
+						"type": "card",
+						"title": {
+							"literalString": "Support health"
+						},
+						"description": {
+							"literalString": "Live performance across customer channels"
+						},
+						"variant": {
+							"literalString": "bordered"
+						},
+						"children": {
+							"explicitList": [
+								"health-summary",
+								"health-progress",
+								"health-footer"
+							]
+						}
+					}
+				},
+				{
+					"id": "health-summary",
+					"style": {
+						"className": "w-full"
+					},
+					"component": {
+						"type": "row",
+						"align": {
+							"literalString": "center"
+						},
+						"justify": {
+							"literalString": "between"
+						},
+						"children": {
+							"explicitList": ["health-score", "health-status"]
+						}
+					}
+				},
+				{
+					"id": "health-score",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "94%"
+						},
+						"variant": {
+							"literalString": "heading"
+						},
+						"size": {
+							"literalString": "3xl"
+						},
+						"weight": {
+							"literalString": "bold"
+						}
+					}
+				},
+				{
+					"id": "health-status",
+					"component": {
+						"type": "badge",
+						"content": {
+							"literalString": "On target"
+						},
+						"variant": {
+							"literalString": "secondary"
+						}
+					}
+				},
+				{
+					"id": "health-progress",
+					"component": {
+						"type": "progress",
+						"value": {
+							"literalNumber": 94
+						},
+						"max": {
+							"literalNumber": 100
+						},
+						"showLabel": {
+							"literalBool": false
+						},
+						"variant": {
+							"literalString": "success"
+						}
+					}
+				},
+				{
+					"id": "health-footer",
+					"component": {
+						"type": "text",
+						"content": {
+							"literalString": "Median first response · 4m 18s"
+						},
+						"size": {
+							"literalString": "sm"
+						},
+						"color": {
+							"literalString": "muted"
+						}
+					}
+				}
+			],
+			"dataModel": [
+				{
+					"path": "$.health.score",
+					"value": 94
+				},
+				{
+					"path": "$.health.responseTime",
+					"value": "4m 18s"
+				}
+			],
+			"customizationOptions": [],
+			"exposedProps": [
+				{
+					"id": "title",
+					"label": "Card title",
+					"description": "Heading shown above the support metrics.",
+					"targetComponentId": "root",
+					"propertyPath": "component.title",
+					"propType": "String",
+					"defaultValue": [
+						34, 83, 117, 112, 112, 111, 114, 116, 32, 104, 101, 97, 108, 116,
+						104, 34
+					],
+					"group": "Content"
+				}
+			],
+			"tags": ["support", "metrics", "SLA"],
+			"version": [1, 1, 0],
+			"createdAt": "2026-07-20T09:00:00Z",
+			"updatedAt": "2026-07-28T14:00:00Z",
+			"actions": [
+				{
+					"id": "open-priority-queue",
+					"label": "Open priority queue",
+					"description": "Navigate to the queue that needs attention.",
+					"contextSchema": []
+				}
+			]
+		},
+		"get_widget_meta": {
+			"name": "Support Health Card",
+			"description": "A reusable SLA and response-time summary for support pages.",
+			"long_description": "Use this widget on dashboards that need a compact view of SLA attainment and response speed.",
+			"tags": ["support", "metrics", "SLA"],
+			"icon": null,
+			"thumbnail": null,
+			"preview_media": [],
+			"age_rating": null,
+			"website": null,
+			"support_url": null,
+			"docs_url": null,
+			"release_notes": null,
+			"organization_specific_values": [],
+			"use_case": "Customer support",
+			"created_at": {
+				"secs_since_epoch": 1785283200,
+				"nanos_since_epoch": 0
+			},
+			"updated_at": {
+				"secs_since_epoch": 1785283200,
+				"nanos_since_epoch": 0
+			}
+		},
+		"get_widget_versions": [[1, 0, 0], [1, 1, 0]],
+		"get_open_widgets": [],
 		"storage_list": [
 			{
 				"location": "customer-briefs",
@@ -3230,7 +4155,19 @@
 				"version": "1"
 			}
 		],
-		"db_table_names": ["customers", "support_tickets", "workflow_runs"],
+		"db_table_names": [
+			"accounts",
+			"customer_accounts",
+			"customers",
+			"knowledge_articles",
+			"products",
+			"support_agents",
+			"support_tickets",
+			"ticket_articles",
+			"ticket_assignments",
+			"ticket_products",
+			"workflow_runs"
+		],
 		"db_table_names_user": [],
 		"db_schema": {
 			"metadata": {
@@ -3313,9 +4250,2451 @@
 			}
 		],
 		"db_indices": [],
-		"graph_list_overlays": [],
-		"graph_list_remote_ontology_imports": [],
-		"graph_list_imports": [],
+		"graph_list_overlays": [
+			{
+				"id": "customer-operations",
+				"name": "Customer Operations",
+				"description": "A live semantic model connecting customers, accounts, support work, products, and knowledge.",
+				"nodes": [
+					{
+						"id": "customer",
+						"api_name": "customer",
+						"label": "Customer",
+						"table": "customers",
+						"id_column": "customer_id",
+						"display_column": "name",
+						"property_columns": [
+							{
+								"name": "name",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "plan",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "status",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "region",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "open_tickets",
+								"data_type": "Int64",
+								"nullable": false
+							}
+						],
+						"style": {
+							"color": "#14b8a6",
+							"icon": "user",
+							"size": {
+								"mode": "fixed",
+								"value": 16
+							},
+							"shape": "circle"
+						}
+					},
+					{
+						"id": "account",
+						"api_name": "account",
+						"label": "Account",
+						"table": "accounts",
+						"id_column": "account_id",
+						"display_column": "name",
+						"property_columns": [
+							{
+								"name": "name",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "segment",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "arr",
+								"data_type": "Float64",
+								"nullable": false
+							},
+							{
+								"name": "health",
+								"data_type": "Utf8",
+								"nullable": false
+							}
+						],
+						"style": {
+							"color": "#6366f1",
+							"icon": "briefcase",
+							"size": {
+								"mode": "fixed",
+								"value": 17
+							},
+							"shape": "circle"
+						}
+					},
+					{
+						"id": "ticket",
+						"api_name": "support_ticket",
+						"label": "Support Ticket",
+						"table": "support_tickets",
+						"id_column": "ticket_id",
+						"display_column": "subject",
+						"property_columns": [
+							{
+								"name": "subject",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "priority",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "status",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "channel",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "sla_minutes",
+								"data_type": "Int64",
+								"nullable": false
+							}
+						],
+						"style": {
+							"color": "#f59e0b",
+							"icon": "alertTriangle",
+							"size": {
+								"mode": "by-degree",
+								"min": 13,
+								"max": 24
+							},
+							"shape": "circle"
+						}
+					},
+					{
+						"id": "agent",
+						"api_name": "support_agent",
+						"label": "Support Agent",
+						"table": "support_agents",
+						"id_column": "agent_id",
+						"display_column": "name",
+						"property_columns": [
+							{
+								"name": "name",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "team",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "timezone",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "capacity",
+								"data_type": "Int64",
+								"nullable": false
+							}
+						],
+						"style": {
+							"color": "#ec4899",
+							"icon": "userCog",
+							"size": {
+								"mode": "fixed",
+								"value": 15
+							},
+							"shape": "circle"
+						}
+					},
+					{
+						"id": "product",
+						"api_name": "product",
+						"label": "Product",
+						"table": "products",
+						"id_column": "product_id",
+						"display_column": "name",
+						"property_columns": [
+							{
+								"name": "name",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "area",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "owner",
+								"data_type": "Utf8",
+								"nullable": false
+							}
+						],
+						"style": {
+							"color": "#22c55e",
+							"icon": "package",
+							"size": {
+								"mode": "fixed",
+								"value": 16
+							},
+							"shape": "circle"
+						}
+					},
+					{
+						"id": "article",
+						"api_name": "knowledge_article",
+						"label": "Knowledge Article",
+						"table": "knowledge_articles",
+						"id_column": "article_id",
+						"display_column": "title",
+						"property_columns": [
+							{
+								"name": "title",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "collection",
+								"data_type": "Utf8",
+								"nullable": false
+							},
+							{
+								"name": "helpfulness",
+								"data_type": "Float64",
+								"nullable": false
+							}
+						],
+						"style": {
+							"color": "#8b5cf6",
+							"icon": "fileText",
+							"size": {
+								"mode": "fixed",
+								"value": 14
+							},
+							"shape": "circle"
+						}
+					}
+				],
+				"edges": [
+					{
+						"id": "customer-account",
+						"api_name": "belongs_to_account",
+						"label": "belongs to",
+						"table": "customer_accounts",
+						"src_column": "customer_id",
+						"dst_column": "account_id",
+						"src_label": "Customer",
+						"dst_label": "Account",
+						"property_columns": [],
+						"style": {
+							"color": "#818cf8",
+							"icon": "link",
+							"size": {
+								"mode": "fixed",
+								"value": 10
+							},
+							"shape": "circle",
+							"width": 1.8
+						}
+					},
+					{
+						"id": "customer-ticket",
+						"api_name": "opened_ticket",
+						"label": "opened",
+						"table": "support_tickets",
+						"src_column": "customer_id",
+						"dst_column": "ticket_id",
+						"src_label": "Customer",
+						"dst_label": "Support Ticket",
+						"containment": true,
+						"property_columns": [
+							{
+								"name": "created_at",
+								"data_type": "Timestamp",
+								"nullable": false
+							}
+						],
+						"style": {
+							"color": "#2dd4bf",
+							"icon": "link",
+							"size": {
+								"mode": "fixed",
+								"value": 10
+							},
+							"shape": "circle",
+							"width": 2
+						}
+					},
+					{
+						"id": "ticket-agent",
+						"api_name": "assigned_to_agent",
+						"label": "assigned to",
+						"table": "ticket_assignments",
+						"src_column": "ticket_id",
+						"dst_column": "agent_id",
+						"src_label": "Support Ticket",
+						"dst_label": "Support Agent",
+						"property_columns": [
+							{
+								"name": "assigned_at",
+								"data_type": "Timestamp",
+								"nullable": false
+							}
+						],
+						"style": {
+							"color": "#f472b6",
+							"icon": "link",
+							"size": {
+								"mode": "fixed",
+								"value": 10
+							},
+							"shape": "circle",
+							"width": 1.8
+						}
+					},
+					{
+						"id": "ticket-product",
+						"api_name": "concerns_product",
+						"label": "concerns",
+						"table": "ticket_products",
+						"src_column": "ticket_id",
+						"dst_column": "product_id",
+						"src_label": "Support Ticket",
+						"dst_label": "Product",
+						"property_columns": [],
+						"style": {
+							"color": "#4ade80",
+							"icon": "link",
+							"size": {
+								"mode": "fixed",
+								"value": 10
+							},
+							"shape": "circle",
+							"width": 1.6
+						}
+					},
+					{
+						"id": "ticket-article",
+						"api_name": "suggests_article",
+						"label": "suggests",
+						"table": "ticket_articles",
+						"src_column": "ticket_id",
+						"dst_column": "article_id",
+						"src_label": "Support Ticket",
+						"dst_label": "Knowledge Article",
+						"property_columns": [
+							{
+								"name": "confidence",
+								"data_type": "Float64",
+								"nullable": false
+							}
+						],
+						"style": {
+							"color": "#a78bfa",
+							"icon": "link",
+							"size": {
+								"mode": "fixed",
+								"value": 10
+							},
+							"shape": "circle",
+							"width": 1.5
+						}
+					},
+					{
+						"id": "account-product",
+						"api_name": "uses_product",
+						"label": "uses",
+						"table": "account_products",
+						"src_column": "account_id",
+						"dst_column": "product_id",
+						"src_label": "Account",
+						"dst_label": "Product",
+						"property_columns": [
+							{
+								"name": "adoption",
+								"data_type": "Utf8",
+								"nullable": false
+							}
+						],
+						"style": {
+							"color": "#60a5fa",
+							"icon": "link",
+							"size": {
+								"mode": "fixed",
+								"value": 10
+							},
+							"shape": "circle",
+							"width": 1.4
+						}
+					}
+				],
+				"object_views": [
+					{
+						"object_type": "customer",
+						"title_property": "name",
+						"prominent_properties": ["plan", "status", "region", "open_tickets"]
+					},
+					{
+						"object_type": "ticket",
+						"title_property": "subject",
+						"prominent_properties": [
+							"priority",
+							"status",
+							"channel",
+							"sla_minutes"
+						]
+					}
+				],
+				"actions": [
+					{
+						"id": "triage-ticket",
+						"name": "Triage support ticket",
+						"description": "Classify urgency, find relevant context, and prepare the next best response.",
+						"object_type": "ticket",
+						"board_id": "docs-board",
+						"board_version": [1, 2, 0],
+						"start_node_id": "triage-request-node",
+						"event_id": "triage-selected-request",
+						"enabled": true,
+						"allow_bulk": true,
+						"exposed": true,
+						"parameter_schema": {
+							"type": "object",
+							"properties": {
+								"response_tone": {
+									"type": "string",
+									"title": "Response tone",
+									"default": "Friendly"
+								}
+							}
+						}
+					},
+					{
+						"id": "refresh-account-brief",
+						"name": "Refresh account brief",
+						"description": "Summarize account health, recent requests, and product adoption.",
+						"object_type": "account",
+						"board_id": "docs-board",
+						"board_version": [1, 2, 0],
+						"start_node_id": "triage-request-node",
+						"enabled": true,
+						"allow_bulk": false,
+						"exposed": false
+					}
+				],
+				"exposed": true,
+				"bindings_enabled": true,
+				"default_limit": 200,
+				"created_at": "2026-07-20T09:00:00Z",
+				"updated_at": "2026-07-28T14:00:00Z"
+			}
+		],
+		"graph_get_overlay": {
+			"id": "customer-operations",
+			"name": "Customer Operations",
+			"description": "A live semantic model connecting customers, accounts, support work, products, and knowledge.",
+			"nodes": [
+				{
+					"id": "customer",
+					"api_name": "customer",
+					"label": "Customer",
+					"table": "customers",
+					"id_column": "customer_id",
+					"display_column": "name",
+					"property_columns": [
+						{
+							"name": "name",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "plan",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "status",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "region",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "open_tickets",
+							"data_type": "Int64",
+							"nullable": false
+						}
+					],
+					"style": {
+						"color": "#14b8a6",
+						"icon": "user",
+						"size": {
+							"mode": "fixed",
+							"value": 16
+						},
+						"shape": "circle"
+					}
+				},
+				{
+					"id": "account",
+					"api_name": "account",
+					"label": "Account",
+					"table": "accounts",
+					"id_column": "account_id",
+					"display_column": "name",
+					"property_columns": [
+						{
+							"name": "name",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "segment",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "arr",
+							"data_type": "Float64",
+							"nullable": false
+						},
+						{
+							"name": "health",
+							"data_type": "Utf8",
+							"nullable": false
+						}
+					],
+					"style": {
+						"color": "#6366f1",
+						"icon": "briefcase",
+						"size": {
+							"mode": "fixed",
+							"value": 17
+						},
+						"shape": "circle"
+					}
+				},
+				{
+					"id": "ticket",
+					"api_name": "support_ticket",
+					"label": "Support Ticket",
+					"table": "support_tickets",
+					"id_column": "ticket_id",
+					"display_column": "subject",
+					"property_columns": [
+						{
+							"name": "subject",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "priority",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "status",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "channel",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "sla_minutes",
+							"data_type": "Int64",
+							"nullable": false
+						}
+					],
+					"style": {
+						"color": "#f59e0b",
+						"icon": "alertTriangle",
+						"size": {
+							"mode": "by-degree",
+							"min": 13,
+							"max": 24
+						},
+						"shape": "circle"
+					}
+				},
+				{
+					"id": "agent",
+					"api_name": "support_agent",
+					"label": "Support Agent",
+					"table": "support_agents",
+					"id_column": "agent_id",
+					"display_column": "name",
+					"property_columns": [
+						{
+							"name": "name",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "team",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "timezone",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "capacity",
+							"data_type": "Int64",
+							"nullable": false
+						}
+					],
+					"style": {
+						"color": "#ec4899",
+						"icon": "userCog",
+						"size": {
+							"mode": "fixed",
+							"value": 15
+						},
+						"shape": "circle"
+					}
+				},
+				{
+					"id": "product",
+					"api_name": "product",
+					"label": "Product",
+					"table": "products",
+					"id_column": "product_id",
+					"display_column": "name",
+					"property_columns": [
+						{
+							"name": "name",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "area",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "owner",
+							"data_type": "Utf8",
+							"nullable": false
+						}
+					],
+					"style": {
+						"color": "#22c55e",
+						"icon": "package",
+						"size": {
+							"mode": "fixed",
+							"value": 16
+						},
+						"shape": "circle"
+					}
+				},
+				{
+					"id": "article",
+					"api_name": "knowledge_article",
+					"label": "Knowledge Article",
+					"table": "knowledge_articles",
+					"id_column": "article_id",
+					"display_column": "title",
+					"property_columns": [
+						{
+							"name": "title",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "collection",
+							"data_type": "Utf8",
+							"nullable": false
+						},
+						{
+							"name": "helpfulness",
+							"data_type": "Float64",
+							"nullable": false
+						}
+					],
+					"style": {
+						"color": "#8b5cf6",
+						"icon": "fileText",
+						"size": {
+							"mode": "fixed",
+							"value": 14
+						},
+						"shape": "circle"
+					}
+				}
+			],
+			"edges": [
+				{
+					"id": "customer-account",
+					"api_name": "belongs_to_account",
+					"label": "belongs to",
+					"table": "customer_accounts",
+					"src_column": "customer_id",
+					"dst_column": "account_id",
+					"src_label": "Customer",
+					"dst_label": "Account",
+					"property_columns": [],
+					"style": {
+						"color": "#818cf8",
+						"icon": "link",
+						"size": {
+							"mode": "fixed",
+							"value": 10
+						},
+						"shape": "circle",
+						"width": 1.8
+					}
+				},
+				{
+					"id": "customer-ticket",
+					"api_name": "opened_ticket",
+					"label": "opened",
+					"table": "support_tickets",
+					"src_column": "customer_id",
+					"dst_column": "ticket_id",
+					"src_label": "Customer",
+					"dst_label": "Support Ticket",
+					"containment": true,
+					"property_columns": [
+						{
+							"name": "created_at",
+							"data_type": "Timestamp",
+							"nullable": false
+						}
+					],
+					"style": {
+						"color": "#2dd4bf",
+						"icon": "link",
+						"size": {
+							"mode": "fixed",
+							"value": 10
+						},
+						"shape": "circle",
+						"width": 2
+					}
+				},
+				{
+					"id": "ticket-agent",
+					"api_name": "assigned_to_agent",
+					"label": "assigned to",
+					"table": "ticket_assignments",
+					"src_column": "ticket_id",
+					"dst_column": "agent_id",
+					"src_label": "Support Ticket",
+					"dst_label": "Support Agent",
+					"property_columns": [
+						{
+							"name": "assigned_at",
+							"data_type": "Timestamp",
+							"nullable": false
+						}
+					],
+					"style": {
+						"color": "#f472b6",
+						"icon": "link",
+						"size": {
+							"mode": "fixed",
+							"value": 10
+						},
+						"shape": "circle",
+						"width": 1.8
+					}
+				},
+				{
+					"id": "ticket-product",
+					"api_name": "concerns_product",
+					"label": "concerns",
+					"table": "ticket_products",
+					"src_column": "ticket_id",
+					"dst_column": "product_id",
+					"src_label": "Support Ticket",
+					"dst_label": "Product",
+					"property_columns": [],
+					"style": {
+						"color": "#4ade80",
+						"icon": "link",
+						"size": {
+							"mode": "fixed",
+							"value": 10
+						},
+						"shape": "circle",
+						"width": 1.6
+					}
+				},
+				{
+					"id": "ticket-article",
+					"api_name": "suggests_article",
+					"label": "suggests",
+					"table": "ticket_articles",
+					"src_column": "ticket_id",
+					"dst_column": "article_id",
+					"src_label": "Support Ticket",
+					"dst_label": "Knowledge Article",
+					"property_columns": [
+						{
+							"name": "confidence",
+							"data_type": "Float64",
+							"nullable": false
+						}
+					],
+					"style": {
+						"color": "#a78bfa",
+						"icon": "link",
+						"size": {
+							"mode": "fixed",
+							"value": 10
+						},
+						"shape": "circle",
+						"width": 1.5
+					}
+				},
+				{
+					"id": "account-product",
+					"api_name": "uses_product",
+					"label": "uses",
+					"table": "account_products",
+					"src_column": "account_id",
+					"dst_column": "product_id",
+					"src_label": "Account",
+					"dst_label": "Product",
+					"property_columns": [
+						{
+							"name": "adoption",
+							"data_type": "Utf8",
+							"nullable": false
+						}
+					],
+					"style": {
+						"color": "#60a5fa",
+						"icon": "link",
+						"size": {
+							"mode": "fixed",
+							"value": 10
+						},
+						"shape": "circle",
+						"width": 1.4
+					}
+				}
+			],
+			"object_views": [
+				{
+					"object_type": "customer",
+					"title_property": "name",
+					"prominent_properties": ["plan", "status", "region", "open_tickets"]
+				},
+				{
+					"object_type": "ticket",
+					"title_property": "subject",
+					"prominent_properties": [
+						"priority",
+						"status",
+						"channel",
+						"sla_minutes"
+					]
+				}
+			],
+			"actions": [
+				{
+					"id": "triage-ticket",
+					"name": "Triage support ticket",
+					"description": "Classify urgency, find relevant context, and prepare the next best response.",
+					"object_type": "ticket",
+					"board_id": "docs-board",
+					"board_version": [1, 2, 0],
+					"start_node_id": "triage-request-node",
+					"event_id": "triage-selected-request",
+					"enabled": true,
+					"allow_bulk": true,
+					"exposed": true,
+					"parameter_schema": {
+						"type": "object",
+						"properties": {
+							"response_tone": {
+								"type": "string",
+								"title": "Response tone",
+								"default": "Friendly"
+							}
+						}
+					}
+				},
+				{
+					"id": "refresh-account-brief",
+					"name": "Refresh account brief",
+					"description": "Summarize account health, recent requests, and product adoption.",
+					"object_type": "account",
+					"board_id": "docs-board",
+					"board_version": [1, 2, 0],
+					"start_node_id": "triage-request-node",
+					"enabled": true,
+					"allow_bulk": false,
+					"exposed": false
+				}
+			],
+			"exposed": true,
+			"bindings_enabled": true,
+			"default_limit": 200,
+			"created_at": "2026-07-20T09:00:00Z",
+			"updated_at": "2026-07-28T14:00:00Z"
+		},
+		"graph_subgraph": {
+			"nodes": [
+				{
+					"id": "Customer:CUS-1042",
+					"label": "Customer",
+					"caption": "Avery Morgan",
+					"props": {
+						"customer_id": "CUS-1042",
+						"name": "Avery Morgan",
+						"plan": "Enterprise",
+						"status": "Active",
+						"region": "North America",
+						"open_tickets": 1
+					}
+				},
+				{
+					"id": "Customer:CUS-1038",
+					"label": "Customer",
+					"caption": "Jordan Lee",
+					"props": {
+						"customer_id": "CUS-1038",
+						"name": "Jordan Lee",
+						"plan": "Team",
+						"status": "Active",
+						"region": "Europe",
+						"open_tickets": 0
+					}
+				},
+				{
+					"id": "Customer:CUS-1027",
+					"label": "Customer",
+					"caption": "Samira Patel",
+					"props": {
+						"customer_id": "CUS-1027",
+						"name": "Samira Patel",
+						"plan": "Enterprise",
+						"status": "Onboarding",
+						"region": "Asia Pacific",
+						"open_tickets": 2
+					}
+				},
+				{
+					"id": "Customer:CUS-1004",
+					"label": "Customer",
+					"caption": "Mina Chen",
+					"props": {
+						"customer_id": "CUS-1004",
+						"name": "Mina Chen",
+						"plan": "Team",
+						"status": "Active",
+						"region": "Europe",
+						"open_tickets": 0
+					}
+				},
+				{
+					"id": "Account:ACC-88",
+					"label": "Account",
+					"caption": "Northstar Labs",
+					"props": {
+						"account_id": "ACC-88",
+						"name": "Northstar Labs",
+						"segment": "Enterprise",
+						"arr": 248000,
+						"health": "Healthy"
+					}
+				},
+				{
+					"id": "Account:ACC-74",
+					"label": "Account",
+					"caption": "Atlas Logistics",
+					"props": {
+						"account_id": "ACC-74",
+						"name": "Atlas Logistics",
+						"segment": "Enterprise",
+						"arr": 184000,
+						"health": "At risk"
+					}
+				},
+				{
+					"id": "Account:ACC-61",
+					"label": "Account",
+					"caption": "Meridian Works",
+					"props": {
+						"account_id": "ACC-61",
+						"name": "Meridian Works",
+						"segment": "Growth",
+						"arr": 92000,
+						"health": "Healthy"
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2841",
+					"label": "Support Ticket",
+					"caption": "Billing access issue",
+					"props": {
+						"ticket_id": "TKT-2841",
+						"subject": "Billing access issue",
+						"priority": "Urgent",
+						"status": "In progress",
+						"channel": "Chat",
+						"sla_minutes": 12
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2836",
+					"label": "Support Ticket",
+					"caption": "SSO configuration",
+					"props": {
+						"ticket_id": "TKT-2836",
+						"subject": "SSO configuration",
+						"priority": "High",
+						"status": "Open",
+						"channel": "Email",
+						"sla_minutes": 48
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2829",
+					"label": "Support Ticket",
+					"caption": "Onboarding blocker",
+					"props": {
+						"ticket_id": "TKT-2829",
+						"subject": "Onboarding blocker",
+						"priority": "High",
+						"status": "In progress",
+						"channel": "Chat",
+						"sla_minutes": 35
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2822",
+					"label": "Support Ticket",
+					"caption": "Usage report mismatch",
+					"props": {
+						"ticket_id": "TKT-2822",
+						"subject": "Usage report mismatch",
+						"priority": "Normal",
+						"status": "Waiting",
+						"channel": "Portal",
+						"sla_minutes": 120
+					}
+				},
+				{
+					"id": "Support Agent:AGT-12",
+					"label": "Support Agent",
+					"caption": "Nina Torres",
+					"props": {
+						"agent_id": "AGT-12",
+						"name": "Nina Torres",
+						"team": "Enterprise Support",
+						"timezone": "UTC-5",
+						"capacity": 72
+					}
+				},
+				{
+					"id": "Support Agent:AGT-18",
+					"label": "Support Agent",
+					"caption": "Omar Hassan",
+					"props": {
+						"agent_id": "AGT-18",
+						"name": "Omar Hassan",
+						"team": "Technical Support",
+						"timezone": "UTC+1",
+						"capacity": 58
+					}
+				},
+				{
+					"id": "Support Agent:AGT-24",
+					"label": "Support Agent",
+					"caption": "Keiko Sato",
+					"props": {
+						"agent_id": "AGT-24",
+						"name": "Keiko Sato",
+						"team": "Onboarding",
+						"timezone": "UTC+9",
+						"capacity": 64
+					}
+				},
+				{
+					"id": "Support Agent:AGT-31",
+					"label": "Support Agent",
+					"caption": "Lucas Meyer",
+					"props": {
+						"agent_id": "AGT-31",
+						"name": "Lucas Meyer",
+						"team": "Growth Support",
+						"timezone": "UTC+1",
+						"capacity": 81
+					}
+				},
+				{
+					"id": "Product:PRD-CORE",
+					"label": "Product",
+					"caption": "Flow Builder",
+					"props": {
+						"product_id": "PRD-CORE",
+						"name": "Flow Builder",
+						"area": "Automation",
+						"owner": "Core Experience"
+					}
+				},
+				{
+					"id": "Product:PRD-DATA",
+					"label": "Product",
+					"caption": "Data Studio",
+					"props": {
+						"product_id": "PRD-DATA",
+						"name": "Data Studio",
+						"area": "Data",
+						"owner": "Knowledge Systems"
+					}
+				},
+				{
+					"id": "Product:PRD-IDENTITY",
+					"label": "Product",
+					"caption": "Identity & Access",
+					"props": {
+						"product_id": "PRD-IDENTITY",
+						"name": "Identity & Access",
+						"area": "Platform",
+						"owner": "Trust"
+					}
+				},
+				{
+					"id": "Knowledge Article:KB-204",
+					"label": "Knowledge Article",
+					"caption": "Understand usage and billing",
+					"props": {
+						"article_id": "KB-204",
+						"title": "Understand usage and billing",
+						"collection": "Billing",
+						"helpfulness": 0.91
+					}
+				}
+			],
+			"edges": [
+				{
+					"id": "e-customer-account-1",
+					"source": "Customer:CUS-1042",
+					"target": "Account:ACC-88",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-customer-account-2",
+					"source": "Customer:CUS-1038",
+					"target": "Account:ACC-61",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-customer-account-3",
+					"source": "Customer:CUS-1027",
+					"target": "Account:ACC-74",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-customer-account-5",
+					"source": "Customer:CUS-1004",
+					"target": "Account:ACC-61",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-opened-1",
+					"source": "Customer:CUS-1042",
+					"target": "Support Ticket:TKT-2841",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-opened-2",
+					"source": "Customer:CUS-1042",
+					"target": "Support Ticket:TKT-2836",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-opened-3",
+					"source": "Customer:CUS-1027",
+					"target": "Support Ticket:TKT-2829",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-opened-4",
+					"source": "Customer:CUS-1038",
+					"target": "Support Ticket:TKT-2822",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-1",
+					"source": "Support Ticket:TKT-2841",
+					"target": "Support Agent:AGT-12",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-2",
+					"source": "Support Ticket:TKT-2836",
+					"target": "Support Agent:AGT-18",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-3",
+					"source": "Support Ticket:TKT-2829",
+					"target": "Support Agent:AGT-24",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-4",
+					"source": "Support Ticket:TKT-2822",
+					"target": "Support Agent:AGT-31",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-product-1",
+					"source": "Support Ticket:TKT-2841",
+					"target": "Product:PRD-DATA",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-product-2",
+					"source": "Support Ticket:TKT-2836",
+					"target": "Product:PRD-IDENTITY",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-product-3",
+					"source": "Support Ticket:TKT-2829",
+					"target": "Product:PRD-CORE",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-product-4",
+					"source": "Support Ticket:TKT-2822",
+					"target": "Product:PRD-DATA",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-article-1",
+					"source": "Support Ticket:TKT-2841",
+					"target": "Knowledge Article:KB-204",
+					"label": "suggests",
+					"props": {
+						"confidence": 0.93
+					}
+				},
+				{
+					"id": "e-article-3",
+					"source": "Support Ticket:TKT-2822",
+					"target": "Knowledge Article:KB-204",
+					"label": "suggests",
+					"props": {
+						"confidence": 0.87
+					}
+				},
+				{
+					"id": "e-account-product-1",
+					"source": "Account:ACC-88",
+					"target": "Product:PRD-DATA",
+					"label": "uses",
+					"props": {}
+				},
+				{
+					"id": "e-account-product-2",
+					"source": "Account:ACC-74",
+					"target": "Product:PRD-CORE",
+					"label": "uses",
+					"props": {}
+				},
+				{
+					"id": "e-account-product-3",
+					"source": "Account:ACC-61",
+					"target": "Product:PRD-DATA",
+					"label": "uses",
+					"props": {}
+				}
+			],
+			"truncated": false
+		},
+		"graph_sample": [
+			{
+				"customer_id": "CUS-1042",
+				"name": "Avery Morgan",
+				"plan": "Enterprise",
+				"status": "Active",
+				"region": "North America",
+				"open_tickets": 1
+			},
+			{
+				"customer_id": "CUS-1038",
+				"name": "Jordan Lee",
+				"plan": "Team",
+				"status": "Active",
+				"region": "Europe",
+				"open_tickets": 0
+			},
+			{
+				"customer_id": "CUS-1027",
+				"name": "Samira Patel",
+				"plan": "Enterprise",
+				"status": "Onboarding",
+				"region": "Asia Pacific",
+				"open_tickets": 2
+			},
+			{
+				"customer_id": "CUS-1019",
+				"name": "Noah Williams",
+				"plan": "Starter",
+				"status": "Trial",
+				"region": "North America",
+				"open_tickets": 1
+			},
+			{
+				"customer_id": "CUS-1004",
+				"name": "Mina Chen",
+				"plan": "Team",
+				"status": "Active",
+				"region": "Europe",
+				"open_tickets": 0
+			}
+		],
+		"graph_search_nodes": [],
+		"graph_neighbors": {
+			"nodes": [
+				{
+					"id": "Customer:CUS-1042",
+					"label": "Customer",
+					"caption": "Avery Morgan",
+					"props": {
+						"customer_id": "CUS-1042",
+						"name": "Avery Morgan",
+						"plan": "Enterprise",
+						"status": "Active",
+						"region": "North America",
+						"open_tickets": 1
+					}
+				},
+				{
+					"id": "Customer:CUS-1038",
+					"label": "Customer",
+					"caption": "Jordan Lee",
+					"props": {
+						"customer_id": "CUS-1038",
+						"name": "Jordan Lee",
+						"plan": "Team",
+						"status": "Active",
+						"region": "Europe",
+						"open_tickets": 0
+					}
+				},
+				{
+					"id": "Customer:CUS-1027",
+					"label": "Customer",
+					"caption": "Samira Patel",
+					"props": {
+						"customer_id": "CUS-1027",
+						"name": "Samira Patel",
+						"plan": "Enterprise",
+						"status": "Onboarding",
+						"region": "Asia Pacific",
+						"open_tickets": 2
+					}
+				},
+				{
+					"id": "Customer:CUS-1004",
+					"label": "Customer",
+					"caption": "Mina Chen",
+					"props": {
+						"customer_id": "CUS-1004",
+						"name": "Mina Chen",
+						"plan": "Team",
+						"status": "Active",
+						"region": "Europe",
+						"open_tickets": 0
+					}
+				},
+				{
+					"id": "Account:ACC-88",
+					"label": "Account",
+					"caption": "Northstar Labs",
+					"props": {
+						"account_id": "ACC-88",
+						"name": "Northstar Labs",
+						"segment": "Enterprise",
+						"arr": 248000,
+						"health": "Healthy"
+					}
+				},
+				{
+					"id": "Account:ACC-74",
+					"label": "Account",
+					"caption": "Atlas Logistics",
+					"props": {
+						"account_id": "ACC-74",
+						"name": "Atlas Logistics",
+						"segment": "Enterprise",
+						"arr": 184000,
+						"health": "At risk"
+					}
+				},
+				{
+					"id": "Account:ACC-61",
+					"label": "Account",
+					"caption": "Meridian Works",
+					"props": {
+						"account_id": "ACC-61",
+						"name": "Meridian Works",
+						"segment": "Growth",
+						"arr": 92000,
+						"health": "Healthy"
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2841",
+					"label": "Support Ticket",
+					"caption": "Billing access issue",
+					"props": {
+						"ticket_id": "TKT-2841",
+						"subject": "Billing access issue",
+						"priority": "Urgent",
+						"status": "In progress",
+						"channel": "Chat",
+						"sla_minutes": 12
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2836",
+					"label": "Support Ticket",
+					"caption": "SSO configuration",
+					"props": {
+						"ticket_id": "TKT-2836",
+						"subject": "SSO configuration",
+						"priority": "High",
+						"status": "Open",
+						"channel": "Email",
+						"sla_minutes": 48
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2829",
+					"label": "Support Ticket",
+					"caption": "Onboarding blocker",
+					"props": {
+						"ticket_id": "TKT-2829",
+						"subject": "Onboarding blocker",
+						"priority": "High",
+						"status": "In progress",
+						"channel": "Chat",
+						"sla_minutes": 35
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2822",
+					"label": "Support Ticket",
+					"caption": "Usage report mismatch",
+					"props": {
+						"ticket_id": "TKT-2822",
+						"subject": "Usage report mismatch",
+						"priority": "Normal",
+						"status": "Waiting",
+						"channel": "Portal",
+						"sla_minutes": 120
+					}
+				},
+				{
+					"id": "Support Agent:AGT-12",
+					"label": "Support Agent",
+					"caption": "Nina Torres",
+					"props": {
+						"agent_id": "AGT-12",
+						"name": "Nina Torres",
+						"team": "Enterprise Support",
+						"timezone": "UTC-5",
+						"capacity": 72
+					}
+				},
+				{
+					"id": "Support Agent:AGT-18",
+					"label": "Support Agent",
+					"caption": "Omar Hassan",
+					"props": {
+						"agent_id": "AGT-18",
+						"name": "Omar Hassan",
+						"team": "Technical Support",
+						"timezone": "UTC+1",
+						"capacity": 58
+					}
+				},
+				{
+					"id": "Support Agent:AGT-24",
+					"label": "Support Agent",
+					"caption": "Keiko Sato",
+					"props": {
+						"agent_id": "AGT-24",
+						"name": "Keiko Sato",
+						"team": "Onboarding",
+						"timezone": "UTC+9",
+						"capacity": 64
+					}
+				},
+				{
+					"id": "Support Agent:AGT-31",
+					"label": "Support Agent",
+					"caption": "Lucas Meyer",
+					"props": {
+						"agent_id": "AGT-31",
+						"name": "Lucas Meyer",
+						"team": "Growth Support",
+						"timezone": "UTC+1",
+						"capacity": 81
+					}
+				},
+				{
+					"id": "Product:PRD-CORE",
+					"label": "Product",
+					"caption": "Flow Builder",
+					"props": {
+						"product_id": "PRD-CORE",
+						"name": "Flow Builder",
+						"area": "Automation",
+						"owner": "Core Experience"
+					}
+				},
+				{
+					"id": "Product:PRD-DATA",
+					"label": "Product",
+					"caption": "Data Studio",
+					"props": {
+						"product_id": "PRD-DATA",
+						"name": "Data Studio",
+						"area": "Data",
+						"owner": "Knowledge Systems"
+					}
+				},
+				{
+					"id": "Product:PRD-IDENTITY",
+					"label": "Product",
+					"caption": "Identity & Access",
+					"props": {
+						"product_id": "PRD-IDENTITY",
+						"name": "Identity & Access",
+						"area": "Platform",
+						"owner": "Trust"
+					}
+				},
+				{
+					"id": "Knowledge Article:KB-204",
+					"label": "Knowledge Article",
+					"caption": "Understand usage and billing",
+					"props": {
+						"article_id": "KB-204",
+						"title": "Understand usage and billing",
+						"collection": "Billing",
+						"helpfulness": 0.91
+					}
+				}
+			],
+			"edges": [
+				{
+					"id": "e-customer-account-1",
+					"source": "Customer:CUS-1042",
+					"target": "Account:ACC-88",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-customer-account-2",
+					"source": "Customer:CUS-1038",
+					"target": "Account:ACC-61",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-customer-account-3",
+					"source": "Customer:CUS-1027",
+					"target": "Account:ACC-74",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-customer-account-5",
+					"source": "Customer:CUS-1004",
+					"target": "Account:ACC-61",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-opened-1",
+					"source": "Customer:CUS-1042",
+					"target": "Support Ticket:TKT-2841",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-opened-2",
+					"source": "Customer:CUS-1042",
+					"target": "Support Ticket:TKT-2836",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-opened-3",
+					"source": "Customer:CUS-1027",
+					"target": "Support Ticket:TKT-2829",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-opened-4",
+					"source": "Customer:CUS-1038",
+					"target": "Support Ticket:TKT-2822",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-1",
+					"source": "Support Ticket:TKT-2841",
+					"target": "Support Agent:AGT-12",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-2",
+					"source": "Support Ticket:TKT-2836",
+					"target": "Support Agent:AGT-18",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-3",
+					"source": "Support Ticket:TKT-2829",
+					"target": "Support Agent:AGT-24",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-4",
+					"source": "Support Ticket:TKT-2822",
+					"target": "Support Agent:AGT-31",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-product-1",
+					"source": "Support Ticket:TKT-2841",
+					"target": "Product:PRD-DATA",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-product-2",
+					"source": "Support Ticket:TKT-2836",
+					"target": "Product:PRD-IDENTITY",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-product-3",
+					"source": "Support Ticket:TKT-2829",
+					"target": "Product:PRD-CORE",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-product-4",
+					"source": "Support Ticket:TKT-2822",
+					"target": "Product:PRD-DATA",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-article-1",
+					"source": "Support Ticket:TKT-2841",
+					"target": "Knowledge Article:KB-204",
+					"label": "suggests",
+					"props": {
+						"confidence": 0.93
+					}
+				},
+				{
+					"id": "e-article-3",
+					"source": "Support Ticket:TKT-2822",
+					"target": "Knowledge Article:KB-204",
+					"label": "suggests",
+					"props": {
+						"confidence": 0.87
+					}
+				},
+				{
+					"id": "e-account-product-1",
+					"source": "Account:ACC-88",
+					"target": "Product:PRD-DATA",
+					"label": "uses",
+					"props": {}
+				},
+				{
+					"id": "e-account-product-2",
+					"source": "Account:ACC-74",
+					"target": "Product:PRD-CORE",
+					"label": "uses",
+					"props": {}
+				},
+				{
+					"id": "e-account-product-3",
+					"source": "Account:ACC-61",
+					"target": "Product:PRD-DATA",
+					"label": "uses",
+					"props": {}
+				}
+			],
+			"truncated": false
+		},
+		"graph_overlay_children": {
+			"nodes": [
+				{
+					"id": "Customer:CUS-1042",
+					"label": "Customer",
+					"caption": "Avery Morgan",
+					"props": {
+						"customer_id": "CUS-1042",
+						"name": "Avery Morgan",
+						"plan": "Enterprise",
+						"status": "Active",
+						"region": "North America",
+						"open_tickets": 1
+					}
+				},
+				{
+					"id": "Customer:CUS-1038",
+					"label": "Customer",
+					"caption": "Jordan Lee",
+					"props": {
+						"customer_id": "CUS-1038",
+						"name": "Jordan Lee",
+						"plan": "Team",
+						"status": "Active",
+						"region": "Europe",
+						"open_tickets": 0
+					}
+				},
+				{
+					"id": "Customer:CUS-1027",
+					"label": "Customer",
+					"caption": "Samira Patel",
+					"props": {
+						"customer_id": "CUS-1027",
+						"name": "Samira Patel",
+						"plan": "Enterprise",
+						"status": "Onboarding",
+						"region": "Asia Pacific",
+						"open_tickets": 2
+					}
+				},
+				{
+					"id": "Customer:CUS-1004",
+					"label": "Customer",
+					"caption": "Mina Chen",
+					"props": {
+						"customer_id": "CUS-1004",
+						"name": "Mina Chen",
+						"plan": "Team",
+						"status": "Active",
+						"region": "Europe",
+						"open_tickets": 0
+					}
+				},
+				{
+					"id": "Account:ACC-88",
+					"label": "Account",
+					"caption": "Northstar Labs",
+					"props": {
+						"account_id": "ACC-88",
+						"name": "Northstar Labs",
+						"segment": "Enterprise",
+						"arr": 248000,
+						"health": "Healthy"
+					}
+				},
+				{
+					"id": "Account:ACC-74",
+					"label": "Account",
+					"caption": "Atlas Logistics",
+					"props": {
+						"account_id": "ACC-74",
+						"name": "Atlas Logistics",
+						"segment": "Enterprise",
+						"arr": 184000,
+						"health": "At risk"
+					}
+				},
+				{
+					"id": "Account:ACC-61",
+					"label": "Account",
+					"caption": "Meridian Works",
+					"props": {
+						"account_id": "ACC-61",
+						"name": "Meridian Works",
+						"segment": "Growth",
+						"arr": 92000,
+						"health": "Healthy"
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2841",
+					"label": "Support Ticket",
+					"caption": "Billing access issue",
+					"props": {
+						"ticket_id": "TKT-2841",
+						"subject": "Billing access issue",
+						"priority": "Urgent",
+						"status": "In progress",
+						"channel": "Chat",
+						"sla_minutes": 12
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2836",
+					"label": "Support Ticket",
+					"caption": "SSO configuration",
+					"props": {
+						"ticket_id": "TKT-2836",
+						"subject": "SSO configuration",
+						"priority": "High",
+						"status": "Open",
+						"channel": "Email",
+						"sla_minutes": 48
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2829",
+					"label": "Support Ticket",
+					"caption": "Onboarding blocker",
+					"props": {
+						"ticket_id": "TKT-2829",
+						"subject": "Onboarding blocker",
+						"priority": "High",
+						"status": "In progress",
+						"channel": "Chat",
+						"sla_minutes": 35
+					}
+				},
+				{
+					"id": "Support Ticket:TKT-2822",
+					"label": "Support Ticket",
+					"caption": "Usage report mismatch",
+					"props": {
+						"ticket_id": "TKT-2822",
+						"subject": "Usage report mismatch",
+						"priority": "Normal",
+						"status": "Waiting",
+						"channel": "Portal",
+						"sla_minutes": 120
+					}
+				},
+				{
+					"id": "Support Agent:AGT-12",
+					"label": "Support Agent",
+					"caption": "Nina Torres",
+					"props": {
+						"agent_id": "AGT-12",
+						"name": "Nina Torres",
+						"team": "Enterprise Support",
+						"timezone": "UTC-5",
+						"capacity": 72
+					}
+				},
+				{
+					"id": "Support Agent:AGT-18",
+					"label": "Support Agent",
+					"caption": "Omar Hassan",
+					"props": {
+						"agent_id": "AGT-18",
+						"name": "Omar Hassan",
+						"team": "Technical Support",
+						"timezone": "UTC+1",
+						"capacity": 58
+					}
+				},
+				{
+					"id": "Support Agent:AGT-24",
+					"label": "Support Agent",
+					"caption": "Keiko Sato",
+					"props": {
+						"agent_id": "AGT-24",
+						"name": "Keiko Sato",
+						"team": "Onboarding",
+						"timezone": "UTC+9",
+						"capacity": 64
+					}
+				},
+				{
+					"id": "Support Agent:AGT-31",
+					"label": "Support Agent",
+					"caption": "Lucas Meyer",
+					"props": {
+						"agent_id": "AGT-31",
+						"name": "Lucas Meyer",
+						"team": "Growth Support",
+						"timezone": "UTC+1",
+						"capacity": 81
+					}
+				},
+				{
+					"id": "Product:PRD-CORE",
+					"label": "Product",
+					"caption": "Flow Builder",
+					"props": {
+						"product_id": "PRD-CORE",
+						"name": "Flow Builder",
+						"area": "Automation",
+						"owner": "Core Experience"
+					}
+				},
+				{
+					"id": "Product:PRD-DATA",
+					"label": "Product",
+					"caption": "Data Studio",
+					"props": {
+						"product_id": "PRD-DATA",
+						"name": "Data Studio",
+						"area": "Data",
+						"owner": "Knowledge Systems"
+					}
+				},
+				{
+					"id": "Product:PRD-IDENTITY",
+					"label": "Product",
+					"caption": "Identity & Access",
+					"props": {
+						"product_id": "PRD-IDENTITY",
+						"name": "Identity & Access",
+						"area": "Platform",
+						"owner": "Trust"
+					}
+				},
+				{
+					"id": "Knowledge Article:KB-204",
+					"label": "Knowledge Article",
+					"caption": "Understand usage and billing",
+					"props": {
+						"article_id": "KB-204",
+						"title": "Understand usage and billing",
+						"collection": "Billing",
+						"helpfulness": 0.91
+					}
+				}
+			],
+			"edges": [
+				{
+					"id": "e-customer-account-1",
+					"source": "Customer:CUS-1042",
+					"target": "Account:ACC-88",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-customer-account-2",
+					"source": "Customer:CUS-1038",
+					"target": "Account:ACC-61",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-customer-account-3",
+					"source": "Customer:CUS-1027",
+					"target": "Account:ACC-74",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-customer-account-5",
+					"source": "Customer:CUS-1004",
+					"target": "Account:ACC-61",
+					"label": "belongs to",
+					"props": {}
+				},
+				{
+					"id": "e-opened-1",
+					"source": "Customer:CUS-1042",
+					"target": "Support Ticket:TKT-2841",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-opened-2",
+					"source": "Customer:CUS-1042",
+					"target": "Support Ticket:TKT-2836",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-opened-3",
+					"source": "Customer:CUS-1027",
+					"target": "Support Ticket:TKT-2829",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-opened-4",
+					"source": "Customer:CUS-1038",
+					"target": "Support Ticket:TKT-2822",
+					"label": "opened",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-1",
+					"source": "Support Ticket:TKT-2841",
+					"target": "Support Agent:AGT-12",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-2",
+					"source": "Support Ticket:TKT-2836",
+					"target": "Support Agent:AGT-18",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-3",
+					"source": "Support Ticket:TKT-2829",
+					"target": "Support Agent:AGT-24",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-assigned-4",
+					"source": "Support Ticket:TKT-2822",
+					"target": "Support Agent:AGT-31",
+					"label": "assigned to",
+					"props": {}
+				},
+				{
+					"id": "e-product-1",
+					"source": "Support Ticket:TKT-2841",
+					"target": "Product:PRD-DATA",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-product-2",
+					"source": "Support Ticket:TKT-2836",
+					"target": "Product:PRD-IDENTITY",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-product-3",
+					"source": "Support Ticket:TKT-2829",
+					"target": "Product:PRD-CORE",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-product-4",
+					"source": "Support Ticket:TKT-2822",
+					"target": "Product:PRD-DATA",
+					"label": "concerns",
+					"props": {}
+				},
+				{
+					"id": "e-article-1",
+					"source": "Support Ticket:TKT-2841",
+					"target": "Knowledge Article:KB-204",
+					"label": "suggests",
+					"props": {
+						"confidence": 0.93
+					}
+				},
+				{
+					"id": "e-article-3",
+					"source": "Support Ticket:TKT-2822",
+					"target": "Knowledge Article:KB-204",
+					"label": "suggests",
+					"props": {
+						"confidence": 0.87
+					}
+				},
+				{
+					"id": "e-account-product-1",
+					"source": "Account:ACC-88",
+					"target": "Product:PRD-DATA",
+					"label": "uses",
+					"props": {}
+				},
+				{
+					"id": "e-account-product-2",
+					"source": "Account:ACC-74",
+					"target": "Product:PRD-CORE",
+					"label": "uses",
+					"props": {}
+				},
+				{
+					"id": "e-account-product-3",
+					"source": "Account:ACC-61",
+					"target": "Product:PRD-DATA",
+					"label": "uses",
+					"props": {}
+				}
+			],
+			"truncated": false
+		},
+		"graph_paths": {
+			"found": false,
+			"paths": [],
+			"nodes": [],
+			"edges": [],
+			"truncated": false
+		},
+		"graph_cypher": [],
+		"graph_list_remote_ontology_imports": [
+			{
+				"id": "remote-product-knowledge",
+				"target_app_id": "knowledge-hub",
+				"remote_ontology_id": "product-knowledge",
+				"contract": {
+					"id": "product-knowledge",
+					"name": "Product Knowledge",
+					"description": "Published product areas, capabilities, and support guidance from the Knowledge Hub.",
+					"nodes": [
+						{
+							"id": "capability",
+							"api_name": "capability",
+							"label": "Capability",
+							"table": "capabilities",
+							"id_column": "capability_id",
+							"display_column": "name",
+							"property_columns": [
+								{
+									"name": "name",
+									"data_type": "Utf8",
+									"nullable": false
+								},
+								{
+									"name": "maturity",
+									"data_type": "Utf8",
+									"nullable": false
+								}
+							],
+							"style": {
+								"color": "#38bdf8",
+								"icon": "package",
+								"size": {
+									"mode": "fixed",
+									"value": 15
+								},
+								"shape": "circle"
+							}
+						},
+						{
+							"id": "guide",
+							"api_name": "guide",
+							"label": "Guide",
+							"table": "guides",
+							"id_column": "guide_id",
+							"display_column": "title",
+							"property_columns": [
+								{
+									"name": "title",
+									"data_type": "Utf8",
+									"nullable": false
+								},
+								{
+									"name": "audience",
+									"data_type": "Utf8",
+									"nullable": false
+								}
+							],
+							"style": {
+								"color": "#a78bfa",
+								"icon": "fileText",
+								"size": {
+									"mode": "fixed",
+									"value": 14
+								},
+								"shape": "circle"
+							}
+						},
+						{
+							"id": "owner",
+							"api_name": "product_owner",
+							"label": "Product Owner",
+							"table": "product_owners",
+							"id_column": "owner_id",
+							"display_column": "name",
+							"property_columns": [
+								{
+									"name": "name",
+									"data_type": "Utf8",
+									"nullable": false
+								},
+								{
+									"name": "team",
+									"data_type": "Utf8",
+									"nullable": false
+								}
+							],
+							"style": {
+								"color": "#fb7185",
+								"icon": "userCog",
+								"size": {
+									"mode": "fixed",
+									"value": 14
+								},
+								"shape": "circle"
+							}
+						}
+					],
+					"edges": [
+						{
+							"id": "capability-guide",
+							"api_name": "documented_by",
+							"label": "documented by",
+							"table": "capability_guides",
+							"src_column": "capability_id",
+							"dst_column": "guide_id",
+							"src_label": "Capability",
+							"dst_label": "Guide",
+							"containment": true,
+							"property_columns": [],
+							"style": {
+								"color": "#a78bfa",
+								"icon": "link",
+								"size": {
+									"mode": "fixed",
+									"value": 10
+								},
+								"shape": "circle",
+								"width": 1.5
+							}
+						},
+						{
+							"id": "capability-owner",
+							"api_name": "owned_by",
+							"label": "owned by",
+							"table": "capability_owners",
+							"src_column": "capability_id",
+							"dst_column": "owner_id",
+							"src_label": "Capability",
+							"dst_label": "Product Owner",
+							"property_columns": [],
+							"style": {
+								"color": "#fb7185",
+								"icon": "link",
+								"size": {
+									"mode": "fixed",
+									"value": 10
+								},
+								"shape": "circle",
+								"width": 1.5
+							}
+						}
+					],
+					"object_views": [],
+					"actions": [],
+					"exposed": true,
+					"bindings_enabled": true,
+					"default_limit": 100,
+					"created_at": "2026-07-18T08:30:00Z",
+					"updated_at": "2026-07-27T16:15:00Z"
+				},
+				"source_updated_at": "2026-07-27T16:15:00Z",
+				"bindings_enabled": true,
+				"installed_at": "2026-07-27T16:20:00Z",
+				"updated_at": "2026-07-27T16:20:00Z"
+			}
+		],
+		"graph_list_imports": [
+			{
+				"id": "remote-product-knowledge",
+				"target_app_id": "knowledge-hub",
+				"remote_ontology_id": "product-knowledge",
+				"contract": {
+					"id": "product-knowledge",
+					"name": "Product Knowledge",
+					"description": "Published product areas, capabilities, and support guidance from the Knowledge Hub.",
+					"nodes": [
+						{
+							"id": "capability",
+							"api_name": "capability",
+							"label": "Capability",
+							"table": "capabilities",
+							"id_column": "capability_id",
+							"display_column": "name",
+							"property_columns": [
+								{
+									"name": "name",
+									"data_type": "Utf8",
+									"nullable": false
+								},
+								{
+									"name": "maturity",
+									"data_type": "Utf8",
+									"nullable": false
+								}
+							],
+							"style": {
+								"color": "#38bdf8",
+								"icon": "package",
+								"size": {
+									"mode": "fixed",
+									"value": 15
+								},
+								"shape": "circle"
+							}
+						},
+						{
+							"id": "guide",
+							"api_name": "guide",
+							"label": "Guide",
+							"table": "guides",
+							"id_column": "guide_id",
+							"display_column": "title",
+							"property_columns": [
+								{
+									"name": "title",
+									"data_type": "Utf8",
+									"nullable": false
+								},
+								{
+									"name": "audience",
+									"data_type": "Utf8",
+									"nullable": false
+								}
+							],
+							"style": {
+								"color": "#a78bfa",
+								"icon": "fileText",
+								"size": {
+									"mode": "fixed",
+									"value": 14
+								},
+								"shape": "circle"
+							}
+						},
+						{
+							"id": "owner",
+							"api_name": "product_owner",
+							"label": "Product Owner",
+							"table": "product_owners",
+							"id_column": "owner_id",
+							"display_column": "name",
+							"property_columns": [
+								{
+									"name": "name",
+									"data_type": "Utf8",
+									"nullable": false
+								},
+								{
+									"name": "team",
+									"data_type": "Utf8",
+									"nullable": false
+								}
+							],
+							"style": {
+								"color": "#fb7185",
+								"icon": "userCog",
+								"size": {
+									"mode": "fixed",
+									"value": 14
+								},
+								"shape": "circle"
+							}
+						}
+					],
+					"edges": [
+						{
+							"id": "capability-guide",
+							"api_name": "documented_by",
+							"label": "documented by",
+							"table": "capability_guides",
+							"src_column": "capability_id",
+							"dst_column": "guide_id",
+							"src_label": "Capability",
+							"dst_label": "Guide",
+							"containment": true,
+							"property_columns": [],
+							"style": {
+								"color": "#a78bfa",
+								"icon": "link",
+								"size": {
+									"mode": "fixed",
+									"value": 10
+								},
+								"shape": "circle",
+								"width": 1.5
+							}
+						},
+						{
+							"id": "capability-owner",
+							"api_name": "owned_by",
+							"label": "owned by",
+							"table": "capability_owners",
+							"src_column": "capability_id",
+							"dst_column": "owner_id",
+							"src_label": "Capability",
+							"dst_label": "Product Owner",
+							"property_columns": [],
+							"style": {
+								"color": "#fb7185",
+								"icon": "link",
+								"size": {
+									"mode": "fixed",
+									"value": 10
+								},
+								"shape": "circle",
+								"width": 1.5
+							}
+						}
+					],
+					"object_views": [],
+					"actions": [],
+					"exposed": true,
+					"bindings_enabled": true,
+					"default_limit": 100,
+					"created_at": "2026-07-18T08:30:00Z",
+					"updated_at": "2026-07-27T16:15:00Z"
+				},
+				"source_updated_at": "2026-07-27T16:15:00Z",
+				"bindings_enabled": true,
+				"installed_at": "2026-07-27T16:20:00Z",
+				"updated_at": "2026-07-27T16:20:00Z"
+			}
+		],
 		"list_runs": [],
 		"query_run": [],
 		"get_board_versions": [[1, 0, 0], [1, 1, 0], [1, 2, 0]],

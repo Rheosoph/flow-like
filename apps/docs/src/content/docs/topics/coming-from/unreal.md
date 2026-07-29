@@ -1,525 +1,211 @@
 ---
 title: For Unreal Engine Developers
-description: How Unreal Blueprints concepts translate to Flow-Like
+description: Apply Unreal Blueprint graph skills to Flow-Like automation
 sidebar:
   order: 5
 ---
 
-Coming from **Unreal Engine Blueprints**? You already understand visual programming! This guide maps Blueprint concepts to Flow-Like, helping you apply your node graph skills to automation and AI workflows.
+Unreal Blueprint experience transfers well to Flow-Like's node canvas: both
+distinguish execution from data, enforce pin types, and support pure and impure
+nodes. The domain is different. Flow-Like runs event-driven automation, data,
+AI, and interface workflows; it is not a game loop, world, or gameplay runtime.
 
-## Quick Concept Mapping
+## Translate the graph model
 
-| Blueprint Concept | Flow-Like Equivalent |
-|-------------------|---------------------|
-| Blueprint | Board |
-| Event Graph | Flow |
+| Blueprint concept | Closest Flow-Like concept |
+| --- | --- |
+| Unreal project | App |
+| Blueprint Event Graph | Flow |
+| Blueprint asset | Flow plus its functions, variables, and metadata |
 | Node | Node |
-| Pin | Pin |
-| Execution Pin (white) | Execution Wire |
-| Data Pin (colored) | Data Wire |
-| Variable | Variable |
-| Function | Board with Quick Action |
-| Macro | Subflow / Board reference |
-| Event | Event node |
-| Cast To | Type conversion nodes |
-| Branch | Branch node |
-| For Each Loop | For Each node |
-| Sequence | Multiple output wires |
-| Struct | Struct type |
-| Array | Array type |
-| Pure Function | Pure nodes (no execution pin) |
-| Reroute Node | Reroute (visual organization) |
-
-## The Familiar Visual Model
-
-If you've used Blueprints, Flow-Like will feel natural:
-
-**Blueprint Event Graph:**
-```
-(Event BeginPlay) ──▶ [Print String] ──▶ [Set Variable]
-```
-
-**Flow-Like Flow:**
-```
-[Quick Action Event] ──▶ [Console Log] ──▶ [Set Variable]
-```
-
-Both use:
-- Left-to-right execution
-- Nodes connected by wires
-- Input pins on left, output pins on right
-- Execution flow (white wires) and data flow (colored wires)
-
-## Execution Wires
-
-Just like Blueprints, Flow-Like has **execution wires** (white) that control flow order:
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Event          │     │  Process        │     │  Save           │
-│            exec ├────▶│ exec       exec ├────▶│ exec            │
-│                 │     │                 │     │                 │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-```
-
-Nodes execute in the order the execution wire connects them.
-
-## Data Wires
-
-Data pins work identically:
-
-**Blueprint:**
-```
-[Get Player Location] ──▶ (Vector) ──▶ [Print String]
-```
-
-**Flow-Like:**
-```
-[Get Variable: location] ──▶ (Vector3) ──▶ [Console Log]
-```
-
-Colored wires carry data. Types must match (or be convertible).
-
-## Variables
-
-### Blueprint Variables
-
-In Blueprints, variables are scoped to the Blueprint class.
-
-### Flow-Like Variables
-
-Variables are scoped to the Board:
-```
-Board: MyWorkflow
-├── Variables:
-│   ├── counter: Integer = 0
-│   ├── playerData: PlayerInfo
-│   └── items: Array<Item>
-```
-
-Access with Get/Set Variable nodes—exactly like Blueprints.
-
-## Events
-
-| Blueprint Event | Flow-Like Event |
-|-----------------|-----------------|
-| Event BeginPlay | Init Event (if applicable) |
-| Event Tick | Scheduled Event |
-| Custom Event | Quick Action Event |
-| Event Dispatcher | Quick Action (callable) |
-| Input Event | (not applicable—no game input) |
-| Collision/Overlap | (not applicable—no physics) |
-
-Flow-Like events are triggers for workflows:
-- **Quick Action** – Manual button click
-- **Chat Event** – Conversational input
-- **HTTP Event** – API webhook
-- **Scheduled Event** – Timer-based
-
-## Control Flow
-
-### Branch (If)
-
-**Blueprint:**
-```
-[Branch]
-├── Condition ──▶
-├── True ──▶ [Do Something]
-└── False ──▶ [Do Other]
-```
-
-**Flow-Like:**
-```
-[Branch]
-├── condition ◀── (bool input)
-├── True ──▶ [Do Something]
-└── False ──▶ [Do Other]
-```
-
-Identical pattern!
-
-### For Each Loop
-
-**Blueprint:**
-```
-[For Each Loop]
-├── Array ◀── (array input)
-├── Loop Body ──▶ [Process]
-│   ├── Array Element ──▶
-│   └── Array Index ──▶
-└── Completed ──▶ [After Loop]
-```
-
-**Flow-Like:**
-```
-[For Each]
-├── array ◀── (array input)
-├── body ──▶ [Process]
-│   ├── element ──▶
-│   └── index ──▶
-└── done ──▶ [After Loop]
-```
-
-Same structure, same semantics.
-
-### Sequence
-
-**Blueprint:**
-```
-[Sequence]
-├── Then 0 ──▶ [First]
-├── Then 1 ──▶ [Second]
-└── Then 2 ──▶ [Third]
-```
-
-**Flow-Like:**
-Simply connect multiple wires from one node:
-```
-[Event] ──┬──▶ [First]
-          ├──▶ [Second]
-          └──▶ [Third]
-```
-
-Branches execute in parallel (unlike Blueprint's sequential).
-
-### Flip Flop / Do Once
-
-**Blueprint:** Built-in nodes like Flip Flop.
-
-**Flow-Like:** Use variables to track state:
-```
-[Get Variable: flip_state]
-    │
-    ▼
-[Branch: flip_state == true]
-    │
-   True ──▶ [Action A] ──▶ [Set Variable: flip_state = false]
-    │
-   False ──▶ [Action B] ──▶ [Set Variable: flip_state = true]
-```
-
-## Functions & Macros
-
-### Blueprint Functions → Boards with Quick Actions
-
-**Blueprint Function:**
-```
-Function: CalculateScore
-├── Inputs: kills, deaths
-├── Local Variables: ratio
-└── Return: score
-
-[Divide] ──▶ [Multiply] ──▶ [Return Node]
-```
-
-**Flow-Like:**
-```
-Board: CalculateScore
-├── Quick Action Event:
-│   ├── kills (input)
-│   └── deaths (input)
-└── Flow:
-    [Divide] ──▶ [Multiply] ──▶ [Return]
-```
-
-Call from another Board just like calling a Blueprint function.
-
-### Macros → Subflows
-
-Blueprint Macros expand inline. In Flow-Like, use subflows or board references for reusable logic.
-
-## Pure Functions
-
-**Blueprint Pure Nodes:** No execution pins, just data.
-
-**Flow-Like Getter Nodes:** Same concept:
-```
-[Get Variable: score] ──▶ (value)  // Pure, no exec wire
-```
-
-Pure nodes can be connected to multiple consumers and will evaluate when needed.
-
-## Casting
-
-**Blueprint:**
-```
-[Cast To PlayerCharacter]
-├── Object ◀──
-├── Success ──▶ [Use as PlayerCharacter]
-└── Failed ──▶ [Handle Error]
-```
-
-**Flow-Like:**
-Use type-specific nodes or validation:
-```
-[Validate Type]
-├── value ◀──
-├── valid ──▶ [Use Value]
-└── invalid ──▶ [Handle Error]
-```
-
-Or Extract Knowledge with schema validation for structured data.
-
-## Structs
-
-**Blueprint Struct:**
-```
-Struct: S_PlayerData
-├── Name: String
-├── Score: Integer
-└── Inventory: Array<S_Item>
-```
-
-**Flow-Like Struct:**
-```
-Struct: PlayerData
-├── name: String
-├── score: Integer
-└── inventory: Array<Item>
-```
-
-Break/Make struct nodes work similarly:
-```
-[Make PlayerData]
-├── name ◀── "Alice"
-├── score ◀── 100
-├── inventory ◀── [empty array]
-└── ──▶ PlayerData instance
-```
-
-```
-[Get Field: name]
-├── struct ◀── playerData
-└── ──▶ "Alice"
-```
-
-## Arrays
-
-Array operations are nearly identical:
-
-| Blueprint Node | Flow-Like Node |
-|----------------|----------------|
-| Make Array | Create Array |
-| Add | Append |
-| Insert | Insert |
-| Remove Index | Remove at Index |
-| Remove Item | Remove Item |
-| Get | Get at Index |
-| Length | Array Length |
-| Find | Find Index |
-| Contains | Contains |
-| Filter | Filter Array |
-| Set Array Elem | Set at Index |
-| Append Array | Concat Arrays |
-
-## Math & Operations
-
-All familiar math nodes exist:
-- Add, Subtract, Multiply, Divide
-- Sin, Cos, Tan, etc.
-- Clamp, Lerp, Map Range
-- Min, Max, Abs
-- Vector operations
-
-## String Operations
-
-| Blueprint | Flow-Like |
-|-----------|-----------|
-| Append | Concat |
-| Format Text | Template String |
-| To String | Stringify |
-| Contains | String Contains |
-| Split | Split String |
-| Join | Join Strings |
-| Replace | String Replace |
-| To Upper/Lower | To Uppercase / To Lowercase |
-
-## Comparison: Game vs. Automation
-
-| Blueprint Use Case | Flow-Like Equivalent |
-|--------------------|---------------------|
-| Player spawns | Quick Action triggered |
-| Game tick | Scheduled event |
-| Button pressed | Chat Event / Quick Action |
-| API call | HTTP Request |
-| Save game | Save to Database / File |
-| AI behavior tree | Agent nodes |
-| UI update | A2UI components |
-| Network replicate | (not applicable) |
-
-## What's Different
-
-### No Real-Time Execution
-Blueprints run every frame. Flow-Like runs on-demand (events trigger flows).
-
-### No Game Objects
-No Actors, Components, or World. Instead: files, APIs, databases, AI.
-
-### No Physics/Collision
-Flow-Like is for data processing, not simulation.
-
-
-## What's Similar
-
-### Visual Debugging
-- Blueprints: Execution trace, watch values
-- Flow-Like: Wire inspection, execution history
-
-### Type System
-Both enforce types at connection time. Incompatible types can't connect.
-
-### Modular Design
-- Blueprints: Functions, Macros, Child Blueprints
-- Flow-Like: Boards, Quick Actions, Board references
-
-## What Flow-Like Adds
-
-### AI & LLMs
-
-Native AI integration:
-```
-[Chat Event] ──▶ [Invoke LLM] ──▶ [Response]
-```
-
-Build conversational AI, agents, RAG systems.
-
-### Data Processing
-
-SQL across any source:
-```
-[Register CSV] ──▶ [SQL Query] ──▶ [Results Table]
-```
-
-### Integrations
-
-Connect to real-world services:
-- REST APIs
-- Databases (PostgreSQL, MySQL, etc.)
-- Cloud storage (S3, Azure, GCS)
-- File systems
-
-### Deployment
-
-Run workflows:
-- Desktop app (like a packaged game)
-- Cloud backends (like dedicated servers)
-- Scheduled (like background services)
-
-## Example: Blueprint to Flow-Like
-
-### Blueprint: Score Tracker
-
-```
-Event BeginPlay
-    │
-    ▼
-Set Score = 0
-    │
-    ▼
-Bind Event: OnEnemyKilled → Add to Score
-
----
-
-Function: AddToScore(points)
-├── Get Score
-├── Add (Score + points)
-├── Set Score
-└── Update UI
-```
-
-### Flow-Like: Task Tracker
-
-```
-Board: TaskTracker
-├── Variables:
-│   ├── completed_count: Integer = 0
-│   └── tasks: Array<Task>
-│
-└── Events:
-    ├── Quick Action: AddTask (task_name)
-    │       │
-    │       ▼
-    │   [Create Task] ──▶ [Append to tasks] ──▶ [Set Variable]
-    │
-    └── Quick Action: CompleteTask (task_id)
-            │
-            ▼
-        [Find Task] ──▶ [Mark Complete] ──▶ [Increment completed_count]
-                                               │
-                                               ▼
-                                        [Update UI Log]
-```
-
-### Blueprint: AI Patrol
-
-```
-Event Tick
-    │
-    ▼
-Get Next Patrol Point
-    │
-    ▼
-Move To Location
-    │
-    ▼
-Branch: At Location?
-├── True ──▶ Wait 2s ──▶ Get Next Point
-└── False ──▶ Continue Moving
-```
-
-### Flow-Like: Data Monitor
-
-```
-Scheduled Event (every 5 minutes)
-    │
-    ▼
-HTTP Request: Get Metrics
-    │
-    ▼
-Branch: Metric > Threshold?
-├── True ──▶ Send Alert (Slack)
-│               │
-│               ▼
-│           Log to Database
-│
-└── False ──▶ Log: "All normal"
-```
-
-## Tips for Blueprint Developers
-
-### 1. Think Events, Not Ticks
-Replace constant polling with event-driven triggers.
-
-### 2. Use Variables for Persistence
-Your "game state" is Board Variables.
-
-### 3. Boards Are Blueprints
-Each Board is like a Blueprint class—self-contained logic unit.
-
-### 4. Quick Actions Are Custom Events
-Expose functionality that other boards (or users) can call.
-
-### 5. Data Flow Is Familiar
-Same pins, same wires, same left-to-right flow.
-
-## FAQ
-
-### Can I use this for game development?
-Flow-Like is for automation/AI, not games. But the skills transfer!
-
-### Is there a marketplace?
-Flow-Like has packages. Community contributions work similarly.
-
-### Can I prototype game logic?
-Yes—for data flow and AI behavior (not rendering/physics).
-
-### Does it work with Unreal?
-You could trigger Flow-Like workflows from Unreal via HTTP, but they're separate tools.
-
-## Next Steps
-
-- **[Studio Overview](/studio/overview/)** – Learn the IDE
-- **[Working with Nodes](/studio/nodes/)** – Node deep dive
-- **[Variables](/studio/variables/)** – State management
-- **[GenAI](/topics/genai/overview/)** – Build AI with familiar node graphs
-- **[Agents](/topics/genai/agents/)** – AI that feels like Behavior Trees
+| Execution pin and wire | Execution pin and white wire |
+| Data pin and wire | Typed data pin and colored dashed wire |
+| Impure node | Standard node |
+| Pure function | Pure node |
+| Variable | Flow variable |
+| Function | Flow function invoked by Call Function |
+| Collapsed graph or macro-like grouping | Layer |
+| Custom Event | Event node targeted by an App Event |
+| Branch | Branch |
+| For Each Loop | For Each |
+| Sequence | Sequence |
+| Flip Flop | Flip Flop |
+| Do Once | Do Once |
+| Struct | Schema-constrained Struct |
+| Array | Typed Array |
+| Reroute Node | Reroute |
+
+The mapping is conceptual. A Flow is stored internally as a board, but the App
+and Studio interfaces present it as a Flow. It does not behave like a spawned
+Blueprint instance.
+
+## Execution and data wires
+
+[Execution wires](/studio/connecting/) determine when standard nodes run. Data
+wires supply typed values. A pure node has no execution pin and evaluates when
+a downstream consumer needs its output.
+
+This is close to Blueprint's pure/impure distinction, with two cautions:
+
+- multiple outgoing wires are not a substitute for the
+  [Sequence](/nodes/control/control-sequence/) node when order matters;
+- concurrency should be explicit through
+  [Parallel Execution](/nodes/control/control-par-execution/) or
+  [Parallel For Each](/nodes/control/control-par-for-each/), with
+  [Gather](/nodes/control/parallel/control-gather/) when branches must rejoin.
+
+Pins must have compatible types. Generic pins can resolve to a concrete type
+after connection, and complex Struct pins may enforce a schema.
+
+## Familiar control nodes
+
+| Blueprint pattern | Current Flow-Like node |
+| --- | --- |
+| Boolean branch | [Branch](/nodes/control/control-branch/) |
+| Iterate an Array | [For Each](/nodes/control/control-for-each/) |
+| Iterate with early exit | [For Each (Break)](/nodes/control/control-for-each-with-break/) |
+| Condition-controlled loop | [While Loop](/nodes/control/control-while-loop/) |
+| Ordered outputs | [Sequence](/nodes/control/control-sequence/) |
+| Alternate A and B | [Flip Flop](/nodes/control/flow/control-flip-flop/) |
+| Allow one execution until reset | [Do Once](/nodes/control/flow/control-do-once/) |
+| Bounded execution | [Timeout](/nodes/control/control-timeout/) |
+| Visual rerouting | [Reroute](/nodes/control/reroute/) |
+
+Use these nodes directly rather than recreating Flip Flop, Do Once, or Sequence
+with ad hoc variables and wires.
+
+## Functions and layers
+
+A Flow function is the closest match for reusable Blueprint function logic.
+Define typed inputs and outputs on the function, then invoke it with
+[Call Function](/nodes/control/functions/control-call-function/).
+
+[Layers](/studio/layers/) collapse a group of nodes behind a typed placeholder.
+They are useful for readability and prototyping and can be nested. Use a
+function when the graph should be called as reusable logic; use a Layer when
+the main goal is a named abstraction inside the canvas.
+
+Unlike Blueprint inheritance or components, Layers do not create Actors,
+objects, or a world hierarchy.
+
+## Structs, arrays, and fields
+
+Define a Struct schema for records that need stable fields. The current catalog
+includes:
+
+| Need | Node |
+| --- | --- |
+| Build a Struct | [Make Struct](/nodes/structs/struct-make/) |
+| Build from a schema | [Make Struct (Schema)](/nodes/structs/struct-make-from-schema/) |
+| Read one field | [Get Field](/nodes/structs/fields/struct-get/) |
+| Update one field | [Set Field](/nodes/structs/fields/struct-set/) |
+| Expose all fields as pins | [Break Struct](/nodes/structs/struct-break/) |
+| Build an Array | [Make Array](/nodes/utils/array/make-array/) |
+| Append an item | [Push](/nodes/utils/array/array-push/) |
+| Read by index | [Get Element](/nodes/utils/array/array-get/) |
+| Remove by index | [Remove Index](/nodes/utils/array/array-remove-index/) |
+
+Do not assume a Blueprint object reference can be cast into a Flow-Like type.
+Validate or transform incoming data with the node whose input contract matches
+the source format.
+
+## Variables and persistence
+
+Flow variables are typed, board-level in-memory state. Read and write them with
+Get Variable and Set Variable nodes, just as Blueprint getter and setter nodes
+make state access visible.
+
+Choose another store when the lifecycle is different:
+
+| Requirement | Use |
+| --- | --- |
+| Temporary state used by the graph | Flow variable |
+| Per-machine configuration or secret | [Runtime Variable](/apps/runtime-variables/) |
+| Durable structured records | Database nodes |
+| App-owned files | [App Storage](/apps/storage/) |
+| Chat conversation state | Chat history and local/global sessions |
+
+There is no Actor instance, replicated property, SaveGame object, or gameplay
+framework behind a Flow variable.
+
+## Events instead of gameplay callbacks
+
+An event node begins execution inside a Flow. An [App Event](/apps/events/)
+configures how that node is invoked.
+
+| Automation need | Flow-Like entry |
+| --- | --- |
+| User clicks a named action | Simple Event node with a Quick Action |
+| Recurring job | Simple Event node with a cron Event |
+| HTTP request | Simple or Generic Event node with an API Event |
+| Built-in conversation | Chat Event node with a Chat UI Event |
+| Local application link | Compatible event node with a deeplink Event |
+| Page or Widget interaction | UI action targeting an Event |
+
+There is no equivalent to Event Tick. A cron Event is a scheduled automation,
+not a per-frame callback. If work must wait or poll, use an explicit bounded
+loop, Delay, timeout, or an external event rather than simulating a frame loop.
+
+## What does not transfer
+
+| Unreal capability | Flow-Like status |
+| --- | --- |
+| Actors, Pawns, Components, and World | No equivalent |
+| Rendering and materials | Not a rendering engine |
+| Physics, collision, overlap, and traces | No equivalent |
+| Gameplay input | Use App interfaces and Events instead |
+| Replication and network roles | Use ordinary API, authorization, and data contracts |
+| Frame-rate-sensitive behavior | Not a real-time simulation workload |
+| Gameplay Ability System | No direct equivalent |
+
+Flow-Like Pages and Widgets can present workflow-backed interfaces, but they are
+application UI rather than Unreal UMG or Slate widgets.
+
+## Example: turn a gameplay-style monitor into automation
+
+A Blueprint developer might recognize a “read state, compare, act, record”
+pattern. A Flow-Like service monitor can implement it without a pseudo graph:
+
+| Stage | Flow-Like implementation |
+| --- | --- |
+| Trigger | Cron Event every approved interval |
+| Read | API Call to the metrics endpoint |
+| Parse | Schema-constrained JSON or Struct |
+| Compare | Typed comparison into Branch |
+| Act | Notification node on the true path |
+| Record | Database write containing status, time, and run ID |
+| Recover | Bounded retry only for safe, repeatable requests |
+
+This is event-driven work. It should not continuously poll at frame frequency,
+and notifications should use an idempotency rule so a retry cannot send the
+same alert repeatedly.
+
+## Debugging and versions
+
+Use [run history and logs](/studio/logging/) to inspect completed executions,
+timing, and node output. This is not Blueprint's live gameplay debugger, so
+design logs around stable run and correlation identifiers.
+
+Create a saved Flow version after a behavior is verified. App Events can target
+that version rather than the mutable latest graph; see
+[Versioning](/studio/versioning/).
+
+## Tips for Blueprint developers
+
+1. Define pin types and schemas before arranging the graph.
+2. Keep execution ordering explicit.
+3. Use Functions for callable logic and Layers for visual abstraction.
+4. Replace Tick-driven thinking with App Events.
+5. Store durable state in a database or App Storage, not only in variables.
+6. Check whether a node is local-only before selecting remote execution.
+7. Validate every external payload as untrusted input.
+
+## Next steps
+
+- [Studio overview](/studio/overview/)
+- [Nodes](/studio/nodes/)
+- [Connections](/studio/connecting/)
+- [Layers](/studio/layers/)
+- [Variables](/studio/variables/)
+- [Events](/apps/events/)
+- [Pages and A2UI](/apps/a2ui/)

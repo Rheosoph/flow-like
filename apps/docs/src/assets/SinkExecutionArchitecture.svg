@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+	<title id="title">Flow-Like event sink execution architecture</title>
+	<desc id="description">HTTP calls, bot messages, and schedules reach either desktop adapters or hosted ingress and sink services. Flow-Like verifies the delivery path, resolves an active event sink, and dispatches one workflow run.</desc>
+	<defs>
+		<linearGradient id="background" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#151519"/>
+			<stop offset="0.56" stop-color="#1b1b20"/>
+			<stop offset="1" stop-color="#111115"/>
+		</linearGradient>
+		<linearGradient id="dispatch" x1="1240" y1="300" x2="1518" y2="648" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#372520"/>
+			<stop offset="1" stop-color="#211d1e"/>
+		</linearGradient>
+		<pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+			<circle cx="2" cy="2" r="1.25" fill="#ffffff" opacity="0.065"/>
+		</pattern>
+		<filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+			<feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000000" flood-opacity="0.34"/>
+		</filter>
+		<filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1600" height="900">
+			<feGaussianBlur stdDeviation="9" result="blur"/>
+			<feMerge>
+				<feMergeNode in="blur"/>
+				<feMergeNode in="SourceGraphic"/>
+			</feMerge>
+		</filter>
+		<marker id="arrow-orange" markerWidth="22" markerHeight="22" refX="20" refY="11" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L22 11L0 22Z" fill="#ff7652"/>
+		</marker>
+		<marker id="arrow-cyan" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L14 7L0 14Z" fill="#59c7d8"/>
+		</marker>
+		<marker id="arrow-purple" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L14 7L0 14Z" fill="#a58aff"/>
+		</marker>
+	</defs>
+
+	<rect width="1600" height="900" fill="#111115"/>
+	<rect width="1600" height="900" rx="36" fill="url(#background)"/>
+	<rect x="28" y="28" width="1544" height="844" rx="28" fill="url(#dots)" stroke="#ffffff" stroke-opacity="0.08"/>
+	<circle cx="1090" cy="455" r="310" fill="#ff6744" opacity="0.04"/>
+
+	<text x="88" y="102" fill="#f4f0ec" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="42" font-weight="720">One event sink, two delivery paths</text>
+	<text x="88" y="143" fill="#aaa7a5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="21">Desktop adapters and hosted ingress converge on the same active event and workflow dispatcher.</text>
+	<text x="1480" y="106" text-anchor="end" fill="#ff7652" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700" letter-spacing="3">FLOW-LIKE · EVENT SINKS</text>
+
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="82" y="238" width="314" height="430" rx="28" fill="#202126" stroke="#59c7d8" stroke-opacity="0.55"/>
+		<rect x="116" y="272" width="105" height="28" rx="14" fill="#59c7d8" fill-opacity="0.13" stroke="#59c7d8" stroke-opacity="0.44"/>
+		<text x="168" y="292" text-anchor="middle" fill="#7ad8e7" font-size="12" font-weight="760" letter-spacing="1.5">SIGNALS</text>
+		<text x="116" y="345" fill="#f4f0ec" font-size="24" font-weight="700">External trigger</text>
+		<text x="116" y="377" fill="#aaa7a5" font-size="15">The event source chooses the adapter.</text>
+
+		<rect x="116" y="418" width="246" height="60" rx="15" fill="#27282e" stroke="#ffffff" stroke-opacity="0.1"/>
+		<circle cx="143" cy="448" r="7" fill="#59c7d8"/>
+		<text x="163" y="454" fill="#e9e6e2" font-size="16" font-weight="650">HTTP request</text>
+		<rect x="116" y="494" width="246" height="60" rx="15" fill="#27282e" stroke="#ffffff" stroke-opacity="0.1"/>
+		<circle cx="143" cy="524" r="7" fill="#a58aff"/>
+		<text x="163" y="530" fill="#e9e6e2" font-size="16" font-weight="650">Bot message / interaction</text>
+		<rect x="116" y="570" width="246" height="60" rx="15" fill="#27282e" stroke="#ffffff" stroke-opacity="0.1"/>
+		<circle cx="143" cy="600" r="7" fill="#f1b35f"/>
+		<text x="163" y="606" fill="#e9e6e2" font-size="16" font-weight="650">Schedule</text>
+
+		<rect x="486" y="238" width="292" height="190" rx="25" fill="#202126" stroke="#59c7d8" stroke-opacity="0.56"/>
+		<rect x="518" y="270" width="82" height="28" rx="14" fill="#59c7d8" fill-opacity="0.13" stroke="#59c7d8" stroke-opacity="0.44"/>
+		<text x="559" y="290" text-anchor="middle" fill="#7ad8e7" font-size="12" font-weight="760" letter-spacing="1.5">LOCAL</text>
+		<text x="518" y="344" fill="#f4f0ec" font-size="23" font-weight="700">Desktop adapters</text>
+		<text x="518" y="377" fill="#aaa7a5" font-size="15">Local HTTP · Gateway / polling</text>
+		<text x="518" y="402" fill="#aaa7a5" font-size="15">In-process scheduler</text>
+
+		<rect x="486" y="478" width="292" height="190" rx="25" fill="#202126" stroke="#a58aff" stroke-opacity="0.56"/>
+		<rect x="518" y="510" width="94" height="28" rx="14" fill="#a58aff" fill-opacity="0.13" stroke="#a58aff" stroke-opacity="0.44"/>
+		<text x="565" y="530" text-anchor="middle" fill="#beaaff" font-size="12" font-weight="760" letter-spacing="1.5">HOSTED</text>
+		<text x="518" y="584" fill="#f4f0ec" font-size="21" font-weight="700">Ingress + sink services</text>
+		<text x="518" y="617" fill="#aaa7a5" font-size="15">Signed webhooks · bot workers</text>
+		<text x="518" y="642" fill="#aaa7a5" font-size="15">Provider scheduler · scoped token</text>
+
+		<rect x="868" y="286" width="292" height="334" rx="28" fill="#202126" stroke="#4fd2a0" stroke-opacity="0.58"/>
+		<rect x="900" y="318" width="104" height="28" rx="14" fill="#4fd2a0" fill-opacity="0.13" stroke="#4fd2a0" stroke-opacity="0.44"/>
+		<text x="952" y="338" text-anchor="middle" fill="#73ddb5" font-size="12" font-weight="760" letter-spacing="1.5">RESOLVE</text>
+		<text x="900" y="392" fill="#f4f0ec" font-size="23" font-weight="700">Active event sink</text>
+		<text x="900" y="425" fill="#aaa7a5" font-size="15">Event ID · app · board · node</text>
+		<line x1="900" y1="456" x2="1128" y2="456" stroke="#ffffff" stroke-opacity="0.09"/>
+		<text x="900" y="494" fill="#d8d4d0" font-size="15">1  Verify delivery path</text>
+		<text x="900" y="532" fill="#d8d4d0" font-size="15">2  Check active state + type</text>
+		<text x="900" y="570" fill="#d8d4d0" font-size="15">3  Merge configured + trigger data</text>
+
+		<rect x="1250" y="286" width="268" height="334" rx="30" fill="url(#dispatch)" stroke="#ff7652" stroke-width="2.4"/>
+		<rect x="1282" y="318" width="108" height="28" rx="14" fill="#ff7652" fill-opacity="0.15" stroke="#ff7652" stroke-opacity="0.5"/>
+		<text x="1336" y="338" text-anchor="middle" fill="#ff9a7e" font-size="12" font-weight="760" letter-spacing="1.5">DISPATCH</text>
+		<text x="1282" y="392" fill="#f7f2ee" font-size="23" font-weight="720">Workflow run</text>
+		<text x="1282" y="425" fill="#b8b2ae" font-size="15">One resolved event invocation</text>
+		<rect x="1282" y="468" width="204" height="54" rx="14" fill="#29262a" stroke="#ff7652" stroke-opacity="0.36"/>
+		<text x="1384" y="501" text-anchor="middle" fill="#e8dfda" font-size="15">Execution environment</text>
+		<rect x="1282" y="540" width="204" height="54" rx="14" fill="#29262a" stroke="#f1b35f" stroke-opacity="0.36"/>
+		<text x="1384" y="573" text-anchor="middle" fill="#e8dfda" font-size="15">Run status · logs · result</text>
+	</g>
+
+	<path d="M396 354H452V333H474" fill="none" stroke="#59c7d8" stroke-width="3" marker-end="url(#arrow-cyan)"/>
+	<path d="M396 552H452V573H474" fill="none" stroke="#a58aff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+	<path d="M778 333H820V408H856" fill="none" stroke="#59c7d8" stroke-width="3" marker-end="url(#arrow-cyan)"/>
+	<path d="M778 573H820V498H856" fill="none" stroke="#a58aff" stroke-width="3" marker-end="url(#arrow-purple)"/>
+	<path d="M1160 453H1228" fill="none" stroke="#ff7652" stroke-width="3.8" marker-end="url(#arrow-orange)" filter="url(#glow)"/>
+
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+		<rect x="486" y="730" width="1032" height="76" rx="20" fill="#202126" stroke="#ffffff" stroke-opacity="0.11"/>
+		<text x="520" y="760" fill="#8e909a" font-size="12" font-weight="760" letter-spacing="1.4">SHARED CONTRACT</text>
+		<text x="520" y="788" fill="#f4f0ec" font-size="17" font-weight="700">The transport changes; event lookup, scoped credentials, dispatch, and run observability stay consistent.</text>
+	</g>
+	<text x="88" y="824" fill="#8e909a" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15">Event sink architecture · local and hosted delivery converge before execution</text>
+</svg>

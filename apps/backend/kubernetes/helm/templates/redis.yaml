@@ -1,10 +1,16 @@
 {{- if .Values.redis.enabled }}
 {{- $fullname := include "flow-like.fullname" . -}}
-{{- $secretName := printf "%s-redis" $fullname -}}
-{{- $existing := (lookup "v1" "Secret" .Release.Namespace $secretName) -}}
+{{- $secretName := include "flow-like.redisSecretName" . -}}
+{{- $usesExistingSecret := and .Values.redis.auth.enabled (ne (default "" .Values.redis.auth.existingSecret) "") -}}
+{{- $existing := dict -}}
+{{- if not $usesExistingSecret -}}
+  {{- $existing = (lookup "v1" "Secret" .Release.Namespace $secretName) -}}
+{{- end -}}
 {{- $password := "" -}}
 {{- if .Values.redis.auth.enabled -}}
-  {{- if $existing -}}
+  {{- if $usesExistingSecret -}}
+    {{- /* The existing Secret is read by the pod; never copy its value into a rendered manifest. */ -}}
+  {{- else if $existing -}}
     {{- $password = (index $existing.data "REDIS_PASSWORD" | b64dec) -}}
   {{- else -}}
     {{- $p := (default "" .Values.redis.auth.password) -}}
@@ -23,6 +29,7 @@
   {{- $url = printf "redis://%s:6379" $host -}}
 {{- end -}}
 
+{{- if not $usesExistingSecret }}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -35,6 +42,7 @@ stringData:
   REDIS_URL: {{ $url | quote }}
   REDIS_PASSWORD: {{ $password | quote }}
 ---
+{{- end }}
 apiVersion: v1
 kind: Service
 metadata:

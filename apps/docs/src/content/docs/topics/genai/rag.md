@@ -1,371 +1,189 @@
 ---
 title: RAG & Knowledge Bases
-description: Build AI systems that answer questions from your documents
+description: Build AI systems that retrieve evidence from your documents before answering
 sidebar:
   order: 4
 ---
 
-**Retrieval-Augmented Generation (RAG)** allows your AI to answer questions using information from your own documents. Instead of relying only on what the model was trained on, RAG fetches relevant content and includes it in the AI's context.
+**Retrieval-Augmented Generation (RAG)** adds selected source content to a model request. The model still generates the answer, but the workflow controls which documents are searched, which passages are supplied, and what evidence is returned to the user.
 
-:::tip[What is RAG?]
-RAG = **Retrieve** relevant documents + **Augment** the prompt with them + **Generate** an informed response
+:::tip[The RAG contract]
+Retrieve relevant passages, augment the request with those passages, then generate an answer that stays within the supplied evidence.
 :::
 
-## Why Use RAG?
+![The Flow-Like RAG architecture: documents are indexed once, then each question retrieves context before an answer is generated](../../../../assets/RAGOverview.svg)
 
-| Without RAG | With RAG |
-|-------------|----------|
-| AI only knows training data | AI accesses your documents |
-| Can't answer company-specific questions | Answers from your knowledge base |
-| May hallucinate facts | Cites actual sources |
-| General, generic responses | Specific, relevant answers |
+## Two workflows, two responsibilities
 
-## RAG Architecture
+| Phase | Runs when | Responsibility |
+|-------|-----------|----------------|
+| Indexing | A source is added or changed | Extract, chunk, embed, and store content with provenance |
+| Query | A user asks a question | Embed, search, select context, answer, and cite sources |
 
-A RAG system in Flow-Like has two phases:
+Keep indexing separate from answering. This makes corpus updates, embedding migrations, and query evaluation easier to operate independently.
 
-### 1. Indexing Phase (One-Time Setup)
-```
-Documents ──▶ Chunk Text ──▶ Embed ──▶ Store in Database
-```
+## Build the index
 
-### 2. Query Phase (Every Question)
-```
-User Question ──▶ Embed Query ──▶ Search Database ──▶ Add to Prompt ──▶ Generate Answer
-```
+### 1. Extract source content
 
-## Building a RAG System
+Read each source with the appropriate document node and preserve:
 
-### Step 1: Prepare Your Documents
+- a stable source ID;
+- title or filename;
+- page, section, or other location;
+- source version or modification time;
+- access-control metadata where required.
 
-First, you need to get your documents into Flow-Like:
+See [Document processing](/topics/document-processing/overview/) for PDF, spreadsheet, image, DOCX, PPTX, and HTML paths.
 
-1. **Upload files** to your app's [Storage](/apps/storage/)
-2. **Read file contents** using Storage nodes
-3. **Split into chunks** for efficient retrieval
+### 2. Chunk the text
 
-### Step 2: Create Embeddings
+Use [Chunk Text](/nodes/ai/preprocessing/chunk-text/) when chunk boundaries should follow the configured embedding model's splitter, or [Character Chunk Text](/nodes/ai/preprocessing/chunk-text-char/) for character-based splitting.
 
-**Embeddings** are numerical representations that capture the meaning of text. Similar texts have similar embeddings, enabling semantic search.
+Choose chunk size and overlap through evaluation rather than a universal default:
 
-#### Load an Embedding Model
+- smaller chunks improve passage precision but may lose surrounding context;
+- larger chunks preserve context but can dilute the match;
+- overlap can protect facts at a boundary but increases index size and duplicate retrieval;
+- headings and section metadata help reconstruct meaning.
 
-Use the **Load Embedding Model** node:
+Do not split tables, lists, or procedures blindly when their rows or steps depend on one another.
 
-```
-Load Embedding Model
-    │
-    ├── Model: (select an embedding model)
-    │
-    └── Result ──▶ (embedding model reference)
-```
+### 3. Embed each chunk
 
-**Recommended embedding models:**
-- `text-embedding-3-small` (OpenAI) – Fast, affordable
-- `text-embedding-3-large` (OpenAI) – Higher quality
-- `nomic-embed-text` (Ollama) – Local, free
-- `voyage-2` (VoyageAI) – High quality
+Use [Load Embedding Model](/nodes/ai/embedding/load-model/) and [Embed Document](/nodes/ai/embedding/embed-document/). Index and query with the same embedding model and configuration; vectors from different embedding spaces are not interchangeable.
 
-#### Chunk Your Documents
+### 4. Store content and provenance
 
-Large documents need to be split into smaller pieces. Use **Chunk Text**:
+Open a local database with [Open Database](/nodes/data/database/open-local-db/) and insert or upsert the chunk data and vector. Use a deterministic chunk ID derived from the source version and chunk location when repeatable re-indexing matters.
 
-```
-Chunk Text
-    │
-    ├── Text: (your document)
-    ├── Chunk Size: 500
-    ├── Overlap: 50
-    │
-    └── Chunks ──▶ (array of text pieces)
-```
+A useful record shape is:
 
-| Parameter | Description | Recommendation |
-|-----------|-------------|----------------|
-| **Chunk Size** | Characters per chunk | 300-1000 |
-| **Overlap** | Characters shared between chunks | 10-20% of chunk size |
-
-#### Embed Your Documents
-
-For each chunk, create an embedding using **Embed Document**:
-
-```
-For Each Chunk
-    │
-    ▼
-Embed Document
-    │
-    ├── Document: (chunk text)
-    ├── Model: (embedding model)
-    │
-    └── Vector ──▶ (embedding array)
-```
-
-### Step 3: Store in Database
-
-Flow-Like provides a local vector database for storing and searching embeddings.
-
-#### Open a Database
-
-Use **Open Database** to create or connect to a database:
-
-```
-Open Database
-    │
-    ├── Name: "my_knowledge_base"
-    │
-    └── Database ──▶ (database connection)
-```
-
-#### Insert Documents
-
-Use **Insert** or **Upsert** to store your chunks with their embeddings:
-
-```
-Insert
-    │
-    ├── Database: (connection)
-    ├── Data: {
-    │       "text": "chunk content...",
-    │       "source": "document.pdf",
-    │       "page": 5
-    │   }
-    ├── Vector: (embedding)
-    │
-    └── End
-```
-
-:::note[Vector Column]
-The database automatically creates a vector column for similarity search. Your additional data (text, source, etc.) is stored alongside.
-:::
-
-### Step 4: Search at Query Time
-
-When a user asks a question:
-
-#### Embed the Query
-
-```
-Embed Query
-    │
-    ├── Query: "What is our return policy?"
-    ├── Model: (same embedding model!)
-    │
-    └── Vector ──▶ (query embedding)
-```
-
-:::caution[Important]
-Always use the **same embedding model** for indexing and querying. Different models produce incompatible embeddings!
-:::
-
-#### Search the Database
-
-Use **Vector Search** to find similar documents:
-
-```
-Vector Search
-    │
-    ├── Database: (connection)
-    ├── Vector: (query embedding)
-    ├── Limit: 5
-    │
-    └── Results ──▶ (matching documents)
-```
-
-### Step 5: Generate the Answer
-
-Now combine the retrieved documents with the user's question:
-
-```
-Set System Message
-    │
-    ├── System: "Answer using ONLY the provided context..."
-    │
-    ▼
-Push Message (add context)
-    │
-    ├── Content: "Context:\n{retrieved documents}"
-    ├── Role: "user"
-    │
-    ▼
-Push Message (add question)
-    │
-    ├── Content: "Question: {user question}"
-    ├── Role: "user"
-    │
-    ▼
-Invoke LLM ──▶ Answer
-```
-
-## Search Methods
-
-Flow-Like supports multiple search strategies:
-
-### Vector Search
-Finds documents by **semantic similarity**—great for conceptual questions.
-
-```
-"What's our vacation policy?" → finds "PTO guidelines" document
-```
-
-### Full-Text Search
-Finds documents by **exact keywords**—great for specific terms.
-
-```
-"policy number 12345" → finds documents containing "12345"
-```
-
-### Hybrid Search
-Combines **vector + full-text** for the best of both worlds:
-
-```
-Hybrid Search
-    │
-    ├── Vector: (query embedding)
-    ├── Search Term: "vacation policy"
-    ├── Re-Rank: true
-    │
-    └── Results ──▶ (best matches)
-```
-
-The **Re-Rank** option reorders results for better relevance.
-
-## Complete RAG Flow Example
-
-Here's a full RAG chatbot flow:
-
-```
-Chat Event
-    │
-    ├──▶ history
-    │
-    ▼
-Get Last Message (extract user question)
-    │
-    ▼
-Embed Query
-    │
-    ▼
-Hybrid Search (find relevant docs)
-    │
-    ▼
-Format Context (combine retrieved docs)
-    │
-    ▼
-Set System Message: "Answer based on context..."
-    │
-    ▼
-Push Message: (context + question)
-    │
-    ▼
-Invoke LLM
-    │
-    ▼
-Push Response ──▶ (stream answer to user)
-```
-
-## Best Practices
-
-### 1. Chunk Strategically
-- Use smaller chunks (300-500 chars) for precise answers
-- Use larger chunks (800-1000 chars) for more context
-- Consider semantic chunking (by paragraph/section)
-
-### 2. Include Metadata
-Store useful metadata with each chunk:
 ```json
 {
-  "text": "chunk content",
-  "source": "employee_handbook.pdf",
-  "page": 12,
+  "chunk_id": "handbook-v7-benefits-004",
+  "text": "Employees may carry over...",
+  "source_id": "employee-handbook",
+  "source_title": "Employee Handbook",
   "section": "Benefits",
-  "updated": "2025-01-15"
+  "page": 12,
+  "source_version": "7"
 }
 ```
 
-### 3. Craft Good System Prompts
-Tell the AI to use only the provided context:
+The record should contain enough metadata to display a source reference and to remove or replace every chunk from one source version.
 
-```
-Answer the user's question using ONLY the information provided in the context.
-If the context doesn't contain the answer, say "I don't have information about that."
-Always cite your sources.
-```
+## Answer a query
 
-### 4. Handle "No Results" Gracefully
-When the search returns no relevant documents, acknowledge it:
+### 1. Embed the question
 
-```
-If (results.length == 0)
-    └── Respond: "I couldn't find relevant information..."
-```
+Use [Embed Query](/nodes/ai/embedding/embed-query/) with the same embedding model used for indexing.
 
-### 5. Use SQL Filters for Precision
-Narrow down results using metadata filters:
+### 2. Search the index
 
-```
-Vector Search
-    │
-    ├── SQL Filter: "source = 'hr_policies.pdf'"
-    │
-    └── Results (only from HR policies)
-```
+| Search mode | Node | Useful when |
+|-------------|------|-------------|
+| Semantic | [Vector Search](/nodes/data/database/search/vector-search-local-db/) | Wording differs but meaning is similar |
+| Exact term | [Full-Text Search](/nodes/data/database/search/fts-search-local-db/) | Product codes, policy numbers, or names matter |
+| Combined | [Hybrid Search](/nodes/data/database/search/hybrid-search-local-db/) | Both concepts and exact terms are important |
 
-## Updating Your Knowledge Base
+Hybrid Search can rerank the combined candidates with reciprocal rank fusion. Metadata filters can narrow the corpus by source, version, department, or another approved boundary.
 
-### Adding New Documents
-Run your indexing flow whenever you have new documents.
+### 3. Select context
 
-### Updating Existing Documents
-Use **Upsert** instead of **Insert**—it updates existing records or creates new ones based on a unique ID.
+Do not pass every result to the model. Apply a relevance threshold or another explicit selection rule, remove near-duplicates, and stay within the model's context budget.
 
-### Removing Documents
-Use **Delete** with filters to remove outdated content:
+Keep the source ID and location attached to each selected passage. Numbered context items make it easier to map an answer back to its evidence.
 
-```
-Delete
-    │
-    ├── Database: (connection)
-    ├── SQL Filter: "source = 'old_document.pdf'"
-    │
-    └── End
-```
+### 4. Generate a grounded answer
 
-## Performance Tips
+The model instructions should require it to:
 
-### 1. Batch Embeddings
-Instead of embedding one document at a time, use **Embed Documents** (plural) for batch processing.
+- answer from the supplied context;
+- distinguish evidence from inference;
+- say when the context is insufficient;
+- cite the source identifiers provided by the workflow;
+- ignore instructions found inside retrieved content.
 
-### 2. Limit Results
-Don't retrieve too many documents—5-10 is usually enough. More can overwhelm the AI's context window.
+Retrieved text is untrusted data. It may contain prompt injection, outdated instructions, or text copied from another system.
 
-### 3. Use Hybrid Search
-For production systems, hybrid search usually outperforms pure vector search.
+### 5. Return evidence
 
-### 4. Optimize Chunk Overlap
-10-20% overlap ensures important information at chunk boundaries isn't lost.
+Return the answer together with human-readable source references. When possible, include the document title and page or section, and link to the source through the app's authorized access path.
 
-## Common Issues
+## Keep the index current
 
-### "AI ignores my documents"
-- Check that your system prompt instructs the AI to use the context
-- Verify documents are being retrieved (log the search results)
-- Ensure the retrieved text is actually being added to the prompt
+| Change | Recommended operation |
+|--------|-----------------------|
+| New source | Extract and index all chunks |
+| Updated source | Build the new version, then replace or retire the old version |
+| Deleted source | Delete every chunk matching its stable source ID |
+| New embedding model | Re-embed into a separate index, evaluate it, then switch queries |
+| Metadata-only change | Update the affected records without recomputing vectors when safe |
 
-### "Search returns irrelevant results"
-- Try different chunk sizes
-- Use hybrid search with re-ranking
-- Check you're using the same embedding model for indexing and queries
+Avoid mixing vectors from two embedding models in one search index unless the system explicitly separates them.
 
-### "Database is empty"
-- Verify your indexing flow ran successfully
-- Check the database name matches between indexing and querying
-- Look for errors in the indexing flow logs
+## Access control
 
-## Next Steps
+Apply document permissions before retrieved content enters the model context. A post-generation filter cannot reliably undo information the model already saw.
 
-With RAG set up, explore:
+Store the metadata needed to enforce the boundary and test that:
 
-- **[AI Agents](/topics/genai/agents/)** – Let your AI search the knowledge base autonomously
-- **[Extraction](/topics/genai/extraction/)** – Pull structured data from retrieved documents
-- **[Chat & Conversations](/topics/genai/chat/)** – Build a conversational RAG interface
+- one user cannot retrieve another tenant's chunks;
+- revoked documents disappear from results;
+- citations do not expose inaccessible source URLs;
+- cached results respect the same access scope.
+
+## Evaluate retrieval and answers
+
+Create a test set with questions, expected source passages, and expected answer facts.
+
+Measure retrieval separately from generation:
+
+| Layer | Useful checks |
+|-------|---------------|
+| Retrieval | hit rate, rank of the relevant chunk, duplicate rate, irrelevant-context rate |
+| Answer | factual correctness, citation correctness, completeness, unsupported-claim rate |
+| System | latency, model and embedding cost, index freshness, no-result rate |
+
+Include difficult cases:
+
+- exact identifiers;
+- synonyms and paraphrases;
+- questions whose answer spans adjacent chunks;
+- no-answer questions;
+- conflicting or outdated sources;
+- prompt injection inside documents;
+- access-restricted sources.
+
+Tune chunking, search mode, filters, candidate count, and context selection against this set. Changing the answer prompt cannot repair a relevant passage that was never retrieved.
+
+## Troubleshooting
+
+| Symptom | Check |
+|---------|-------|
+| Relevant source never appears | Extraction, chunk boundaries, embedding consistency, filters |
+| Results are conceptually related but wrong | Metadata filters, hybrid search, corpus duplication |
+| Answer ignores evidence | Context formatting, instruction order, excessive irrelevant context |
+| Citations point to the wrong place | Source metadata propagation and context numbering |
+| Old content keeps appearing | Version replacement and deletion by stable source ID |
+| Queries suddenly return nothing | Model/index mismatch, database selection, access filter |
+
+## Production checklist
+
+- [ ] Indexing and query workflows are separate
+- [ ] Every chunk retains source and location metadata
+- [ ] Index and query use the same embedding configuration
+- [ ] Chunking choices are evaluated on representative questions
+- [ ] Access filters run before generation
+- [ ] No-result behavior is explicit
+- [ ] Answers include verifiable source references
+- [ ] Updates and deletions replace all affected chunks
+- [ ] Retrieval and answer quality are measured separately
+
+## Next steps
+
+- [AI agents](/topics/genai/agents/)
+- [Extraction](/topics/genai/extraction/)
+- [Chat and conversations](/topics/genai/chat/)
+- [Document processing](/topics/document-processing/overview/)

@@ -133,7 +133,7 @@ impl RuntimeCredentialsTrait for MixedRuntimeCredentials {
     }
 }
 
-async fn scope_inner(
+pub(super) async fn scope_inner(
     creds: &RuntimeCredentials,
     sub: &str,
     app_id: &str,
@@ -161,7 +161,7 @@ async fn scope_inner(
     }
 }
 
-async fn master_inner(creds: &RuntimeCredentials) -> Result<RuntimeCredentials> {
+pub(super) async fn master_inner(creds: &RuntimeCredentials) -> Result<RuntimeCredentials> {
     match creds {
         #[cfg(feature = "aws")]
         RuntimeCredentials::Aws(aws) => Ok(RuntimeCredentials::Aws(aws.master_credentials().await)),
@@ -179,30 +179,30 @@ async fn master_inner(creds: &RuntimeCredentials) -> Result<RuntimeCredentials> 
 
 /// Default provider based on compile-time feature flags (same priority as
 /// `RuntimeCredentials::master_credentials`).
-fn default_provider_name() -> &'static str {
-    #[cfg(feature = "r2")]
-    return "r2";
-
-    #[cfg(all(feature = "aws", not(feature = "r2")))]
+pub(super) fn default_provider_name() -> &'static str {
+    #[cfg(feature = "aws")]
     return "aws";
 
-    #[cfg(all(feature = "azure", not(feature = "aws"), not(feature = "r2")))]
+    #[cfg(all(feature = "azure", not(feature = "aws")))]
     return "azure";
 
+    #[cfg(all(feature = "gcp", not(feature = "aws"), not(feature = "azure")))]
+    return "gcp";
+
     #[cfg(all(
-        feature = "gcp",
+        feature = "r2",
         not(feature = "aws"),
         not(feature = "azure"),
-        not(feature = "r2")
+        not(feature = "gcp")
     ))]
-    return "gcp";
+    return "r2";
 
     #[cfg(not(any(feature = "aws", feature = "azure", feature = "gcp", feature = "r2")))]
     return "none";
 }
 
-fn provider_to_runtime_credentials(provider: &str) -> Result<RuntimeCredentials> {
-    match provider {
+pub(super) fn provider_to_runtime_credentials(provider: &str) -> Result<RuntimeCredentials> {
+    match provider.to_ascii_lowercase().as_str() {
         #[cfg(feature = "r2")]
         "r2" => {
             use super::r2_credentials::R2RuntimeCredentials;
@@ -214,14 +214,14 @@ fn provider_to_runtime_credentials(provider: &str) -> Result<RuntimeCredentials>
             Ok(RuntimeCredentials::Aws(AwsRuntimeCredentials::from_env()))
         }
         #[cfg(feature = "azure")]
-        "azure" => {
+        "azure" | "blob" => {
             use super::azure_credentials::AzureRuntimeCredentials;
             Ok(RuntimeCredentials::Azure(
                 AzureRuntimeCredentials::from_env(),
             ))
         }
         #[cfg(feature = "gcp")]
-        "gcp" => {
+        "gcp" | "gcs" | "google" => {
             use super::gcp_credentials::GcpRuntimeCredentials;
             Ok(RuntimeCredentials::Gcp(GcpRuntimeCredentials::from_env()))
         }

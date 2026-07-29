@@ -56,6 +56,8 @@ export interface IPlanStep {
 	timestamp?: number;
 	startTime?: number;
 	endTime?: number;
+	/** Tool that produced this step. Drives the FlowPilot orb's activity state and tool labels. */
+	toolName?: string;
 }
 
 export interface IModelCallEntry {

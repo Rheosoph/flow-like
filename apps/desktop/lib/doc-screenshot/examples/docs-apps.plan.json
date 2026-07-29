@@ -91,6 +91,57 @@
 			]
 		},
 		{
+			"name": "runtime-variables",
+			"path": "/library/config/runtime-vars",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "CRM_API_TOKEN"
+				},
+				{
+					"type": "fill",
+					"selector": ".divide-y > div:nth-child(1) input[type=\"password\"]",
+					"value": "docs_crm_token_8fb2c1"
+				},
+				{
+					"type": "fill",
+					"selector": ".divide-y > div:nth-child(2) textarea",
+					"value": "https://support-api.eu.example"
+				},
+				{
+					"type": "delay",
+					"ms": 200
+				},
+				{
+					"type": "click",
+					"selector": ".divide-y > div:nth-child(1) > div:first-child > div:last-child button",
+					"index": 0
+				},
+				{
+					"type": "delay",
+					"ms": 200
+				},
+				{
+					"type": "click",
+					"selector": ".divide-y > div:nth-child(2) > div:first-child > div:last-child button",
+					"index": 0
+				},
+				{
+					"type": "waitFor",
+					"text": "All Configured"
+				},
+				{
+					"type": "capture",
+					"name": "RuntimeVariables",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
 			"name": "data-studio-source",
 			"path": "/library/config/explore",
 			"query": {
@@ -131,6 +182,210 @@
 				{
 					"type": "capture",
 					"name": "AppEvents",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "pages-overview",
+			"path": "/library/config/pages",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "[role=\"tab\"]",
+					"state": "visible"
+				},
+				{
+					"type": "click",
+					"selector": "[role=\"tab\"]",
+					"index": 1
+				},
+				{
+					"type": "waitFor",
+					"text": "Support Operations Dashboard"
+				},
+				{
+					"type": "capture",
+					"name": "PagesOverview",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "page-builder",
+			"path": "/page-builder",
+			"query": {
+				"id": "support-operations-page",
+				"app": "docs-app",
+				"board": "docs-board",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Visual Page Builder"
+				},
+				{
+					"type": "waitFor",
+					"text": "Support operations"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-builder-component=\"open-tickets-card\"]",
+					"state": "visible"
+				},
+				{
+					"type": "click",
+					"selector": "[data-builder-component=\"open-tickets-card\"]"
+				},
+				{
+					"type": "delay",
+					"ms": 300
+				},
+				{
+					"type": "capture",
+					"name": "PageBuilder",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "routes-overview",
+			"path": "/library/config/pages",
+			"query": {
+				"id": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"selector": "input[placeholder=\"Search events...\"]",
+					"state": "visible"
+				},
+				{
+					"type": "waitFor",
+					"text": "/chat"
+				},
+				{
+					"type": "waitFor",
+					"text": "/triage"
+				},
+				{
+					"type": "capture",
+					"name": "RoutesOverview",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "route-configuration",
+			"path": "/library/config/pages",
+			"viewport": {
+				"height": 1280
+			},
+			"query": {
+				"id": "docs-app",
+				"eventId": "triage-selected-request",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Basic Information"
+				},
+				{
+					"type": "waitFor",
+					"text": "/triage"
+				},
+				{
+					"type": "click",
+					"selector": "button.font-mono"
+				},
+				{
+					"type": "waitFor",
+					"selector": "input[placeholder=\"/\"]",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "RouteConfiguration",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "widgets-overview",
+			"path": "/library/config/widgets",
+			"query": {
+				"id": "docs-app",
+				"widgetId": "support-health-widget",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Support Health Card"
+				},
+				{
+					"type": "waitFor",
+					"text": "Widget Preview"
+				},
+				{
+					"type": "capture",
+					"name": "WidgetsOverview",
+					"mode": "viewport"
+				}
+			]
+		},
+		{
+			"name": "widget-builder",
+			"path": "/widget",
+			"query": {
+				"id": "support-health-widget",
+				"app": "docs-app",
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Support Health Card"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-builder-component=\"root\"]",
+					"state": "visible"
+				},
+				{
+					"type": "click",
+					"selector": "[role=\"tab\"]",
+					"index": 1
+				},
+				{
+					"type": "waitFor",
+					"selector": "#tree-node-root",
+					"state": "visible"
+				},
+				{
+					"type": "click",
+					"selector": "#tree-node-root button",
+					"index": 0
+				},
+				{
+					"type": "waitFor",
+					"selector": "#tree-node-health-summary",
+					"state": "visible"
+				},
+				{
+					"type": "delay",
+					"ms": 300
+				},
+				{
+					"type": "capture",
+					"name": "WidgetBuilder",
 					"mode": "viewport"
 				}
 			]

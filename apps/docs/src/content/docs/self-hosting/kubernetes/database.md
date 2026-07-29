@@ -1,35 +1,16 @@
 ---
 title: Database
-description: Database configuration for the Kubernetes backend.
+description: Choose and migrate the SQL database used by the Kubernetes backend.
 sidebar:
   order: 30
 ---
 
-The Flow-Like API uses a relational database for platform data. The Prisma schema is in:
+The Flow-Like API stores platform data in a PostgreSQL-compatible relational
+database. The Prisma schema is under `packages/api/prisma/schema/`.
 
-- `packages/api/prisma/schema/`
+## Internal Database
 
-## CockroachDB (Default)
-
-The Helm chart deploys a 3-node CockroachDB cluster by default. This provides:
-
-- **Native schema compatibility** — Flow-Like's Prisma schema is CockroachDB-first
-- **High availability** — Automatic failover with 3 nodes
-- **Distributed SQL** — Horizontal scaling built-in
-- **PostgreSQL compatible** — Standard drivers work out of the box
-
-### Internal CockroachDB (default)
-
-```yaml
-database:
-  type: internal
-  internal:
-    replicas: 3
-    persistence:
-      size: 10Gi
-```
-
-For local development, a single-node cluster is sufficient:
+`database.type: internal` deploys one CockroachDB pod:
 
 ```yaml
 database:
@@ -37,51 +18,88 @@ database:
   internal:
     replicas: 1
     persistence:
-      size: 1Gi
+      storageClass: ""
+      size: 10Gi
 ```
 
-### External Database
+This workload runs CockroachDB with `start-single-node --insecure`. It is a
+convenient evaluation and development database, not a highly available or
+TLS-hardened production topology.
 
-Use an external PostgreSQL or CockroachDB instance:
+Do not increase `database.internal.replicas`. Multiple independent
+`start-single-node` pods do not form a CockroachDB cluster.
+
+## External Database
+
+Use an externally operated PostgreSQL or CockroachDB service for production:
 
 ```yaml
 database:
   type: external
   external:
-    connectionString: "postgresql://user:pass@host:5432/flowlike"
-    # Or use an existing secret:
-    existingSecret: "my-db-secret"
+    existingSecret: flow-like-database
 ```
 
-## Schema Migrations
+The named Secret must contain one key:
 
-### Helm Chart Migration Job
+```dotenv
+DATABASE_URL=postgresql://flowlike:replace-me@database.example.com:5432/flowlike?sslmode=require
+```
 
-The chart includes a migration job that runs on install/upgrade:
+The URL is consumed by both the API and the migration Job. Keep it in an
+externally managed Kubernetes Secret; avoid `database.external.connectionString`
+in shared or committed values files.
+
+See [Installation](/self-hosting/kubernetes/installation/#6-use-an-external-database-in-production)
+for a command that creates the Secret without putting the URL in shell
+history.
+
+## Schema Application
+
+The chart enables `database.migration` by default:
 
 ```yaml
 database:
   migration:
     enabled: true
+    image:
+      repository: registry.example.com/flow-like/migration
+      tag: replace-me
+      pullPolicy: IfNotPresent
 ```
 
-### Manual Migration
+The Job waits on `DATABASE_URL`, then runs Prisma schema push during install
+and upgrade. For the internal database it is a post-install hook; for an
+external database it is a pre-install hook.
+
+The current migration command uses `prisma db push --accept-data-loss`.
+Review that behavior against your backup, change-management, and production
+migration policy. To manage schema changes separately, set
+`database.migration.enabled: false` and run an approved migration process
+before rolling out the API.
+
+The repository helper can run the same schema push from a trusted workstation.
+Put `DATABASE_URL` in the ignored `apps/backend/kubernetes/.env` file first:
 
 ```bash
 cd apps/backend/kubernetes
 ./scripts/migrate-db.sh
 ```
 
-Or via Docker:
+It also accepts `--docker` when the local Docker Compose migration service is
+configured.
+
+## Verification
+
+Check the API's Secret reference and database readiness without printing the
+credential:
 
 ```bash
-./scripts/migrate-db.sh --docker
+kubectl get secret flow-like-database -n flow-like
+kubectl logs -n flow-like -l app.kubernetes.io/component=db-migration
+kubectl rollout status deployment/flow-like-api -n flow-like
 ```
 
-## Runtime Configuration
-
-The API requires:
-
-- `DATABASE_URL` — CockroachDB/PostgreSQL connection string
-
-This is read by `flow_like_api::state::State`.
+Successful Helm hook Jobs may already have been deleted according to the
+chart's hook policy. Use `helm status` and namespace events when no migration
+pod remains.

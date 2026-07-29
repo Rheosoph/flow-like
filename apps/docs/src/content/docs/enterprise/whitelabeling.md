@@ -1,164 +1,108 @@
 ---
 title: White-Labeling
-description: Deploy Flow-Like as your own branded workflow platform
+description: Scope an embedded, headless, or hybrid Flow-Like OEM deployment
 sidebar:
   order: 20
 ---
 
-Flow-Like's white-label program lets you deploy a fully branded workflow automation platform — under your name, on your infrastructure, for your customers.
+Flow-Like's white-label and OEM program is for teams that want to ship
+Flow-Like capabilities as part of their own product and brand. The deployment
+architecture, commercial rights, support, and delivered components are defined
+in the commercial agreement for your use case.
 
-## What is White-Labeling?
-
-White-labeling means taking Flow-Like and making it yours. Your customers see your brand, your logo, your domain — while you benefit from Flow-Like's battle-tested workflow engine under the hood.
-
-**You get:**
-- Complete brand replacement (logo, colors, name)
-- Custom domain deployment
-- SSO integration with your identity provider
-- Full source code access
-- The right to sublicense to your customers
-
-## Two Approaches
-
-### 🔧 Embed the Workflow Engine
-
-**Integrate Flow-Like's core into your existing product.**
-
-Perfect for SaaS companies that want to add workflow automation to their platform without building from scratch.
-
-| What You Get | Description |
-|--------------|-------------|
-| Rust Core Library | High-performance workflow execution engine |
-| Visual Editor Component | Embeddable React workflow designer |
-| REST API | Execute and manage workflows programmatically |
-| Node Catalog | 200+ pre-built nodes for common operations |
-
-**Use cases:**
-- Add workflow automation to your SaaS product
-- Build internal automation tools
-- Create custom data processing pipelines
-- Power AI agent orchestration
-
-### 🎨 Full Platform White-Label
-
-**Deploy Flow-Like as a complete branded product.**
-
-Perfect for agencies, consultancies, and enterprises who want to offer workflow automation under their own brand.
-
-| What You Get | Description |
-|--------------|-------------|
-| Complete Desktop App | Rebrandable Tauri application |
-| Web Application | Self-hosted web interface |
-| Backend Services | API, executor, and storage services |
-| Documentation | Rebrandable docs site |
-
-**Use cases:**
-- Launch your own workflow automation product
-- Offer automation services to clients
-- Build an internal enterprise platform
-- Create vertical-specific workflow solutions
-
-## Benefits
-
-| Benefit | Description |
-|---------|-------------|
-| **Speed to Market** | Launch in weeks, not years of development |
-| **Proven Technology** | Rust-based engine trusted by enterprises |
-| **Full Ownership** | Self-host on your infrastructure, own your data |
-| **Continuous Updates** | Benefit from ongoing Flow-Like improvements |
-| **Custom Extensions** | Add your own nodes, integrations, and features |
-| **Revenue Opportunity** | Monetize workflows as part of your offering |
-| **No Per-Seat Licensing** | One license, unlimited users |
-
-## Implementation Options
-
-### Self-Service
-
-For teams with development resources who want to handle white-labeling themselves.
-
-:::note[Contact Required]
-Even for self-service white-labeling, you'll need an Enterprise License. Reach out so we can discuss your use case and provide access.
-
-📧 **[info@great-co.de](mailto:info@great-co.de)**
+:::note[Commercial scope]
+The source-available license does not automatically grant every white-label,
+hosted-service, trademark, or sublicensing right. Review
+[Licensing](/enterprise/licensing/) and confirm the intended product and
+distribution model before implementation.
 :::
 
-Once licensed, you can:
-1. Fork the repository under your organization
-2. Follow our customization guides for branding
-3. Deploy on your infrastructure (Docker, Kubernetes, or bare metal)
-4. Access community support via Discord
+## Choose how customers interact
 
-→ See [Customizing & White-Label](/dev/customizing/) for technical details.
+Three common architectures separate the product surface from the execution
+layer:
 
-### Professional Services
+![Embedded, headless, and hybrid architectures for delivering Flow-Like under another product brand](../../../assets/WhiteLabelDeploymentModes.svg)
 
-For teams who want hands-off implementation:
+### Embedded
 
-- **Custom branding** — We rebrand the platform for you
-- **Custom nodes** — We build integrations specific to your needs
-- **Deployment** — We help deploy on your infrastructure
-- **Training** — We train your team on the platform
-- **Priority support** — Dedicated support channel with SLA
+Place the Flow-Like authoring experience inside your existing product through
+an iframe or web component. The surrounding product owns navigation and can
+pass sessions and events between the parent and embedded surface.
 
-## Pricing
+Use this when customers should design Flows without leaving your application.
 
-White-label licensing is available under our Enterprise plan. Pricing depends on:
+### Headless
 
-- Deployment type (engine embed vs full platform)
-- Support level required
-- Custom development needs
-- Number of deployments
+Use the Flow-Like engine and APIs behind an interface you build. A headless
+deployment can invoke and manage automation without exposing the Flow-Like
+frontend to customers.
 
-📧 **Contact us for a quote:** [info@great-co.de](mailto:info@great-co.de)
+Use this when your product needs a purpose-built UI or no customer-facing
+authoring UI at all.
 
-## What's Included
+### Hybrid
 
-| Feature | Engine Embed | Full White-Label |
-|---------|:------------:|:----------------:|
-| Rust workflow engine | ✅ | ✅ |
-| Visual editor component | ✅ | ✅ |
-| REST API | ✅ | ✅ |
-| Pre-built nodes (200+) | ✅ | ✅ |
-| Desktop application | — | ✅ |
-| Web application | — | ✅ |
-| Backend services | — | ✅ |
-| Documentation site | — | ✅ |
-| Source code access | ✅ | ✅ |
-| Sublicensing rights | ✅ | ✅ |
-| Community support | ✅ | ✅ |
-| Priority support | Add-on | Add-on |
-| Custom development | Add-on | Add-on |
+Combine a branded Flow-Like visual editor for builders with API-driven
+execution, custom dashboards, or focused end-user experiences.
 
-## Technical Requirements
+Use this when different audiences need different surfaces over the same
+automation platform.
 
-### Engine Embed
+## Scope the product surface
 
-- Rust toolchain for building
-- Node.js/Bun for frontend components
-- Your existing infrastructure
+White-label work commonly covers:
 
-### Full Platform
+- visual tokens, typography, logos, favicons, and launch assets;
+- custom domains and branded customer communications;
+- identity integration and session passthrough;
+- tenant isolation, deployment topology, and data residency;
+- usage metering and integration with your billing or entitlement layer;
+- API or SDK access and custom product integrations;
+- support, maintenance, and upgrade responsibilities.
 
-- Docker or Kubernetes for deployment
-- S3-compatible storage (AWS S3, MinIO, R2, etc.)
-- PostgreSQL database
-- Redis (optional, for job queues)
+Availability and implementation differ by deployment. Treat this as a
+discovery checklist, not as a list of entitlements included in every
+agreement.
 
-→ See [Self-Hosting](/self-hosting/overview/) for deployment details.
+## Prepare an implementation brief
 
-## Get Started
+Before requesting a proposal, document:
 
-:::tip[Ready to Make Flow-Like Yours?]
-Let's discuss your white-label needs and find the right solution for your business.
+1. **Audience** — who builds Flows and who only invokes them.
+2. **Surface** — Embedded, Headless, Hybrid, or a mix by customer.
+3. **Tenancy** — single tenant, multi-tenant, or dedicated deployments.
+4. **Identity** — SSO provider, user provisioning, and session handoff.
+5. **Execution** — local, hosted, customer-managed, or air-gapped.
+6. **Branding** — product name, domains, assets, theme, and communications.
+7. **Operations** — expected usage, regions, observability, SLA, and upgrades.
+8. **Distribution** — internal use, customer deployment, hosted service, or
+   resale.
 
-**Schedule a call to discuss:**
-- Your use case and requirements
-- Pricing and licensing terms
-- Implementation timeline
-- Support options
+These choices determine both the technical plan and the commercial license.
 
-📧 **[info@great-co.de](mailto:info@great-co.de)**
-:::
+## Implementation paths
+
+Teams may implement an agreed scope themselves or include professional
+services for branding, integrations, deployment, training, and support.
+
+For the open customization surfaces, see
+[Customizing & White-Label](/dev/customizing/). For infrastructure planning,
+start with [Self-Hosting](/self-hosting/overview/) and validate the exact
+services required by the architecture you select.
+
+## Commercial planning
+
+Pricing and terms depend on the deployment mode, number and shape of
+deployments, usage, support level, and custom engineering. Do not assume a
+per-seat model, unlimited deployment rights, or sublicensing rights unless
+they appear in the proposal.
+
+For a white-label product inquiry, contact
+[sales@flow-like.com](mailto:sales@flow-like.com?subject=White-Label%20%26%20OEM%20Inquiry).
+
+For an OEM partnership, contact
+[partnerships@flow-like.com](mailto:partnerships@flow-like.com?subject=OEM%20Partnership%20Inquiry).
 
 ## Related
 

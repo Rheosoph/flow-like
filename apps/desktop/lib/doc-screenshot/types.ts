@@ -2,6 +2,8 @@ export const DOC_SCREENSHOT_PLAN_SCHEMA =
 	"flow-like.doc-screenshot-plan/v1" as const;
 export const DOC_SCREENSHOT_TAURI_FIXTURE_SCHEMA =
 	"flow-like.doc-screenshot-tauri-fixture/v1" as const;
+export const DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA =
+	"flow-like.doc-screenshot-http-fixture/v1" as const;
 export const DOC_SCREENSHOT_RESULT_SCHEMA =
 	"flow-like.doc-screenshot-result/v1" as const;
 
@@ -172,6 +174,7 @@ export interface DocScreenshotPlan {
 	baseUrl?: string;
 	outputDir: string;
 	tauriFixture?: string;
+	httpFixture?: string;
 	defaults: DocScreenshotDefaults;
 	scenarios: DocScreenshotScenario[];
 }
@@ -180,6 +183,32 @@ export interface DocScreenshotTauriFixture {
 	schema: typeof DOC_SCREENSHOT_TAURI_FIXTURE_SCHEMA;
 	strict: boolean;
 	responses: Record<string, JsonValue | { $error: string }>;
+}
+
+export interface DocScreenshotHttpFixtureRequest {
+	method: string;
+	url: string;
+	body?: string;
+}
+
+export interface DocScreenshotHttpFixtureResponse {
+	status: number;
+	headers: Record<string, string>;
+	body?: string;
+	json?: JsonValue;
+}
+
+export interface DocScreenshotHttpFixtureRoute {
+	request: DocScreenshotHttpFixtureRequest;
+	response: DocScreenshotHttpFixtureResponse;
+}
+
+export interface DocScreenshotHttpFixture {
+	schema: typeof DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA;
+	strict: boolean;
+	blockedOrigins: string[];
+	blockedEndpoints: string[];
+	routes: DocScreenshotHttpFixtureRoute[];
 }
 
 export interface DocScreenshotStepResult {

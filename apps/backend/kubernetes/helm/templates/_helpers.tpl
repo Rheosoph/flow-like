@@ -110,6 +110,29 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
+Backend JWT secret name
+*/}}
+{{- define "flow-like.jwtSecretName" -}}
+{{- if (ne (default "" .Values.jwt.existingSecret) "") -}}
+{{- .Values.jwt.existingSecret -}}
+{{- else -}}
+{{- printf "%s-api-keys" (include "flow-like.fullname" .) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Redis secret name. An existing secret is used only when authentication is
+enabled; otherwise the chart-managed secret carries the unauthenticated URL.
+*/}}
+{{- define "flow-like.redisSecretName" -}}
+{{- if and .Values.redis.auth.enabled (ne (default "" .Values.redis.auth.existingSecret) "") -}}
+{{- .Values.redis.auth.existingSecret -}}
+{{- else -}}
+{{- printf "%s-redis" (include "flow-like.fullname" .) -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 Database mode: internal (CockroachDB) or external
 */}}
 {{- define "flow-like.databaseMode" -}}
@@ -206,4 +229,3 @@ Storage secret name - based on provider
   {{- end -}}
 {{- end -}}
 {{- end }}
-

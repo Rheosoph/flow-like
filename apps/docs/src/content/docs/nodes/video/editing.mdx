@@ -1,0 +1,30 @@
+---
+title: "Editing Node Catalog"
+description: "Video/Editing Flow-Like node category with 2 generated node references."
+sidebar:
+  order: 0
+  label: "Editing"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Editing nodes, Video/Editing, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Video/Editing"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Editing Node Catalog\",\"description\":\"Video/Editing Flow-Like node category with 2 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/video/editing/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Video/Editing\",\"keywords\":\"Editing nodes, Video/Editing, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Video/Editing"}
+	label="Editing"
+	nodes={nodesByCategory["Video/Editing"] ?? []}
+	client:load
+/>

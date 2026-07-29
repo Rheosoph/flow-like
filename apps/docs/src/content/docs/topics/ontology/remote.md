@@ -15,8 +15,14 @@ Everything here is in **Data Studio → Sharing**.
 - A **consumer** installs a **sanitized copy** of the contract. It gets the object types and the *semantics* of actions — but not the producer's private implementation (board IDs, versions, start nodes are stripped).
 - When a consumer invokes a remote action, execution happens **in the producer's project**, which resolves those opaque identifiers itself. The consumer never runs the producer's board directly.
 
+![The Flow-Like remote ontology model: a producer exposes a sanitized contract, a consumer installs bindings, and remote queries and actions continue to run against the producer](../../../../assets/RemoteOntologyOverview.svg)
+
+The **Sharing** tab shows both sides of that contract: the producer's exposure and local-binding controls, plus any sanitized contracts already installed from other projects.
+
+![Data Studio's Sharing tab showing an exposed Customer Operations contract and an installed Product Knowledge remote ontology](../../../../assets/OntologySharing.webp)
+
 :::note[Only exposed contracts are shared]
-The discovery endpoint returns *only* ontologies the producer has explicitly exposed. Exposure can be turned off at any time, which stops new discovery and installs immediately.
+The discovery endpoint returns *only* ontologies the producer has explicitly exposed. Turning exposure off stops new discovery and installs immediately; existing consumers are denied when they next authorize the ontology.
 :::
 
 ## Prerequisites: connect the projects
@@ -24,7 +30,9 @@ The discovery endpoint returns *only* ontologies the producer has explicitly exp
 Sharing rides on **app connections**. Before anything appears in the Sharing tab:
 
 1. Create an active connection from the consuming app to the producing app under **Team → Connections**.
-2. The connection's **role must grant Read Files or Read Database** on the producer. Without it, the producer's contracts stay invisible even if exposed.
+2. The consumer needs **Read Boards** in its own project to discover contracts.
+3. The connection's role must grant **Read Files or Read Databases** on the producer. Without it, the producer's contracts stay invisible even if exposed.
+4. Installing or refreshing a contract also requires **Write Files or Write Databases** in the consuming project.
 
 If there are no active connections, the Sharing tab shows *"No active app connections. Create one from Team → Connections."*
 
@@ -39,6 +47,8 @@ On each of your ontologies in the Sharing tab there are two switches:
 
 Turning **Expose** on is all a producer has to do. Consumers with a qualifying connection can then discover and install it.
 
+Actions have their own **Expose to connected projects** switch. Only actions enabled for sharing are included in the sanitized remote contract; local-only actions stay private even when the ontology itself is exposed.
+
 ## Consumer side: discover and install
 
 The **Available remote ontologies** panel lists your active connections. For each one:
@@ -50,11 +60,21 @@ An installed contract is labelled **"bindings only"** — a reminder that you re
 
 ### Keeping in sync
 
-Each installed contract remembers the producer version it was captured from. When the producer changes their ontology, the badge shows **Update available**. Click **Refresh** to pull the latest sanitized contract and regenerate your bindings.
+Each installed contract remembers the producer version it was captured from. **Discover** or **Refresh** compares that version with the current producer contract and can then show **Update available**. Updates are not pushed automatically. Refresh the contract to install the latest sanitized copy and regenerate its bindings.
 
 ### Removing one
 
 **Uninstall** removes the contract and its generated bindings from your project. Uninstall works even if the connection is no longer active, so you can always clean up a stale import.
+
+## Using remote data in Data Studio
+
+Installed contracts are first-class, read-only data sources:
+
+- **Explore** lists their object types alongside local ontologies. Remote previews carry source provenance and open a read-only object inspector.
+- **Sources** lists the object types supplied by each installed contract.
+- **Queries** has a remote-ontology surface for SQL previews. Remote statements run against the producer and cannot be saved as consumer-side queries or views.
+
+The local object sheet deliberately does not invoke remote actions. Use the generated **Invoke Remote Ontology Action** node so the producer can authorize and execute the governed operation.
 
 ## Using a remote ontology in boards
 
@@ -76,7 +96,7 @@ A producer's containment links keep their hierarchy flag when shared, so you can
 | No implementation leaks | `board_id`, `board_version`, `start_node_id`, and event IDs are stripped from shared action contracts |
 | No cross-ontology leaks | Containment link targets (`dst_ontology`, `dst_binding_id`) are stripped, so a remote subtree can't resolve into a producer overlay that wasn't exposed |
 | Actions can't be widened by editing metadata | Each action pins an immutable board version and a contract hash that's re-checked at invoke time |
-| Revocation is immediate | Turning off **Expose** stops new discovery/installs; existing consumers lose access on their next remote call |
+| Revocation is enforced at authorization | Turning off **Expose** stops new discovery and installs; existing consumers fail at the next workflow run or authorization check (authorization is cached only within a run) |
 | Consumers can always clean up | Uninstall never requires the connection to still be active |
 
 ## Related

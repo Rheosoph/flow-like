@@ -159,6 +159,8 @@ export function applyStreamEvent(
 				...step,
 				description: step.description ?? existing?.description,
 				reasoning: step.reasoning ?? existing?.reasoning,
+				// Kept on the step so the orb can tell research from code generation.
+				toolName: toolName ?? existing?.toolName,
 				timestamp: existing?.timestamp ?? Date.now(),
 			});
 			acc.currentStepId =
@@ -175,6 +177,7 @@ export function applyStreamEvent(
 				title: `Using ${name}`,
 				description: toolFieldSummary(event.data),
 				status: "progress",
+				toolName: name,
 				timestamp: acc.steps.get(id)?.timestamp ?? Date.now(),
 			});
 			acc.currentStepId = id;

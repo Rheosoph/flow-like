@@ -304,6 +304,20 @@ install_helm_chart() {
 
     # Inside k3d, the registry is accessible as registry-name:internal-port
     local registry="${REGISTRY_NAME}:${REGISTRY_INTERNAL_PORT}"
+    local jwt_output
+    local backend_key
+    local backend_pub
+    local backend_kid
+
+    jwt_output="$("$REPO_ROOT/tools/gen-execution-keys.sh" --export)"
+    backend_key="$(printf '%s\n' "$jwt_output" | sed -n 's/^BACKEND_KEY=//p')"
+    backend_pub="$(printf '%s\n' "$jwt_output" | sed -n 's/^BACKEND_PUB=//p')"
+    backend_kid="$(printf '%s\n' "$jwt_output" | sed -n 's/^BACKEND_KID=//p')"
+
+    if [[ -z "$backend_key" || -z "$backend_pub" || -z "$backend_kid" ]]; then
+        log_error "Could not generate the BACKEND_KEY, BACKEND_PUB, and BACKEND_KID values."
+        exit 1
+    fi
 
     # Create namespace
     kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
@@ -380,6 +394,12 @@ executor:
     repository: flow-like/executor
     tag: dev
     pullPolicy: Always
+
+# Execution JWT keypair (generated locally; values-local.yaml is gitignored)
+jwt:
+  backendKey: "${backend_key}"
+  backendPub: "${backend_pub}"
+  backendKid: "${backend_kid}"
 
 # Internal CockroachDB (single node for dev)
 database:
@@ -479,8 +499,6 @@ EOF
     if [[ -f "$ROOT_DIR/helm/values-secrets.yaml" ]]; then
         helm_cmd+=(-f "$ROOT_DIR/helm/values-secrets.yaml")
         log_info "Including secrets from values-secrets.yaml"
-    else
-        log_warn "No values-secrets.yaml found - JWT keys will need to be provided"
     fi
 
     helm_cmd+=(--timeout 10m)

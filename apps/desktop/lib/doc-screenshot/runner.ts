@@ -4,6 +4,7 @@ import { dirname, resolve } from "node:path";
 import puppeteer, {
 	type Browser,
 	type ElementHandle,
+	type HTTPRequest,
 	type HTTPResponse,
 	type KeyInput,
 	type Page,
@@ -15,6 +16,8 @@ import {
 	type DocScreenshotArtifact,
 	type DocScreenshotCaptureStep,
 	type DocScreenshotFormat,
+	type DocScreenshotHttpFixture,
+	type DocScreenshotHttpFixtureResponse,
 	type DocScreenshotKeyboardModifier,
 	type DocScreenshotMouseButton,
 	type DocScreenshotPlan,
@@ -37,6 +40,7 @@ export interface RunDocScreenshotOptions {
 	baseUrl: string;
 	outputDir: string;
 	tauriFixture?: DocScreenshotTauriFixture;
+	httpFixture?: DocScreenshotHttpFixture;
 }
 
 interface ScenarioDiagnostics {
@@ -55,6 +59,7 @@ interface ScenarioRuntime {
 	viewport: DocScreenshotViewport;
 	diagnostics: ScenarioDiagnostics;
 	originViolation?: string;
+	httpFixtureViolation?: string;
 	httpStatus?: number;
 	heldModifiers: Set<DocScreenshotKeyboardModifier>;
 	heldMouseButton?: DocScreenshotMouseButton;
@@ -112,6 +117,126 @@ export function buildScreenshotUrl(
 	return url;
 }
 
+export type DocScreenshotHttpFixtureResolution =
+	| {
+			action: "respond";
+			response: DocScreenshotHttpFixtureResponse;
+	  }
+	| {
+			action: "continue";
+	  }
+	| {
+			action: "block";
+	  }
+	| {
+			action: "abort";
+			error: string;
+	  };
+
+export function resolveHttpFixtureRequest(
+	fixture: DocScreenshotHttpFixture,
+	allowedOrigin: string,
+	request: {
+		method: string;
+		url: string;
+		body?: string;
+	},
+): DocScreenshotHttpFixtureResolution {
+	const route = fixture.routes.find(
+		(candidate) =>
+			candidate.request.method === request.method &&
+			candidate.request.url === request.url &&
+			(candidate.request.body === undefined ||
+				candidate.request.body === request.body),
+	);
+	if (route) {
+		return {
+			action: "respond",
+			response: route.response,
+		};
+	}
+	const url = new URL(request.url);
+	if (
+		(url.protocol === "http:" || url.protocol === "https:") &&
+		(fixture.blockedOrigins.includes(url.origin) ||
+			fixture.blockedEndpoints.includes(`${url.origin}${url.pathname}`))
+	) {
+		return { action: "block" };
+	}
+	if (
+		(url.protocol !== "http:" && url.protocol !== "https:") ||
+		url.origin === allowedOrigin ||
+		!fixture.strict
+	) {
+		return { action: "continue" };
+	}
+	return {
+		action: "abort",
+		error: `Unexpected cross-origin request not declared in the HTTP fixture: ${request.method} ${redactScreenshotUrl(request.url)}`,
+	};
+}
+
+function httpFixtureResponseHeaders(
+	response: DocScreenshotHttpFixtureResponse,
+): Record<string, string> {
+	const headers = { ...response.headers };
+	if (
+		response.json !== undefined &&
+		!Object.keys(headers).some((name) => name.toLowerCase() === "content-type")
+	) {
+		headers["content-type"] = "application/json; charset=utf-8";
+	}
+	return headers;
+}
+
+async function installHttpFixture(
+	page: Page,
+	fixture: DocScreenshotHttpFixture,
+	allowedOrigin: string,
+	onViolation: (message: string) => void,
+): Promise<void> {
+	await page.setRequestInterception(true);
+	page.on("request", async (request: HTTPRequest) => {
+		if (request.isInterceptResolutionHandled()) return;
+		try {
+			const resolution = resolveHttpFixtureRequest(fixture, allowedOrigin, {
+				method: request.method(),
+				url: request.url(),
+				body: request.hasPostData() ? await request.fetchPostData() : undefined,
+			});
+			switch (resolution.action) {
+				case "respond":
+					await request.respond({
+						status: resolution.response.status,
+						headers: httpFixtureResponseHeaders(resolution.response),
+						body:
+							resolution.response.json === undefined
+								? resolution.response.body
+								: JSON.stringify(resolution.response.json),
+					});
+					return;
+				case "continue":
+					await request.continue();
+					return;
+				case "block":
+					await request.abort("blockedbyclient");
+					return;
+				case "abort":
+					onViolation(resolution.error);
+					await request.abort("blockedbyclient");
+					return;
+			}
+		} catch (error) {
+			onViolation(
+				`HTTP fixture interception failed for ${request.method()} ${redactScreenshotUrl(request.url())}: ${errorMessage(error)}`,
+			);
+			if (!request.isInterceptResolutionHandled()) {
+				await request.abort("failed").catch(() => undefined);
+			}
+		}
+	});
+}
+
 function assertAllowedPageUrl(value: string, origin: string): void {
 	const url = new URL(value);
 	if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -123,6 +248,16 @@ function assertAllowedPageUrl(value: string, origin: string): void {
 		throw new Error(
 			`Top-level navigation escaped the allowed origin: ${redactScreenshotUrl(value)}`,
 		);
+	}
+}
+
+function assertScenarioIntegrity(runtime: ScenarioRuntime): void {
+	if (runtime.originViolation) throw new Error(runtime.originViolation);
+	if (runtime.httpFixtureViolation) {
+		throw new Error(runtime.httpFixtureViolation);
+	}
+	if (runtime.page.url() !== "about:blank") {
+		assertAllowedPageUrl(runtime.page.url(), runtime.allowedOrigin);
 	}
 }
 
@@ -587,14 +722,41 @@ async function encodeScreenshot(
 	};
 }
 
+export interface DocScreenshotElementCaptureTarget {
+	scrollIntoView(): Promise<void>;
+	boundingBox(): Promise<{
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+	} | null>;
+}
+
+export async function resolveElementCaptureClip(
+	target: DocScreenshotElementCaptureTarget,
+	selector: string,
+	padding: number,
+): Promise<{ x: number; y: number; width: number; height: number }> {
+	await target.scrollIntoView();
+	const box = await target.boundingBox();
+	if (!box || box.width <= 0 || box.height <= 0) {
+		throw new Error(`Element has no visible bounds: ${selector}`);
+	}
+	return {
+		x: Math.max(0, box.x - padding),
+		y: Math.max(0, box.y - padding),
+		width: box.width + padding * 2,
+		height: box.height + padding * 2,
+	};
+}
+
 async function captureScreenshot(
 	runtime: ScenarioRuntime,
 	step: DocScreenshotCaptureStep,
 ): Promise<DocScreenshotArtifact> {
 	await settlePage(runtime);
 	await removeDevelopmentOverlays(runtime.page);
-	if (runtime.originViolation) throw new Error(runtime.originViolation);
-	assertAllowedPageUrl(runtime.page.url(), runtime.allowedOrigin);
+	assertScenarioIntegrity(runtime);
 	const mode = step.mode ?? "viewport";
 	let cssWidth = runtime.viewport.width;
 	let cssHeight = runtime.viewport.height;
@@ -620,17 +782,12 @@ async function captureScreenshot(
 			runtime.defaults.timeoutMs,
 		);
 		try {
-			const box = await handle.boundingBox();
-			if (!box || box.width <= 0 || box.height <= 0) {
-				throw new Error(`Element has no visible bounds: ${step.selector}`);
-			}
 			const padding = step.padding ?? 0;
-			clip = {
-				x: Math.max(0, box.x - padding),
-				y: Math.max(0, box.y - padding),
-				width: box.width + padding * 2,
-				height: box.height + padding * 2,
-			};
+			clip = await resolveElementCaptureClip(
+				handle,
+				step.selector ?? "",
+				padding,
+			);
 			cssWidth = clip.width;
 			cssHeight = clip.height;
 		} finally {
@@ -705,6 +862,7 @@ async function runStep(
 	runtime: ScenarioRuntime,
 	step: DocScreenshotStep,
 ): Promise<DocScreenshotArtifact | undefined> {
+	assertScenarioIntegrity(runtime);
 	const timeoutMs =
 		step.type === "waitFor" && step.timeoutMs
 			? step.timeoutMs
@@ -717,7 +875,7 @@ async function runStep(
 				timeout: timeoutMs,
 			});
 			runtime.httpStatus = response?.status();
-			assertAllowedPageUrl(runtime.page.url(), runtime.allowedOrigin);
+			assertScenarioIntegrity(runtime);
 			return;
 		}
 		case "click": {
@@ -967,10 +1125,7 @@ async function runStep(
 				await releaseHeldMouse(runtime);
 			}
 	}
-	if (runtime.originViolation) throw new Error(runtime.originViolation);
-	if (runtime.page.url() !== "about:blank") {
-		assertAllowedPageUrl(runtime.page.url(), runtime.allowedOrigin);
-	}
+	assertScenarioIntegrity(runtime);
 }
 
 async function runScenario(
@@ -1032,6 +1187,16 @@ async function runScenario(
 		if (options.tauriFixture) {
 			await injectTauriFixture(page, options.tauriFixture);
 		}
+		if (options.httpFixture) {
+			await installHttpFixture(
+				page,
+				options.httpFixture,
+				baseUrl.origin,
+				(message) => {
+					runtime.httpFixtureViolation ??= message;
+				},
+			);
+		}
 		page.on("console", (message) => {
 			if (process.env.DOC_SCREENSHOT_DEBUG === "1") {
 				console.error(`[browser ${message.type()}] ${message.text()}`);
@@ -1081,11 +1246,12 @@ async function runScenario(
 			},
 		);
 		runtime.httpStatus = response?.status();
-		assertAllowedPageUrl(page.url(), baseUrl.origin);
+		assertScenarioIntegrity(runtime);
 		for (const [index, step] of scenario.steps.entries()) {
 			const stepStarted = Date.now();
 			try {
 				const artifact = await runStep(runtime, step);
+				assertScenarioIntegrity(runtime);
 				if (artifact) artifacts.push(artifact);
 				stepResults.push({
 					index,
