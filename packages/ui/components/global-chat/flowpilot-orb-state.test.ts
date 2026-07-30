@@ -83,7 +83,7 @@ describe("selectActiveOrbTool", () => {
 						{
 							id: "newer-finished",
 							title: "Searching",
-							status: "completed",
+							status: "done",
 							toolName: "catalog_search",
 						},
 						{

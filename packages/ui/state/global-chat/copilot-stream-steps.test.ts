@@ -70,4 +70,22 @@ describe("toolEndPlanStepStatus", () => {
 		});
 		expect(acc.steps.get("plan-1")?.status).toBe("done");
 	});
+
+	test("keeps the tool name when progress arrives without a start event", () => {
+		const acc = createStreamAccumulator();
+		applyStreamEvent(acc, {
+			type: "tool_progress",
+			data: {
+				tool_call_id: "edit-1",
+				tool: "edit_flowscript",
+				message: "Applying changes",
+			},
+			raw: "",
+		});
+
+		expect(acc.steps.get("edit-1")).toMatchObject({
+			status: "progress",
+			toolName: "edit_flowscript",
+		});
+	});
 });

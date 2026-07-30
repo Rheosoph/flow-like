@@ -292,6 +292,7 @@ export function applyStreamEvent(
 				title: name === "tool" ? "Working" : `Using ${name}`,
 				description: message,
 				status: "progress",
+				toolName: name,
 				timestamp: Date.now(),
 				content_offset: acc.content.length,
 			});

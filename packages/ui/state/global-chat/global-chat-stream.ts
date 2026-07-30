@@ -257,7 +257,8 @@ export function tauriStart(command: string, args: Record<string, unknown>) {
 
 /**
  * Drive one assistant turn: parse the streamed FlowPilot protocol into the message's content +
- * plan steps, mirror it into the store's `streamingMessage` (throttled checkpoints to IndexedDB),
+ * plan steps, mirror it into the store's per-run `streamingMessages` view (throttled checkpoints
+ * to IndexedDB),
  * and finalize into `messages` when the run ends. Safe to run detached from any component.
  */
 export async function driveGlobalChatStream({
