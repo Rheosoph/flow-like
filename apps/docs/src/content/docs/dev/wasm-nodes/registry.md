@@ -1,259 +1,121 @@
 ---
 title: Package Registry
-description: Publishing, installing, and managing WASM packages
+description: Publish, review, install, and manage WASM packages
 sidebar:
   order: 27
 ---
 
-Flow-Like provides a central package registry for discovering, sharing, and installing WASM nodes created by the community.
+The package registry stores versioned WASM node packages, their metadata, permissions, compiled artifacts, access rules, and review history.
 
-## Registry Overview
+## Browse and install
 
-The package registry allows you to:
+Use the desktop app's **Store → Packages** view to search the registry and open a package detail page. A detail page can show:
 
-- **Browse** community-created packages
-- **Search** by name, description, or keywords
-- **Install** packages with a single click
-- **Publish** your own packages for others to use
-- **Update** installed packages when new versions are available
+- package metadata and current status;
+- exported nodes;
+- requested permissions;
+- available versions;
+- access or purchase requirements;
+- installation state.
 
-## Finding Packages
+Installing a package downloads the selected version into the local registry cache. Installed packages appear under **Library → Packages**, where you can check for updates, update a package, or uninstall it.
 
-### In the Desktop App
+:::note
+Only active versions that the current user can access are downloadable. Private and request-access packages apply their package membership rules before download.
+:::
 
-Navigate to **Store → Packages** to browse the registry:
+## Publish a package
 
-- **Search**: Type in the search bar to find packages by name or keyword
-- **Filter**: Toggle "Verified only" to show only reviewed packages
-- **Sort**: Order by downloads, relevance, name, or date
+Open **Library → Packages → Publish**. The current wizard has four steps:
 
-### Package Details
+1. **Upload WASM** — select a file with a valid WebAssembly header.
+2. **Manifest** — enter the package ID, name, version, description, license, links, and keywords.
+3. **Permissions** — choose resource tiers and capabilities.
+4. **Review** — verify the binary and metadata, then submit.
 
-Click on any package to see:
+The client uploads the binary and submits a versioned manifest to the registry. The backend hashes the binary, rejects duplicate package versions, extracts node definitions, and prepares a platform artifact when compilation is configured.
 
-- **Overview**: Description, author, license, and links
-- **Nodes**: List of all nodes included in the package
-- **Permissions**: What capabilities the package requires
-- **Versions**: Version history with release notes
+### Package identity
 
-## Installing Packages
+- Use a stable reverse-domain ID such as `com.example.image-tools`.
+- Increment the semantic version for every published artifact.
+- A package ID and version pair is immutable.
+- Keep the manifest's permissions aligned with the node definitions exported by the binary.
 
-### From the Store
+## Private packages and publication
 
-1. Navigate to **Store → Packages**
-2. Find and click on the package you want
-3. Click the **Install** button
-4. The package will be downloaded and made available immediately
+New packages are private by default. A successfully compiled private version can become active for its members without public publication.
 
-### Local Installation
+Making a package public is a separate governance step:
 
-You can also install packages from local `.wasm` files:
+1. Complete the package metadata and README.
+2. Request publication.
+3. The package or version enters `pending_review`.
+4. An administrator with the global `ManagePackages` permission reviews it.
+5. The reviewer can approve, reject, request changes, comment, or flag the submission.
 
-1. Navigate to **Library → Packages**
-2. Click **Install from file**
-3. Select your `.wasm` file
+There is no guaranteed review time. Use the package detail and publication-review history as the source of truth.
 
-## Managing Installed Packages
+## Statuses
 
-Access your installed packages at **Library → Packages**:
+| Status | Meaning |
+|---|---|
+| `pending_review` | A package or version is waiting for a publication decision |
+| `active` | The version is usable by users who have access |
+| `rejected` | The submitted version did not pass review |
+| `deprecated` | Still represented in the registry but discouraged |
+| `disabled` | Not usable |
+| `yanked` | A specific released version is excluded from normal version selection |
 
-| Action | Description |
-|--------|-------------|
-| **Update** | Install the latest version of a package |
-| **Update All** | Update all packages with available updates |
-| **Uninstall** | Remove a package from your system |
+Status and visibility are different. An active package can still be private.
 
-## Publishing Packages
+## What reviewers evaluate
 
-### Prerequisites
+| Area | Evidence to check |
+|---|---|
+| Binary | Valid WASM, node extraction, and compilation result |
+| Permissions | Declared capabilities match the implementation and description |
+| Node contract | Pins, schemas, defaults, and permissions are internally consistent |
+| Metadata | ID, version, description, categories, links, and release notes are accurate |
+| Safety | External hosts, storage access, OAuth scopes, and model access are justified |
+| Maintenance | Repository, license, documentation, and ownership are clear |
 
-Before publishing, ensure your package:
+A `verified` flag is registry metadata set by administrators. Treat it as an additional trust signal, not a replacement for reviewing permissions and package provenance.
 
-1. Has a valid `manifest.json` (see [Manifest Reference](/dev/wasm-nodes/manifest))
-2. Compiles to a valid WASM module
-3. Follows the naming convention: `your-org.package-name`
-4. Includes a description and keywords
+## Version review behavior
 
-### Publishing Process
+Publishing an update creates a new version record without immediately replacing the package's current active artifact. On approval, the registry promotes the reviewed version and its extracted node definitions. Rejecting the pending version leaves an already-active package version available.
 
-1. Navigate to **Library → Packages → Publish**
-2. **Step 1 - Upload**: Select your compiled `.wasm` file
-3. **Step 2 - Manifest**: Review and edit package metadata
-4. **Step 3 - Permissions**: Configure required capabilities
-5. **Step 4 - Review**: Verify all information and submit
+This separation prevents an unreviewed update from silently changing a public package.
 
-After submission, your package enters the **review queue**.
+## Permissions shown to users
 
-## Understanding Package Status
+The registry can display package-level resource and capability declarations, including:
 
-| Status | Badge | Description |
-|--------|-------|-------------|
-| **Pending Review** | 🟡 | Awaiting admin review |
-| **Active** | 🟢 | Approved and available |
-| **Deprecated** | ⚠️ | Still available but not recommended |
-| **Disabled** | 🔴 | Removed from the registry |
+| Area | Examples |
+|---|---|
+| Resources | Memory and timeout tier |
+| Network | HTTP, allowed hosts, WebSocket, TCP, UDP, DNS |
+| Storage | Node- or user-scoped storage |
+| Runtime context | Variables, cache, streaming, A2UI |
+| Services | OAuth and model access |
 
-### Verified Packages
+Request the smallest useful set. An empty allowed-host list with HTTP enabled means unrestricted hosts, not no hosts.
 
-Packages marked with a **✓ Verified** badge have been:
+## Package-author checklist
 
-- Reviewed by the Flow-Like team
-- Checked for security issues
-- Tested for compatibility
-- Confirmed to follow best practices
+Before publishing:
 
----
-
-## Governance & Approval Process
-
-All packages submitted to the public registry must go through an approval process to ensure quality and security.
-
-### Why Review is Required
-
-WASM packages can execute arbitrary code with the permissions they request. The review process:
-
-- **Protects users** from malicious or buggy code
-- **Ensures quality** of the ecosystem
-- **Maintains compatibility** with Flow-Like updates
-- **Builds trust** in the package registry
-
-### Submission Guidelines
-
-Before submitting a package for review:
-
-1. **Test thoroughly** - Ensure your package works correctly
-2. **Minimize permissions** - Only request what you actually need
-3. **Document clearly** - Include helpful descriptions and examples
-4. **Follow naming conventions** - Use `org.package-name` format
-5. **Version semantically** - Follow [semver](https://semver.org/) for versioning
-
-### The Review Process
-
-```
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   Package    │     │   Admin      │     │   Package    │
-│   Submitted  │────▶│   Review     │────▶│   Decision   │
-└──────────────┘     └──────────────┘     └──────────────┘
-       │                    │                    │
-       │                    ▼                    ▼
-       │            ┌──────────────┐     ┌──────────────┐
-       │            │   Security   │     │  ✓ Approved  │
-       │            │   Check      │     │  ✗ Declined  │
-       │            └──────────────┘     │  💬 Feedback │
-       │                                 └──────────────┘
-       ▼
-┌──────────────────────────────────────────────────────┐
-│                  Pending Review                       │
-│  • Package visible with "pending" status             │
-│  • Cannot be installed by users yet                  │
-└──────────────────────────────────────────────────────┘
-```
-
-### What Reviewers Check
-
-| Area | What We Review |
-|------|----------------|
-| **Security** | Requested permissions match actual usage; no malicious patterns |
-| **Quality** | Code compiles correctly; nodes function as described |
-| **Metadata** | Name, description, keywords are accurate and helpful |
-| **Compatibility** | Works with current Flow-Like version |
-| **License** | License is valid and permits redistribution |
-
-### Review Outcomes
-
-After review, your package will receive one of these outcomes:
-
-#### ✓ Approved
-
-Your package is published to the registry:
-- Status changes to **Active**
-- Users can install it immediately
-- You can publish updates (which also require review)
-
-#### ✗ Declined
-
-The package did not meet requirements:
-- You'll receive feedback explaining why
-- Common reasons:
-  - Security concerns with permissions
-  - Package doesn't work as described
-  - Missing or incorrect metadata
-- You can fix issues and resubmit
-
-#### 💬 Changes Requested
-
-Minor changes needed before approval:
-- Reviewer comments explain what to fix
-- Update your package and submit a new version
-- The new version enters the review queue
-
-### Review Timeline
-
-- Most packages are reviewed within **48-72 hours**
-- Complex packages may take longer
-- You can check status in **Admin → Packages** (if you have admin access)
-
-### Appealing Decisions
-
-If you disagree with a review decision:
-
-1. Read the feedback carefully
-2. If you believe there's an error, open a GitHub issue
-3. Provide context and evidence supporting your case
-4. A different reviewer will evaluate the appeal
-
-### Administrator Access
-
-Users with the `ManagePackages` permission can:
-
-- View all pending packages
-- Review package contents and metadata
-- Approve or decline submissions
-- Add comments and feedback
-- Disable problematic packages
-
-Admin access is granted to trusted community members. If you're interested in helping review packages, contact the Flow-Like team.
-
----
-
-## Best Practices
-
-### For Package Authors
-
-1. **Start small** - Begin with a single, well-tested node
-2. **Request minimal permissions** - Only what you truly need
-3. **Include examples** - Help users understand how to use your nodes
-4. **Maintain compatibility** - Test against Flow-Like updates
-5. **Respond to feedback** - Address reviewer comments promptly
-
-### For Users
-
-1. **Check verification status** - Prefer verified packages
-2. **Review permissions** - Understand what access a package needs
-3. **Keep packages updated** - Install security and bug fixes
-4. **Report issues** - Help maintainers improve packages
-
-## Local Development
-
-For development, you can load packages locally without going through the registry:
-
-1. Build your WASM module locally
-2. Use **Library → Packages → Install from file**
-3. Test in your workflows
-4. Once ready, publish to the registry
-
-This allows rapid iteration during development while maintaining quality for public releases.
-
-## Package Permissions Reference
-
-When reviewing or installing packages, understand these permission levels:
-
-| Permission | Risk Level | Description |
-|------------|------------|-------------|
-| **None** | Safe | Pure computation, no external access |
-| **Network** | Medium | Can make HTTP requests |
-| **File System** | High | Can read/write files |
-| **Environment** | Medium | Can access environment variables |
-| **Process** | Critical | Can spawn processes (rarely granted) |
-
-Packages should request the minimum permissions needed for their functionality.
+- run the template tests and load the package in a representative flow;
+- verify every exported node and pin;
+- remove unused permissions;
+- confirm that secrets are never embedded in the binary or manifest;
+- document external data transfer and expected costs;
+- publish a new version instead of replacing an existing artifact.
+
+## Related
+
+- [Custom WASM Nodes](/dev/wasm-nodes/overview/)
+- [Component Model vs Core Modules](/dev/wasm-nodes/runtime-models/)
+- [Package Manifest](/dev/wasm-nodes/manifest/)
+- [Sandboxing & Permissions](/dev/wasm-nodes/sandboxing/)

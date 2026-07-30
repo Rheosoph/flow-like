@@ -1,6 +1,6 @@
 ---
 title: Rust WASM Nodes
-description: Create custom WASM nodes using Rust with the WASM Component Model
+description: Build Flow-Like WASM nodes in Rust with the Component Model SDK
 sidebar:
   order: 1
   badge:
@@ -8,345 +8,205 @@ sidebar:
     variant: tip
 ---
 
-Rust is the **recommended language** for WASM nodes — it produces the smallest binaries and has the best WASM tooling. The Flow-Like SDK provides macros for zero-boilerplate node development.
+Rust is the most complete Flow-Like WASM SDK and the recommended starting
+point. The checked-in template targets the WASM Component Model with
+`wasm32-wasip2`.
 
-## Prerequisites
+## Start from the template
 
-```bash
-# Install Rust (if not already installed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Add WASM target
-rustup target add wasm32-wasip1
-```
-
-## Quick Start with SDK
-
-### Project Setup
+Copy `templates/wasm-node-rust` into your own project, then run:
 
 ```bash
-cargo new --lib my-wasm-nodes
-cd my-wasm-nodes
+mise run setup
+mise run test
+mise run build
 ```
 
-Update `Cargo.toml`:
+The build task installs the `wasm32-wasip2` target, compiles a release component,
+and copies the result to `node.wasm`. The underlying Cargo artifact is:
 
-```toml title="Cargo.toml"
-[package]
-name = "my-wasm-nodes"
-version = "0.1.0"
-edition = "2024"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-flow-like-wasm-sdk = { git = "https://github.com/Rheosoph/flow-like", branch = "dev" }
-serde_json = "1"
-
-[profile.release]
-opt-level = "s"
-lto = true
-strip = true
+```text
+target/wasm32-wasip2/release/flow_like_wasm_node_template.wasm
 ```
 
-### Single Node Example
+If you do not use mise:
+
+```bash
+rustup target add wasm32-wasip2
+cargo build --release --target wasm32-wasip2
+```
+
+The template depends on the published `flow-like-wasm-sdk` crate and configures
+the library as `cdylib`.
+
+## Define a node
+
+Rust packages use `#[register_node]`, `WasmNode`, and a single
+`wasm_main!()` invocation:
 
 ```rust title="src/lib.rs"
 use flow_like_wasm_sdk::*;
 
-// Define the node using the macro
-node! {
-    name: "uppercase",
-    friendly_name: "Uppercase",
-    description: "Converts text to uppercase",
-    category: "Custom/Text",
+#[register_node]
+#[derive(Default)]
+pub struct UppercaseNode;
 
-    inputs: {
-        exec: Exec,
-        text: String = "",
-    },
+impl WasmNode for UppercaseNode {
+    fn get_node(&self) -> NodeDefinition {
+        let mut node = NodeDefinition::new(
+            "uppercase",
+            "Uppercase",
+            "Converts text to uppercase",
+            "Custom/Text",
+        );
 
-    outputs: {
-        exec_out: Exec,
-        result: String,
-    },
-}
+        node.add_input_pin(
+            "exec",
+            "Exec",
+            "Trigger execution",
+            VariableType::Execution,
+        );
+        node.add_input_pin(
+            "text",
+            "Text",
+            "Text to transform",
+            VariableType::String,
+        )
+        .set_default_value(json!(""));
+        node.add_output_pin(
+            "exec_out",
+            "Done",
+            "Continue execution",
+            VariableType::Execution,
+        );
+        node.add_output_pin(
+            "result",
+            "Result",
+            "Uppercase text",
+            VariableType::String,
+        );
 
-// Implement the run logic
-run_node!(handle_run);
+        node
+    }
 
-fn handle_run(mut ctx: Context) -> ExecutionResult {
-    let text = ctx.get_string("text").unwrap_or_default();
-    ctx.set_output("result", text.to_uppercase());
-    ctx.success()
-}
-```
-
-### Multi-Node Package
-
-For packages with multiple related nodes:
-
-```rust title="src/lib.rs"
-use flow_like_wasm_sdk::*;
-
-package! {
-    nodes: [
-        {
-            name: "add",
-            friendly_name: "Add",
-            description: "Adds two numbers",
-            category: "Custom/Math",
-            inputs: { exec: Exec, a: I64 = 0, b: I64 = 0 },
-            outputs: { exec_out: Exec, result: I64 },
-        },
-        {
-            name: "subtract",
-            friendly_name: "Subtract",
-            description: "Subtracts two numbers",
-            category: "Custom/Math",
-            inputs: { exec: Exec, a: I64 = 0, b: I64 = 0 },
-            outputs: { exec_out: Exec, result: I64 },
-        },
-        {
-            name: "multiply",
-            friendly_name: "Multiply",
-            description: "Multiplies two numbers",
-            category: "Custom/Math",
-            inputs: { exec: Exec, a: I64 = 0, b: I64 = 0 },
-            outputs: { exec_out: Exec, result: I64 },
-        }
-    ]
-}
-
-// Each node needs a run function named run_{node_name}
-#[no_mangle]
-pub extern "C" fn run_add(ptr: i32, len: i32) -> i64 {
-    run_with_handler(ptr, len, |mut ctx| {
-        let a = ctx.get_i64("a").unwrap_or(0);
-        let b = ctx.get_i64("b").unwrap_or(0);
-        ctx.set_output("result", a + b);
+    fn run(&self, mut ctx: Context) -> ExecutionResult {
+        let text = ctx.get_string("text").unwrap_or_default();
+        ctx.set_output("result", text.to_uppercase());
+        ctx.activate_exec("exec_out");
         ctx.success()
-    })
+    }
 }
 
-#[no_mangle]
-pub extern "C" fn run_subtract(ptr: i32, len: i32) -> i64 {
-    run_with_handler(ptr, len, |mut ctx| {
-        let a = ctx.get_i64("a").unwrap_or(0);
-        let b = ctx.get_i64("b").unwrap_or(0);
-        ctx.set_output("result", a - b);
-        ctx.success()
-    })
+wasm_main!();
+```
+
+Add more registered structs for a multi-node package. `wasm_main!()` generates
+the Component Model exports and automatically exposes every registered node
+through `get_nodes`.
+
+## Context API
+
+Common input helpers:
+
+```rust
+ctx.get_string("name");          // Option<String>
+ctx.get_i64("name");             // Option<i64>
+ctx.get_f64("name");             // Option<f64>
+ctx.get_bool("name");            // Option<bool>
+ctx.get_input("name");           // Option<&serde_json::Value>
+ctx.get_input_as::<T>("name");   // Option<T>
+ctx.require_input_as::<T>("name");
+```
+
+Common output and control helpers:
+
+```rust
+ctx.set_output("result", value);
+ctx.set_output_json("result", &value);
+ctx.activate_exec("exec_out");
+ctx.success();
+ctx.fail("What went wrong");
+```
+
+Logging and streaming are also available through the context:
+
+```rust
+ctx.info("Starting work");
+ctx.stream_text("Partial result");
+ctx.stream_progress(0.5, "Halfway");
+```
+
+## Typed struct pins
+
+Derive `JsonSchema` for a serializable Rust type, then attach the schema to a
+struct pin:
+
+```rust
+#[derive(Default, serde::Serialize, serde::Deserialize, JsonSchema)]
+struct Request {
+    query: String,
+    limit: u32,
 }
 
-#[no_mangle]
-pub extern "C" fn run_multiply(ptr: i32, len: i32) -> i64 {
-    run_with_handler(ptr, len, |mut ctx| {
-        let a = ctx.get_i64("a").unwrap_or(0);
-        let b = ctx.get_i64("b").unwrap_or(0);
-        ctx.set_output("result", a * b);
-        ctx.success()
-    })
-}
+node.add_input_pin(
+    "request",
+    "Request",
+    "Search request",
+    VariableType::Struct,
+)
+.set_schema::<Request>()
+.set_enforce_schema(true);
 ```
 
-## Package Manifest
+Read it with `ctx.get_input_as::<Request>("request")`.
 
-Create `manifest.toml` alongside your code:
+## Permissions
 
-```toml title="manifest.toml"
-manifest_version = 1
-id = "com.example.math-utils"
-name = "Math Utilities"
-version = "1.0.0"
-description = "Common math operations"
-
-[[authors]]
-name = "Your Name"
-
-[permissions]
-memory = "minimal"
-timeout = "quick"
-
-[[nodes]]
-id = "add"
-name = "Add"
-description = "Adds two numbers"
-category = "Custom/Math"
-
-[[nodes]]
-id = "subtract"
-name = "Subtract"
-description = "Subtracts two numbers"
-category = "Custom/Math"
-
-[[nodes]]
-id = "multiply"
-name = "Multiply"
-description = "Multiplies two numbers"
-category = "Custom/Math"
-```
-
-## SDK API Reference
-
-### Context Methods
+Declare each capability on the node that uses it:
 
 ```rust
-// Get input values
-ctx.get_string("pin_name") -> Option<String>
-ctx.get_i64("pin_name") -> Option<i64>
-ctx.get_f64("pin_name") -> Option<f64>
-ctx.get_bool("pin_name") -> Option<bool>
-ctx.get_json("pin_name") -> Option<serde_json::Value>
-ctx.get_bytes("pin_name") -> Option<Vec<u8>>
-
-// Set output values
-ctx.set_output("pin_name", value)
-
-// Execution control
-ctx.success() -> ExecutionResult
-ctx.error(message) -> ExecutionResult
+node.add_permission(NodePermission::NetworkHttp);
+node.add_permission(NodePermission::StorageRead);
+node.add_permission(NodePermission::StorageWrite);
 ```
 
-### Logging
+Permissions are part of the exported node definition and drive the execution
+sandbox. Package memory and timeout limits remain in `flow-like.toml`; see the
+[manifest reference](/dev/wasm-nodes/manifest/).
 
-```rust
-use flow_like_wasm_sdk::log;
+Do not use manifest capability flags as a substitute for
+`node.add_permission(...)`.
 
-log::debug("Debug message");
-log::info("Info message");
-log::warn("Warning message");
-log::error("Error message");
-```
+## Test locally
 
-### Variables
-
-```rust
-use flow_like_wasm_sdk::var;
-
-// Get/set execution variables
-let value = var::get_variable("my_var");
-var::set_variable("my_var", json!({"key": "value"}));
-```
-
-### Streaming Output
-
-```rust
-use flow_like_wasm_sdk::stream;
-
-// Stream progress updates
-stream::stream_progress(50, "Processing...");
-
-// Stream text
-stream::stream_text("Partial output...");
-
-// Stream JSON
-stream::stream_json(json!({"status": "working"}));
-```
-
-## Pin Types
-
-| Type | Rust Type | Default |
-|------|-----------|---------|
-| `Exec` | `()` | - |
-| `String` | `String` | `""` |
-| `I64` | `i64` | `0` |
-| `F64` | `f64` | `0.0` |
-| `Bool` | `bool` | `false` |
-| `Json` | `serde_json::Value` | `null` |
-| `Bytes` | `Vec<u8>` | `[]` |
-
-## Build
+The template's tests run on the native host target so node logic can be tested
+without loading WASM:
 
 ```bash
-cargo build --release --target wasm32-wasip1
+mise run test
 ```
 
-Output: `target/wasm32-wasip1/release/my_wasm_nodes.wasm`
-
-## Optimize (Optional)
-
-Install `wasm-opt` for smaller binaries:
+From the repository root, run the template definition lint and runtime
+integration suite:
 
 ```bash
-# macOS
-brew install binaryen
-
-# Linux
-apt install binaryen
-
-# Optimize (can reduce size by 20-40%)
-wasm-opt -Os -o optimized.wasm target/wasm32-wasip1/release/my_wasm_nodes.wasm
+mise run test:wasm:rust:lint
+mise run test:wasm:rust:e2e
 ```
 
-## Install & Test
+## Publish
 
-### Local Testing
+1. Run `mise run build`.
+2. Open Flow-Like Desktop.
+3. Go to **Library → Packages → Publish**.
+4. Select `node.wasm` and `flow-like.toml`.
+5. Review the extracted nodes and submit the package.
 
-```bash
-# Copy to Flow-Like nodes directory
-cp target/wasm32-wasip1/release/my_wasm_nodes.wasm ~/.flow-like/nodes/
-cp manifest.toml ~/.flow-like/nodes/my_wasm_nodes.toml
-```
-
-### Publishing
-
-```bash
-# Publish to registry (requires API key)
-flow-like publish ./target/wasm32-wasip1/release/my_wasm_nodes.wasm
-```
-
-## Advanced: HTTP Requests
-
-For nodes that need network access, declare it in the manifest:
-
-```toml
-[permissions.network]
-http_enabled = true
-allowed_hosts = ["api.example.com"]
-```
-
-Then use the host functions:
-
-```rust
-use flow_like_wasm_sdk::http;
-
-fn handle_run(mut ctx: Context) -> ExecutionResult {
-    let response = http::get("https://api.example.com/data")?;
-    ctx.set_output("result", response);
-    ctx.success()
-}
-```
-
-## Advanced: OAuth Access
-
-For nodes requiring OAuth:
-
-```toml
-[[permissions.oauth_scopes]]
-provider = "google"
-scopes = ["https://www.googleapis.com/auth/drive.readonly"]
-reason = "Access Google Drive files"
-required = true
-
-[[nodes]]
-id = "list_files"
-oauth_providers = ["google"]
-```
-
-```rust
-use flow_like_wasm_sdk::auth;
-
-fn handle_run(mut ctx: Context) -> ExecutionResult {
-    let token = auth::get_oauth_access_token("google")?;
-    // Use token for API calls...
-    ctx.success()
-}
-```
+There is no checked-in `flow-like publish` CLI and no supported
+`~/.flow-like/nodes` copy-install workflow.
 
 ## Related
 
-→ [Package Manifest](/dev/wasm-nodes/manifest/) — Full manifest reference
-→ [WASM Nodes Overview](/dev/wasm-nodes/overview/)
-→ [Writing Native Rust Nodes](/dev/writing-nodes/)
+- [Package Manifest](/dev/wasm-nodes/manifest/)
+- [WASM Nodes Overview](/dev/wasm-nodes/overview/)
+- [Writing Native Nodes](/dev/writing-nodes/)

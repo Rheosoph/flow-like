@@ -11,9 +11,9 @@
 #   ./gen-execution-keys.sh --verify  # Verify current env vars are valid
 #
 # Environment variables set:
-#   EXECUTION_KEY - Base64-encoded PEM private key
-#   EXECUTION_PUB - Base64-encoded PEM public key
-#   EXECUTION_KID - Key ID for JWKS
+#   BACKEND_KEY - Base64-encoded PEM private key
+#   BACKEND_PUB - Base64-encoded PEM public key
+#   BACKEND_KID - Key ID for JWKS
 
 set -euo pipefail
 
@@ -48,17 +48,17 @@ export_env() {
     # Base64 encode the PEM files
     local key_b64=$(base64 < "$KEY_FILE" | tr -d '\n')
     local pub_b64=$(base64 < "$PUB_FILE" | tr -d '\n')
-    local kid="execution-es256-$(date +%Y%m%d)"
+    local kid="backend-es256-$(date +%Y%m%d)"
 
     echo ""
     echo "# Execution JWT Configuration"
     echo "# Add these to your .env file or deployment config"
     echo ""
-    echo "EXECUTION_KEY=${key_b64}"
+    echo "BACKEND_KEY=${key_b64}"
     echo ""
-    echo "EXECUTION_PUB=${pub_b64}"
+    echo "BACKEND_PUB=${pub_b64}"
     echo ""
-    echo "EXECUTION_KID=${kid}"
+    echo "BACKEND_KID=${kid}"
     echo ""
     echo "# For API callback URL (adjust for your deployment)"
     echo "# API_BASE_URL=https://api.your-domain.com"
@@ -73,12 +73,12 @@ export_shell() {
     # Base64 encode the PEM files
     local key_b64=$(base64 < "$KEY_FILE" | tr -d '\n')
     local pub_b64=$(base64 < "$PUB_FILE" | tr -d '\n')
-    local kid="execution-es256-$(date +%Y%m%d)"
+    local kid="backend-es256-$(date +%Y%m%d)"
 
     echo "# Run this to set environment variables for current shell:"
-    echo "export EXECUTION_KEY='${key_b64}'"
-    echo "export EXECUTION_PUB='${pub_b64}'"
-    echo "export EXECUTION_KID='${kid}'"
+    echo "export BACKEND_KEY='${key_b64}'"
+    echo "export BACKEND_PUB='${pub_b64}'"
+    echo "export BACKEND_KID='${kid}'"
 }
 
 verify_env() {
@@ -86,37 +86,37 @@ verify_env() {
 
     local errors=0
 
-    if [[ -z "${EXECUTION_KEY:-}" ]]; then
-        echo "✗ EXECUTION_KEY not set"
+    if [[ -z "${BACKEND_KEY:-}" ]]; then
+        echo "✗ BACKEND_KEY not set"
         errors=$((errors + 1))
     else
         # Try to decode and verify
-        local decoded=$(echo "$EXECUTION_KEY" | base64 -d 2>/dev/null || true)
+        local decoded=$(echo "$BACKEND_KEY" | base64 -d 2>/dev/null || true)
         if [[ "$decoded" == *"BEGIN PRIVATE KEY"* ]]; then
-            echo "✓ EXECUTION_KEY is valid PKCS#8 private key"
+            echo "✓ BACKEND_KEY is valid PKCS#8 private key"
         else
-            echo "✗ EXECUTION_KEY is not a valid base64-encoded PEM private key"
+            echo "✗ BACKEND_KEY is not a valid base64-encoded PEM private key"
             errors=$((errors + 1))
         fi
     fi
 
-    if [[ -z "${EXECUTION_PUB:-}" ]]; then
-        echo "✗ EXECUTION_PUB not set"
+    if [[ -z "${BACKEND_PUB:-}" ]]; then
+        echo "✗ BACKEND_PUB not set"
         errors=$((errors + 1))
     else
-        local decoded=$(echo "$EXECUTION_PUB" | base64 -d 2>/dev/null || true)
+        local decoded=$(echo "$BACKEND_PUB" | base64 -d 2>/dev/null || true)
         if [[ "$decoded" == *"BEGIN PUBLIC KEY"* ]]; then
-            echo "✓ EXECUTION_PUB is valid public key"
+            echo "✓ BACKEND_PUB is valid public key"
         else
-            echo "✗ EXECUTION_PUB is not a valid base64-encoded PEM public key"
+            echo "✗ BACKEND_PUB is not a valid base64-encoded PEM public key"
             errors=$((errors + 1))
         fi
     fi
 
-    if [[ -z "${EXECUTION_KID:-}" ]]; then
-        echo "⚠ EXECUTION_KID not set (will use default)"
+    if [[ -z "${BACKEND_KID:-}" ]]; then
+        echo "⚠ BACKEND_KID not set (will use default)"
     else
-        echo "✓ EXECUTION_KID is set: $EXECUTION_KID"
+        echo "✓ BACKEND_KID is set: $BACKEND_KID"
     fi
 
     if [[ $errors -gt 0 ]]; then
@@ -141,9 +141,9 @@ show_help() {
     echo "  $0 --help       Show this help"
     echo ""
     echo "Environment variables:"
-    echo "  EXECUTION_KEY   Base64-encoded PKCS#8 private key"
-    echo "  EXECUTION_PUB   Base64-encoded public key"
-    echo "  EXECUTION_KID   Key identifier for JWKS"
+    echo "  BACKEND_KEY     Base64-encoded PKCS#8 private key"
+    echo "  BACKEND_PUB     Base64-encoded public key"
+    echo "  BACKEND_KID     Key identifier for JWKS"
 }
 
 # Parse arguments

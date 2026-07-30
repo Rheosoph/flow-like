@@ -48,7 +48,7 @@ pub struct InviteUserParams {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/team/invite", skip(state, user))]
+#[tracing::instrument(name = "PUT /apps/{app_id}/team/invite", skip(state, user, params))]
 pub async fn invite_user(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

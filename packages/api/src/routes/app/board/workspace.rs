@@ -53,7 +53,7 @@ pub struct WorkspaceResponse {
 )]
 #[tracing::instrument(
     name = "GET /apps/{app_id}/board/{board_id}/workspace",
-    skip(state, user)
+    skip(state, user, params)
 )]
 pub async fn workspace(
     State(state): State<AppState>,

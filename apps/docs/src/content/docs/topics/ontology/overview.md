@@ -11,18 +11,21 @@ An **ontology** is a semantic layer you place over the database tables you alrea
 An ontology is **metadata only**. It maps your existing tables to object and link types; the tables stay exactly as they are and keep working as normal databases. You can define many ontologies over the same tables.
 :::
 
+![The Flow-Like ontology architecture: existing tables are mapped to object types, link types, and governed actions for exploration and controlled operations](../../../../assets/OntologyOverview.svg)
+
 ## Where it lives
 
 Everything is in **[Data Studio](/apps/data-studio/)**, an app's **Data → Data Studio** view. Data Studio has these tabs:
 
 | Tab | What it's for |
 |-----|---------------|
-| **Overview** | At-a-glance counts (ontologies, object types, actions, shared) and shortcuts into the other tabs |
+| **Overview** | At-a-glance counts (ontologies, object types, actions, shared, and remote) and shortcuts into the other tabs |
 | **Explore** | Browse objects of each type in a preview table and open an object's inspector — its views and available actions |
 | **Model** | Create, rename, and delete ontologies; review object types and relationships; open the data graph |
 | **Actions** | Define governed operations that run on an object type |
 | **Sharing** | Expose your ontology to connected projects, and install ontologies from others |
-| **Sources** | Inspect the native tables the ontology is built on |
+| **Sources** | Create and inspect project or personal native tables, plus object types from installed remote ontologies |
+| **Queries** | Run SQL over native tables, ontology overlays, or installed remote contracts and visualize the results |
 
 ## The building blocks
 
@@ -44,6 +47,12 @@ A **link type** maps a table to a relationship between two object types — a so
 
 An **overlay** is the whole ontology: its object types, link types, styling, object views, and actions, stored as a single metadata record inside the same database as the tables it references. Because it lives next to the data, scope is automatic — a **project** overlay lives in the project database, a **user** overlay in the user database.
 
+![The Model tab showing the Customer Operations ontology, its six color-coded object types, source mappings, properties, and relationship model](../../../../assets/OntologyModel.webp)
+
+The Model view is the saved semantic contract. It makes the mapping explicit: every object points to a source table and identity column, and every relationship names its source and target types.
+
+![The relationship section of the Customer Operations model showing typed links between customers, accounts, tickets, agents, products, and knowledge articles](../../../../assets/OntologyRelationships.webp)
+
 ## Hierarchy & composition
 
 Any link type can be marked as **containment** — a parent → child hierarchy edge. The link's **source** object type is the parent and its **target** is the child (for example `Department → Person`, or a self-referential `Department → Department`). Containment turns a flat set of object types into a drill-down tree you can expand and collapse on demand, following only the hierarchy edges rather than every relationship.
@@ -61,23 +70,31 @@ In the **Explore** data graph, expanding a parent object loads just its direct c
 
 ## Setting one up
 
-Use **Model → Create ontology** to open the setup wizard:
+Select **Set up ontology** from the Data Studio header, or **Model → New**, to open the setup wizard:
 
-1. **Sources** — pick the tables to include.
-2. **Objects** — for each table, confirm the object name, API name, unique ID, display property, and properties. Duplicate names or API names are flagged inline.
-3. **Relationships** — Flow-Like infers link types from foreign-key-like columns. Review them, rename or remove any, and keep your edits as you navigate between steps.
-4. **Publish** — the draft is validated against the live database (tables and columns must exist, labels must be unique and queryable). Anything wrong is shown per mapping before the ontology is saved.
+1. **Sources** — pick the project tables to include.
+2. **Objects** — Flow-Like includes the table properties automatically. Review each object name, API name, unique ID, and display property. Duplicate names or API names are flagged inline.
+3. **Relationships** — Flow-Like proposes links from ID-shaped column names such as `customer_id`; it does not require database foreign-key constraints. Review, rename, mark containment, or remove the proposals, and keep your edits as you move between steps.
+4. **Publish** — the draft is checked against the live database. Mapping errors block creation and are shown inline. If the validation request itself is unavailable, the wizard warns you and lets you decide whether to continue.
 
 Once saved, the ontology appears in **Model**, and — if bindings are enabled — its objects become available as board nodes (see below).
 
 ## Exploring the graph
 
+Start in **Explore** when you want a table-shaped object preview. Opening an object shows the configured title and prominent properties first, followed by its remaining fields and available actions:
+
+![The Customer object inspector showing Avery Morgan's configured highlights and remaining properties over the object explorer](../../../../assets/OntologyObjectInspector.webp)
+
 Open an ontology's **data graph** — from **Model → Explore data graph** — to see your objects and links in a WebGL graph:
+
+![The live Customer Operations knowledge graph showing customers, accounts, support tickets, agents, products, knowledge articles, and their typed links](../../../../assets/OntologyKnowledgeGraph.webp)
 
 - **Search** matches loaded nodes first, then falls back to a full-graph search.
 - **Click** a node to open its inspector; **shift-click** (or the inspector's **Expand**) pulls in its neighbors, one or two hops at a time.
 - **Find paths** — from a node's inspector, choose "Find path from here", then click a second node. Flow-Like returns the shortest connections (with alternative routes) and highlights them. This is the "how are these two things connected?" question.
 - **Object views** — the inspector shows a title property and prominent properties first, and offers any actions defined for that object type.
+
+![The graph search focused on Avery Morgan with the node inspector open, showing properties, connected objects, path finding, and expansion controls](../../../../assets/OntologyGraphInspector.webp)
 
 Graph-wide analytics — object counts, connected components, and the most connected / most central objects — is available through the **Graph Analytics** node (see below).
 
@@ -88,6 +105,12 @@ Queries are bounded server-side: a shared concurrency limit, a per-query row cap
 ## Actions on objects
 
 An **action** is a governed operation that runs on an object type — "Approve order", "Enrich contact", "Dispatch vehicle". Define one in the **Actions** tab:
+
+![The Actions tab showing two active Customer Operations bindings, their target object types, implementation boards, and binding health](../../../../assets/OntologyActions.webp)
+
+Open **Define action** or edit an existing binding to choose its exact implementation:
+
+![The ontology action editor binding a typed object operation to a specific board entry and version](../../../../assets/OntologyActionEditor.webp)
 
 - **Object type** the action applies to, and an **implementation board** plus its **start node**.
 - **Board version** — pin a specific published version for a reproducible action, or keep the current draft (it is published automatically when you save). Pinning to an immutable version is what makes an action safe to expose and re-run.

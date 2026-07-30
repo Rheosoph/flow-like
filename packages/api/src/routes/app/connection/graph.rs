@@ -500,7 +500,10 @@ pub(crate) fn mask_app_id(app_id: &str, viewer_app_id: &str) -> String {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/connections/graph", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /apps/{app_id}/connections/graph",
+    skip(state, user, query)
+)]
 pub async fn get_connection_graph(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

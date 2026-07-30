@@ -5,22 +5,31 @@ sidebar:
   order: 31
 ---
 
-**Data Studio** is an app's home for structured data: the native tables your flows create, and the [ontology](/topics/ontology/overview/) — a semantic layer of object types, relationships, and governed actions — you build on top of them. Open it from an app's **Data → Data Studio** view.
+**Data Studio** is an app's home for structured data: native tables created directly or by flows, and the [ontology](/topics/ontology/overview/) — a semantic layer of object types, relationships, and governed actions — you build on top of them. Open it from an app's **Data → Data Studio** view.
+
+![Flow-Like Data Studio showing one customer-operations ontology, six object types, two governed actions, one shared contract, and one installed remote ontology](../../../assets/DataStudioOverview.webp)
 
 ## Tabs
 
 | Tab | What it's for |
 |-----|---------------|
-| **Overview** | At-a-glance counts (ontologies, object types, actions, shared) and shortcuts into the other tabs |
+| **Overview** | At-a-glance counts (ontologies, object types, actions, shared, and remote) and shortcuts into the other tabs |
 | **Explore** | Browse objects of each type in a preview table and open an object's inspector — its views and available actions |
 | **Model** | Create, rename, and delete ontologies; review object types and relationships; open the data graph |
 | **Actions** | Define governed operations that run on an object type |
 | **Sharing** | Expose ontologies to connected projects, and install ontologies published by others |
-| **Sources** | Inspect the native tables the ontology is built on |
+| **Sources** | Create and inspect project or personal native tables, plus object types from installed remote ontologies |
+| **Queries** | Run SQL over native tables, local ontologies, or installed remote contracts and view the result as a table, chart, relationship graph, or JSON |
+
+## Explore ontology objects
+
+The **Explore** tab turns ontology mappings into searchable business objects. Select an ontology and object type on the left, filter the loaded preview, and open any row for its configured highlights, remaining properties, and governed actions.
+
+![Data Studio's Explore tab showing five Customer objects from the Customer Operations ontology](../../../assets/OntologyObjects.webp)
 
 ## Native tables
 
-The **Sources** tab lists every relational table created and populated by your flows (for example, to store processed data in a structured way). Open a source to inspect its rows, schema, and indexes:
+The **Sources** tab lists project and personal relational tables. Tables may be created directly in Data Studio or by flows that persist structured results. Open a source to inspect its rows, schema, and indexes:
 
 ![A screenshot of Flow-Like Desktop showing a preview of a custom database populated with data from flow executions](../../../assets/AppDatabases.webp)
 
@@ -30,6 +39,12 @@ On top of those tables you can define an **ontology**: object types, link types,
 
 - [Ontology & Knowledge Graph](/topics/ontology/overview/) — object types, link types, the graph explorer, and actions.
 - [Shared & Remote Ontologies](/topics/ontology/remote/) — expose an ontology to connected projects and install ontologies published by others.
+
+## Query and visualize
+
+The **Queries** tab provides one SQL workbench for project tables, personal tables, local ontology overlays, and installed remote contracts. Local statements can be saved as stored queries or — when they have no parameters — reusable views. Remote statements are read-only previews and cannot be saved in the consuming project.
+
+Results can be inspected as a data table, a configurable chart, a relationship graph, or raw JSON. The workbench preserves the query and visualization configuration together when you save a local query.
 
 ## Ask FlowPilot (Data Studio agent)
 
@@ -46,4 +61,7 @@ Every reply is transparent: the agent shows the **query it ran** (in a collapsib
 
 When you have a Data Studio page open, the agent defaults to **that app and ontology** automatically. You can also ask about a different project's data in the same conversation; it will target the other app when you name it (subject to that project's sharing settings).
 
-> The Data Studio agent runs on a tool-capable FlowPilot model (Claude Code, Codex, or GitHub Copilot). Mutating steps — creating tables or overlays, adding elements, executing actions — ask for your approval before they run.
+> The Data Studio agent runs on a tool-capable FlowPilot model (Claude Code,
+> Codex, or GitHub Copilot). Mutating steps—creating tables or overlays,
+> adding elements, and executing actions—follow the approval mode selected for
+> the current FlowPilot session.

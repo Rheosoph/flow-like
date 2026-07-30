@@ -1,4 +1,9 @@
-import type { IApiState, IProfile } from "@flow-like/flow-like-ui";
+import {
+	type IApiState,
+	type IProfile,
+	getActiveTraceContext,
+	getTelemetryTraceparent,
+} from "@flow-like/flow-like-ui";
 import { getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { type EventSourceMessage, createEventSource } from "eventsource-client";
@@ -21,6 +26,21 @@ type ProcessedSSEEvent = {
 	type: string;
 	error?: Error;
 };
+
+/**
+ * W3C trace propagation for outgoing API calls. Empty when no trace is active
+ * or the active trace was not sampled, so tracing stays free when it is off.
+ */
+function traceHeaders(): Record<string, string> {
+	try {
+		const context = getActiveTraceContext();
+		if (!context?.sampled) return {};
+		const traceparent = getTelemetryTraceparent(context);
+		return traceparent ? { traceparent } : {};
+	} catch {
+		return {};
+	}
+}
 
 function tryParseJSON<T>(text: string): T | null {
 	try {
@@ -138,6 +158,7 @@ export class TauriApiState implements IApiState {
 				...options,
 				headers: {
 					"Content-Type": "application/json",
+					...traceHeaders(),
 					...options?.headers,
 					...authHeader,
 				},
@@ -152,6 +173,8 @@ export class TauriApiState implements IApiState {
 				const errorText = await response.text();
 				throw apiResponseError(response, errorText, path);
 			}
+
+			if (response.status === 204) return undefined as T;
 
 			return (await response.json()) as T;
 		} catch (error) {

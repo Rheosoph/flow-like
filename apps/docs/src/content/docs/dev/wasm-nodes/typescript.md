@@ -1,6 +1,6 @@
 ---
 title: TypeScript WASM Nodes
-description: Create custom WASM nodes using TypeScript with the WASM Component Model
+description: Build Flow-Like WASM nodes in TypeScript with ComponentizeJS
 sidebar:
   order: 3
   badge:
@@ -8,304 +8,166 @@ sidebar:
     variant: success
 ---
 
-TypeScript can compile to WASM using **AssemblyScript** (TypeScript-like syntax) or **Javy** (full JavaScript/TypeScript).
+Flow-Like's TypeScript SDK uses standard TypeScript/JavaScript, `esbuild`, and
+Bytecode Alliance's `componentize-js`. The result is a WASM Component that
+implements Flow-Like's WIT world.
 
-## Option 1: AssemblyScript (Recommended)
+This is the supported TypeScript path. You do not need AssemblyScript or Javy.
 
-AssemblyScript is a TypeScript-like language that compiles directly to WASM with small output sizes.
+## Start from the template
 
-### Setup
+Copy `templates/wasm-node-typescript`, then run:
 
 ```bash
-mkdir my-custom-node
-cd my-custom-node
-npm init -y
-npm install --save-dev assemblyscript
-npx asinit .
+mise run setup
+mise run test
+mise run build
 ```
 
-### Template Code
+The build task installs Node.js 22 dependencies, copies the canonical WIT file,
+bundles `src/app.ts`, and componentizes it to:
 
-```typescript title="assembly/index.ts"
-// Memory management
-let resultBuffer: ArrayBuffer;
+```text
+build/node.wasm
+```
 
-class NodeDefinition {
-  name: string;
-  friendly_name: string;
-  description: string;
-  category: string;
-  icon: string;
-  pins: PinDefinition[];
-}
+Without mise:
 
-class PinDefinition {
-  name: string;
-  friendly_name: string;
-  description: string;
-  pin_type: string;
-  data_type: string;
-  default_value: string | null;
-}
+```bash
+npm install
+npm test
+npm run build
+```
 
-class ExecutionContext {
-  inputs: Map<string, string>;
-}
+The project depends on `@flow-like/wasm-sdk-typescript` and
+`@bytecodealliance/componentize-js`.
 
-class ExecutionResult {
-  outputs: Map<string, string>;
-  error: string | null;
-}
+## Define a node
 
-// Export: get_node
-export function get_node(): usize {
-  const json = `{
-    "name": "wasm_ts_uppercase",
-    "friendly_name": "Uppercase (TS)",
-    "description": "Converts a string to uppercase using TypeScript",
-    "category": "Custom/Text",
-    "icon": "/flow/icons/text.svg",
-    "pins": [
-      {
-        "name": "exec_in",
-        "friendly_name": "▶",
-        "description": "Trigger execution",
-        "pin_type": "Input",
-        "data_type": "Execution"
-      },
-      {
-        "name": "exec_out",
-        "friendly_name": "▶",
-        "description": "Continue execution",
-        "pin_type": "Output",
-        "data_type": "Execution"
-      },
-      {
-        "name": "input",
-        "friendly_name": "Input",
-        "description": "The string to convert",
-        "pin_type": "Input",
-        "data_type": "String",
-        "default_value": ""
-      },
-      {
-        "name": "output",
-        "friendly_name": "Output",
-        "description": "The uppercase string",
-        "pin_type": "Output",
-        "data_type": "String"
-      }
-    ],
-    "scores": {
-      "privacy": 0,
-      "security": 0,
-      "performance": 1,
-      "governance": 0,
-      "reliability": 0,
-      "cost": 0
-    }
-  }`;
+Edit `src/node.ts`. The template's `src/app.ts` supplies the WIT bridge and
+exports:
 
-  return changetype<usize>(String.UTF8.encode(json));
-}
+```typescript title="src/node.ts"
+import {
+  type Context,
+  type ExecutionResult,
+  NodeDefinition,
+  PinDefinition,
+  PinType,
+} from "@flow-like/wasm-sdk-typescript";
 
-// Export: run
-export function run(contextPtr: usize, contextLen: u32): usize {
-  // Read context from memory
-  const contextBytes = new Uint8Array(contextLen);
-  memory.copy(
-    changetype<usize>(contextBytes.buffer),
-    contextPtr,
-    contextLen
+export function getDefinition(): NodeDefinition {
+  const node = new NodeDefinition(
+    "uppercase_ts",
+    "Uppercase",
+    "Converts text to uppercase",
+    "Custom/Text",
   );
 
-  const contextJson = String.UTF8.decode(contextBytes.buffer);
+  node.addPin(PinDefinition.inputExec("exec"));
+  node.addPin(
+    PinDefinition.inputPin("text", PinType.STRING, {
+      defaultValue: "",
+    }),
+  );
+  node.addPin(PinDefinition.outputExec("exec_out"));
+  node.addPin(PinDefinition.outputPin("result", PinType.STRING));
 
-  // Simple JSON parsing (AssemblyScript has limited JSON support)
-  // In production, use a JSON library like @assemblyscript/json
-  const inputMatch = contextJson.match(/"input"\s*:\s*"([^"]*)"/);
-  const input = inputMatch ? inputMatch[1] : "";
+  return node;
+}
 
-  // Execute logic
-  const output = input.toUpperCase();
-
-  // Return result
-  const result = `{"outputs":{"output":"${output}"},"error":null}`;
-  return changetype<usize>(String.UTF8.encode(result));
+export function run(ctx: Context): ExecutionResult {
+  const text = ctx.getString("text", "") ?? "";
+  ctx.setOutput("result", text.toUpperCase());
+  ctx.activateExec("exec_out");
+  return ctx.success();
 }
 ```
 
-### Build
+Keep the node name and pin names stable after publishing; boards persist those
+identifiers.
+
+## Pin types
+
+The SDK exports constants for the Flow-Like value types:
+
+| Constant | Value |
+| --- | --- |
+| `PinType.STRING` | String |
+| `PinType.I64` | 64-bit integer |
+| `PinType.F64` | 64-bit float |
+| `PinType.BOOL` | Boolean |
+| `PinType.GENERIC` | JSON value |
+| `PinType.BYTES` | Binary data |
+
+Use `PinDefinition.inputExec` and `outputExec` for flow-control pins. The SDK
+also supports struct schemas, collections, defaults, options, and sensitive
+inputs.
+
+## Permissions
+
+Declare permissions on the node definition:
+
+```typescript
+node.addPermission("network:http");
+node.addPermission("streaming");
+```
+
+These labels are exported with the node and configure its execution sandbox.
+Other common labels include `storage:read`, `storage:write`, `variables`,
+`cache`, `models`, `a2ui`, `oauth`, and `functions`.
+
+Package memory and timeout limits belong in `flow-like.toml`; see the
+[manifest reference](/dev/wasm-nodes/manifest/).
+
+## Context and host services
+
+The context reads typed inputs and writes outputs:
+
+```typescript
+const name = ctx.getString("name", "") ?? "";
+const count = ctx.getI64("count", 1) ?? 1;
+
+ctx.setOutput("result", name.repeat(Math.max(count, 0)));
+```
+
+The template's bridge also connects logging, streaming, variables, cache,
+storage, models, OAuth, and HTTP to Flow-Like host imports. Declare the matching
+permission before calling a gated host service.
+
+## Multi-node packages
+
+The checked-in TypeScript template exposes one `getDefinition`/`run` pair. To
+ship multiple nodes, keep the WIT entry point responsible for returning every
+definition and dispatching `run` by `ctx.nodeName`. Use the repository's
+multi-node SDK/package helpers as the reference rather than adding `[[nodes]]`
+tables to the manifest; manifest node tables are not part of the current typed
+manifest.
+
+## Test
+
+The template uses Vitest:
 
 ```bash
-npm run asbuild:release
+mise run test
 ```
 
-Output: `build/release.wasm`
+Tests run the TypeScript node logic with a mock host, so they are fast and do
+not require the desktop app. Run `mise run build` as a separate integration
+check because successful unit tests do not prove that all dependencies can be
+componentized.
 
-### Configuration
+## Publish
 
-Update `asconfig.json` for optimized builds:
-
-```json title="asconfig.json"
-{
-  "targets": {
-    "release": {
-      "outFile": "build/release.wasm",
-      "optimizeLevel": 3,
-      "shrinkLevel": 2,
-      "noAssert": true
-    }
-  }
-}
-```
-
----
-
-## Option 2: Javy (Full TypeScript/JavaScript)
-
-Javy compiles full JavaScript to WASM, supporting the entire language but with larger binary sizes.
-
-### Setup
-
-```bash
-# Install Javy
-# macOS
-brew install aspect-build/aspect/javy
-
-# Or download from releases
-# https://github.com/aspect-build/aspect-cli/releases
-```
-
-### Template Code
-
-```typescript title="src/index.ts"
-// Node definition
-const nodeDefinition = {
-  name: "wasm_javy_uppercase",
-  friendly_name: "Uppercase (Javy)",
-  description: "Converts a string to uppercase using Javy",
-  category: "Custom/Text",
-  icon: "/flow/icons/text.svg",
-  pins: [
-    {
-      name: "exec_in",
-      friendly_name: "▶",
-      description: "Trigger execution",
-      pin_type: "Input",
-      data_type: "Execution",
-    },
-    {
-      name: "exec_out",
-      friendly_name: "▶",
-      description: "Continue execution",
-      pin_type: "Output",
-      data_type: "Execution",
-    },
-    {
-      name: "input",
-      friendly_name: "Input",
-      description: "The string to convert",
-      pin_type: "Input",
-      data_type: "String",
-      default_value: "",
-    },
-    {
-      name: "output",
-      friendly_name: "Output",
-      description: "The uppercase string",
-      pin_type: "Output",
-      data_type: "String",
-    },
-  ],
-  scores: {
-    privacy: 0,
-    security: 0,
-    performance: 2,
-    governance: 0,
-    reliability: 0,
-    cost: 0,
-  },
-};
-
-// Javy uses stdin/stdout for I/O
-const decoder = new TextDecoder();
-const encoder = new TextEncoder();
-
-// Read operation from stdin
-const input = Javy.IO.readSync(0);
-const request = JSON.parse(decoder.decode(input));
-
-let response: any;
-
-if (request.operation === "get_node") {
-  response = nodeDefinition;
-} else if (request.operation === "run") {
-  const context = request.context;
-  const inputValue = context.inputs?.input || "";
-
-  response = {
-    outputs: {
-      output: inputValue.toUpperCase(),
-    },
-    error: null,
-  };
-} else {
-  response = { error: "Unknown operation" };
-}
-
-// Write response to stdout
-const outputBytes = encoder.encode(JSON.stringify(response));
-Javy.IO.writeSync(1, outputBytes);
-```
-
-### Build
-
-First compile TypeScript:
-
-```bash
-npx tsc --outDir dist
-```
-
-Then compile to WASM:
-
-```bash
-javy build -o my-node.wasm dist/index.js
-```
-
-### Optimize with Javy
-
-```bash
-javy build -o my-node.wasm dist/index.js -O
-```
-
----
-
-## Size Comparison
-
-| Compiler | Typical Size | Full TS Support |
-|----------|--------------|-----------------|
-| AssemblyScript | 10-100 KB | Limited |
-| Javy | 500 KB - 2 MB | Full |
-
-## When to Use What
-
-| Use Case | Recommended |
-|----------|-------------|
-| Simple transformations | AssemblyScript |
-| Complex logic, npm packages | Javy |
-| Smallest possible binary | AssemblyScript |
-| Rapid prototyping | Javy |
-
-## Install
-
-```bash
-cp build/release.wasm ~/.flow-like/nodes/my-custom-node.wasm
-```
+1. Run `mise run build`.
+2. Open Flow-Like Desktop.
+3. Go to **Library → Packages → Publish**.
+4. Select `build/node.wasm` and `flow-like.toml`.
+5. Review the nodes extracted from the binary and submit.
 
 ## Related
 
-→ [WASM Nodes Overview](/dev/wasm-nodes/overview/)
-→ [Rust Template](/dev/wasm-nodes/rust/)
-→ [Go Template](/dev/wasm-nodes/go/)
-→ [C/C++ Template](/dev/wasm-nodes/cpp/)
+- [Package Manifest](/dev/wasm-nodes/manifest/)
+- [WASM Nodes Overview](/dev/wasm-nodes/overview/)
+- [Python WASM Nodes](/dev/wasm-nodes/python/)
+- [Rust WASM Nodes](/dev/wasm-nodes/rust/)

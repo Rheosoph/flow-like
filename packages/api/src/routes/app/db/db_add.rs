@@ -38,7 +38,10 @@ pub struct AddToDBPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/db/{table}", skip(state, user))]
+#[tracing::instrument(
+    name = "PUT /apps/{app_id}/db/{table}",
+    skip(state, user, scope, payload)
+)]
 pub async fn add_to_table(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -14,6 +14,11 @@ use utoipa::ToSchema;
 
 use crate::state::AppState;
 
+// Every handler here skips its `request` argument: the bodies carry live
+// credentials (authorization codes, refresh tokens, access tokens, device
+// codes) and `#[tracing::instrument]` would `Debug`-format them into every
+// subscriber, including the persisted telemetry span table. `provider_id` is
+// the safe correlation field and stays recorded.
 const OAUTH_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// OAuth configs loaded at build time (without secrets)
@@ -461,7 +466,7 @@ pub async fn refresh_oauth_token_for_provider(
         (status = 500, description = "Internal error", body = ErrorResponse)
     )
 )]
-#[tracing::instrument(name = "POST /oauth/token/:provider_id", skip(state))]
+#[tracing::instrument(name = "POST /oauth/token/:provider_id", skip(state, request))]
 pub async fn token_exchange(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
@@ -562,7 +567,7 @@ pub async fn token_exchange(
         (status = 500, description = "Internal error", body = ErrorResponse)
     )
 )]
-#[tracing::instrument(name = "POST /oauth/refresh/:provider_id", skip(state))]
+#[tracing::instrument(name = "POST /oauth/refresh/:provider_id", skip(state, request))]
 pub async fn token_refresh(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
@@ -637,7 +642,7 @@ pub async fn token_refresh(
     Ok(Json(token_response))
 }
 
-#[tracing::instrument(name = "POST /oauth/device/start/:provider_id", skip(state))]
+#[tracing::instrument(name = "POST /oauth/device/start/:provider_id", skip(state, request))]
 pub async fn device_start(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
@@ -706,7 +711,7 @@ pub async fn device_start(
     Ok(Json(payload))
 }
 
-#[tracing::instrument(name = "POST /oauth/device/poll/:provider_id", skip(state))]
+#[tracing::instrument(name = "POST /oauth/device/poll/:provider_id", skip(state, request))]
 pub async fn device_poll(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
@@ -749,7 +754,7 @@ pub async fn device_poll(
     Ok((status, Json(payload)).into_response())
 }
 
-#[tracing::instrument(name = "POST /oauth/userinfo/:provider_id", skip(state))]
+#[tracing::instrument(name = "POST /oauth/userinfo/:provider_id", skip(state, request))]
 pub async fn userinfo(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,
@@ -798,7 +803,7 @@ pub async fn userinfo(
     Ok((status_code, Json(payload)).into_response())
 }
 
-#[tracing::instrument(name = "POST /oauth/revoke/:provider_id", skip(state))]
+#[tracing::instrument(name = "POST /oauth/revoke/:provider_id", skip(state, request))]
 pub async fn revoke_token(
     State(state): State<AppState>,
     Path(provider_id): Path<String>,

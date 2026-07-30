@@ -125,7 +125,7 @@ fn get_credentials_access() -> crate::credentials::CredentialsAccess {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/board/{board_id}/invoke",
-    skip(state, user, params)
+    skip(state, user, query, params)
 )]
 pub async fn invoke_board(
     State(state): State<AppState>,
@@ -295,7 +295,7 @@ pub async fn invoke_board(
     if !is_jwt_configured() {
         println!("Execution JWT signing not configured");
         return Err(ApiError::internal_error(anyhow!(
-            "Execution JWT signing not configured (missing EXECUTION_KEY/EXECUTION_PUB env vars)"
+            "Execution JWT signing not configured (missing BACKEND_KEY/BACKEND_PUB)"
         )));
     }
 

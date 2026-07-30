@@ -101,6 +101,8 @@ export interface IPlanStep {
 	 * legacy grouped block above the text.
 	 */
 	content_offset?: number;
+	/** Tool that produced this step. Drives the FlowPilot orb's activity state and tool labels. */
+	toolName?: string;
 }
 
 export interface IModelCallEntry {

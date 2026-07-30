@@ -91,7 +91,7 @@ pub struct ForkPreviewResponse {
         (status = 404, description = "Source app not found")
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/fork/preview", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/fork/preview", skip(state, user, params))]
 pub async fn get_fork_preview(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -1,180 +1,154 @@
 ---
 title: AI Models & Setup
-description: Configure AI models and providers to power your GenAI applications
+description: Configure model providers and select models for Flow-Like GenAI workflows
 sidebar:
   order: 2
 ---
 
-Before building AI-powered flows, you need to **configure at least one AI model**. Flow-Like supports a wide range of providers—from cloud APIs like OpenAI and Anthropic to local models via Ollama.
+Flow-Like model nodes use the providers and models available in the active profile. Configure credentials and endpoints once, then either select a provider model explicitly or let **Find Model** choose from the available catalog using preferences.
 
-## Supported Providers
+## Configure the active profile
 
-Flow-Like supports these AI providers out of the box:
+Use the profile and model settings to:
 
-| Provider | Type | Best For |
-|----------|------|----------|
-| **OpenAI** | Cloud | GPT-4, GPT-4o, o1, o3 models |
-| **Azure OpenAI** | Cloud | Enterprise deployments |
-| **Anthropic** | Cloud | Claude 3.5, Claude 4 models |
-| **Google** | Cloud | Gemini models |
-| **Ollama** | Local | Self-hosted, privacy-first |
-| **Groq** | Cloud | Ultra-fast inference |
-| **DeepSeek** | Cloud | Reasoning models |
-| **Mistral** | Cloud | European AI provider |
-| **Together AI** | Cloud | Open-source models |
-| **OpenRouter** | Cloud | Model aggregator |
-| **Perplexity** | Cloud | Search-enhanced AI |
-| **Cohere** | Cloud | Enterprise NLP |
-| **HuggingFace** | Cloud | Open-source models |
-| **xAI (Grok)** | Cloud | X's AI models |
-| **VoyageAI** | Cloud | Embedding models |
-| **Hyperbolic** | Cloud | High-performance inference |
-| **Moonshot** | Cloud | Multilingual models |
+1. add a provider connection;
+2. enter the required credential or local endpoint;
+3. discover or enable the models you intend to use;
+4. test the connection;
+5. save the profile;
+6. run a small workflow with the selected model.
 
-## Adding a Model to Flow-Like
+See [Profiles](/start/profiles/) and [AI models in the getting-started guide](/start/models/) for the current interface.
 
-### Step 1: Open Profiles
+Store provider credentials in the profile or secret-backed configuration. Do not put API keys into boards, prompts, logs, or documentation screenshots.
 
-Go to **Settings → Profiles** in Flow-Like Desktop:
+## Provider nodes
 
-1. Click your profile avatar in the sidebar
-2. Select **Profiles** from the menu
-3. Click on your active profile
+The generated provider catalog currently includes model builders for:
 
-### Step 2: Add a Provider
+| Provider family | Examples |
+|-----------------|----------|
+| Major hosted APIs | OpenAI, Anthropic, Gemini, Vertex AI, AWS Bedrock |
+| Hosted inference and routing | Groq, OpenRouter, Together AI, Perplexity, Huggingface |
+| Other hosted providers | Cohere, Deepseek, Mistral, Moonshot AI, xAI, Hyperbolic, VoyageAI |
+| Local or compatible endpoints | Ollama, LM Studio, Mozilla any-llm |
+| Additional catalog providers | Galadriel, Mira |
 
-In the **Models** section of your profile:
+Browse [Generative model provider nodes](/nodes/ai/generative/provider/) for the current set and each node's inputs. Provider availability and model lists can change independently of the docs.
 
-1. Click **Add Provider**
-2. Select your provider from the list
-3. Enter your **API key** (or connection details for local models)
-4. Click **Save**
+## Explicit model selection
 
-:::tip[Getting API Keys]
-Each provider has their own signup process:
-- **OpenAI**: [platform.openai.com](https://platform.openai.com)
-- **Anthropic**: [console.anthropic.com](https://console.anthropic.com)
-- **Google AI**: [aistudio.google.com](https://aistudio.google.com)
-- **Ollama**: No key needed—just run Ollama locally!
-:::
+Use a provider-specific model node when the board requires a known provider configuration. Examples include:
 
-### Step 3: Select Models
+- [OpenAI Model](/nodes/ai/generative/provider/ai-generative-build-openai/)
+- [Anthropic Model](/nodes/ai/generative/provider/ai-generative-build-anthropic/)
+- [Gemini Model](/nodes/ai/generative/provider/ai-generative-build-gemini/)
+- [AWS Bedrock Model](/nodes/ai/generative/provider/ai-generative-build-bedrock/)
+- [Ollama Model](/nodes/ai/generative/provider/ai-generative-build-ollama/)
+- [LM Studio Model](/nodes/ai/generative/provider/ai-generative-build-lmstudio/)
 
-After adding a provider, Flow-Like will fetch the available models. Choose which ones you want to use:
+Explicit selection is useful when:
 
-1. Browse the available models
-2. Toggle on the models you want active
-3. Optionally, set a **default model** for quick access
+- a workflow has been evaluated against one model configuration;
+- data residency or provider policy is fixed;
+- a provider-specific option is required;
+- exact cost and behavior need controlled rollout.
 
-## Using Models in Your Flows
+Keep the model identifier configurable rather than scattering it across several boards.
 
-Once configured, you can use AI models in your flows with these nodes:
+## Preference-based selection
 
-### Find Model Node
+[Find Model](/nodes/ai/generative/ai-generative-find-model/) selects a model from the active profile using a `BitModelPreference`.
 
-The **Find Model** node automatically selects the best available model based on your preferences:
+Build the preference with:
 
-```
-┌─────────────────┐     ┌─────────────────┐
-│  Make Model     │────▶│   Invoke LLM    │
-│  Preferences    │     │                 │
-└─────────────────┘     └─────────────────┘
-```
+| Node | Purpose |
+|------|---------|
+| [Make Preferences](/nodes/ai/generative/preferences/ai-generative-make-preferences/) | Start a preference value and require multimodal capability when needed |
+| [Set Preference Weight](/nodes/ai/generative/preferences/ai-generative-set-preference-weight/) | Weight cost, speed, reasoning, creativity, factuality, function calling, safety, openness, multilinguality, or coding |
+| [Set Model Hint](/nodes/ai/generative/preferences/ai-generative-set-model-hint/) | Add a soft hint for a desired model family |
 
-**How it works:**
-1. Add a **Make Preferences** node
-2. Set preferences like speed, cost, or capability requirements
-3. Connect to your LLM node
-4. Flow-Like automatically picks the best matching model
+Preference weights guide selection; they are not hard guarantees of quality. Evaluate the selected-model behavior for the workflow and log the actual model used with each run.
 
-### Direct Model Selection
+Use preference-based selection when the board can tolerate a compatible alternative and the active profile may differ across environments.
 
-Alternatively, use a specific model by its identifier:
+## Match capability to the task
 
-1. Add your provider's **Prepare Model** node (e.g., "Prepare OpenAI")
-2. Select the specific model from the dropdown
-3. Connect to your LLM invocation node
+| Task | Required capability to verify |
+|------|-------------------------------|
+| Chat or generation | Text generation and sufficient context |
+| Tool-using agent | Reliable function or tool calling |
+| Structured extraction | Required tool call and JSON Schema adherence |
+| Image understanding | Multimodal or vision input |
+| RAG indexing | Embedding model with stable vector dimension |
+| Speech | Matching speech-to-text or text-to-speech model type |
+| Image or video generation | Corresponding generation model and options |
 
-## Model Preferences
+A provider may expose several model types. A text-generation model is not automatically an embedding, speech, image, or video model.
 
-The **Model Preferences** system helps you choose the right model dynamically:
+## Local models
 
-| Preference | Description |
-|------------|-------------|
-| **Speed** | Prioritize fast response times |
-| **Cost** | Prefer cheaper models |
-| **Quality** | Prefer more capable models |
-| **Context Size** | Require specific context window |
-| **Capabilities** | Require features like vision or tools |
+[Ollama Model](/nodes/ai/generative/provider/ai-generative-build-ollama/) and [LM Studio Model](/nodes/ai/generative/provider/ai-generative-build-lmstudio/) connect to compatible local services.
 
-This is especially useful when you want your flows to:
-- Automatically fall back to alternatives if a model is unavailable
-- Balance cost vs. quality based on the task
-- Use different models in development vs. production
+Before using a local model:
 
-## Local Models with Ollama
+- confirm the service is reachable from the execution backend;
+- verify model type and tool or vision support;
+- measure memory, accelerator, and disk requirements on the target machine;
+- test concurrency and timeout behavior;
+- define what should happen when the local service is unavailable.
 
-For privacy-sensitive applications or offline use, you can run models locally with **Ollama**:
+Hardware requirements depend on model architecture, quantization, context size, and runtime. Use the model and runtime documentation instead of a universal RAM estimate.
 
-### Setting Up Ollama
+## Embedding models
 
-1. Download Ollama from [ollama.ai](https://ollama.ai)
-2. Install and run Ollama on your machine
-3. Pull a model: `ollama pull llama3.2` or `ollama pull mistral`
-4. In Flow-Like, add Ollama as a provider (usually auto-detected)
+RAG requires an embedding model for documents and queries. Use [Load Embedding Model](/nodes/ai/embedding/load-model/), [Embed Document](/nodes/ai/embedding/embed-document/), and [Embed Query](/nodes/ai/embedding/embed-query/).
 
-### Recommended Local Models
+Index and query with the same embedding model and configuration. Changing the model normally requires rebuilding the vector index.
 
-| Model | Size | Good For |
-|-------|------|----------|
-| **llama3.2** | 3B/8B | General purpose, fast |
-| **mistral** | 7B | Coding, reasoning |
-| **phi-4** | 14B | High quality, balanced |
-| **deepseek-r1** | 7B/32B | Complex reasoning |
-| **nomic-embed-text** | - | Text embeddings |
+## Model configuration
 
-:::note[Hardware Requirements]
-Local models require a capable machine. For 7B models, you'll want at least 8GB RAM. For larger models (32B+), 32GB+ RAM or a GPU is recommended.
-:::
+History nodes can set options such as maximum tokens, temperature, top-p, response format, streaming, seed, and stop words. Provider support differs.
 
-## Model Configuration Tips
+Choose settings through evaluation:
 
-### For Chat Applications
-- Use models with large context windows (32K+ tokens)
-- Enable streaming for better user experience
-- Consider cost for high-volume applications
+- lower variability for extraction and governed answers;
+- enough output budget for the response contract;
+- streaming only when partial output can be handled safely;
+- response format compatible with the downstream parser;
+- explicit timeout and retry behavior.
 
-### For RAG & Knowledge Retrieval
-- Pair a generative model with an embedding model
-- Use the same embedding model for indexing and querying
-- Consider specialized models like `nomic-embed-text`
+Do not assume a provider interprets every sampling parameter identically.
 
-### For Agents & Tools
-- Use models explicitly designed for tool use (GPT-4, Claude 3.5+)
-- Larger models generally perform better with complex tools
-- Test with simpler tasks first
+## Evaluate before rollout
+
+Maintain task-specific cases and compare:
+
+- correctness and completeness;
+- tool or schema adherence;
+- refusal and uncertainty behavior;
+- latency and timeout rate;
+- token usage and cost;
+- multilingual and domain behavior where relevant;
+- safety on adversarial or sensitive inputs.
+
+Record the provider, model identifier, profile or configuration version, prompt version, and relevant settings with evaluation results.
 
 ## Troubleshooting
 
-### "No models available"
-- Check your API key is valid and has credits
-- Verify your internet connection (for cloud providers)
-- For Ollama, ensure it's running (`ollama serve`)
+| Symptom | Check |
+|---------|-------|
+| No models available | Active profile, provider connection, model discovery, network reach |
+| Authentication fails | Credential scope, expiration, endpoint, secret handling |
+| Local model is unreachable | Service address from the execution backend, firewall, process state |
+| Tool calls fail | Model capability, tool schema, iteration and timeout limits |
+| Structured extraction fails | Function-call support, schema validity, selected model |
+| Output changes between environments | Active profile, selected model, preference result, settings |
+| Context errors | Input size, history length, retrieval count, output budget |
 
-### "Model not responding"
-- Check rate limits on your API key
-- Try a different model from the same provider
-- For local models, check system resources
+## Next steps
 
-### "Unexpected responses"
-- Verify the model supports your use case (e.g., vision, tools)
-- Check your system prompt and temperature settings
-- Try a more capable model
-
-## Next Steps
-
-With your models configured, you're ready to build:
-
-- **Simple chat**: Continue to [Chat & Conversations](/topics/genai/chat/)
-- **Knowledge retrieval**: Jump to [RAG & Knowledge Bases](/topics/genai/rag/)
-- **Autonomous agents**: See [AI Agents](/topics/genai/agents/)
+- [Chat and conversations](/topics/genai/chat/)
+- [RAG and knowledge bases](/topics/genai/rag/)
+- [AI agents](/topics/genai/agents/)
+- [Extraction and structured output](/topics/genai/extraction/)

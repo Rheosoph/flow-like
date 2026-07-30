@@ -1,571 +1,166 @@
 ---
 title: Machine Learning
-description: Train and deploy ML models for classification, regression, and clustering
+description: Prepare data, train supported models, evaluate them, and run inference in Flow-Like
 sidebar:
   order: 4
 ---
 
-Flow-Like includes a complete machine learning toolkit built on **linfa** (Rust's ML library) and **ONNX Runtime** for neural network inference. Train models visually without writing code.
+Flow-Like provides workflow nodes for classical machine learning and ONNX inference. Keep data preparation, splitting, training, evaluation, persistence, and prediction as explicit stages so the result can be reproduced and reviewed.
 
-## Available Algorithms
+## Supported workflow families
 
-### Classification
+| Task | Current catalog examples |
+|------|--------------------------|
+| Classification | Decision tree, naive Bayes, multi-class SVM |
+| Regression | Linear regression |
+| Clustering | KMeans, DBSCAN |
+| Dimensionality reduction | PCA, t-SNE |
+| Evaluation | Accuracy, confusion matrix, regression metrics |
+| Tuning | Grid search, auto classifier |
+| Inference | Saved Flow-Like models and ONNX models |
 
-| Algorithm | Node | Best For |
-|-----------|------|----------|
-| **Decision Tree** | Fit Decision Tree | Interpretable rules, multi-class |
-| **Naive Bayes** | Fit Naive Bayes | Fast baseline, Gaussian features |
-| **SVM** | Fit SVM Multi-Class | High accuracy, complex boundaries |
+Browse the [Machine Learning node catalog](/nodes/ai/ml/) for current pins, schemas, and model requirements.
 
-### Regression
+## Prepare data
 
-| Algorithm | Node | Best For |
-|-----------|------|----------|
-| **Linear Regression** | Fit Linear Regression | Continuous predictions, feature importance |
+### Define the observation grain
 
-### Clustering
+Each row should represent the same kind of observation. Before training:
 
-| Algorithm | Node | Best For |
-|-----------|------|----------|
-| **K-Means** | Fit KMeans | Known cluster count, spherical clusters |
-| **DBSCAN** | Fit DBSCAN | Unknown cluster count, outlier detection |
+- choose a stable record identifier;
+- remove leakage from fields created after the prediction target;
+- define numeric or categorical feature handling;
+- document missing-value behavior;
+- fix the target definition and evaluation window;
+- retain the source version or query window.
 
-### Dimensionality Reduction
+### Split before fitting
 
-| Algorithm | Node | Best For |
-|-----------|------|----------|
-| **PCA** | Fit PCA | Feature reduction, visualization prep |
-
-### Deep Learning (ONNX)
-
-| Model Type | Node | Best For |
-|------------|------|----------|
-| **Image Classification** | ONNX TIMM | Classify images |
-| **Object Detection** | ONNX YOLO/D-FINE | Detect objects in images |
-| **Teachable Machine** | Teachable Machine | Quick prototyping |
-
-## Data Preparation
-
-### Input Format
-
-ML nodes expect data in a **LanceDB database** with:
-- A `records` column: 2D float array (feature matrix)
-- A `targets` column: labels (classification) or values (regression)
-
-### Preparing Your Data
-
-```
-┌────────────────────────────────────────────────────────────┐
-│                                                            │
-│  1. Load Data (CSV, SQL, etc.)                            │
-│       │                                                    │
-│       ▼                                                    │
-│  2. Insert into Database                                   │
-│       │                                                    │
-│       ▼                                                    │
-│  3. Format as records/targets                              │
-│       │                                                    │
-│       ▼                                                    │
-│  4. Split (train/test)                                     │
-│       │                                                    │
-│       ▼                                                    │
-│  5. Train Model                                            │
-│                                                            │
-└────────────────────────────────────────────────────────────┘
-```
-
-### Dataset Splitting
-
-**Random Split:**
-```
-Split Dataset
-    │
-    ├── Database: (input data)
-    ├── Split Ratio: 0.8  (80% train, 20% test)
-    │
-    ├── Train ──▶ (training database)
-    └── Test ──▶ (test database)
-```
-
-**Stratified Split** (preserves class distribution):
-```
-Stratified Split
-    │
-    ├── Database: (input data)
-    ├── Target Column: "label"
-    ├── Split Ratio: 0.8
-    │
-    ├── Train ──▶ (balanced training set)
-    └── Test ──▶ (balanced test set)
-```
-
-:::tip[Use Stratified for Imbalanced Data]
-If your classes are imbalanced (e.g., 95% vs 5%), always use stratified splitting to ensure both train and test sets have representative samples.
-:::
-
-### Other Data Operations
-
-| Node | Purpose |
-|------|---------|
-| **Shuffle Dataset** | Randomize row order |
-| **Sample Dataset** | Take a random subset |
-
-## Classification Models
-
-### Decision Tree
-
-Decision trees create interpretable if-then rules:
-
-```
-Fit Decision Tree
-    │
-    ├── Database: (training data)
-    ├── Max Depth: 10  (0 = unlimited)
-    ├── Min Samples Split: 2
-    │
-    └── Model ──▶ (trained decision tree)
-```
-
-**When to use:**
-- You need to explain predictions
-- Data has clear decision boundaries
-- Multi-class classification
-
-**Parameters:**
-| Parameter | Effect | Recommendation |
-|-----------|--------|----------------|
-| Max Depth | Tree complexity | Start with 5-10, increase if underfitting |
-| Min Samples Split | Minimum samples to split | Higher values prevent overfitting |
-
-### Naive Bayes
-
-Fast Gaussian classifier:
-
-```
-Fit Naive Bayes
-    │
-    ├── Database: (training data)
-    │
-    └── Model ──▶ (trained Naive Bayes)
-```
-
-**When to use:**
-- Quick baseline model
-- Features are roughly Gaussian
-- Fast inference needed
-
-**Pros/Cons:**
-| Pros | Cons |
+| Need | Node |
 |------|------|
-| Very fast training | Assumes feature independence |
-| Works with small datasets | Less accurate than trees/SVM |
-| Handles multi-class naturally | Sensitive to feature scaling |
-
-### SVM (Support Vector Machine)
-
-High-accuracy classifier with RBF kernel:
-
-```
-Fit SVM Multi-Class
-    │
-    ├── Database: (training data)
-    │
-    └── Model ──▶ (trained SVM ensemble)
-```
-
-**When to use:**
-- Maximum accuracy needed
-- Smaller datasets (< 10,000 samples)
-- Complex decision boundaries
-
-**Notes:**
-- Uses One-vs-All strategy for multi-class
-- Gaussian (RBF) kernel by default
-- Slower training than trees/Naive Bayes
-
-## Regression Models
-
-### Linear Regression
-
-Predict continuous values:
-
-```
-Fit Linear Regression
-    │
-    ├── Database: (training data with numeric targets)
-    │
-    └── Model ──▶ (trained linear model)
-```
-
-**When to use:**
-- Predicting continuous values
-- Understanding feature importance
-- Linear relationship expected
-
-**Getting Coefficients:**
-```
-Get Linear Coefficients
-    │
-    ├── Model: (trained linear regression)
-    │
-    └── Info ──▶ {
-        coefficients: [0.5, -0.3, 0.8],
-        intercept: 2.1,
-        n_features: 3
-    }
-```
-
-## Clustering Models
-
-### K-Means
-
-Partition data into k clusters:
-
-```
-Fit KMeans
-    │
-    ├── Database: (data with records column)
-    ├── Clusters: 5  (number of clusters)
-    │
-    └── Model ──▶ (trained KMeans)
-```
-
-**When to use:**
-- You know the number of clusters
-- Clusters are roughly spherical
-- Customer segmentation, grouping
-
-**Getting Centroids:**
-```
-Get KMeans Centroids
-    │
-    ├── Model: (trained KMeans)
-    │
-    └── Info ──▶ {
-        k: 5,
-        dimensions: 3,
-        centroids: [[...], [...], ...]
-    }
-```
-
-### DBSCAN
-
-Density-based clustering:
-
-```
-Fit DBSCAN
-    │
-    ├── Database: (data with records column)
-    ├── Epsilon: 0.5  (max distance between points)
-    ├── Min Points: 5  (points to form dense region)
-    │
-    ├── End ──▶ (clustering complete)
-    ├── N Clusters ──▶ (number found)
-    └── N Noise ──▶ (outliers found)
-```
-
-**When to use:**
-- Unknown number of clusters
-- Need to detect outliers/anomalies
-- Non-spherical cluster shapes
-
-:::note[DBSCAN Returns Counts, Not a Model]
-Unlike KMeans, DBSCAN doesn't produce a reusable model—it assigns clusters directly to your data.
-:::
-
-## Dimensionality Reduction
-
-### PCA (Principal Component Analysis)
-
-Reduce feature dimensions:
-
-```
-Fit PCA
-    │
-    ├── Database: (high-dimensional data)
-    ├── N Components: 2  (target dimensions)
-    ├── Output Column: "reduced"
-    │
-    ├── End ──▶ (reduction complete)
-    └── Vectors ──▶ (reduced vectors)
-```
-
-**When to use:**
-- Too many features (high-dimensional data)
-- Preparing for visualization (reduce to 2-3D)
-- Removing noise/redundant features
-
-## Making Predictions
-
-The **Predict** node works with any trained model:
-
-### Predict on Database
-
-```
-Predict
-    │
-    ├── Model: (any trained ML model)
-    ├── Mode: "Database"
-    ├── Database: (data to predict)
-    ├── Input Column: "records"
-    ├── Output Column: "predictions"
-    ├── Batch Size: 5000
-    │
-    ├── End ──▶ (predictions complete)
-    └── Database ──▶ (with predictions column)
-```
-
-### Predict on Vector
-
-For single predictions:
-
-```
-Predict
-    │
-    ├── Model: (trained model)
-    ├── Mode: "Vector"
-    ├── Vector: [1.5, 2.3, 0.8, ...]  (features)
-    │
-    └── Prediction ──▶ "class_a"  (or numeric value)
-```
-
-## Model Evaluation
-
-### Classification Metrics
-
-**Accuracy:**
-```
-Evaluate Accuracy
-    │
-    ├── Database: (with predictions & targets)
-    ├── Prediction Column: "predictions"
-    ├── Target Column: "targets"
-    │
-    └── Result ──▶ {
-        accuracy: 0.92,
-        correct: 920,
-        total: 1000
-    }
-```
-
-**Confusion Matrix:**
-```
-Evaluate Confusion Matrix
-    │
-    ├── Database: (with predictions & targets)
-    ├── Prediction Column: "predictions"
-    ├── Target Column: "targets"
-    │
-    └── Result ──▶ {
-        matrix: [[45, 5], [3, 47]],
-        precision: [0.94, 0.90],
-        recall: [0.90, 0.94],
-        f1_score: [0.92, 0.92]
-    }
-```
-
-### Regression Metrics
-
-```
-Evaluate Regression
-    │
-    ├── Database: (with predictions & targets)
-    ├── Prediction Column: "predictions"
-    ├── Target Column: "targets"
-    │
-    └── Result ──▶ {
-        mse: 0.05,
-        rmse: 0.22,
-        mae: 0.18,
-        r_squared: 0.89
-    }
-```
-
-**Metric Guide:**
-| Metric | Description | Good Value |
-|--------|-------------|------------|
-| MSE | Mean Squared Error | Lower is better |
-| RMSE | Root MSE (same units as target) | Lower is better |
-| MAE | Mean Absolute Error | Lower is better |
-| R² | Variance explained | Closer to 1.0 |
-
-## Saving and Loading Models
-
-### Save Model
-
-```
-Save ML Model
-    │
-    ├── Model: (trained model)
-    ├── Path: (FlowPath for output)
-    │
-    └── End
-```
-
-Formats:
-- **JSON** – Human-readable, portable
-- **Binary** – Faster, smaller (Fory format)
-
-### Load Model
-
-```
-Load ML Model
-    │
-    ├── Path: (FlowPath to saved model)
-    │
-    └── Model ──▶ (loaded model ready for predictions)
-```
-
-## ONNX Models (Deep Learning)
-
-For pre-trained neural networks:
-
-### Loading ONNX Models
-
-```
-Load ONNX
-    │
-    ├── Path: (FlowPath to .onnx file)
-    │
-    └── Session ──▶ (ONNX inference session)
-```
-
-### Image Classification (TIMM)
-
-Use models exported from PyTorch Image Models:
-
-```
-ONNX Classification
-    │
-    ├── Session: (ONNX session)
-    ├── Image: (image data)
-    ├── Top K: 5
-    │
-    └── Results ──▶ [
-        {class_idx: 281, score: 0.92},
-        {class_idx: 282, score: 0.05},
-        ...
-    ]
-```
-
-### Object Detection (YOLO/D-FINE)
-
-Detect objects in images:
-
-```
-ONNX Detection
-    │
-    ├── Session: (ONNX session)
-    ├── Image: (image data)
-    ├── Confidence: 0.5
-    ├── NMS Threshold: 0.4
-    │
-    └── Detections ──▶ [
-        {class_idx: 0, score: 0.95, x1: 10, y1: 20, x2: 100, y2: 150},
-        ...
-    ]
-```
-
-### Teachable Machine
-
-For Google Teachable Machine models:
-
-```
-Teachable Machine
-    │
-    ├── Path: (FlowPath to .tflite)
-    ├── Labels: (optional labels file)
-    ├── Image: (image data)
-    │
-    └── Results ──▶ [{label: "cat", score: 0.95}, ...]
-```
-
-## Model Selection Guide
-
-| Use Case | Recommended Model |
-|----------|-------------------|
-| Quick classification baseline | Naive Bayes |
-| Need to explain predictions | Decision Tree |
-| Maximum accuracy (small data) | SVM |
-| Predict continuous values | Linear Regression |
-| Group data (known K) | K-Means |
-| Find outliers & groups | DBSCAN |
-| Reduce dimensions | PCA |
-| Classify images | ONNX (TIMM) |
-| Detect objects | ONNX (YOLO) |
-| Imbalanced classes | Use Stratified Split first |
-
-## Complete Example: Customer Churn Prediction
-
-```
-┌────────────────────────────────────────────────────────────┐
-│                                                            │
-│  Load CSV (customer data)                                  │
-│       │                                                    │
-│       ▼                                                    │
-│  Insert to Database                                        │
-│       │                                                    │
-│       ▼                                                    │
-│  Stratified Split (80/20)                                  │
-│       │                                                    │
-│       ├──▶ Train Set ──▶ Fit Decision Tree                │
-│       │                        │                           │
-│       │                        ▼                           │
-│       │                   Model ────────────┐              │
-│       │                                     │              │
-│       └──▶ Test Set ────────────────────────┼──▶ Predict  │
-│                                             │       │      │
-│                                             │       ▼      │
-│                                    Confusion Matrix        │
-│                                             │              │
-│                                             ▼              │
-│                                    Save Model (if good)    │
-│                                                            │
-└────────────────────────────────────────────────────────────┘
-```
-
-## Best Practices
-
-### 1. Always Split Your Data
-Never evaluate on training data—it gives overly optimistic results.
-
-### 2. Start Simple
-Begin with Naive Bayes or Decision Trees, then try more complex models.
-
-### 3. Use Stratified Splitting for Classification
-Especially important when classes are imbalanced.
-
-### 4. Check Feature Scaling
-Some algorithms (SVM, K-Means) are sensitive to feature scales. Consider normalizing.
-
-### 5. Evaluate Multiple Metrics
-Accuracy alone can be misleading. Check precision, recall, and F1.
-
-### 6. Save Good Models
-Don't retrain every time—save and load trained models.
-
-## Troubleshooting
-
-### "Model performs poorly"
-- Check for data quality issues
-- Try a different algorithm
-- Increase training data
-- Check for class imbalance
-
-### "Training is slow"
-- Reduce dataset size with sampling
-- Use smaller batch sizes
-- Try simpler algorithms (Naive Bayes)
-
-### "Memory errors"
-- Set MAX_RECORDS limit
-- Process in batches
-- Use sampling for very large datasets
-
-## Next Steps
-
-With trained models:
-
-- **[Data Visualization](/topics/datascience/visualization/)** – Visualize predictions and metrics
-- **[AI-Powered Analysis](/topics/datascience/ai-analysis/)** – Combine ML with GenAI
-- **[Data Loading](/topics/datascience/loading/)** – Work with more data sources
+| General train/test split | [Split Dataset](/nodes/ai/ml/dataset/ai-ml-dataset-split/) |
+| Preserve class proportions | [Stratified Split](/nodes/ai/ml/dataset/ai-ml-dataset-stratified-split/) |
+| Repeated fold evaluation | [K-Fold Split](/nodes/ai/ml/dataset/ai-ml-dataset-kfold/) |
+| Shuffle or sample | [Shuffle Dataset](/nodes/ai/ml/dataset/ai-ml-dataset-shuffle/), [Sample Dataset](/nodes/ai/ml/dataset/ai-ml-dataset-sample/) |
+
+Perform transformations that learn from data, such as scaling statistics or category vocabularies, using the training portion only. Reuse the fitted transformation for validation and inference.
+
+For time-dependent data, use a chronological split rather than randomizing future observations into the training set.
+
+## Classification
+
+| Model | Node | Useful starting point |
+|-------|------|-----------------------|
+| Decision tree | [Train Classifier (Decision Tree)](/nodes/ai/ml/classification/fit-decision-tree/) | Interpretable non-linear rules |
+| Naive Bayes | [Train Classifier (Naive Bayes)](/nodes/ai/ml/classification/fit-naive-bayes/) | Fast baseline under its feature assumptions |
+| Multi-class SVM | [Train Classifier (SVM)](/nodes/ai/ml/classification/fit-svm-multi-class/) | Margin-based classification on prepared features |
+
+Start with a baseline and compare models on the same untouched evaluation set. Accuracy alone can hide poor minority-class performance.
+
+Use [Accuracy](/nodes/ai/ml/metrics/ml-eval-accuracy/) and [Confusion Matrix](/nodes/ai/ml/metrics/ml-eval-confusion-matrix/) together. Add task-specific precision, recall, or cost analysis downstream when false positives and false negatives have different consequences.
+
+## Regression
+
+[Train Regression (Linear)](/nodes/ai/ml/regression/fit-linear-regression/) fits a linear regression model. [Get Coefficients](/nodes/ai/ml/model-info/ml-get-linear-coefficients/) exposes the learned coefficients for interpretation, and [Regression Metrics](/nodes/ai/ml/metrics/ml-eval-regression/) evaluates predictions.
+
+Check residual patterns and target distribution, not only one aggregate score. Large outliers, time drift, and extrapolation beyond the training range can make a plausible average metric misleading.
+
+## Clustering
+
+| Model | Node | Main decision |
+|-------|------|---------------|
+| KMeans | [Train Clustering (KMeans)](/nodes/ai/ml/clustering/fit-kmeans/) | Number of clusters and feature scaling |
+| DBSCAN | [Train Clustering (DBSCAN)](/nodes/ai/ml/clustering/fit-dbscan/) | Neighborhood radius and minimum density |
+
+[Get Centroids](/nodes/ai/ml/model-info/ml-get-kmeans-centroids/) helps inspect KMeans clusters. Clusters do not acquire business meaning automatically; review representative records and stability before assigning labels.
+
+DBSCAN can identify noise without choosing a cluster count, but its behavior depends strongly on scale and density. Standardize comparable numeric features before tuning distance-based models.
+
+## Dimensionality reduction
+
+| Method | Node | Typical use |
+|--------|------|-------------|
+| PCA | [PCA Reduction](/nodes/ai/ml/reduction/fit-pca/) | Linear compression and variance analysis |
+| t-SNE | [t-SNE Reduction](/nodes/ai/ml/reduction/fit-tsne/) | Exploratory low-dimensional visualization |
+
+Fit reduction on training data when it is part of a predictive pipeline. Treat t-SNE layouts as exploratory views; distances and cluster shapes should not be interpreted as a validated predictive model.
+
+## Tune models
+
+[Grid Search](/nodes/ai/ml/tuning/ai-ml-tuning-grid-search/) evaluates configured parameter combinations. [Auto Classifier](/nodes/ai/ml/tuning/ai-ml-tuning-auto-classifier/) compares supported classifier choices.
+
+Use a validation strategy that remains separate from the final test set. Record:
+
+- candidate parameter ranges;
+- selected metric;
+- random seed where available;
+- split definition;
+- winning configuration and score;
+- training data version.
+
+## Predict
+
+[Predict](/nodes/ai/ml/ml-predict/) runs a saved or newly trained model on prepared features. [Prediction Class/Label](/nodes/ai/ml/ai-ml-pred-class-or-label/) and [Prediction Score](/nodes/ai/ml/teachable-machine/ai-ml-pred-score/) expose task-specific prediction details where applicable.
+
+Inference must reproduce the training feature order, types, missing-value handling, and transformations. Validate the input schema before invoking the model.
+
+## Save and load models
+
+| Need | Node |
+|------|------|
+| Save model through the path abstraction | [Save Model](/nodes/ai/ml/save-ml-model/) |
+| Load model through the path abstraction | [Load Model](/nodes/ai/ml/load-ml-model/) |
+| Save raw binary model data | [Save Model (Binary)](/nodes/ai/ml/save-ml-model-binary/) |
+| Load raw binary model data | [Load Model (Binary)](/nodes/ai/ml/load-ml-model-binary/) |
+| Inspect metadata | [Model Info](/nodes/ai/ml/model-info/ml-model-info/) |
+
+Store a small model card with the artifact: training data version, feature schema, target, metrics, intended use, limitations, and owner.
+
+## ONNX inference
+
+The [ONNX node family](/nodes/ai/ml/onnx/) covers model loading plus several prepared tasks:
+
+| Area | Examples |
+|------|----------|
+| Vision | Image classification, object detection, segmentation, depth, pose |
+| OCR | Text detection, region cropping, text recognition |
+| Face | Detection, embeddings, comparison |
+| Audio | Loading, resampling, spectrograms, voice activity detection |
+| NLP | Named-entity recognition |
+| Batch | Batch image inference |
+
+Start with [Load ONNX](/nodes/ai/ml/onnx/load-onnx/) and inspect [ONNX Model Info](/nodes/ai/ml/onnx/onnx-model-info/) and [Session Info](/nodes/ai/ml/onnx/onnx-session-info/). Model compatibility depends on input tensors, preprocessing, output tensors, and supported operators. Validate those contracts instead of assuming any ONNX file will work with a task-specific node.
+
+[Teachable Machine](/nodes/ai/ml/ai-ml-teachable-machine/) is available for compatible exported models.
+
+## Example: churn model
+
+| Stage | Operation |
+|-------|-----------|
+| Source | Query one row per customer with a fixed observation window |
+| Validate | Check target, features, missing values, and class distribution |
+| Split | Stratify train and test data by churn label |
+| Baseline | Train a decision tree with a documented configuration |
+| Evaluate | Review accuracy and the confusion matrix |
+| Persist | Save the model and its feature schema |
+| Serve | Validate new customer features, predict, and record model version |
+| Monitor | Compare outcome drift and class balance over time |
+
+## Production checklist
+
+- [ ] Observation grain and target are documented
+- [ ] Leakage fields are removed
+- [ ] Train, validation, and test data are separate
+- [ ] Preprocessing is fitted on training data and reused at inference
+- [ ] Baseline and selected model use the same evaluation set
+- [ ] Multiple task-relevant metrics are reviewed
+- [ ] Model, feature schema, and data version are saved together
+- [ ] Inference validates feature order and types
+- [ ] Drift, failures, and model version are observable
+
+## Next steps
+
+- [Data loading and storage](/topics/datascience/loading/)
+- [DataFusion and SQL](/topics/datascience/datafusion/)
+- [Data visualization](/topics/datascience/visualization/)
+- [AI-powered analysis](/topics/datascience/ai-analysis/)

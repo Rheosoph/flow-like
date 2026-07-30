@@ -32,7 +32,7 @@ use flow_like_storage::databases::graph::lancegraph;
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/graph", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/graph", skip(state, user, scope))]
 pub async fn list_overlays(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

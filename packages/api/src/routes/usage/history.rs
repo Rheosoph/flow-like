@@ -62,7 +62,7 @@ pub struct LlmUsageRecord {
         (status = 200, description = "LLM usage history", body = PaginatedResponse<LlmUsageRecord>)
     )
 )]
-#[tracing::instrument(name = "GET /usage/llm", skip(state, user))]
+#[tracing::instrument(name = "GET /usage/llm", skip_all)]
 pub async fn get_llm_history(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -141,7 +141,7 @@ pub struct EmbeddingUsageRecord {
         (status = 200, description = "Embedding usage history", body = PaginatedResponse<EmbeddingUsageRecord>)
     )
 )]
-#[tracing::instrument(name = "GET /usage/embeddings", skip(state, user))]
+#[tracing::instrument(name = "GET /usage/embeddings", skip_all)]
 pub async fn get_embedding_history(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -219,7 +219,7 @@ pub struct ExecutionUsageRecord {
         (status = 200, description = "Execution usage history", body = PaginatedResponse<ExecutionUsageRecord>)
     )
 )]
-#[tracing::instrument(name = "GET /usage/executions", skip(state, user))]
+#[tracing::instrument(name = "GET /usage/executions", skip_all)]
 pub async fn get_execution_history(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -54,7 +54,7 @@ pub struct CreateGroupRequest {
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/groups", skip(state, user))]
+#[tracing::instrument(name = "POST /apps/{app_id}/groups", skip(state, user, payload))]
 pub async fn create_group(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -313,7 +313,10 @@ pub struct UpdateGroupRequest {
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/groups/{group_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "PUT /apps/{app_id}/groups/{group_id}",
+    skip(state, user, payload)
+)]
 pub async fn update_group(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

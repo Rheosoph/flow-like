@@ -1,258 +1,177 @@
 ---
 title: Monitoring
-description: Enable monitoring for Docker Compose deployment with Prometheus and Grafana.
+description: Run the bundled Prometheus, Grafana, Tempo, and exporter services
 sidebar:
   order: 25
 ---
 
-The Docker Compose deployment includes optional monitoring with Prometheus, Grafana, and pre-built dashboards.
+The optional `monitoring` profile adds metrics, dashboards, distributed
+tracing, and database exporters to the same Compose network.
 
-## Enabling Monitoring
-
-Start the monitoring stack alongside your services:
+## Start the profile
 
 ```bash
 docker compose --profile monitoring up -d
+docker compose --profile monitoring ps
 ```
 
-Or run just monitoring services:
+The profile starts:
+
+| Service | Template host port | Purpose |
+| --- | --- | --- |
+| Grafana | `3002` | Provisioned dashboards and trace exploration |
+| Prometheus | `9091` | Metrics storage, rules, and queries |
+| Tempo | `3200` | Trace storage and query API |
+| Tempo OTLP gRPC | `4317` | Trace ingestion |
+| Tempo OTLP HTTP | `4318` | Trace ingestion |
+| Redis exporter | `9121` | Redis metrics |
+| PostgreSQL exporter | `9187` | PostgreSQL metrics |
+
+The compiler metrics listener is separately published on `9092` by default.
+API and runtime metrics stay on the Compose network.
+
+Change `GRAFANA_ADMIN_PASSWORD` before making Grafana reachable outside a
+trusted development machine.
+
+## What Prometheus scrapes
+
+The checked-in configuration at
+`monitoring/prometheus/prometheus.yml` defines these targets:
+
+| Job | Internal target | Metrics path |
+| --- | --- | --- |
+| Prometheus | `localhost:9090` | `/metrics` |
+| Flow-Like API | `api:9090` | `/metrics` |
+| Runtime | `runtime:9000` | `/metrics` |
+| WASM compiler | `compiler:9091` | `/metrics` |
+| Redis | `redis-exporter:9121` | `/metrics` |
+| PostgreSQL | `postgres-exporter:9187` | `/metrics` |
+
+There is no cAdvisor service in the current profile, so the bundled stack does
+not collect per-container CPU, memory, or network metrics by default.
+
+Check target health:
 
 ```bash
-docker compose --profile monitoring up -d prometheus grafana
+curl --fail http://localhost:9091/api/v1/targets
 ```
 
-## Accessing Services
-
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| Grafana | http://localhost:3002 | admin / admin |
-| Prometheus | http://localhost:9091 | — |
-
-:::tip
-Change the default Grafana password on first login for production use.
-:::
-
-## Pre-built Dashboards
-
-Grafana comes pre-configured with dashboards for all services:
-
-### System Overview
-
-Overall system health:
-- Container CPU and memory usage
-- Network I/O across services
-- Container restarts and uptime
-
-### API Service
-
-API performance metrics:
-- Request rate (requests/second)
-- Response latency (p50, p95, p99)
-- Error rate by status code
-- Active connections
-
-### Execution Runtime
-
-Runtime metrics:
-- Jobs in progress
-- Execution duration histogram
-- Queue depth
-- Success/failure rates
-
-### PostgreSQL
-
-Database performance:
-- Active connections
-- Query rate
-- Transaction throughput
-- Cache hit ratio
-
-## Prometheus Targets
-
-Prometheus scrapes metrics from:
-
-| Target | Endpoint | Metrics |
-|--------|----------|---------|
-| API | `api:9090/metrics` | Request counts, latencies, errors |
-| Runtime | `runtime:9090/metrics` | Execution metrics |
-| PostgreSQL Exporter | `postgres-exporter:9187/metrics` | Database metrics |
-| cAdvisor | `cadvisor:8080/metrics` | Container metrics |
-
-## Configuration
-
-### Custom Prometheus Config
-
-Edit `monitoring/prometheus/prometheus.yml`:
-
-```yaml
-global:
-  scrape_interval: 15s
-  evaluation_interval: 15s
-
-scrape_configs:
-  - job_name: 'api'
-    static_configs:
-      - targets: ['api:9090']
-
-  - job_name: 'runtime'
-    static_configs:
-      - targets: ['runtime:9090']
-
-  # Add custom targets here
-  - job_name: 'custom-service'
-    static_configs:
-      - targets: ['my-service:9090']
-```
-
-### Custom Grafana Dashboards
-
-Add dashboard JSON files to `monitoring/grafana/provisioning/dashboards/`:
+Check the service listeners directly:
 
 ```bash
-# Download a dashboard from Grafana.com
-curl -o monitoring/grafana/provisioning/dashboards/my-dashboard.json \
-  'https://grafana.com/api/dashboards/1860/revisions/latest/download'
+docker compose exec api curl --fail http://localhost:9090/metrics
+docker compose exec runtime curl --fail http://localhost:9000/metrics
+curl --fail http://localhost:9092/metrics
+```
 
-# Restart Grafana to pick up changes
+## Provisioned dashboards
+
+Grafana loads the JSON dashboards in
+`monitoring/grafana/dashboards/` into a **Flow-Like** folder:
+
+- system overview;
+- API;
+- execution runtime;
+- WASM compiler;
+- PostgreSQL;
+- Redis;
+- distributed tracing.
+
+The provisioned provider is read-only in the UI. To maintain another bundled
+dashboard, add its JSON file to that directory and restart Grafana:
+
+```bash
 docker compose restart grafana
 ```
 
-### Alert Rules
+For dashboards managed independently of the repository, configure another
+Grafana provider or use an external Grafana instance.
 
-Add Prometheus alerting rules in `monitoring/prometheus/alerts/`:
+## Metrics and trace configuration
 
-```yaml
-# monitoring/prometheus/alerts/api.yml
-groups:
-  - name: api
-    rules:
-      - alert: HighErrorRate
-        expr: |
-          sum(rate(http_requests_total{status=~"5.."}[5m]))
-          / sum(rate(http_requests_total[5m])) > 0.05
-        for: 5m
-        labels:
-          severity: critical
-        annotations:
-          summary: "High error rate (> 5%)"
-```
+Useful environment variables include:
 
-## Environment Variables
-
-Configure monitoring via `.env`:
-
-```env
-# Prometheus
-PROMETHEUS_RETENTION=15d
+```dotenv
 PROMETHEUS_PORT=9091
+GRAFANA_PORT=3002
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=<strong-password>
 
-# Grafana
-GRAFANA_PORT=3001
-GRAFANA_ADMIN_PASSWORD=your-secure-password
+TEMPO_HTTP_PORT=3200
+TEMPO_OTLP_GRPC_PORT=4317
+TEMPO_OTLP_HTTP_PORT=4318
 
-# Metrics export
-METRICS_ENABLED=true
-METRICS_PORT=9090
+OTEL_EXPORTER_OTLP_ENDPOINT=http://tempo:4317
+OTEL_EXPORTER_OTLP_PROTOCOL=grpc
+OTEL_TRACES_SAMPLER=parentbased_traceidratio
+OTEL_TRACES_SAMPLER_ARG=0.1
 ```
 
-## Metrics Endpoints
+The API, runtime, and compiler use their own `OTEL_SERVICE_NAME` values in the
+Compose file. Grafana provisions both Prometheus and Tempo data sources.
 
-The API and Runtime services expose Prometheus metrics on a separate port (9090):
-
-```bash
-# Check API metrics
-curl http://localhost:9090/metrics
-
-# Check Runtime metrics (requires port mapping)
-docker compose exec runtime curl localhost:9090/metrics
-```
-
-## Resource Usage
-
-The monitoring stack adds minimal overhead:
-
-| Service | CPU | Memory |
-|---------|-----|--------|
-| Prometheus | ~100m | ~256MB |
-| Grafana | ~50m | ~128MB |
-| cAdvisor | ~50m | ~128MB |
-
-## Production Considerations
-
-### Persistence
-
-Enable persistent storage for Prometheus data:
+Prometheus retention is currently fixed to `15d` in
+`docker-compose.yml`. Change it with a small override:
 
 ```yaml
-# docker-compose.override.yml
 services:
   prometheus:
-    volumes:
-      - prometheus-data:/prometheus
-
-volumes:
-  prometheus-data:
-```
-
-### External Access
-
-For production, place Grafana behind a reverse proxy with TLS:
-
-```nginx
-server {
-    listen 443 ssl;
-    server_name grafana.example.com;
-
-    location / {
-        proxy_pass http://localhost:3001;
-        proxy_set_header Host $host;
-    }
-}
-```
-
-### Alertmanager
-
-Add Alertmanager for alert routing:
-
-```yaml
-# docker-compose.override.yml
-services:
-  alertmanager:
-    image: prom/alertmanager:v0.26.0
-    ports:
-      - "9093:9093"
-    volumes:
-      - ./monitoring/alertmanager:/etc/alertmanager
     command:
-      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
 ```
+
+Prometheus, Grafana, and Tempo already use named volumes. Back up those volumes
+if their history or dashboard state is important.
+
+## Recording and alert rules
+
+`monitoring/prometheus/rules/alerts.yml` contains API, runtime, Redis, and
+PostgreSQL alerts plus recording rules for request and execution metrics.
+Prometheus loads and evaluates the file automatically.
+
+The bundled Prometheus configuration has an empty Alertmanager list. Alerts
+therefore appear in Prometheus but are not delivered to email, chat, or an
+incident-management system. To route alerts:
+
+1. run an Alertmanager service or use a managed endpoint;
+2. add it under `alerting.alertmanagers` in a maintained Prometheus
+   configuration;
+3. mount that configuration with a Compose override;
+4. validate the target and a test route before relying on it.
+
+Do not assume that the presence of an alert rule means notifications are
+configured.
 
 ## Troubleshooting
 
-### No metrics in Grafana
+### A target is down
 
-1. Check Prometheus is scraping targets:
-   ```bash
-   curl http://localhost:9091/api/v1/targets
-   ```
-
-2. Verify services expose metrics:
-   ```bash
-   docker compose exec api curl -s localhost:9090/metrics | head -20
-   ```
-
-3. Check Grafana datasource:
-   - Go to Settings → Data Sources
-   - Verify Prometheus URL is `http://prometheus:9090`
-
-### High memory usage
-
-Reduce Prometheus retention:
-
-```yaml
-# docker-compose.override.yml
-services:
-  prometheus:
-    command:
-      - '--storage.tsdb.retention.time=7d'
+```bash
+docker compose --profile monitoring ps
+docker compose logs prometheus
+docker compose logs api runtime compiler
 ```
+
+Prometheus targets use internal ports and service names. Do not substitute
+host-published ports inside `prometheus.yml`.
+
+### Grafana has no data
+
+Open **Connections → Data sources** and test the provisioned Prometheus URL:
+`http://prometheus:9090`. Then inspect the Prometheus targets page to determine
+whether collection or visualization is failing.
+
+### Traces are missing
+
+Check Tempo health and the application exporters:
+
+```bash
+curl --fail http://localhost:3200/ready
+docker compose logs tempo api runtime compiler
+```
+
+Confirm that `OTEL_EXPORTER_OTLP_ENDPOINT` resolves to `http://tempo:4317`
+inside the Compose network and that the sampling ratio is greater than zero.

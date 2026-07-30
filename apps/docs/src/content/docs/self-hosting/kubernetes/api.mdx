@@ -1,6 +1,6 @@
 ---
 title: API Service
-description: Architecture of the Kubernetes API service.
+description: Architecture and operation of the Kubernetes API service.
 sidebar:
   order: 60
 ---
@@ -9,124 +9,112 @@ import { LinkCard } from '@astrojs/starlight/components';
 
 <LinkCard
   title="API Reference"
-  description="Complete list of all API endpoints"
+  description="Inspect the live OpenAPI document and the Kubernetes-specific health surface"
   href="/self-hosting/kubernetes/api-reference/"
 />
 
 ## Overview
 
-The API service is the main entry point for Flow-Like on Kubernetes. It handles:
+The Kubernetes API image hosts the standard Flow-Like API router plus deployment-specific health probes and a separate metrics listener. It does not add a second `/jobs/*` API.
 
-- **User requests** — Authentication, apps, workflows
-- **Job management** — Submit and track workflow executions
-- **Health checks** — Kubernetes probes for reliability
+![Flow-Like Kubernetes architecture showing the web and API services, state services, execution choices, optional compiler, and observability](../../../../assets/KubernetesArchitecture.svg)
 
-## Architecture
+## HTTP surfaces
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    API Service                          │
-│                   (Port 8080)                           │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  /health/*     → Kubernetes probes (live, ready, etc.)  │
-│  /jobs/*       → Job submission and management          │
-│  /api/v1/*     → Flow-Like API (auth, apps, etc.)       │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-         │                    │
-         ▼                    ▼
-   ┌──────────┐        ┌─────────────┐
-   │  Redis   │        │ CockroachDB │
-   │  (Queue) │        │  (Database) │
-   └──────────┘        └─────────────┘
-```
+| Surface | Default port | Purpose |
+|---|---:|---|
+| `/api/v1/*` | 8080 | Standard Flow-Like hub, app, event, execution, registry, sink, and administration routes |
+| `/health/live` | 8080 | Kubernetes liveness probe |
+| `/health/ready` | 8080 | Kubernetes readiness probe |
+| `/health/startup` | 8080 | Kubernetes startup probe |
+| `/swagger-ui` | 8080 | Interactive API documentation |
+| `/api-doc/openapi.json` | 8080 | Generated OpenAPI document |
+| `/r/*` and `/m/*` | 8080 | Registered inbound REST and MCP routes; each registration enforces its own authorization |
+| `/metrics` | 9090 | Prometheus metrics listener |
 
-## Source Code
+The main router's `/api/v1/execution/*` routes report and query runs. Workflow invocation is exposed through app and event routes, then dispatched through the configured execution backend.
+
+## Runtime dependencies
+
+| Dependency | Role |
+|---|---|
+| PostgreSQL or CockroachDB | Durable API state, apps, events, runs, and registry metadata |
+| Redis | Shared queue/cache coordination used by the configured backend |
+| Object storage | Content, metadata, and registry artifacts |
+| Executor pool | Runs workflows through the implemented HTTP executor path |
+| Compiler, when enabled | Builds platform-specific WASM artifacts |
+
+The API constructs the shared Flow-Like router, starts the run sweeper, and initializes object storage before it begins listening.
+
+The API can create Kubernetes Job objects, but the checked-in executor's
+job-once entrypoint is a placeholder that exits. Treat `kubernetes_job` as an
+incomplete dispatch path, not an alternative runtime dependency.
+
+## Source code
 
 | Component | Location |
-|-----------|----------|
-| Main entrypoint | `apps/backend/kubernetes/api/src/main.rs` |
-| Configuration | `apps/backend/kubernetes/api/src/config.rs` |
-| Health endpoints | `apps/backend/kubernetes/api/src/health.rs` |
-| Job management | `apps/backend/kubernetes/api/src/jobs/` |
-| Storage setup | `apps/backend/kubernetes/api/src/storage.rs` |
+|---|---|
+| Kubernetes entry point | `apps/backend/kubernetes/api/src/main.rs` |
+| Environment configuration | `apps/backend/kubernetes/api/src/config.rs` |
+| Kubernetes probe handlers | `apps/backend/kubernetes/api/src/health.rs` |
+| Metrics listener | `apps/backend/kubernetes/api/src/metrics.rs` |
+| Object-store adapter | `apps/backend/kubernetes/api/src/storage.rs` |
+| Shared API router | `packages/api/src/lib.rs` |
+| Execution dispatch | `packages/api/src/execution/` |
 
-## Storage Providers
+## Configuration
 
-The API supports multiple storage backends:
+The Helm chart injects:
 
-| Provider | Configuration Key |
-|----------|-------------------|
-| AWS S3 | `aws` |
-| Azure Blob | `azure` |
-| Google Cloud Storage | `gcp` |
-| Cloudflare R2 | `r2` |
-| S3-compatible (MinIO, etc.) | `s3` |
+- `DATABASE_URL` and `REDIS_URL`;
+- storage provider settings and credentials;
+- execution JWT keys;
+- execution-backend and executor settings;
+- `PORT=8080` and `METRICS_PORT=9090`.
 
-See [Storage Configuration](/self-hosting/kubernetes/storage/) for details.
+`PORT` is configurable in the binary, but the chart intentionally fixes the container HTTP port at `8080` and maps the API Service to it. Storage-specific requirements are covered in [Storage Configuration](/self-hosting/kubernetes/storage/).
 
-## Required Configuration
-
-At minimum, the API needs:
-
-| Variable | Purpose |
-|----------|---------|
-| `DATABASE_URL` | CockroachDB/PostgreSQL connection |
-| `REDIS_URL` | Job queue and caching |
-| `STORAGE_PROVIDER` | Which storage backend to use |
-| Storage credentials | Depends on provider |
-
-See [Configuration](/self-hosting/kubernetes/configuration/) for the full list.
-
-## Port Configuration
-
-The API **always listens on port 8080** inside the container. This is:
-- Set in the Helm chart (`values.yaml`)
-- Used by the Kubernetes Service definition
-- Exposed via port-forward, Ingress, or LoadBalancer
-
-To access it locally:
+## Access the service locally
 
 ```bash
-# Forward local 8083 → service 8080
-kubectl port-forward svc/flow-like-api 8083:8080 -n flow-like
-
-# Test it
-curl http://localhost:8083/api/v1/health
+kubectl port-forward service/flow-like-api 8083:8080 -n flow-like
 ```
+
+In another terminal:
+
+```bash
+curl -fsS http://localhost:8083/health/live
+curl -fsS http://localhost:8083/api/v1/health
+```
+
+Port forwarding is for operator access and development. Use an authenticated Ingress or another controlled edge for persistent external access.
 
 ## Scaling
 
-The API is stateless and can be horizontally scaled. Default configuration:
+The chart defaults to one API replica with autoscaling disabled.
 
-- **Minimum replicas:** 3
-- **Maximum replicas:** 10
-- **Scale trigger:** 70% CPU utilization
+| Value | Default |
+|---|---:|
+| `api.replicaCount` | 1 |
+| `api.autoscaling.enabled` | `false` |
+| `api.autoscaling.minReplicas` | 1 |
+| `api.autoscaling.maxReplicas` | 10 |
+| CPU target | 70% |
+| Memory target | 80% |
+
+When autoscaling is enabled, the chart omits the Deployment replica count and creates an HPA. Confirm that the cluster metrics API is available before enabling it.
+
+## Logs and rollout status
 
 ```bash
-# Manual scaling
-kubectl scale deployment/flow-like-api --replicas=5 -n flow-like
-
-# Check autoscaler
-kubectl get hpa -n flow-like
-```
-
-## Logs
-
-```bash
-# View logs
-kubectl logs deployment/flow-like-api -n flow-like
-
-# Follow in real-time
-kubectl logs deployment/flow-like-api -n flow-like -f
-
-# Last 100 lines
 kubectl logs deployment/flow-like-api -n flow-like --tail=100
+kubectl logs deployment/flow-like-api -n flow-like --follow
+kubectl rollout status deployment/flow-like-api -n flow-like
 ```
 
 ## Related
 
-- [API Reference](/self-hosting/kubernetes/api-reference/) — All endpoints
-- [kubectl Basics](/self-hosting/kubernetes/kubectl-basics/) — Essential commands
-- [Executor](/self-hosting/kubernetes/executor/) — How jobs run
+- [API Reference](/self-hosting/kubernetes/api-reference/)
+- [kubectl Basics](/self-hosting/kubernetes/kubectl-basics/)
+- [Executor](/self-hosting/kubernetes/executor/)
+- [Configuration](/self-hosting/kubernetes/configuration/)

@@ -1,276 +1,173 @@
 ---
 title: Chat & Conversations
-description: Build interactive chat experiences with conversational AI
+description: Build multi-turn chat workflows with history, streaming, sessions, and attachments
 sidebar:
   order: 3
 ---
 
-Conversational AI is one of the most popular GenAI applications. Flow-Like makes it easy to build chat experiences with **full conversation history**, **streaming responses**, and a **ready-to-use Chat UI**.
+Flow-Like chat boards begin with a **Chat Event** and return responses through chat callback nodes. The event supplies the current conversation and session context; the workflow decides which model, tools, retrieval, and response behavior to apply.
 
-## How Chat Works in Flow-Like
+## Chat event contract
 
-A chat application in Flow-Like consists of three main components:
+[Chat Event](/nodes/events/events-chat/) starts the board and exposes:
 
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Chat Event    │────▶│  Your Flow      │────▶│  Push Response  │
-│  (user message) │     │  (AI logic)     │     │  (send reply)   │
-└─────────────────┘     └─────────────────┘     └─────────────────┘
-```
+| Output | Purpose |
+|--------|---------|
+| History | Current model-compatible chat history |
+| Local Session | State scoped to this chat |
+| Global Session | State scoped to the user |
+| Tools | Tools requested through the chat surface |
+| Actions | User actions from prior interactive content |
+| Attachments | Uploaded files or references |
+| User | Current user information |
 
-1. **Chat Event** – Receives the user's message along with the full conversation history
-2. **Your Flow** – Processes the input and generates a response using AI
-3. **Push Response** – Sends the AI's reply back to the Chat UI
+Read only the outputs the workflow needs. Treat user text, attachments, and restored session values as untrusted input.
 
-## Building Your First Chatbot
+## Minimal model response
 
-### Step 1: Create a Chat Event
+A basic model-backed chat board:
 
-1. Open your app in Flow-Like
-2. Go to **Events** in the sidebar
-3. Click **New Event**
-4. Select **Chat Event**
-5. Choose which Board and Flow will handle the chat
+1. receives **History** from Chat Event;
+2. applies the system instruction;
+3. invokes a configured model;
+4. pushes the resulting response to the chat.
 
-### Step 2: Set Up the Flow
+| Stage | Node |
+|-------|------|
+| Set role and rules | [Set System Message](/nodes/ai/generative/history/ai-generative-set-system-prompt-message/) |
+| Invoke configured model | [Invoke Model](/nodes/ai/generative/ai-generative-invoke/) |
+| Return complete response | [Push Response](/nodes/events/chat/events-chat-push-response/) |
 
-In your flow, you need:
+The system message should state the role, source policy, tool policy, refusal behavior, and expected response shape. Do not include credentials or private operational data.
 
-1. **Chat Event Node** – This is your starting point. It outputs:
-   - `history` – The full conversation history
-   - `local_session` – Data specific to this chat session
-   - `global_session` – Data shared across all sessions
-   - `attachments` – Any files the user uploaded
-   - `user` – Information about the user
+## Work with history
 
-2. **Invoke LLM Node** – Sends the conversation to an AI model
+The event's History output already contains the conversation supplied by the chat surface. History nodes let the workflow modify a copy before invocation:
 
-3. **Push Response Node** – Streams the response back to the user
+| Need | Node |
+|------|------|
+| Create an empty history | [Make History](/nodes/ai/generative/history/ai-generative-make-history/) |
+| Add a message | [Push Message](/nodes/ai/generative/history/ai-generative-add-history-message/) |
+| Build from messages | [From Messages](/nodes/ai/generative/history/ai-generative-from-messages/) |
+| Limit retained messages | [Set History N](/nodes/ai/generative/history/ai-generative-set-history-n/) |
+| Remove the latest message | [Pop Message from History](/nodes/ai/generative/history/ai-generative-pop-history-message/) |
+| Clear history | [Clear History](/nodes/ai/generative/history/ai-generative-clear-history/) |
 
-### Step 3: Connect the Nodes
+Keep enough history for the task, but avoid unbounded transcripts. Store durable application facts in typed app or workflow state rather than relying on old conversational text.
 
-```
-Chat Event                    Invoke LLM                   Push Response
-    │                             │                             │
-    ├──▶ history ─────────────▶ History                        │
-    │                             │                             │
-    │                      Model ◀── (your model)              │
-    │                             │                             │
-    │                      On Stream ─────────────▶ Chunk      │
-    │                             │                             │
-    └─────────────────────────────┴────────────────────────────┘
-```
+## Configure model behavior
 
-**Key connections:**
-- Connect `history` from Chat Event to the `History` input on Invoke LLM
-- Connect `On Stream` execution to trigger Push Chunk
-- Connect `Chunk` output to the Push Chunk node
+History configuration nodes expose settings such as:
 
-## Understanding Chat History
+- [Set Max Tokens](/nodes/ai/generative/history/ai-generative-set-history-max-tokens/);
+- [Set History Temperature](/nodes/ai/generative/history/ai-generative-set-history-temperature/);
+- [Set History Top P](/nodes/ai/generative/history/ai-generative-set-history-top-p/);
+- [Set Stop Words](/nodes/ai/generative/history/ai-generative-set-history-stop-words/);
+- [Set Seed](/nodes/ai/generative/history/ai-generative-set-history-seed/);
+- [Set Response Format](/nodes/ai/generative/history/ai-generative-set-history-response-format/);
+- [Set Stream](/nodes/ai/generative/history/ai-generative-set-history-stream/).
 
-The **Chat History** object contains the entire conversation between the user and the AI:
+Provider support varies. A setting present in the workflow does not guarantee that every provider or model implements it identically.
 
-| Component | Description |
-|-----------|-------------|
-| **Messages** | Array of all messages (user + assistant) |
-| **System Prompt** | Instructions that guide the AI's behavior |
-| **Parameters** | Settings like temperature, max tokens, etc. |
+## Stream responses
 
-### Working with History
+Enable streaming on the history or invocation path supported by the configured model, then pass each model response chunk to [Push Chunk](/nodes/events/chat/events-chat-push-response-chunk/).
 
-You can manipulate chat history using these nodes:
+Use [Push Response](/nodes/events/chat/events-chat-push-response/) when:
 
-| Node | Purpose |
-|------|---------|
-| **Make History** | Create a new empty history |
-| **Push Message** | Add a message to the history |
-| **Pop Message** | Remove the last message |
-| **Clear History** | Remove all messages |
-| **Set System Message** | Set or update the system prompt |
+- the model returns one complete response;
+- the workflow must validate or redact the full result before display;
+- the response is short enough that progressive delivery adds little value.
 
-### Setting a System Prompt
+Use **Push Chunk** when:
 
-The **system prompt** defines your AI's personality and behavior. Use the **Set System Message** node:
+- the model provides response chunks;
+- the user benefits from lower perceived latency;
+- the workflow can still report a final completion or failure state.
 
-```
-Chat Event                Set System Message              Invoke LLM
-    │                          │                              │
-    ├──▶ history ─────────▶ History                          │
-    │                          │                              │
-    │                    System ◀── "You are a helpful..."   │
-    │                          │                              │
-    │                    Result ──────────────────────────▶ History
-```
+Do not stream raw internal reasoning. Stream user-facing answer content and named progress states.
 
-**Example system prompts:**
+## Show progress and metadata
 
-```
-You are a helpful customer service agent for Acme Corp.
-Be friendly, professional, and always offer to escalate to a human if needed.
-```
+The chat callback nodes include:
 
-```
-You are a creative writing assistant.
-Help users brainstorm ideas, improve their prose, and overcome writer's block.
-Respond in an encouraging, supportive tone.
-```
+| Need | Node |
+|------|------|
+| Add a named progress step | [Push Step](/nodes/events/chat/events-chat-push-step/) |
+| Update text for a step | [Push Text to Step](/nodes/events/chat/events-chat-push-text-to-step/) |
+| Remove a step | [Remove Step](/nodes/events/chat/events-chat-remove-step/) |
+| Push one statistic | [Push Stat](/nodes/events/chat/events-chat-push-stat/) |
+| Push several statistics | [Push Stats](/nodes/events/chat/events-chat-push-stats/) |
 
-## Streaming Responses
+Progress should describe observable work such as “Searching documents” or “Validating order,” not hidden chain-of-thought.
 
-For a better user experience, stream responses token-by-token instead of waiting for the full reply:
+## Session state
 
-### Using Invoke LLM with Streaming
+[Push Local Session](/nodes/events/chat/events-chat-push-local-session/) updates state local to the conversation. [Push Global Session](/nodes/events/chat/events-chat-push-global-session/) updates user-level state.
 
-The **Invoke LLM** node has two execution outputs:
+Use local session state for turn-specific workflow context and global session state only for durable user preferences or facts that legitimately cross conversations. Define retention, schema, and deletion behavior for both.
 
-| Output | Description |
-|--------|-------------|
-| **On Stream** | Fires for each chunk of the response |
-| **Done** | Fires when the complete response is ready |
+Never trust a restored session field as authorization. Re-check permission at the operation boundary.
 
-For chat applications, use **On Stream** to show responses as they arrive:
+## Attachments
 
-```
-        Invoke LLM
-            │
-   On Stream│                Done
-       ▼    │                 │
-  Push Chunk│          Push Response
-            │           (optional)
-```
+[Extract Attachments](/nodes/events/chat/ai-gen-llm-history-extract-attachments/) retrieves attachments from model history. Response attachments can be created:
 
-### Push Chunk vs Push Response
+- [From Path](/nodes/events/chat/attachments/events-chat-attachment-from-path/);
+- [From Signed URL](/nodes/events/chat/attachments/events-chat-attachment-from-signed-url/);
+- and returned with [Push Attachment](/nodes/events/chat/events-chat-push-attachment/) or [Push Attachments](/nodes/events/chat/events-chat-push-attachments/).
 
-| Node | When to Use |
-|------|-------------|
-| **Push Chunk** | During streaming—sends each piece as it arrives |
-| **Push Response** | After completion—sends the full response at once |
+Before processing an upload:
 
-For the best chat experience, use **Push Chunk** during streaming.
+- validate file type and size;
+- inspect or scan content according to the app's threat model;
+- keep the original source reference;
+- send only the necessary content to a model;
+- avoid exposing filesystem paths in the response.
 
-## Customizing the Chat UI
+## Structured interactions
 
-When you create a Chat Event, Flow-Like automatically generates a **Chat UI**. You can customize it:
+Use a structured interaction when required input should not be guessed from free text:
 
-### In the Event Configuration
+| Interaction | Node |
+|-------------|------|
+| Form | [Chat Form](/nodes/events/chat/interaction/interaction-form/) |
+| One option | [Single Choice](/nodes/events/chat/interaction/interaction-single-choice/) |
+| Several options | [Multiple Choice](/nodes/events/chat/interaction/interaction-multiple-choice/) |
 
-- **Default Prompt** – Pre-fill the input field
-- **Welcome Message** – Show a greeting when the chat opens
-- **Suggested Actions** – Quick-reply buttons
-- **File Attachments** – Enable/disable file uploads
+Structured interactions are useful for configuration, approvals, and collecting missing fields before a tool call.
 
-### At Runtime via Nodes
+## Add retrieval or tools
 
-Use these nodes to enhance the chat dynamically:
+- Use [RAG and knowledge bases](/topics/genai/rag/) when answers must be grounded in a controlled document corpus.
+- Use [AI agents](/topics/genai/agents/) when the assistant must choose among bounded tools.
+- Keep ordinary deterministic checks in the board even when a model or agent is involved.
 
-| Node | Purpose |
-|------|---------|
-| **Push Local Session** | Store data for this conversation |
-| **Push Global Session** | Store data across all conversations |
-| **Push Attachment** | Send files to the user |
+## Error handling
 
-## Advanced: Multi-Turn Context
+Every chat path should finish in one of three visible states:
 
-For complex conversations, you might want to:
+- complete response;
+- request for missing information;
+- explicit failure or inability to answer.
 
-### Add Context to Conversation
+If a tool or side effect fails, do not let an earlier streamed sentence imply success. Redact secrets and sensitive payloads from errors, and preserve a safe run identifier for support.
 
-Insert information into the conversation that the user didn't type:
+## Production checklist
 
-```
-Chat Event          Make Message           Push Message         Invoke LLM
-    │                    │                      │                   │
-    ├──▶ history ────────┴───────────────▶ History               │
-    │                                           │                   │
-    │              Content ◀── "Relevant info"  │                   │
-    │              Role ◀── "user"              │                   │
-    │                                           │                   │
-    │                                    Result ─────────────────▶ History
-```
+- [ ] Chat Event outputs are treated as untrusted input
+- [ ] System instructions and model configuration are versioned
+- [ ] History is bounded
+- [ ] Session state has scope and retention rules
+- [ ] Streaming has explicit completion and failure
+- [ ] Attachments are validated before processing
+- [ ] Structured interactions collect required fields
+- [ ] Retrieval and tools enforce access outside the prompt
+- [ ] Logs and errors redact sensitive data
 
-### Implement Memory Across Sessions
+## Next steps
 
-Use **Local Session** and **Global Session** to persist information:
-
-- **Local Session**: Remembers things for this specific conversation
-- **Global Session**: Remembers things across all of this user's conversations
-
-```
-Chat Event              Push Local Session
-    │                         │
-    ├──▶ local_session ───────┤
-    │                         │
-    │   key: "user_preferences"
-    │   value: {theme: "dark"}
-```
-
-## Handling Attachments
-
-Users can send files through the Chat UI. Access them via the `attachments` output:
-
-```
-Chat Event
-    │
-    ├──▶ attachments ───▶ (array of files)
-```
-
-Each attachment contains:
-- `name` – File name
-- `type` – MIME type (e.g., "image/png")
-- `data` – The file content
-
-### Processing Images
-
-For AI models that support vision (like GPT-4o or Claude 3.5):
-
-1. Get attachments from the Chat Event
-2. Use **Pull Attachments** to download image data
-3. The history automatically includes the images for vision models
-
-## Best Practices
-
-### 1. Keep System Prompts Clear
-Write specific, actionable instructions. Vague prompts lead to unpredictable behavior.
-
-### 2. Handle Errors Gracefully
-Add error handling for when the AI fails to respond:
-```
-Invoke LLM
-    │
-  Done│        Failed
-    ▼           ▼
-(success)   (show error message)
-```
-
-### 3. Set Reasonable Limits
-Use **Set Max Tokens** to limit response length and control costs.
-
-### 4. Test with Edge Cases
-Try empty messages, very long inputs, and unexpected requests to ensure your chatbot handles them gracefully.
-
-## Example: Support Chatbot
-
-Here's a complete flow for a customer support chatbot:
-
-```
-Chat Event
-    │
-    ▼
-Set System Message: "You are a support agent for..."
-    │
-    ▼
-Invoke LLM ──▶ On Stream ──▶ Push Chunk
-    │
-  Done
-    │
-    ▼
-Log Response (for analytics)
-```
-
-## Next Steps
-
-Now that you've built a chat interface, explore:
-
-- **[RAG & Knowledge Bases](/topics/genai/rag/)** – Give your chatbot access to your documents
-- **[AI Agents](/topics/genai/agents/)** – Let your AI use tools and take actions
-- **[Extraction](/topics/genai/extraction/)** – Pull structured data from conversations
+- [RAG and knowledge bases](/topics/genai/rag/)
+- [AI agents](/topics/genai/agents/)
+- [Extraction and structured output](/topics/genai/extraction/)
+- [Building chatbots](/topics/chatbots/overview/)

@@ -117,7 +117,7 @@ pub async fn list_group_requests(
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/groups/requests/{member_id}",
-    skip(state, user)
+    skip(state, user, member_id)
 )]
 pub async fn accept_group_request(
     State(state): State<AppState>,
@@ -186,7 +186,7 @@ pub async fn accept_group_request(
 )]
 #[tracing::instrument(
     name = "DELETE /apps/{app_id}/groups/requests/{member_id}",
-    skip(state, user)
+    skip(state, user, member_id)
 )]
 pub async fn decline_group_request(
     State(state): State<AppState>,

@@ -241,16 +241,23 @@ macro_rules! eprintln { ($($t:tt)*) => { tracing::error!($($t)*); } }
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[allow(clippy::too_many_lines, clippy::cognitive_complexity)]
 pub fn run() {
+    // Reference point for the anonymous `app_start` performance metric; taken
+    // before any init work so the frontend can measure process start to first render.
+    functions::telemetry::mark_process_start();
+
+    // Crash buffering is armed from the settings file on disk before the hook is
+    // installed, so panics between here and `init_crash_capture` are still
+    // captured. Silent no-op when the file is absent or crash reports are off.
+    functions::telemetry::init_crash_reporting_from_disk();
+
     // Ensure panics are logged with backtraces in release too.
     std::panic::set_hook(Box::new(|info| {
+        let backtrace = std::backtrace::Backtrace::force_capture().to_string();
         // Use write! instead of eprintln! to avoid a double-panic when stderr
         // is a broken pipe (e.g. the parent process that captured output has gone away).
         let _ = std::io::Write::write_fmt(
             &mut std::io::stderr(),
-            format_args!(
-                "PANIC: {info}\n{}\n",
-                std::backtrace::Backtrace::force_capture()
-            ),
+            format_args!("PANIC: {info}\n{backtrace}\n"),
         );
         // The debug devtools plugin installs a dynamic tracing layer. If that layer itself panics
         // during initialization/event dispatch, re-entering `tracing` from the panic hook can
@@ -273,6 +280,24 @@ pub fn run() {
         {
             let _ = sentry::capture_message(&format!("panic: {info}"), sentry::Level::Fatal);
         }
+
+        // Anonymous crash capture into the local buffer. No-ops until startup
+        // wired it and whenever crash reports are declined. Unparsable
+        // backtraces travel as context so the frame contract stays typed.
+        let (stacktrace, context) = match functions::telemetry::parse_backtrace_frames(&backtrace) {
+            Some(frames) => (Some(frames), None),
+            None => (
+                None,
+                Some(serde_json::json!({ "backtrace": backtrace.as_str() })),
+            ),
+        };
+        functions::telemetry::track_error_blocking(
+            "panic",
+            &info.to_string(),
+            "fatal",
+            stacktrace,
+            context,
+        );
     }));
     #[cfg(all(target_os = "ios", not(debug_assertions)))]
     ios_release_logging::init();
@@ -407,6 +432,9 @@ pub fn run() {
     );
 
     settings_state.set_config(&config);
+    // Wires the panic hook's crash buffer before any managed state exists, so
+    // startup panics are captured too.
+    functions::telemetry::init_crash_capture(&mut settings_state);
     let settings_state = Arc::new(Mutex::new(settings_state));
     let (http_client, refetch_rx) = HTTPClient::new();
     let state = FlowLikeState::new(config, http_client);
@@ -553,6 +581,11 @@ pub fn run() {
                 {
                     tracing::warn!(error = %error, "Automatic local log cleanup failed");
                 }
+            });
+
+            let telemetry_handle = app.app_handle().clone();
+            tauri::async_runtime::spawn(async move {
+                functions::telemetry::track(&telemetry_handle, "app_started", None).await;
             });
 
             // Start the WasmEngine epoch ticker inside the async runtime
@@ -1160,6 +1193,15 @@ pub fn run() {
             functions::feedback::get_offline_feedback,
             functions::feedback::get_offline_feedback_stats,
             functions::feedback::delete_offline_feedback,
+            functions::telemetry::get_telemetry_settings,
+            functions::telemetry::set_telemetry_enabled,
+            functions::telemetry::queue_telemetry_event,
+            functions::telemetry::drain_telemetry_events,
+            functions::telemetry::ack_telemetry_events,
+            functions::telemetry::set_crash_reports_enabled,
+            functions::telemetry::drain_telemetry_errors,
+            functions::telemetry::ack_telemetry_errors,
+            functions::telemetry::app_start_elapsed_ms,
         ]);
 
     #[cfg(debug_assertions)]

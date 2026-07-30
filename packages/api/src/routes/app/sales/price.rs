@@ -45,7 +45,7 @@ pub struct PriceResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PATCH /apps/{app_id}/sales/price", skip(state, user))]
+#[tracing::instrument(name = "PATCH /apps/{app_id}/sales/price", skip(state, user, body))]
 pub async fn update_price(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

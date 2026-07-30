@@ -1,171 +1,207 @@
 ---
 title: Benchmarks
-description: Performance benchmarks for Flow-Like's workflow execution engine
+description: Reproduce and interpret Flow-Like workflow-runtime benchmarks
 sidebar:
   order: 50
 ---
 
-import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Flow-Like's runtime is built in Rust for predictable, high-throughput workflow execution. Here are the results from our benchmark suite using mimalloc allocator.
+Flow-Like includes Criterion benchmarks for single-execution latency,
+concurrent throughput, and allocator behavior. Use them to compare commits or
+deployment choices on the same machine.
 
-## Summary (4 Threads - Fair Comparison)
-
-To provide a fair comparison with n8n (which uses 4 vCPUs), we benchmark with 4 worker threads:
-
-| Metric | Value | Description |
-|--------|-------|-------------|
-| **Single Execution** | ~1.2ms | Time to execute a simple 2-node workflow |
-| **Peak Throughput (4 threads)** | **~124,000 workflows/sec** | At 8K concurrent workflows |
-| **Peak Throughput (16 threads)** | **~244,000 workflows/sec** | At 65K concurrent workflows |
-| **Step Latency** | ~20-40µs | Per-node execution overhead |
-
-<Aside type="tip">
-These benchmarks run on a test workflow with 2 nodes and 5 pins. Real-world performance varies based on workflow complexity and node operations.
+<Aside type="caution" title="Benchmark numbers are not a service guarantee">
+  The reference results below are a historical internal snapshot. They record
+  the broad machine class, but not an exact CPU model, commit SHA, compiler
+  version, power mode, or thermal state. Treat them as orientation and rerun
+  the checked-in harness for decisions about current performance.
 </Aside>
 
-## Throughput by Concurrency Level (4 Threads)
+## What the harness measures
 
-These results use **4 worker threads** to match typical cloud VM configurations (e.g., n8n's c5a.large):
+The throughput benchmark:
 
-| Concurrency | Throughput | Latency |
-|-------------|------------|---------|
-| 128 | ~65,000 exec/s | 2.0ms |
-| 512 | ~100,000 exec/s | 5.1ms |
-| 1,024 | ~112,000 exec/s | 9.1ms |
-| 2,048 | ~121,000 exec/s | 17ms |
-| 4,096 | ~123,000 exec/s | 33ms |
-| **8,192** | **~124,000 exec/s** | **66ms** |
+- loads the checked-in test app and board from `tests/flow`;
+- initializes the current node catalog and local object stores;
+- suppresses normal execution logs;
+- warms the runtime before sampling;
+- runs the same board concurrently at configured in-flight levels;
+- reports Criterion latency and element-throughput distributions.
 
-## Throughput by Concurrency Level (16 Threads)
+It measures in-process workflow execution. It does not include ingress,
+external APIs, remote storage, model inference, databases, queueing, network
+latency, container startup, or an end-user request path.
 
-With full 16-core utilization:
+## Historical reference snapshot
 
-| Concurrency | Throughput | Latency |
-|-------------|------------|---------|
-| 128 | ~60,000 exec/s | 2.1ms |
-| 512 | ~140,000 exec/s | 3.6ms |
-| 1,024 | ~177,000 exec/s | 5.7ms |
-| 4,096 | ~228,000 exec/s | 18ms |
-| 8,192 | ~238,000 exec/s | 35ms |
-| 32,768 | ~241,000 exec/s | 135ms |
-| **65,536** | **~244,000 exec/s** | **269ms** |
+The previous internal run used:
 
-<Aside type="note">
-Peak throughput scales with thread count. With 4 threads: ~124K/sec. With 16 threads: ~244K/sec.
-</Aside>
+| Setting | Recorded value |
+| --- | --- |
+| CPU | 16-core Apple M-series machine |
+| Memory | 32 GB |
+| Operating system | macOS |
+| Build | Optimized benchmark profile with thin LTO |
+| Allocator | mimalloc |
+| Workload | Small checked-in workflow; two nodes and five pins |
 
-## Allocator Comparison
+### Four worker threads
 
-Using mimalloc provides significant performance improvements over the system allocator:
+| Concurrent executions | Approximate throughput | Approximate batch latency |
+| ---: | ---: | ---: |
+| 128 | 65,000 exec/s | 2.0 ms |
+| 512 | 100,000 exec/s | 5.1 ms |
+| 1,024 | 112,000 exec/s | 9.1 ms |
+| 2,048 | 121,000 exec/s | 17 ms |
+| 4,096 | 123,000 exec/s | 33 ms |
+| 8,192 | 124,000 exec/s | 66 ms |
 
-| Allocator | Throughput (1K conc.) | Improvement |
-|-----------|----------------------|-------------|
-| **mimalloc** | ~222,000 exec/s | **+24%** |
-| system | ~179,000 exec/s | baseline |
+### Sixteen worker threads
 
-<Aside type="tip">
-Enable mimalloc with `--features mimalloc` for production deployments.
-</Aside>
+| Concurrent executions | Approximate throughput | Approximate batch latency |
+| ---: | ---: | ---: |
+| 128 | 60,000 exec/s | 2.1 ms |
+| 512 | 140,000 exec/s | 3.6 ms |
+| 1,024 | 177,000 exec/s | 5.7 ms |
+| 4,096 | 228,000 exec/s | 18 ms |
+| 8,192 | 238,000 exec/s | 35 ms |
+| 32,768 | 241,000 exec/s | 135 ms |
+| 65,536 | 244,000 exec/s | 269 ms |
 
-## Running Benchmarks
+These values describe this synthetic in-process workload. A workflow that
+performs HTTP requests, model inference, storage, database work, or substantial
+serialization will be dominated by those operations.
 
-Run these benchmarks on your own hardware:
+### Allocator snapshot
+
+The historical high-concurrency allocator run recorded approximately:
+
+| Allocator | Throughput at 1,024 concurrent executions |
+| --- | ---: |
+| mimalloc | 222,000 exec/s |
+| System allocator | 179,000 exec/s |
+
+Allocator effects vary by platform, allocation pattern, and concurrency. Run
+both variants on the deployment target rather than assuming the same
+percentage improvement.
+
+## Run the benchmarks
+
+Run commands from the repository root.
 
 <Tabs>
-<TabItem label="Peak Throughput">
+  <TabItem label="Throughput sweep">
+
 ```bash
-# Test peak throughput with various concurrency levels
-FL_CONCURRENCY_LIST="128,512,1024,4096,8192" \
-RUST_LOG=off cargo bench --bench throughput_bench --features mimalloc -- peak
+FL_WORKER_THREADS=4 \
+FL_CONCURRENCY_LIST="128,512,1024,2048,4096,8192" \
+FL_MEASURE_SECS=10 \
+RUST_LOG=off \
+cargo bench -p flow-like-catalog \
+  --bench throughput_bench \
+  --features mimalloc \
+  -- peak_throughput
 ```
-</TabItem>
-<TabItem label="Allocator Comparison">
+
+  </TabItem>
+  <TabItem label="Raw throughput">
+
 ```bash
-# Compare system allocator vs mimalloc
-RUST_LOG=off bash packages/catalog/benches/compare_allocators.sh
+FL_WORKER_THREADS=4 \
+FL_MAX_IN_FLIGHT=32 \
+RUST_LOG=off \
+cargo bench -p flow-like-catalog \
+  --bench throughput_bench \
+  --features mimalloc \
+  -- raw_throughput
 ```
-</TabItem>
-<TabItem label="Single Execution">
+
+  </TabItem>
+  <TabItem label="Allocator comparison">
+
 ```bash
-# Single workflow execution latency
-RUST_LOG=off cargo bench --bench allocator_bench --features mimalloc -- single_exec
+RUST_LOG=off cargo bench -p flow-like-catalog \
+  --bench allocator_bench \
+  -- --save-baseline system
+
+RUST_LOG=off cargo bench -p flow-like-catalog \
+  --bench allocator_bench \
+  --features mimalloc \
+  -- --baseline system
 ```
-</TabItem>
-<TabItem label="All Benchmarks">
+
+The helper script runs both variants and formats their output:
+
 ```bash
-# Run all benchmarks
-RUST_LOG=off cargo bench --features mimalloc
+bash packages/catalog/benches/compare_allocators.sh
 ```
-</TabItem>
+
+  </TabItem>
+  <TabItem label="All catalog benchmarks">
+
+```bash
+RUST_LOG=off cargo bench -p flow-like-catalog --features mimalloc
+```
+
+  </TabItem>
 </Tabs>
 
-### Environment Variables
+The first run may spend significant time compiling the optimized benchmark
+profile. Later runs reuse Cargo artifacts unless relevant code or features
+changed.
 
-Customize benchmark behavior:
+## Configuration
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FL_WORKER_THREADS` | CPU count | Tokio worker threads |
-| `FL_CONCURRENCY_LIST` | Auto | Comma-separated concurrency levels to test |
-| `FL_MAX_CONCURRENCY` | CPU × 8 | Max concurrency for auto-sweep |
-| `FL_MEASURE_SECS` | 10 | Measurement duration per level |
-| `RUST_LOG` | - | Set to `off` for accurate benchmarks |
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `FL_BOARD_ID` | Checked-in benchmark board | Board loaded from the test app |
+| `FL_START_ID` | Checked-in start node | Entry node executed by the benchmark |
+| `FL_APP_ID` | Checked-in test app | App directory under the test store |
+| `FL_TESTS_DIR` | `../../tests` from the package | Local benchmark object store |
+| `FL_WORKER_THREADS` | Logical CPU count | Tokio runtime worker threads |
+| `FL_MAX_BLOCKING_THREADS` | Worker threads × 4 | Tokio blocking-thread ceiling |
+| `FL_CONCURRENCY_LIST` | Automatic sweep | Comma-separated in-flight levels |
+| `FL_MAX_CONCURRENCY` | Logical CPU count × 8 | Maximum automatic sweep value |
+| `FL_MEASURE_SECS` | `10` | Criterion measurement duration per level |
+| `FL_MAX_IN_FLIGHT` | Logical CPU count × 4 | In-flight tasks in the raw benchmark |
+| `RUST_LOG` | Inherited environment | Set to `off` for low-noise measurements |
 
-### Requirements
+## Make a comparison reproducible
 
-- Rust toolchain (stable)
-- Test data in `tests/` directory
-- Recommended: 8+ cores for meaningful throughput tests
+Record these details with every result:
 
-<Aside type="note">
-Benchmarks use [Criterion.rs](https://github.com/bheisler/criterion.rs) for statistical analysis. Results include confidence intervals and change detection.
-</Aside>
+1. Commit SHA and whether the worktree is clean.
+2. Rust and Cargo versions.
+3. Operating system, kernel, CPU model, core topology, and memory.
+4. Power mode, virtualization, and container limits.
+5. Allocator and Cargo feature set.
+6. Board, start node, app ID, and any changes to the test fixture.
+7. Worker, blocking-thread, concurrency, and measurement settings.
+8. Criterion estimate and confidence interval, not only the fastest sample.
 
-## Benchmark Environment
+Compare two commits on the same machine with the same fixture and environment.
+Alternating baseline and candidate runs helps reveal thermal or background-load
+drift.
 
-Results shown were measured on:
-- **CPU**: 16 cores (Apple M-series)
-- **Memory**: 32GB
-- **OS**: macOS
-- **Rust**: Stable toolchain
-- **Build**: Release mode with LTO
-- **Allocator**: mimalloc
+## Interpret results
 
-## What Affects Performance?
+- **Single execution** isolates the overhead of one small in-process run.
+- **Throughput** shows how efficiently the runtime uses concurrency.
+- **Batch latency** grows with queue depth even while throughput improves.
+- **Peak throughput** is not the same as a safe production operating point.
+- **External-node workflows** require end-to-end benchmarks that include their
+  actual dependencies.
 
-1. **Concurrency Level** — Higher concurrency enables better CPU utilization up to ~65K concurrent
-2. **Allocator Choice** — mimalloc provides ~24% improvement over system allocator
-3. **Node Complexity** — Simple data routing is fast; heavy compute nodes dominate execution time
-4. **Graph Depth** — More sequential nodes = more steps = longer execution
-5. **Data Size** — Large payloads increase serialization/deserialization overhead
-6. **Tracing Level** — Use `LogLevel::Fatal` for benchmarks; full tracing adds overhead
+Do not compare these numbers directly with another product unless the workload,
+durability, logging, retries, isolation, hardware, and measurement boundary are
+equivalent.
 
-## Comparison with n8n
+## Contributing a benchmark
 
-Both benchmarks execute a comparable task: a simple 2-node workflow. For a fair comparison, we use **4 threads** to match n8n's c5a.large (4 vCPU) setup ([n8n benchmarks](https://docs.n8n.io/hosting/scaling/performance-benchmarking/)):
-
-| Platform | Setup | Throughput | vs n8n |
-|----------|-------|------------|--------|
-| **Flow-Like** | 4 threads, mimalloc | **~124,000 exec/sec** | **564× faster** |
-| **Flow-Like** | 16 threads, mimalloc | **~244,000 exec/sec** | **1,109× faster** |
-| n8n (single) | c5a.large (4 vCPU) | ~220 exec/sec | baseline |
-| n8n (scaled) | 7× c5a.4xlarge | ~2,000 exec/sec | 9× baseline |
-
-### General Comparison
-
-| Platform | Execution Model | Typical Latency |
-|----------|-----------------|-----------------|
-| **Flow-Like** | Native Rust, typed | ~1-2ms per workflow |
-| Node-based tools | JavaScript/Python | ~10-50ms per workflow |
-| Cloud workflows | HTTP-based | ~100-500ms per workflow |
-
-## Contributing Benchmarks
-
-Found a performance issue or want to add a benchmark?
-
-1. Check existing benchmarks in `packages/catalog/benches/`
-2. Use Criterion for consistent measurement
-3. Document what you're measuring and why
-4. Submit a PR with before/after results
-
+1. Add or update a target under `packages/catalog/benches/`.
+2. Keep the workload deterministic and check in its fixture.
+3. Document the measurement boundary and environment variables.
+4. Include before-and-after Criterion output for performance changes.
+5. Explain any change in behavior, durability, or correctness that accompanies
+   the performance result.

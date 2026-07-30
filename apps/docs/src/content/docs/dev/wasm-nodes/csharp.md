@@ -21,16 +21,16 @@ dotnet workload install wasi-experimental
 
 The WIT bindings are processed at build time by the SDK — no separate `wit-bindgen` or `wasm-tools` install required.
 
-## Project Structure
+## Important Files
 
-```
-wasm-node-csharp/
-├── FlowLikeWasmNode.csproj   # Project file (wasi-wasm target)
-├── Node.cs                    # Node definition & run logic
-├── Program.cs                 # WASM entry point / CLI dispatcher
-├── flow-like.toml             # Flow-Like package manifest
-└── mise.toml                  # Build tasks
-```
+| Path | Purpose |
+|------|---------|
+| `FlowLikeWasmNode.csproj` | Configures the .NET 10 `wasi-wasm` target and WIT world |
+| `Node.cs` | Defines node metadata, pins, permissions, and run logic |
+| `Program.cs` | Connects the SDK to the exported WASM entry points |
+| `examples/Permissions.cs` | Demonstrates permission-gated host features |
+| `flow-like.toml` | Declares the Flow-Like package |
+| `mise.toml` | Provides setup, WIT-copy, build, test, and clean tasks |
 
 The WIT file is copied from the monorepo at build time (`mise run build` runs `wit-copy` first).
 

@@ -249,6 +249,8 @@ export function applyStreamEvent(
 				...step,
 				description: step.description ?? existing?.description,
 				reasoning: step.reasoning ?? existing?.reasoning,
+				// Kept on the step so the orb can tell research from code generation.
+				toolName: toolName ?? existing?.toolName,
 				timestamp: existing?.timestamp ?? Date.now(),
 				content_offset: existing?.content_offset ?? acc.content.length,
 			});
@@ -267,6 +269,7 @@ export function applyStreamEvent(
 				title: `Using ${name}`,
 				description: toolFieldSummary(event.data),
 				status: "progress",
+				toolName: name,
 				timestamp: existing?.timestamp ?? Date.now(),
 				content_offset: existing?.content_offset ?? acc.content.length,
 			});

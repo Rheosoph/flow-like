@@ -5,13 +5,15 @@ description: Complete reference for markdown formatting in Flow-Like chat and te
 
 import { Steps, Aside, Card, CardGrid, Tabs, TabItem, Code } from '@astrojs/starlight/components';
 
-# Markdown Formatting
-
-Flow-Like supports rich markdown formatting throughout the platform, including chat interfaces, documentation, and text editors. This reference covers all supported formatting options.
+Flow-Like's rich-text editor and read-only Markdown renderer support standard
+Markdown plus several Flow-Like code-block extensions. Individual product
+surfaces can choose which editor controls they expose.
 
 <Aside>
   Try the live markdown playground at [app.flow-like.com/debug/markdown](https://app.flow-like.com/debug/markdown) to experiment with all formatting options.
 </Aside>
+
+![Flow-Like's Markdown playground rendering a dark-mode Plotly chart from editable Markdown source](../../../assets/MarkdownChartPlayground.webp)
 
 ---
 
@@ -187,11 +189,20 @@ Q4,290,84
 |--------|-------------|--------|
 | `type` | Chart type | `bar`, `line`, `pie`, `radar`, `heatmap`, `scatter`, `funnel`, `treemap`, `sunburst`, `sankey`, `stream`, `waffle`, `radialBar`, `chord`, `calendar`, `bump`, `areaBump` |
 | `title` | Chart title | Any string |
-| `colors` | Color scheme | `nivo`, `paired`, `category10`, `accent`, `dark2`, `set1`, `set2`, `set3`, `pastel1`, `pastel2`, `spectral`, or array of hex colors |
-| `height` | Chart height in pixels | Number (default: 300) |
+| `xLabel` | X-axis label | Any string |
+| `yLabel` | Y-axis label | Any string |
+| `colors` | Nivo color scheme | `nivo`, `paired`, `category10`, `accent`, `dark2`, `set1`, `set2`, `set3`, `pastel1`, `pastel2`, `spectral`, or array of hex colors |
+| `height` | Chart height in pixels | Number (default: 350) |
 | `showLegend` | Show/hide legend | `true`, `false` |
-| `stacked` | Stack bars/areas | `true`, `false` |
+| `legendPosition` | Legend placement | `top`, `bottom`, `left`, `right` |
+| `stacked` | Stack bar series | `true`, `false` |
 | `layout` | Bar orientation | `vertical`, `horizontal` |
+| `animate` | Enable Nivo animation | `true`, `false` |
+
+The configuration header is a deliberately small `key: value` parser, not
+full YAML. CSV parsing is intended for simple examples and does not implement
+quoted cells containing commas; use JSON mode when the data requires those
+features.
 
 ### Nivo Charts (CSV Examples)
 
@@ -372,7 +383,7 @@ For advanced customization, use native Plotly or Nivo JSON configuration:
     ````markdown
     ```nivo
     {
-      "type": "bar",
+      "chartType": "bar",
       "data": [
         { "country": "USA", "value": 120 },
         { "country": "UK", "value": 85 },
@@ -389,19 +400,22 @@ For advanced customization, use native Plotly or Nivo JSON configuration:
 </Tabs>
 
 <Aside type="note">
-  JSON mode passes configuration directly to the chart library, giving you access to all native options. See the [Plotly.js documentation](https://plotly.com/javascript/) and [Nivo documentation](https://nivo.rocks/) for complete configuration references.
+  Plotly JSON uses its native `data`, `layout`, and optional `config` objects.
+  Nivo JSON uses `chartType` plus the properties accepted by Flow-Like's Nivo
+  preview wrapper. Unsupported library properties may be ignored by the
+  wrapper.
 </Aside>
 
 ### Auto-Detection
 
 When no `type` is specified in CSV mode, the chart type is automatically detected based on your data:
 
-| Data Pattern | Detected Type |
-|--------------|---------------|
-| One numeric column | Pie chart |
-| Two numeric columns | Scatter plot |
-| Multiple numeric columns | Bar chart |
-| Time-series labels | Line chart |
+| Data pattern | Detected type |
+| --- | --- |
+| Two columns, numeric values, and no more than six rows | Pie chart |
+| Two columns with more than six rows | Bar chart |
+| Three or more columns with month, quarter, or year-like labels | Line chart |
+| Other tabular data | Bar chart |
 
 ---
 

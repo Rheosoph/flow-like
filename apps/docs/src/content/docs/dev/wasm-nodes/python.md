@@ -1,6 +1,6 @@
 ---
 title: Python WASM Nodes
-description: Create custom WASM nodes using Python with the WASM Component Model
+description: Build Flow-Like WASM nodes in Python with componentize-py
 sidebar:
   order: 4
   badge:
@@ -8,116 +8,159 @@ sidebar:
     variant: success
 ---
 
-Python can run in WASM through several projects, each with trade-offs.
+Flow-Like's Python SDK builds ordinary Python node logic into a WASM Component
+with `componentize-py`. Python support is available now; it does not use
+Pyodide, RustPython, or MicroPython.
 
-## Approaches
+## Start from the template
 
-| Project | Binary Size | Startup | Compatibility |
-|---------|-------------|---------|---------------|
-| **Pyodide** | ~10 MB | Slow | Full CPython |
-| **RustPython** | ~2 MB | Fast | Most Python |
-| **MicroPython** | ~300 KB | Fast | Subset |
+Copy `templates/wasm-node-python`, then run:
 
-## Expected Template (Pyodide)
-
-```python title="node.py"
-import json
-
-def get_node():
-    """Return the node definition."""
-    return {
-        "name": "wasm_python_uppercase",
-        "friendly_name": "Uppercase (Python)",
-        "description": "Converts a string to uppercase using Python",
-        "category": "Custom/Text",
-        "icon": "/flow/icons/text.svg",
-        "pins": [
-            {
-                "name": "exec_in",
-                "friendly_name": "▶",
-                "description": "Trigger execution",
-                "pin_type": "Input",
-                "data_type": "Execution",
-            },
-            {
-                "name": "exec_out",
-                "friendly_name": "▶",
-                "description": "Continue execution",
-                "pin_type": "Output",
-                "data_type": "Execution",
-            },
-            {
-                "name": "input",
-                "friendly_name": "Input",
-                "description": "The string to convert",
-                "pin_type": "Input",
-                "data_type": "String",
-                "default_value": "",
-            },
-            {
-                "name": "output",
-                "friendly_name": "Output",
-                "description": "The uppercase string",
-                "pin_type": "Output",
-                "data_type": "String",
-            },
-        ],
-        "scores": {
-            "privacy": 0,
-            "security": 0,
-            "performance": 3,  # Python is slower
-            "governance": 0,
-            "reliability": 0,
-            "cost": 1,
-        },
-    }
-
-
-def run(context: dict) -> dict:
-    """Execute the node logic."""
-    input_value = context.get("inputs", {}).get("input", "")
-
-    # Execute logic
-    output_value = input_value.upper()
-
-    return {
-        "outputs": {
-            "output": output_value,
-        },
-        "error": None,
-    }
+```bash
+mise run setup
+mise run test
+mise run build
 ```
 
-## Why Python in WASM is Challenging
+The template uses Python 3.12, `uv`, the published
+`flow-like-wasm-sdk` package, and `componentize-py`. The component is written to:
 
-1. **Large runtime** — CPython interpreter is ~10MB
-2. **Slow startup** — Interpreter initialization takes time
-3. **Limited I/O** — WASM sandbox restricts file/network access
-4. **Package compatibility** — Not all PyPI packages work in WASM
+```text
+build/node.wasm
+```
 
-## Recommended Alternatives
+Without mise, the equivalent commands are:
 
-For most use cases, consider:
+```bash
+uv sync --group dev --group build
+uv run pytest -v
+uv run python build.py
+```
 
-| If you need... | Use |
-|----------------|-----|
-| Fastest execution | [Rust](/dev/wasm-nodes/rust/) |
-| Familiar syntax | [TypeScript](/dev/wasm-nodes/typescript/) |
-| Easy learning curve | [Go](/dev/wasm-nodes/go/) |
-| Python specifically | Wait for Python support |
+## Define a node
 
-## Current Workaround
+The recommended declarative API derives pins from Python annotations:
 
-You can call Python scripts via the **Run Script** node in Flow-Like, which executes Python on the host system (not in WASM).
+```python title="src/node.py"
+from flow_like_wasm_sdk import (
+    Exec,
+    ExecInput,
+    ExecOutput,
+    ExecutionResult,
+    Input,
+    Output,
+    WasmNode,
+)
 
-## Stay Updated
 
-Python WASM support is on our roadmap. Watch the repository for updates:
+class Uppercase(
+    WasmNode,
+    name="uppercase_py",
+    title="Uppercase",
+    category="Custom/Text",
+):
+    """Converts text to uppercase."""
 
-📧 **[info@great-co.de](mailto:info@great-co.de)** for enterprise Python node development
+    trigger: Exec = ExecInput(description="Trigger execution")
+    text: str = Input(default="", description="Text to transform")
+    done: Exec = ExecOutput(description="Continue execution")
+    result: str = Output(description="Uppercase text")
+
+    def run(self, ctx) -> ExecutionResult:
+        ctx.result = (ctx.text or "").upper()
+        ctx.activate_exec("done")
+        return ctx.success()
+```
+
+Defining a concrete `WasmNode` subclass registers it automatically. The
+template's `app.py` exposes every registered class through the WIT
+`get-nodes` and `run` exports.
+
+Use stable `name` and pin identifiers. They become part of persisted board
+interfaces.
+
+## Pin types
+
+The declarative API maps common annotations automatically:
+
+| Python annotation | Flow-Like pin |
+| --- | --- |
+| `str` | String |
+| `int` | 64-bit integer |
+| `float` | 64-bit float |
+| `bool` | Boolean |
+| `bytes` | Bytes |
+| `Exec` with `ExecInput`/`ExecOutput` | Execution |
+
+Pydantic models and SDK interop types such as `FlowPath` become struct pins.
+Lists, dictionaries, and sets are supported as collection value types.
+
+## Permissions
+
+Declare capability labels on the class:
+
+```python
+class FetchText(
+    WasmNode,
+    name="fetch_text_py",
+    title="Fetch Text",
+    category="Custom/Network",
+):
+    permissions = ["network:http", "streaming"]
+```
+
+Permissions are exported with that node and used by the runtime sandbox. Common
+labels include `network:http`, `storage:read`, `storage:write`, `variables`,
+`cache`, `streaming`, `models`, `a2ui`, `oauth`, and `functions`.
+
+Package memory and timeout limits belong in `flow-like.toml`. See the
+[manifest reference](/dev/wasm-nodes/manifest/).
+
+## Host services
+
+The context exposes gated host services for logging, streaming, variables,
+cache, storage, HTTP, OAuth, and models. For example:
+
+```python
+ctx.info("Calling upstream API")
+response = ctx.http_get("https://api.example.com/data")
+ctx.stream_progress(0.5, "Halfway")
+```
+
+The node must declare the matching permission before using a gated service.
+
+Python packages that depend on native extensions or unavailable WASI features
+may not componentize successfully. Test dependencies in the template rather
+than assuming all PyPI packages are portable to WASM.
+
+## Test and inspect
+
+Unit tests execute the node classes natively with the SDK's mock host bridge:
+
+```bash
+mise run test
+```
+
+To inspect definitions without compiling a component:
+
+```bash
+mise run build-definition
+```
+
+That command writes a JSON definition under `build/`. It is useful for checking
+names, pins, and permissions in review.
+
+## Publish
+
+1. Run `mise run build`.
+2. Open Flow-Like Desktop.
+3. Go to **Library → Packages → Publish**.
+4. Select `build/node.wasm` and `flow-like.toml`.
+5. Review the nodes extracted from the binary and submit.
 
 ## Related
 
-→ [WASM Nodes Overview](/dev/wasm-nodes/overview/)
-→ [Rust Template](/dev/wasm-nodes/rust/)
-→ [TypeScript Template](/dev/wasm-nodes/typescript/)
+- [Package Manifest](/dev/wasm-nodes/manifest/)
+- [WASM Nodes Overview](/dev/wasm-nodes/overview/)
+- [TypeScript WASM Nodes](/dev/wasm-nodes/typescript/)
+- [Rust WASM Nodes](/dev/wasm-nodes/rust/)

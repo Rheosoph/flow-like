@@ -1,6 +1,6 @@
 ---
 title: Sandboxing & Permissions
-description: How WASM node sandboxing works, what permissions mean, and what to know before running third-party code
+description: Understand Flow-Like's WASM isolation, capability checks, consent, and limits
 sidebar:
   order: 26
   badge:
@@ -8,196 +8,193 @@ sidebar:
     variant: caution
 ---
 
-When you add a WASM node to a workflow, you're running code that was written by someone outside the Flow-Like core team. This guide explains how Flow-Like keeps that code contained, what the permission system does, and how to make informed trust decisions.
+WASM nodes execute inside Wasmtime rather than as native plugins. That provides
+memory isolation and lets Flow-Like meter execution and gate host functions. It
+does not make arbitrary third-party code trustworthy, so Flow-Like also shows a
+consent prompt before running sideloaded packages.
 
-## The short version
+![Conceptual view of a third-party WASM node contained in a sandbox, with approved paths to network, scoped storage, and configured models](../../../../assets/WasmSandbox.webp)
 
-- Every WASM node runs inside an **isolated sandbox** — it cannot access your files, network, or system unless explicitly allowed.
-- Nodes **declare which permissions** they need (e.g. network access, streaming). You see these before anything runs.
-- You can **trust a package once** and skip the prompt for future workflows.
-- If a node declares no permissions, it can only do pure computation — read inputs, return outputs.
+## What the sandbox provides
 
----
+| Boundary | Current behavior |
+| --- | --- |
+| Linear memory | A module cannot directly address the host process's memory |
+| Filesystem | No host directory is preopened as a general-purpose filesystem; storage access uses Flow-Like host functions |
+| Host functions | Variables, cache, storage, streaming, models, OAuth, A2UI, functions, and network operations are capability-checked |
+| CPU work | Wasmtime fuel metering bounds instruction use |
+| Wall time | Epoch interruption enforces the configured timeout |
+| Memory | Store limits apply the package memory tier |
+| Catalog identity | A placed WASM node must resolve to an installed package ID |
 
-## What is sandboxing?
+WASM execution is **not deterministic by default**. Nodes can access time and
+randomness, and permitted nodes can call networks, storage, models, and other
+stateful host services.
 
-Think of a WASM sandbox like a sealed room with no windows or doors. The code inside can think and calculate, but it can't see or touch anything outside. Flow-Like only opens specific, controlled hatches when a node requests them.
+:::caution
+For Component Model runtimes, the current linker inherits stdio and the executor
+process environment so language runtimes such as C# and TypeScript can start.
+Do not treat the WASM boundary as protection for secrets placed in executor
+environment variables. Keep executor environments minimal and use scoped
+Flow-Like host services for data a node legitimately needs.
+:::
 
-### Technical details
+## Per-node permissions
 
-Flow-Like uses [Wasmtime](https://wasmtime.dev/), a production-grade WebAssembly runtime, to run every external node. Each node gets:
+Each node exports its own permission labels. The loader converts those labels
+to runtime capabilities, then layers the package's memory and timeout limits on
+top.
 
-| Isolation layer | What it means |
-|-----------------|---------------|
-| **Separate memory** | The node has its own memory space. It cannot read or write the host process memory. |
-| **No filesystem access** | Unless specifically granted node/user storage, the node cannot touch any files. |
-| **No network by default** | HTTP, WebSocket, and other network calls are blocked unless the node declares the permission. |
-| **CPU time limits** | Nodes have execution budgets. A runaway loop will be terminated, not your machine. |
-| **Memory caps** | Each node has a memory ceiling. It cannot allocate unbounded RAM. |
-| **Deterministic execution** | WASM execution is reproducible — same inputs produce same outputs. |
+| Permission | Protected capability |
+| --- | --- |
+| `network:http` | HTTP host access |
+| `network:websocket` | WebSocket access |
+| `network:tcp` | TCP sockets |
+| `network:udp` | UDP sockets |
+| `network:dns` | DNS lookups |
+| `storage:read` | Read through Flow-Like storage host functions |
+| `storage:write` | Write and delete through storage host functions |
+| `variables` | Read and write flow variables |
+| `cache` | Read and write execution cache |
+| `streaming` | Emit streaming output |
+| `models` | Invoke configured model host functions |
+| `a2ui` | Use A2UI host functions |
+| `oauth` | Request configured OAuth tokens |
+| `functions` | Call functions or subflows |
 
-This is fundamentally different from running a native plugin or a shell script, which typically has full access to your system.
+There are no current `storage:node` or `storage:user` node-permission labels.
+Storage scope is represented by the `FlowPath` values provided to the node and
+the credentials behind the host service.
 
----
+A node with no declared permissions receives none of the protected Flow-Like
+capabilities in this table. It can still read its input pins, write outputs,
+log, access runtime metadata, and use baseline facilities supplied by its ABI.
 
-## How permissions work
+### Network enforcement detail
 
-### The old way vs. the new way
+Core-module host functions check their capability before performing a protected
+operation. Component Model nodes also receive WASI interfaces. In the current
+linker, any network capability enables the WASI networking context, while
+specific Flow-Like network host functions still check their capability.
 
-Previously, permissions were declared in the package manifest (`flow-like.toml`). This was a static, package-wide declaration. Now, permissions are declared **per-node** directly in code. When a node's `get_node` or `get_nodes` function returns its definition, it includes a list of permissions. This means:
+Package-level `allowed_hosts` is not merged into the per-node execution
+configuration by the current installed-package loader. Do not describe it as an
+effective execution-time allowlist. Apply network egress restrictions at the
+executor or cluster boundary when destinations must be constrained.
 
-- Different nodes in the same package can request different permissions.
-- The permission list is always up to date with the actual code.
-- If a node requests no permissions, it needs nothing beyond basic computation.
+## Declare only required permissions
 
-### Available permissions
-
-| Permission | What it allows | Risk level |
-|-----------|----------------|------------|
-| `streaming` | Send output incrementally as it's produced (e.g. token-by-token LLM responses) | Low — data only flows outward through the normal output channel |
-| `network:http` | Make HTTP requests to external services | **Medium** — the node can talk to the internet |
-| `network:websocket` | Open persistent WebSocket connections | **Medium** — similar to HTTP but long-lived |
-| `storage:read` | Read from the storage backend | Low — read-only access to stored data |
-| `storage:write` | Write to the storage backend | Medium — can persist data |
-| `storage:node` | Access a private, per-node storage area | Low — scoped to this node only |
-| `storage:user` | Access user-level storage | Medium — shared across nodes |
-| `variables` | Read and write flow variables | Low — scoped to the current workflow |
-| `cache` | Use the execution cache to skip redundant work | Low — performance optimization only |
-| `models` | Access AI/ML models configured in Flow-Like | Medium — can invoke model inference |
-| `a2ui` | Generate dynamic UI elements at runtime | Low — visual only, no system access |
-| `oauth` | Use OAuth authentication flows | **Medium** — involves user credentials |
-| `functions` | Call registered host functions | Medium — depends on which functions are exposed |
-
-### What "no permissions" means
-
-A node with an empty permissions list can only:
-
-- Read its input pins
-- Write to its output pins
-- Do computation in memory (math, string manipulation, data transformation)
-
-It cannot call out to the network, read files, stream output, or invoke models. This is the safest category.
-
----
-
-## The confirmation dialog
-
-When you run a workflow that contains WASM nodes you haven't previously approved, Flow-Like shows a confirmation dialog. It lists:
-
-1. **Which packages** are about to run
-2. **What permissions** each package needs (aggregated across all its nodes in the workflow)
-3. **Trust options** — how long your approval should last
-
-### Trust levels
-
-| Option | Scope | When to use |
-|--------|-------|-------------|
-| **One-time** | This execution only | You want to test something once |
-| **This event** | All executions triggered by this event | You trust the workflow for this specific trigger |
-| **This board** | All executions of this board | You trust the workflow regardless of how it's triggered |
-| **Trust these packages everywhere** | All workflows using these packages | You fully trust the package author |
-
-Package-level trust is stored locally on your machine. It's never sent to a server. You can clear it at any time from your browser's local storage (keys prefixed with `wasm-consent-package-`).
-
----
-
-## Performance implications
-
-WASM adds a small overhead compared to native Rust nodes. Here's what to expect:
-
-| Aspect | Impact | Details |
-|--------|--------|---------|
-| **Startup** | ~1-5 ms per node | The WASM module is compiled on first load and cached afterward |
-| **Execution** | ~1.1-1.3x native speed | Wasmtime's optimizing compiler produces near-native code |
-| **Memory** | Slightly higher | Each node has its own memory space (default cap applies) |
-| **Host calls** | ~0.1 ms per call | Crossing the sandbox boundary (e.g. reading storage) has a small cost |
-| **Caching** | Transparent | Compiled modules are cached — subsequent loads are nearly instant |
-
-### When performance matters
-
-For most workflows, the overhead is negligible. It becomes noticeable when:
-
-- A node is called **thousands of times** in a tight loop (consider batching)
-- The node makes **many small host calls** (consider batching reads/writes)
-- The node processes **very large data** in memory (watch the memory cap)
-
-Native Rust nodes remain the best choice for performance-critical hot paths. WASM nodes are ideal for extensibility, integrations, and logic that changes frequently.
-
----
-
-## Writing secure nodes
-
-If you're a node author, follow these guidelines:
-
-### Request only what you need
+In the Rust SDK, permissions are attached to the node definition:
 
 ```rust
-// Good — only requests what this node actually uses
-node! {
-    name: "fetch_data",
-    friendly_name: "Fetch Data",
-    description: "Downloads data from an API",
-    category: "Integrations/HTTP",
+fn get_node(&self) -> NodeDefinition {
+    let mut node = NodeDefinition::new(
+        "fetch_data",
+        "Fetch Data",
+        "Downloads data from an API",
+        "Integrations/HTTP",
+    );
 
-    inputs: { exec: Exec, url: String },
-    outputs: { exec_out: Exec, body: String },
-
-    permissions: ["network:http"],
+    // Add pins...
+    node.add_permission(NodePermission::NetworkHttp);
+    node
 }
 ```
 
-```rust
-// Bad — requests everything "just in case"
-node! {
-    name: "fetch_data",
-    // ...
-    permissions: ["network:http", "network:websocket", "storage:write",
-                  "models", "oauth", "functions"],
-}
+Python and TypeScript SDKs export the same serialized labels:
+
+```python
+permissions = ["network:http"]
 ```
 
-Users will see the full permission list and may decline to run a node that asks for too much.
-
-### No permissions is the default
-
-If your node only does computation, don't declare any permissions:
-
-```rust
-node! {
-    name: "parse_csv",
-    friendly_name: "Parse CSV",
-    description: "Parses CSV text into structured data",
-    category: "Data/Transform",
-
-    inputs: { exec: Exec, csv_text: String },
-    outputs: { exec_out: Exec, rows: Json },
-}
+```typescript
+node.addPermission("network:http");
 ```
 
-This node will show "No additional permissions requested" in the UI, which builds user trust.
+Do not request capabilities “just in case.” The UI displays the union of
+permissions used by each package's nodes in the board.
 
-### Permissions are enforced at runtime
+Package-level resource declarations remain in `flow-like.toml`. See the
+[manifest reference](/dev/wasm-nodes/manifest/) for the exact division between
+manifest limits and node permissions.
 
-Even if a node doesn't declare a permission, the sandbox enforces restrictions. A node that tries to make an HTTP call without `network:http` will get an error, not silent access. Permissions are a contract between the node and the runtime.
+## Consent before execution
 
----
+When the UI detects sideloaded WASM packages without saved consent, it shows:
 
-## FAQ
+- package IDs;
+- permissions aggregated by package;
+- **Run once**;
+- **Trust for this board**;
+- **Always trust**, which remembers each package ID across boards.
 
-**Can a WASM node access my clipboard, camera, or microphone?**
-No. The sandbox has no OS peripheral access.
+The choices are stored in browser/local app storage under
+`wasm-consent-board-*` and `wasm-consent-package-*` keys. Consent is a local UX
+decision; it does not grant extra runtime capabilities.
 
-**Can a WASM node read other nodes' data?**
-No. Each node only sees its own input pins and memory.
+The current dialog does not expose an event-specific trust button.
 
-**Can a malicious node mine cryptocurrency?**
-It could try to use CPU, but the execution time limit will terminate it quickly. And it has no network access to submit results unless `network:http` is granted.
+Trust is keyed by package ID, not package version. Updating a package under the
+same ID does not automatically ask for consent again, so review package updates
+before installing them.
 
-**What happens if I trust a package and it updates?**
-Your trust is per package ID — if the same ID ships a new version, your trust persists. Review the changelog of packages you update.
+## Resource limits
 
-**Can I revoke trust?**
-Yes. Clear localStorage entries starting with `wasm-consent-package-` in your browser devtools, or clear app data in the desktop app.
+The package manifest selects memory and timeout tiers. The runtime also applies
+fuel and structural Wasmtime limits. Exact defaults and presets live in
+`packages/wasm/src/limits.rs`.
 
-**Are permissions the same as capabilities in the manifest?**
-The manifest (`flow-like.toml`) previously held a static `[permissions]` section. This has been superseded by per-node declarations in code. The manifest capabilities (memory limits, timeouts) are still respected and layered on top.
+Resource limits reduce the impact of runaway code, but they are not a billing
+or abuse-prevention policy by themselves. A permitted node can still perform
+expensive network or model operations before its local execution limit is
+reached.
+
+## Author checklist
+
+- Give each node a stable name and an accurate permission list.
+- Request storage write only when the node actually writes or deletes data.
+- Treat OAuth tokens and model inputs as sensitive.
+- Batch small host calls where possible.
+- Validate URLs and untrusted response data.
+- Avoid logging secrets or entire credential-bearing payloads.
+- Test denial paths: a missing permission should fail safely.
+- Keep package memory and timeout tiers as small as practical.
+
+## Operator checklist
+
+- Run untrusted packages in a dedicated executor environment.
+- Keep executor environment variables free of unrelated secrets.
+- Restrict outbound network access with container or Kubernetes policy when
+  destination control matters.
+- Give executor storage credentials only the scope required for execution.
+- Pin and review package versions.
+- Monitor timeout, fuel, memory, network, model, and storage failures.
+
+## Frequently asked questions
+
+**Can a WASM node access an arbitrary host directory?**
+
+No host directory is preopened for general file access. Nodes use Flow-Like
+storage host functions and `FlowPath` values when granted storage permissions.
+
+**Does approving a package bypass the sandbox?**
+
+No. Consent allows execution to proceed; runtime capabilities still come from
+the node definition.
+
+**Does no-permission mean fully deterministic pure computation?**
+
+No. It means no protected Flow-Like capabilities. Baseline ABI facilities,
+logging, runtime metadata, time, or randomness may still be available.
+
+**Can trust be revoked?**
+
+Yes. Remove the relevant `wasm-consent-board-*` or
+`wasm-consent-package-*` entry from local storage, or clear the application's
+local data.
+
+## Related
+
+- [Package Manifest](/dev/wasm-nodes/manifest/)
+- [Component Model vs Core Modules](/dev/wasm-nodes/runtime-models/)
+- [WASM Nodes Overview](/dev/wasm-nodes/overview/)

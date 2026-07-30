@@ -47,7 +47,7 @@ pub struct PushMediaResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/meta/media", skip(state, user))]
+#[tracing::instrument(name = "PUT /apps/{app_id}/meta/media", skip(state, user, query))]
 pub async fn push_media(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

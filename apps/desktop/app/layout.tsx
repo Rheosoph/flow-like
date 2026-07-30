@@ -10,6 +10,9 @@ import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
 import { TooltipProvider } from "@flow-like/flow-like-ui/components/ui/tooltip";
 import "@flow-like/flow-like-ui/global.css";
+import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
+import { GlobalChatOverlay } from "@flow-like/flow-like-ui/components/global-chat/global-chat-overlay";
+import { GlobalToolBridge } from "@flow-like/flow-like-ui/components/global-chat/global-tool-bridge";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
 import { createIDBPersister } from "@flow-like/flow-like-ui/lib/persister";
@@ -47,9 +50,6 @@ import { DesktopAuthProvider } from "../components/auth-provider";
 import { DeeplinkNavigationHandler } from "../components/deeplink-navigation-handler";
 import DownloadNotificationProvider from "../components/download-notification-provider";
 import GlobalAnchorHandler from "../components/global-anchor-component";
-import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
-import { GlobalChatOverlay } from "@flow-like/flow-like-ui/components/global-chat/global-chat-overlay";
-import { GlobalToolBridge } from "@flow-like/flow-like-ui/components/global-chat/global-tool-bridge";
 import { IOSWebviewHardening } from "../components/ios-webview-hardening";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
@@ -58,13 +58,12 @@ import { RpaPermissionProvider } from "../components/rpa";
 import { RuntimeVariablesProviderComponent } from "../components/runtime-variables-provider";
 import { SpotlightWrapper } from "../components/spotlight-wrapper";
 import { TauriProvider } from "../components/tauri-provider";
+import { TelemetryProvider } from "../components/telemetry-provider";
 import { ThemeLoader } from "../components/theme-loader";
 import ToastProvider from "../components/toast-provider";
 import TrayProvider from "../components/tray-provider";
 import { UpdateProvider } from "../components/update-provider";
 import { initBlobOffload } from "../lib/init-blob-offload";
-import PostHogPageView from "./PostHogPageView";
-import { PHProvider } from "./provider";
 
 initBlobOffload();
 
@@ -180,66 +179,65 @@ export default function RootLayout({
 			className="min-h-screen"
 		>
 			{/* <ReactScan /> */}
-			<PHProvider>
-				<ReactFlowProvider>
-					<PersistQueryClientProvider
-						client={queryClient}
-						persistOptions={{
-							persister,
-							maxAge: 24 * 60 * 60 * 1000,
-						}}
-					>
-						<NetworkAwareProvider>
-							<body className={inter.className} data-desktop-app="true">
-								<IOSWebviewHardening />
-								<NetworkStatusIndicator />
-								<UpdateProvider />
-								<TrayProvider />
-								<GlobalAnchorHandler />
-								<ThemeProvider
-									attribute="class"
-									defaultTheme="system"
-									enableSystem
-									storageKey="theme"
-									disableTransitionOnChange
-								>
-									<TooltipProvider>
-										<Toaster />
-										<ToastProvider />
-										<TauriProvider>
-											<DownloadNotificationProvider />
-											<RpaPermissionProvider />
-											<DeeplinkNavigationHandler>
-												<OAuthCallbackHandler>
-													<OAuthExecutionProvider>
-														<DesktopAuthProvider>
-															<NotificationProvider />
-															<RuntimeVariablesProviderComponent>
-																<ExecutionServiceProvider>
-																	<ExecutionEngineProviderComponent>
-																		<SpotlightWrapper>
-																			<PostHogPageView />
+			<ReactFlowProvider>
+				<PersistQueryClientProvider
+					client={queryClient}
+					persistOptions={{
+						persister,
+						maxAge: 24 * 60 * 60 * 1000,
+					}}
+				>
+					<NetworkAwareProvider>
+						<body className={inter.className} data-desktop-app="true">
+							<IOSWebviewHardening />
+							<NetworkStatusIndicator />
+							<UpdateProvider />
+							<TrayProvider />
+							<GlobalAnchorHandler />
+							<ThemeProvider
+								attribute="class"
+								defaultTheme="system"
+								enableSystem
+								storageKey="theme"
+								disableTransitionOnChange
+							>
+								<TooltipProvider>
+									<Toaster />
+									<ToastProvider />
+									<TauriProvider>
+										<DownloadNotificationProvider />
+										<RpaPermissionProvider />
+										<DeeplinkNavigationHandler>
+											<OAuthCallbackHandler>
+												<OAuthExecutionProvider>
+													<DesktopAuthProvider>
+														<NotificationProvider />
+														<RuntimeVariablesProviderComponent>
+															<ExecutionServiceProvider>
+																<ExecutionEngineProviderComponent>
+																	<SpotlightWrapper>
+																		<TelemetryProvider>
 																			<ThemeLoader />
 																			<AppSidebar>{children}</AppSidebar>
 																			<GlobalToolBridge />
 																			<GlobalChatOverlay />
 																			<FlowPilotBubbleButton />
-																		</SpotlightWrapper>
-																	</ExecutionEngineProviderComponent>
-																</ExecutionServiceProvider>
-															</RuntimeVariablesProviderComponent>
-														</DesktopAuthProvider>
-													</OAuthExecutionProvider>
-												</OAuthCallbackHandler>
-											</DeeplinkNavigationHandler>
-										</TauriProvider>
-									</TooltipProvider>
-								</ThemeProvider>
-							</body>
-						</NetworkAwareProvider>
-					</PersistQueryClientProvider>
-				</ReactFlowProvider>
-			</PHProvider>
+																		</TelemetryProvider>
+																	</SpotlightWrapper>
+																</ExecutionEngineProviderComponent>
+															</ExecutionServiceProvider>
+														</RuntimeVariablesProviderComponent>
+													</DesktopAuthProvider>
+												</OAuthExecutionProvider>
+											</OAuthCallbackHandler>
+										</DeeplinkNavigationHandler>
+									</TauriProvider>
+								</TooltipProvider>
+							</ThemeProvider>
+						</body>
+					</NetworkAwareProvider>
+				</PersistQueryClientProvider>
+			</ReactFlowProvider>
 		</html>
 	);
 }

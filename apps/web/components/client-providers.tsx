@@ -23,6 +23,7 @@ import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
 import { RuntimeVariablesProviderComponent } from "../components/runtime-variables-provider";
 import { SpotlightWrapper } from "../components/spotlight-wrapper";
+import { TelemetryProvider } from "../components/telemetry-provider";
 import { ThemeLoader } from "../components/theme-loader";
 import { WebProvider } from "../components/web-provider";
 
@@ -93,10 +94,12 @@ export function ClientProviders({ children }: { children: React.ReactNode }) {
 												<ExecutionServiceProvider>
 													<ExecutionEngineProviderComponent>
 														<SpotlightWrapper>
-															<AppSidebar>{children}</AppSidebar>
-															<GlobalToolBridge />
-															<GlobalChatOverlay />
-															<FlowPilotBubbleButton />
+															<TelemetryProvider>
+																<AppSidebar>{children}</AppSidebar>
+																<GlobalToolBridge />
+																<GlobalChatOverlay />
+																<FlowPilotBubbleButton />
+															</TelemetryProvider>
 														</SpotlightWrapper>
 													</ExecutionEngineProviderComponent>
 												</ExecutionServiceProvider>

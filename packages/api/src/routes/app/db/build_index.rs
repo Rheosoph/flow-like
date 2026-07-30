@@ -62,7 +62,10 @@ pub struct BuildIndexPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/db/{table}/index", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/db/{table}/index",
+    skip(state, user, scope, payload)
+)]
 pub async fn build_index(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

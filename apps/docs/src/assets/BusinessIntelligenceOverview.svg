@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like business intelligence architecture</title>
+  <desc id="desc">Databases, files, APIs, and data lakes connect to a DataFusion SQL layer that prepares trusted metrics for dashboards, charts, tables, and reports.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <linearGradient id="engine" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff8a68"/><stop offset="1" stop-color="#ff5d3d"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1440" height="720"><feGaussianBlur stdDeviation="12" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+      .kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.section{fill:#f7f8fa;font-size:23px;font-weight:720}.item{fill:#d8dbe1;font-size:17px;font-weight:620}.tiny{fill:#89919e;font-size:13px;font-weight:700;letter-spacing:1.1px}.sql{fill:#fff3ee;font-size:19px;font-weight:700}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/><rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="282" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/>
+  <circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="kicker">BUSINESS INTELLIGENCE</text>
+  <text x="64" y="136" class="heading">From raw sources to decisions</text>
+  <text x="64" y="169" class="sub">Unify data, define trustworthy metrics, and deliver them in the right format.</text>
+
+  <path d="M 408 365 C 472 365 474 365 530 365" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <path d="M 910 365 C 972 365 976 365 1032 365" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)" filter="url(#glow)"/>
+
+  <g>
+    <rect x="64" y="212" width="344" height="380" rx="26" fill="#191c22" stroke="#373d48" stroke-width="2"/>
+    <text x="96" y="259" class="tiny">CONNECT</text><text x="96" y="296" class="section">Data sources</text>
+    <rect x="96" y="328" width="280" height="48" rx="13" fill="#22262e" stroke="#3b414d"/><circle cx="122" cy="352" r="7" fill="#ff7656"/><text x="144" y="359" class="item">Databases</text>
+    <rect x="96" y="390" width="280" height="48" rx="13" fill="#22262e" stroke="#3b414d"/><circle cx="122" cy="414" r="7" fill="#a78bfa"/><text x="144" y="421" class="item">Files</text>
+    <rect x="96" y="452" width="280" height="48" rx="13" fill="#22262e" stroke="#3b414d"/><circle cx="122" cy="476" r="7" fill="#34d399"/><text x="144" y="483" class="item">APIs</text>
+    <rect x="96" y="514" width="280" height="48" rx="13" fill="#22262e" stroke="#3b414d"/><circle cx="122" cy="538" r="7" fill="#62a7ff"/><text x="144" y="545" class="item">Data lakes</text>
+  </g>
+
+  <g>
+    <rect x="530" y="238" width="380" height="328" rx="30" fill="#1c1d22" stroke="#ff7656" stroke-width="2"/>
+    <rect x="564" y="270" width="76" height="76" rx="22" fill="url(#engine)" filter="url(#glow)"/>
+    <path d="M585 294h34M585 306h34M585 318h22" stroke="#15171b" stroke-width="6" stroke-linecap="round"/>
+    <text x="668" y="295" class="tiny">PREPARE</text><text x="668" y="333" class="section">DataFusion SQL</text>
+    <rect x="564" y="376" width="312" height="70" rx="16" fill="#252227" stroke="#5d3c35"/>
+    <text x="720" y="405" text-anchor="middle" class="sql">Query • Join • Aggregate</text>
+    <text x="720" y="430" text-anchor="middle" class="sub">Shape data into reusable metrics</text>
+    <text x="720" y="500" text-anchor="middle" class="tiny">ONE QUERY LAYER • MANY SOURCES</text>
+  </g>
+
+  <g>
+    <rect x="1032" y="212" width="344" height="380" rx="26" fill="#191c22" stroke="#315145" stroke-width="2"/>
+    <text x="1064" y="259" class="tiny">DELIVER</text><text x="1064" y="296" class="section">Decision surfaces</text>
+    <rect x="1064" y="328" width="280" height="48" rx="13" fill="#202b28" stroke="#3e6759"/><path d="M1090 361v-17h10v17m8 0v-27h10v27m8 0v-12h10v12" fill="none" stroke="#34d399" stroke-width="4"/><text x="1160" y="359" class="item">Dashboards</text>
+    <rect x="1064" y="390" width="280" height="48" rx="13" fill="#202b28" stroke="#3e6759"/><path d="M1090 421l9-12 10 6 13-18 14 12" fill="none" stroke="#34d399" stroke-width="4" stroke-linecap="round"/><text x="1160" y="421" class="item">Charts</text>
+    <rect x="1064" y="452" width="280" height="48" rx="13" fill="#202b28" stroke="#3e6759"/><path d="M1090 466h46m-46 10h46m-46 10h46" stroke="#34d399" stroke-width="3"/><text x="1160" y="483" class="item">Tables</text>
+    <rect x="1064" y="514" width="280" height="48" rx="13" fill="#202b28" stroke="#3e6759"/><path d="M1094 527h28l10 10v16h-38z" fill="none" stroke="#34d399" stroke-width="3"/><text x="1160" y="545" class="item">Reports</text>
+  </g>
+  <text x="720" y="658" text-anchor="middle" class="sub">The workflow controls refresh, delivery, and the data contract behind every view.</text>
+</svg>

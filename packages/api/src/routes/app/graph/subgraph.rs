@@ -53,7 +53,7 @@ fn default_depth() -> usize {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/graph/{overlay_id}/subgraph",
-    skip(state, user, payload)
+    skip(state, user, scope, payload)
 )]
 pub async fn subgraph(
     State(state): State<AppState>,

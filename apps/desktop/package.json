@@ -4,6 +4,7 @@
 	"version": "0.0.2",
 	"type": "module",
 	"scripts": {
+		"docs:screenshot": "bun ./scripts/doc-screenshot.ts",
 		"e2e:flowpilot": "bun ./scripts/flowpilot-e2e.ts",
 		"dev:xcode": "bun tauri ios dev --open --host",
 		"dev:android-studio": "ORT_LIB_LOCATION=$PWD/src-tauri/thirdparty/onnxruntime/android/arm64-v8a ORT_PREFER_DYNAMIC_LINK=1 bun tauri android dev --open",
@@ -26,6 +27,7 @@
 		"prepare:windows-prereqs": "bun ./scripts/prepare-windows-prereqs.ts",
 		"postinstall": "bun run ./scripts/sync-version.ts",
 		"build": "NODE_OPTIONS=--max-old-space-size=8192 bun ../../scripts/sync-node-icons.ts && NODE_OPTIONS=--max-old-space-size=8192 next build --turbopack",
+		"upload-sourcemaps": "bun ../../scripts/upload-sourcemaps.ts --source=desktop --dir=out",
 		"start": "next start",
 		"lint": "next lint",
 		"test": "vitest run",
@@ -117,7 +119,6 @@
 		"next": "^16.1.6",
 		"next-themes": "^0.4.6",
 		"oidc-client-ts": "^3.2.1",
-		"posthog-js": "^1.205.0",
 		"react": "19.2.1",
 		"react-canvas-confetti": "^2.0.7",
 		"react-charts": "^3.0.0-beta.57",

@@ -101,7 +101,7 @@ pub fn mcp_routes() -> Router<AppState> {
         .route("/{slug_or_id}/{*path}", any(inbound_mcp))
 }
 
-#[tracing::instrument(name = "INBOUND /r/{slug}", skip(state, headers, body))]
+#[tracing::instrument(name = "INBOUND /r/{slug}", skip(state, raw_query, headers, body))]
 async fn inbound_rest_root(
     State(state): State<AppState>,
     Path(slug_or_id): Path<String>,
@@ -126,7 +126,10 @@ async fn inbound_rest_root(
     }
 }
 
-#[tracing::instrument(name = "INBOUND /r/{slug}/{path}", skip(state, headers, body))]
+#[tracing::instrument(
+    name = "INBOUND /r/{slug}/{path}",
+    skip(state, path, raw_query, headers, body)
+)]
 async fn inbound_rest(
     State(state): State<AppState>,
     Path((slug_or_id, path)): Path<(String, String)>,
@@ -151,7 +154,7 @@ async fn inbound_rest(
     }
 }
 
-#[tracing::instrument(name = "INBOUND /m/{slug}", skip(state, headers, body))]
+#[tracing::instrument(name = "INBOUND /m/{slug}", skip(state, raw_query, headers, body))]
 async fn inbound_mcp_root(
     State(state): State<AppState>,
     Path(slug_or_id): Path<String>,
@@ -176,7 +179,10 @@ async fn inbound_mcp_root(
     }
 }
 
-#[tracing::instrument(name = "INBOUND /m/{slug}/{path}", skip(state, headers, body))]
+#[tracing::instrument(
+    name = "INBOUND /m/{slug}/{path}",
+    skip(state, path, raw_query, headers, body)
+)]
 async fn inbound_mcp(
     State(state): State<AppState>,
     Path((slug_or_id, path)): Path<(String, String)>,
@@ -1713,7 +1719,7 @@ async fn dispatch_event_collect(
 ) -> Result<Value, ApiError> {
     if !is_jwt_configured() {
         return Err(ApiError::internal_error(flow_like_types::anyhow!(
-            "Execution JWT signing not configured (missing EXECUTION_KEY/EXECUTION_PUB env vars)"
+            "Execution JWT signing not configured (missing BACKEND_KEY/BACKEND_PUB)"
         )));
     }
 

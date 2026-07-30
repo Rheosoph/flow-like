@@ -168,6 +168,7 @@ impl EventBusEvent {
         let cancellation_token = CancellationToken::new();
         let board_name = internal_run.board.name.clone();
         let run_data = RunData::with_metadata(
+            Some(self.app_id.clone()),
             &board_id,
             &payload.id,
             Some(self.event_id.clone()),

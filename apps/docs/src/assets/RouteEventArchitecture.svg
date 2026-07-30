@@ -1,0 +1,153 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+	<title id="title">Flow-Like route to event resolution</title>
+	<desc id="description">A pathname maps to an event ID. The app event then determines whether Flow-Like renders a Page, opens a Quick Action or Chat interface, or runs a backend workflow. The slash path is the default route, and query parameters remain navigation context rather than route data.</desc>
+	<defs>
+		<linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#151519"/>
+			<stop offset="0.55" stop-color="#1b1b20"/>
+			<stop offset="1" stop-color="#111115"/>
+		</linearGradient>
+		<linearGradient id="event-card" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#372520"/>
+			<stop offset="1" stop-color="#211d1e"/>
+		</linearGradient>
+		<pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+			<circle cx="2" cy="2" r="1.25" fill="#ffffff" opacity="0.065"/>
+		</pattern>
+		<filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+			<feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000000" flood-opacity="0.34"/>
+		</filter>
+		<filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1600" height="900">
+			<feGaussianBlur stdDeviation="10" result="blur"/>
+			<feMerge>
+				<feMergeNode in="blur"/>
+				<feMergeNode in="SourceGraphic"/>
+			</feMerge>
+		</filter>
+		<marker id="arrow-orange" markerWidth="22" markerHeight="22" refX="20" refY="11" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L22 11L0 22Z" fill="#ff7652"/>
+		</marker>
+		<marker id="arrow-green" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L14 7L0 14Z" fill="#4fd2a0"/>
+		</marker>
+		<marker id="arrow-amber" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L14 7L0 14Z" fill="#f1b35f"/>
+		</marker>
+		<marker id="arrow-purple" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L14 7L0 14Z" fill="#a58aff"/>
+		</marker>
+		<marker id="arrow-cyan" markerWidth="14" markerHeight="14" refX="12" refY="7" orient="auto" markerUnits="userSpaceOnUse">
+			<path d="M0 0L14 7L0 14Z" fill="#59c7d8"/>
+		</marker>
+	</defs>
+
+	<rect width="1600" height="900" fill="#111115"/>
+	<rect width="1600" height="900" rx="36" fill="url(#background)"/>
+	<rect x="28" y="28" width="1544" height="844" rx="28" fill="url(#dots)" stroke="#ffffff" stroke-opacity="0.08"/>
+	<circle cx="908" cy="446" r="292" fill="#ff6744" opacity="0.04"/>
+
+	<text x="88" y="102" fill="#f4f0ec" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="42" font-weight="720">Routes resolve through events</text>
+	<text x="88" y="143" fill="#aaa7a5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="21">The route stays small. The event owns the target, execution mode, and user experience.</text>
+	<text x="1480" y="106" text-anchor="end" fill="#ff7652" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700" letter-spacing="3">FLOW-LIKE · ROUTING</text>
+
+	<!-- Path -->
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="78" y="286" width="318" height="244" rx="27" fill="#202126" stroke="#5b5d66" stroke-width="2"/>
+		<rect x="112" y="320" width="104" height="28" rx="14" fill="#59c7d8" fill-opacity="0.13" stroke="#59c7d8" stroke-opacity="0.45"/>
+		<text x="164" y="340" text-anchor="middle" fill="#7ad8e7" font-size="12" font-weight="760" letter-spacing="1.5">REQUEST</text>
+		<text x="112" y="399" fill="#f4f0ec" font-size="25" font-weight="700" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">/reports</text>
+		<text x="112" y="430" fill="#aaa7a5" font-size="15" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">?period=30d</text>
+		<line x1="112" y1="464" x2="362" y2="464" stroke="#ffffff" stroke-opacity="0.08"/>
+		<text x="112" y="494" fill="#cbc8c4" font-size="14">Match the pathname only.</text>
+	</g>
+
+	<!-- Mapping -->
+	<path d="M396 408H488" fill="none" stroke="#ff7652" stroke-width="4" marker-end="url(#arrow-orange)" filter="url(#glow)"/>
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="514" y="286" width="350" height="244" rx="27" fill="#202126" stroke="#ff7652" stroke-opacity="0.66" stroke-width="2"/>
+		<rect x="548" y="320" width="146" height="28" rx="14" fill="#ff7652" fill-opacity="0.14" stroke="#ff7652" stroke-opacity="0.46"/>
+		<text x="621" y="340" text-anchor="middle" fill="#ff9a7e" font-size="12" font-weight="760" letter-spacing="1.5">ROUTE MAPPING</text>
+		<text x="548" y="393" fill="#8e909a" font-size="13" font-weight="700" letter-spacing="1.2">PATH</text>
+		<text x="838" y="393" text-anchor="end" fill="#f4f0ec" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">"/reports"</text>
+		<line x1="548" y1="417" x2="830" y2="417" stroke="#ffffff" stroke-opacity="0.08"/>
+		<text x="548" y="453" fill="#8e909a" font-size="13" font-weight="700" letter-spacing="1.2">EVENT ID</text>
+		<text x="838" y="453" text-anchor="end" fill="#f4f0ec" font-size="18" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">"evt_reports"</text>
+		<rect x="548" y="478" width="282" height="28" rx="9" fill="#2a282c"/>
+		<text x="689" y="497" text-anchor="middle" fill="#aaa7a5" font-size="13">Exactly two public fields</text>
+	</g>
+
+	<!-- Event -->
+	<path d="M864 408H956" fill="none" stroke="#ff7652" stroke-width="4" marker-end="url(#arrow-orange)" filter="url(#glow)"/>
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="982" y="252" width="370" height="312" rx="30" fill="url(#event-card)" stroke="#ff7652" stroke-width="2.5"/>
+		<rect x="1018" y="288" width="114" height="28" rx="14" fill="#ff7652" fill-opacity="0.15" stroke="#ff7652" stroke-opacity="0.5"/>
+		<text x="1075" y="308" text-anchor="middle" fill="#ff9a7e" font-size="12" font-weight="760" letter-spacing="1.5">APP EVENT</text>
+		<text x="1018" y="367" fill="#f7f2ee" font-size="27" font-weight="720">Reports</text>
+		<text x="1018" y="399" fill="#b8b2ae" font-size="16">Behavior and target live here.</text>
+
+		<rect x="1018" y="438" width="138" height="42" rx="11" fill="#29262a" stroke="#4fd2a0" stroke-opacity="0.4"/>
+		<text x="1087" y="464" text-anchor="middle" fill="#d9d5d1" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">active</text>
+		<rect x="1170" y="438" width="146" height="42" rx="11" fill="#29262a" stroke="#59c7d8" stroke-opacity="0.4"/>
+		<text x="1243" y="464" text-anchor="middle" fill="#d9d5d1" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">event_type</text>
+		<rect x="1018" y="494" width="138" height="42" rx="11" fill="#29262a" stroke="#a58aff" stroke-opacity="0.4"/>
+		<text x="1087" y="520" text-anchor="middle" fill="#d9d5d1" font-size="14" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">board_id</text>
+		<rect x="1170" y="494" width="146" height="42" rx="11" fill="#29262a" stroke="#f1b35f" stroke-opacity="0.4"/>
+		<text x="1243" y="520" text-anchor="middle" fill="#d9d5d1" font-size="13" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">default_page_id?</text>
+	</g>
+
+	<!-- Event target branches -->
+	<path d="M1352 350H1400V248H1418" fill="none" stroke="#4fd2a0" stroke-width="2.7" marker-end="url(#arrow-green)"/>
+	<path d="M1352 388H1400V380H1418" fill="none" stroke="#f1b35f" stroke-width="2.7" marker-end="url(#arrow-amber)"/>
+	<path d="M1352 426H1400V512H1418" fill="none" stroke="#a58aff" stroke-width="2.7" marker-end="url(#arrow-purple)"/>
+	<path d="M1352 464H1400V644H1418" fill="none" stroke="#59c7d8" stroke-width="2.7" marker-end="url(#arrow-cyan)"/>
+
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="1434" y="202" width="112" height="92" rx="18" fill="#202126" stroke="#4fd2a0" stroke-opacity="0.55"/>
+		<text x="1490" y="242" text-anchor="middle" fill="#f4f0ec" font-size="18" font-weight="700">Page</text>
+		<text x="1490" y="268" text-anchor="middle" fill="#aaa7a5" font-size="12">A2UI surface</text>
+
+		<rect x="1434" y="334" width="112" height="92" rx="18" fill="#202126" stroke="#f1b35f" stroke-opacity="0.55"/>
+		<text x="1490" y="374" text-anchor="middle" fill="#f4f0ec" font-size="15" font-weight="700">Quick Action</text>
+		<text x="1490" y="400" text-anchor="middle" fill="#aaa7a5" font-size="12">Form UI</text>
+
+		<rect x="1434" y="466" width="112" height="92" rx="18" fill="#202126" stroke="#a58aff" stroke-opacity="0.55"/>
+		<text x="1490" y="506" text-anchor="middle" fill="#f4f0ec" font-size="18" font-weight="700">Chat</text>
+		<text x="1490" y="532" text-anchor="middle" fill="#aaa7a5" font-size="12">Chat UI</text>
+
+		<rect x="1434" y="598" width="112" height="92" rx="18" fill="#202126" stroke="#59c7d8" stroke-opacity="0.55"/>
+		<text x="1490" y="638" text-anchor="middle" fill="#f4f0ec" font-size="16" font-weight="700">Backend</text>
+		<text x="1490" y="664" text-anchor="middle" fill="#aaa7a5" font-size="12">Workflow run</text>
+	</g>
+
+	<!-- Rules -->
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="78" y="650" width="1274" height="112" rx="23" fill="#202126" stroke="#ffffff" stroke-opacity="0.11"/>
+		<circle cx="126" cy="706" r="22" fill="#ff7652" fill-opacity="0.14"/>
+		<text x="126" y="713" text-anchor="middle" fill="#ff987b" font-size="20" font-weight="800">/</text>
+		<text x="164" y="690" fill="#f4f0ec" font-size="17" font-weight="700">Default route</text>
+		<text x="164" y="718" fill="#aaa7a5" font-size="14">
+			<tspan x="164" dy="0">A missing path falls back to</tspan>
+			<tspan x="164" dy="21">the mapping for “/”.</tspan>
+		</text>
+
+		<line x1="508" y1="674" x2="508" y2="738" stroke="#ffffff" stroke-opacity="0.09"/>
+		<circle cx="558" cy="706" r="22" fill="#59c7d8" fill-opacity="0.13"/>
+		<text x="558" y="712" text-anchor="middle" fill="#7ad8e7" font-size="18" font-weight="800">?</text>
+		<text x="596" y="690" fill="#f4f0ec" font-size="17" font-weight="700">Query parameters</text>
+		<text x="596" y="718" fill="#aaa7a5" font-size="14">
+			<tspan x="596" dy="0">Stay with navigation; they are not part</tspan>
+			<tspan x="596" dy="21">of the route mapping.</tspan>
+		</text>
+
+		<line x1="976" y1="674" x2="976" y2="738" stroke="#ffffff" stroke-opacity="0.09"/>
+		<circle cx="1026" cy="706" r="22" fill="#4fd2a0" fill-opacity="0.12"/>
+		<path d="M1017 706l6 6 12-14" fill="none" stroke="#73ddb5" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"/>
+		<text x="1064" y="690" fill="#f4f0ec" font-size="17" font-weight="700">One owner per path</text>
+		<text x="1064" y="718" fill="#aaa7a5" font-size="14">
+			<tspan x="1064" dy="0">The Events UI prevents</tspan>
+			<tspan x="1064" dy="21">conflicting path assignments.</tspan>
+		</text>
+	</g>
+
+	<text x="88" y="818" fill="#8e909a" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15">Conceptual architecture · public route model: path → eventId</text>
+</svg>

@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+	<title id="title">Flow-Like WebAssembly runtime models</title>
+	<desc id="description">Flow-Like detects whether a WebAssembly binary is a Component Model component or a core module. Components use WIT and the canonical ABI; core modules exchange JSON through linear memory. Both execute behind the same capability and resource boundary.</desc>
+	<defs>
+		<linearGradient id="background" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#151519"/>
+			<stop offset="0.56" stop-color="#1b1b20"/>
+			<stop offset="1" stop-color="#111115"/>
+		</linearGradient>
+		<linearGradient id="boundary" x1="1188" y1="222" x2="1518" y2="690" gradientUnits="userSpaceOnUse">
+			<stop offset="0" stop-color="#372520"/>
+			<stop offset="1" stop-color="#211d1e"/>
+		</linearGradient>
+		<pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+			<circle cx="2" cy="2" r="1.25" fill="#ffffff" opacity="0.065"/>
+		</pattern>
+		<filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+			<feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000000" flood-opacity="0.34"/>
+		</filter>
+		<filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1600" height="900">
+			<feGaussianBlur stdDeviation="9" result="blur"/>
+			<feMerge>
+				<feMergeNode in="blur"/>
+				<feMergeNode in="SourceGraphic"/>
+			</feMerge>
+		</filter>
+		<marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+			<path d="M0 0L10 5L0 10Z" fill="#ff7652"/>
+		</marker>
+		<marker id="arrow-muted" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+			<path d="M0 0L10 5L0 10Z" fill="#8b8d96"/>
+		</marker>
+	</defs>
+
+	<rect width="1600" height="900" rx="36" fill="url(#background)"/>
+	<rect x="28" y="28" width="1544" height="844" rx="28" fill="url(#dots)" stroke="#ffffff" stroke-opacity="0.08"/>
+	<circle cx="1120" cy="455" r="320" fill="#ff6744" opacity="0.04"/>
+
+	<text x="88" y="102" fill="#f4f0ec" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="42" font-weight="720">Same node contract, two ABI layers</text>
+	<text x="88" y="143" fill="#aaa7a5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="21">The runtime detects the binary format, adapts its interface, and applies one capability boundary.</text>
+	<text x="1480" y="106" text-anchor="end" fill="#ff7652" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700" letter-spacing="3">FLOW-LIKE · WASM</text>
+
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="82" y="330" width="250" height="220" rx="27" fill="#202126" stroke="#f1b35f" stroke-opacity="0.55"/>
+		<rect x="114" y="362" width="86" height="28" rx="14" fill="#f1b35f" fill-opacity="0.13" stroke="#f1b35f" stroke-opacity="0.44"/>
+		<text x="157" y="382" text-anchor="middle" fill="#f6c779" font-size="12" font-weight="760" letter-spacing="1.5">INPUT</text>
+		<text x="114" y="442" fill="#f4f0ec" font-size="28" font-weight="720">node.wasm</text>
+		<text x="114" y="478" fill="#aaa7a5" font-size="15">One or more node definitions</text>
+		<text x="114" y="504" fill="#aaa7a5" font-size="15">plus executable node logic</text>
+
+		<rect x="404" y="330" width="232" height="220" rx="27" fill="#202126" stroke="#ff7652" stroke-opacity="0.62"/>
+		<rect x="436" y="362" width="108" height="28" rx="14" fill="#ff7652" fill-opacity="0.14" stroke="#ff7652" stroke-opacity="0.46"/>
+		<text x="490" y="382" text-anchor="middle" fill="#ff9a7e" font-size="12" font-weight="760" letter-spacing="1.5">DETECT</text>
+		<text x="436" y="442" fill="#f4f0ec" font-size="24" font-weight="700">Binary format</text>
+		<text x="436" y="480" fill="#d8d4d0" font-size="15">Component header?</text>
+		<text x="436" y="510" fill="#aaa7a5" font-size="14">Yes → component</text>
+		<text x="436" y="533" fill="#aaa7a5" font-size="14">No → core module</text>
+
+		<rect x="714" y="206" width="384" height="278" rx="28" fill="#202126" stroke="#59c7d8" stroke-opacity="0.58"/>
+		<rect x="746" y="238" width="122" height="28" rx="14" fill="#59c7d8" fill-opacity="0.13" stroke="#59c7d8" stroke-opacity="0.44"/>
+		<text x="807" y="258" text-anchor="middle" fill="#7ad8e7" font-size="12" font-weight="760" letter-spacing="1.5">COMPONENT</text>
+		<text x="746" y="310" fill="#f4f0ec" font-size="23" font-weight="700">WIT + canonical ABI</text>
+		<text x="746" y="345" fill="#aaa7a5" font-size="15">Typed strings, lists, and interface calls</text>
+		<line x1="746" y1="372" x2="1066" y2="372" stroke="#ffffff" stroke-opacity="0.09"/>
+		<text x="746" y="405" fill="#d8d4d0" font-size="15">Exports: get-node(s) · run · ABI version</text>
+		<text x="746" y="434" fill="#d8d4d0" font-size="15">WASI Preview 2 interfaces</text>
+		<text x="746" y="463" fill="#7ad8e7" font-size="14">TCP · UDP · DNS are permission-gated</text>
+
+		<rect x="714" y="520" width="384" height="278" rx="28" fill="#202126" stroke="#a58aff" stroke-opacity="0.58"/>
+		<rect x="746" y="552" width="96" height="28" rx="14" fill="#a58aff" fill-opacity="0.13" stroke="#a58aff" stroke-opacity="0.44"/>
+		<text x="794" y="572" text-anchor="middle" fill="#beaaff" font-size="12" font-weight="760" letter-spacing="1.5">CORE</text>
+		<text x="746" y="624" fill="#f4f0ec" font-size="23" font-weight="700">Raw exports + linear memory</text>
+		<text x="746" y="659" fill="#aaa7a5" font-size="15">JSON crosses the pointer / length boundary</text>
+		<line x1="746" y1="686" x2="1066" y2="686" stroke="#ffffff" stroke-opacity="0.09"/>
+		<text x="746" y="719" fill="#d8d4d0" font-size="15">Exports: get_node(s) · run · optional alloc</text>
+		<text x="746" y="748" fill="#d8d4d0" font-size="15">Flat host-function bridge</text>
+		<text x="746" y="777" fill="#beaaff" font-size="14">HTTP bridge; no direct TCP / UDP sockets</text>
+
+		<rect x="1190" y="206" width="328" height="592" rx="31" fill="url(#boundary)" stroke="#ff7652" stroke-width="2.4"/>
+		<rect x="1222" y="238" width="124" height="28" rx="14" fill="#ff7652" fill-opacity="0.15" stroke="#ff7652" stroke-opacity="0.5"/>
+		<text x="1284" y="258" text-anchor="middle" fill="#ff9a7e" font-size="12" font-weight="760" letter-spacing="1.5">HOST BOUNDARY</text>
+		<text x="1222" y="312" fill="#f7f2ee" font-size="23" font-weight="720">Capability gate</text>
+		<text x="1222" y="344" fill="#b8b2ae" font-size="15">Manifest permissions become</text>
+		<text x="1222" y="369" fill="#b8b2ae" font-size="15">runtime limits and host access.</text>
+
+		<rect x="1222" y="410" width="264" height="54" rx="14" fill="#29262a" stroke="#4fd2a0" stroke-opacity="0.38"/>
+		<text x="1354" y="443" text-anchor="middle" fill="#e8dfda" font-size="15">Memory · timeout · fuel</text>
+		<rect x="1222" y="482" width="264" height="54" rx="14" fill="#29262a" stroke="#59c7d8" stroke-opacity="0.38"/>
+		<text x="1354" y="515" text-anchor="middle" fill="#e8dfda" font-size="15">Pins · variables · cache</text>
+		<rect x="1222" y="554" width="264" height="54" rx="14" fill="#29262a" stroke="#a58aff" stroke-opacity="0.38"/>
+		<text x="1354" y="587" text-anchor="middle" fill="#e8dfda" font-size="15">Storage · auth · models</text>
+		<rect x="1222" y="626" width="264" height="54" rx="14" fill="#29262a" stroke="#f1b35f" stroke-opacity="0.38"/>
+		<text x="1354" y="659" text-anchor="middle" fill="#e8dfda" font-size="15">Logs · streaming · run result</text>
+		<line x1="1222" y1="710" x2="1486" y2="710" stroke="#ffffff" stroke-opacity="0.09"/>
+		<text x="1222" y="744" fill="#f4f0ec" font-size="16" font-weight="680">Unified node definition</text>
+		<text x="1222" y="772" fill="#f4f0ec" font-size="16" font-weight="680">Unified execution result</text>
+	</g>
+
+	<path d="M332 440H392" fill="none" stroke="#ff7652" stroke-width="3.8" marker-end="url(#arrow-orange)" filter="url(#glow)"/>
+	<path d="M636 420H674V345H702" fill="none" stroke="#59c7d8" stroke-width="3" marker-end="url(#arrow-muted)"/>
+	<path d="M636 460H674V659H702" fill="none" stroke="#a58aff" stroke-width="3" marker-end="url(#arrow-muted)"/>
+	<path d="M1098 345H1150V430H1178" fill="none" stroke="#59c7d8" stroke-width="3" marker-end="url(#arrow-muted)"/>
+	<path d="M1098 659H1150V574H1178" fill="none" stroke="#a58aff" stroke-width="3" marker-end="url(#arrow-muted)"/>
+
+	<text x="88" y="824" fill="#8e909a" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15">Choose the Component Model when the template supports it or sockets are required; keep core modules for compatible existing toolchains.</text>
+</svg>

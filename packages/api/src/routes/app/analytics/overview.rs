@@ -198,7 +198,7 @@ pub struct AnalyticsStats {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/analytics", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/analytics", skip(state, user, query))]
 pub async fn get_analytics_overview(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -385,7 +385,7 @@ pub async fn get_analytics_overview(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "GET /apps/{app_id}/analytics/stats", skip(state, user))]
+#[tracing::instrument(name = "GET /apps/{app_id}/analytics/stats", skip(state, user, query))]
 pub async fn get_analytics_stats(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

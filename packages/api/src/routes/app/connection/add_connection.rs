@@ -46,7 +46,7 @@ pub struct AddConnectionRequest {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/connections", skip(state, user))]
+#[tracing::instrument(name = "POST /apps/{app_id}/connections", skip(state, user, payload))]
 pub async fn add_connection(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

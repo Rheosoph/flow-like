@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+	<title id="title">Anatomy of a Flow-Like app</title>
+	<desc id="description">A Flow-Like Library contains apps. Each app brings together flows, user experiences, data, reusable interface building blocks, and delivery controls.</desc>
+	<defs>
+		<linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#151519"/>
+			<stop offset="0.55" stop-color="#1b1b20"/>
+			<stop offset="1" stop-color="#121216"/>
+		</linearGradient>
+		<linearGradient id="app-card" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#35231f"/>
+			<stop offset="1" stop-color="#211d1e"/>
+		</linearGradient>
+		<linearGradient id="orange-line" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1600" y2="0">
+			<stop offset="0" stop-color="#ff835e"/>
+			<stop offset="1" stop-color="#ff5f3d"/>
+		</linearGradient>
+		<pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+			<circle cx="2" cy="2" r="1.25" fill="#ffffff" opacity="0.07"/>
+		</pattern>
+		<filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1600" height="900">
+			<feGaussianBlur stdDeviation="14" result="blur"/>
+			<feMerge>
+				<feMergeNode in="blur"/>
+				<feMergeNode in="SourceGraphic"/>
+			</feMerge>
+		</filter>
+		<filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+			<feDropShadow dx="0" dy="16" stdDeviation="22" flood-color="#000000" flood-opacity="0.34"/>
+		</filter>
+		<marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+			<path d="M 0 0 L 10 5 L 0 10 z" fill="#ff7652"/>
+		</marker>
+	</defs>
+
+	<rect width="1600" height="900" rx="36" fill="url(#background)"/>
+	<rect x="28" y="28" width="1544" height="844" rx="28" fill="url(#dots)" stroke="#ffffff" stroke-opacity="0.08"/>
+	<circle cx="790" cy="458" r="330" fill="#ff6744" opacity="0.055"/>
+	<circle cx="790" cy="458" r="235" fill="#ff6744" opacity="0.045"/>
+
+	<text x="88" y="102" fill="#f4f0ec" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="42" font-weight="720">One app, one connected workspace</text>
+	<text x="88" y="143" fill="#aaa7a5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="21">Build the logic, experiences, data, and delivery model together.</text>
+	<text x="1478" y="106" text-anchor="end" fill="#ff7652" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700" letter-spacing="3">FLOW-LIKE</text>
+
+	<!-- Library -->
+	<g filter="url(#shadow)">
+		<rect x="82" y="345" width="332" height="204" rx="28" fill="#202126" stroke="#5b5d66" stroke-width="2"/>
+		<circle cx="136" cy="399" r="23" fill="#2c2d34" stroke="#858895"/>
+		<path d="M124 391h10l5 6h11v17h-26z" fill="none" stroke="#d8d6d3" stroke-width="3" stroke-linejoin="round"/>
+		<text x="176" y="389" fill="#8e909a" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15" font-weight="700" letter-spacing="2">LIBRARY</text>
+		<text x="176" y="422" fill="#f2efeb" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="26" font-weight="680">Your apps</text>
+		<line x1="118" y1="457" x2="378" y2="457" stroke="#ffffff" stroke-opacity="0.09"/>
+		<rect x="118" y="480" width="260" height="42" rx="12" fill="#292a31"/>
+		<circle cx="141" cy="501" r="8" fill="#ff7652"/>
+		<text x="160" y="508" fill="#d7d4d1" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17">Customer Support Copilot</text>
+	</g>
+
+	<!-- Library to app -->
+	<path d="M414 447 C480 447 500 447 559 447" fill="none" stroke="url(#orange-line)" stroke-width="4" marker-end="url(#arrow)" filter="url(#glow)"/>
+
+	<!-- App -->
+	<g filter="url(#shadow)">
+		<rect x="586" y="302" width="402" height="294" rx="32" fill="url(#app-card)" stroke="#ff7652" stroke-width="2.5"/>
+		<rect x="622" y="338" width="68" height="30" rx="15" fill="#ff7652" fill-opacity="0.16" stroke="#ff7652" stroke-opacity="0.5"/>
+		<text x="656" y="359" text-anchor="middle" fill="#ff9a7e" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="760" letter-spacing="1.8">APP</text>
+		<circle cx="922" cy="357" r="22" fill="#ff7652" opacity="0.16"/>
+		<circle cx="922" cy="357" r="8" fill="#ff7652"/>
+		<text x="622" y="414" fill="#f7f2ee" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="31" font-weight="720">Customer Support</text>
+		<text x="622" y="452" fill="#f7f2ee" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="31" font-weight="720">Copilot</text>
+		<text x="622" y="495" fill="#b8b2ae" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="18">A project boundary for everything</text>
+		<text x="622" y="522" fill="#b8b2ae" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="18">needed to build and ship an experience.</text>
+		<line x1="622" y1="550" x2="952" y2="550" stroke="#ffb098" stroke-opacity="0.18"/>
+		<circle cx="636" cy="572" r="5" fill="#ff7652"/>
+		<circle cx="657" cy="572" r="5" fill="#4fd2a0"/>
+		<circle cx="678" cy="572" r="5" fill="#a58aff"/>
+	</g>
+
+	<!-- Branch wires -->
+	<path d="M988 374 C1030 374 1020 212 1062 212" fill="none" stroke="#ff7652" stroke-width="3"/>
+	<path d="M988 410 C1028 410 1022 349 1062 349" fill="none" stroke="#4fd2a0" stroke-width="3"/>
+	<path d="M988 447 C1028 447 1022 486 1062 486" fill="none" stroke="#59c7d8" stroke-width="3"/>
+	<path d="M988 484 C1028 484 1022 623 1062 623" fill="none" stroke="#a58aff" stroke-width="3"/>
+	<path d="M988 520 C1030 520 1020 760 1062 760" fill="none" stroke="#f1b35f" stroke-width="3"/>
+
+	<!-- Capability cards -->
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<g>
+			<rect x="1062" y="158" width="446" height="108" rx="22" fill="#202126" stroke="#ff7652" stroke-opacity="0.58"/>
+			<circle cx="1114" cy="212" r="26" fill="#ff7652" fill-opacity="0.13"/>
+			<path d="M1102 212h24m-18-8 6-6 6 6m-12 16 6 6 6-6" fill="none" stroke="#ff8c6b" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+			<text x="1159" y="206" fill="#f4f0ec" font-size="22" font-weight="700">Flows</text>
+			<text x="1159" y="235" fill="#aaa7a5" font-size="16">Typed visual workflow logic</text>
+		</g>
+		<g>
+			<rect x="1062" y="295" width="446" height="108" rx="22" fill="#202126" stroke="#4fd2a0" stroke-opacity="0.52"/>
+			<circle cx="1114" cy="349" r="26" fill="#4fd2a0" fill-opacity="0.12"/>
+			<rect x="1102" y="338" width="24" height="21" rx="4" fill="none" stroke="#73ddb5" stroke-width="3"/>
+			<path d="M1102 345h24" stroke="#73ddb5" stroke-width="3"/>
+			<text x="1159" y="343" fill="#f4f0ec" font-size="22" font-weight="700">Experiences</text>
+			<text x="1159" y="372" fill="#aaa7a5" font-size="16">Events, Pages, routes, and Chat</text>
+		</g>
+		<g>
+			<rect x="1062" y="432" width="446" height="108" rx="22" fill="#202126" stroke="#59c7d8" stroke-opacity="0.54"/>
+			<circle cx="1114" cy="486" r="26" fill="#59c7d8" fill-opacity="0.12"/>
+			<ellipse cx="1114" cy="477" rx="13" ry="6" fill="none" stroke="#7ad8e7" stroke-width="3"/>
+			<path d="M1101 477v17c0 3 6 6 13 6s13-3 13-6v-17m-26 8c0 3 6 6 13 6s13-3 13-6" fill="none" stroke="#7ad8e7" stroke-width="3"/>
+			<text x="1159" y="480" fill="#f4f0ec" font-size="22" font-weight="700">Data</text>
+			<text x="1159" y="509" fill="#aaa7a5" font-size="16">Storage and Data Studio</text>
+		</g>
+		<g>
+			<rect x="1062" y="569" width="446" height="108" rx="22" fill="#202126" stroke="#a58aff" stroke-opacity="0.56"/>
+			<circle cx="1114" cy="623" r="26" fill="#a58aff" fill-opacity="0.13"/>
+			<rect x="1103" y="612" width="9" height="9" rx="2" fill="none" stroke="#beaaff" stroke-width="2.5"/>
+			<rect x="1116" y="612" width="9" height="9" rx="2" fill="none" stroke="#beaaff" stroke-width="2.5"/>
+			<rect x="1103" y="625" width="9" height="9" rx="2" fill="none" stroke="#beaaff" stroke-width="2.5"/>
+			<rect x="1116" y="625" width="9" height="9" rx="2" fill="none" stroke="#beaaff" stroke-width="2.5"/>
+			<text x="1159" y="617" fill="#f4f0ec" font-size="22" font-weight="700">Reuse</text>
+			<text x="1159" y="646" fill="#aaa7a5" font-size="16">Widgets and Flow templates</text>
+		</g>
+		<g>
+			<rect x="1062" y="706" width="446" height="108" rx="22" fill="#202126" stroke="#f1b35f" stroke-opacity="0.54"/>
+			<circle cx="1114" cy="760" r="26" fill="#f1b35f" fill-opacity="0.12"/>
+			<circle cx="1108" cy="754" r="6" fill="none" stroke="#f6c779" stroke-width="2.5"/>
+			<circle cx="1121" cy="757" r="5" fill="none" stroke="#f6c779" stroke-width="2.5"/>
+			<path d="M1098 770c2-7 7-10 12-10 6 0 10 3 12 10m-3 0c2-5 5-7 9-7 4 0 7 2 9 7" fill="none" stroke="#f6c779" stroke-width="2.5" stroke-linecap="round"/>
+			<text x="1159" y="754" fill="#f4f0ec" font-size="22" font-weight="700">Delivery</text>
+			<text x="1159" y="783" fill="#aaa7a5" font-size="16">Team access, releases, and sharing</text>
+		</g>
+	</g>
+</svg>

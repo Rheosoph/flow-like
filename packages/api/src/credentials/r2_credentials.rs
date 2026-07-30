@@ -138,7 +138,7 @@ impl R2RuntimeCredentials {
     /// Generate prefix-scoped temporary credentials using R2's temp credentials API
     #[tracing::instrument(
         name = "R2RuntimeCredentials::scoped_credentials",
-        skip(self, _state),
+        skip(self, sub, _state),
         level = "debug"
     )]
     pub async fn scoped_credentials(

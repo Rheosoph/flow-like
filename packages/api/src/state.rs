@@ -218,6 +218,11 @@ pub struct State {
     pub encryption_key: [u8; 32],
     /// HMAC secret for signing/verifying sink trigger JWTs
     pub sink_secret: Option<String>,
+    /// Dedicated bearer token accepted only by the internal maintenance API.
+    ///
+    /// This is intentionally separate from user auth, sink auth, and
+    /// `BACKEND_KEY`, so a maintenance runner cannot mint broader credentials.
+    pub maintenance_token: Option<String>,
     /// Idempotency cache for sink trigger requests. Keyed by the
     /// `Idempotency-Key` header; callers (Lambda, cron worker) use the
     /// invocation-unique key to collapse automatic retries into a single run.
@@ -310,6 +315,29 @@ impl State {
         if sink_secret.is_none() {
             tracing::warn!(
                 "SINK_SECRET not configured — sink trigger endpoints will be unavailable"
+            );
+        }
+
+        let maintenance_token = secrets
+            .get_secret_string(&SecretRef::new("MAINTENANCE_TOKEN"))
+            .await
+            .ok()
+            .map(|secret| secret.expose_secret().trim().to_string())
+            .filter(|token| !token.is_empty())
+            .and_then(|token| {
+                if token.len() < 32 {
+                    tracing::error!(
+                        "MAINTENANCE_TOKEN must contain at least 32 bytes — maintenance endpoint disabled"
+                    );
+                    None
+                } else {
+                    Some(token)
+                }
+            });
+
+        if maintenance_token.is_none() {
+            tracing::warn!(
+                "MAINTENANCE_TOKEN not configured — scheduled maintenance endpoint will be unavailable"
             );
         }
 
@@ -592,6 +620,7 @@ impl State {
             secrets,
             encryption_key,
             sink_secret,
+            maintenance_token,
             trigger_idempotency: moka::sync::Cache::builder()
                 .max_capacity(10_000)
                 .time_to_live(Duration::from_secs(15 * 60))
@@ -671,7 +700,7 @@ impl State {
 
     #[tracing::instrument(
         name = "master_app",
-        skip(self, state),
+        skip(self, state, _sub),
         fields(sub, app_id, board_id, version)
     )]
     pub async fn master_app(
@@ -722,7 +751,7 @@ impl State {
 
     #[tracing::instrument(
         name = "master_board",
-        skip(self, state),
+        skip(self, state, _sub),
         level = "debug",
         fields(sub, app_id, board_id, version)
     )]

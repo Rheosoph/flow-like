@@ -94,7 +94,7 @@ fn category_value(item: &AppScoreItem, key: &str) -> i32 {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "GET /admin/governance/scores", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/governance/scores", skip_all)]
 pub async fn list_scores(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

@@ -37,7 +37,7 @@ pub struct CreateInviteLinkPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "PUT /apps/{app_id}/team/link", skip(state, user))]
+#[tracing::instrument(name = "PUT /apps/{app_id}/team/link", skip(state, user, payload))]
 pub async fn create_invite_link(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

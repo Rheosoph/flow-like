@@ -1,27 +1,17 @@
 "use client";
 
+import { useBackend, useNetworkStatus } from "@flow-like/flow-like-ui";
+import { useSpotlightStore } from "@flow-like/flow-like-ui/state/spotlight-state";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { check } from "@tauri-apps/plugin-updater";
-import { useBackend, useNetworkStatus } from "@flow-like/flow-like-ui";
-import { useSpotlightStore } from "@flow-like/flow-like-ui/state/spotlight-state";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo } from "react";
-
-interface TrayNotification {
-	id: string;
-	title: string;
-	read: boolean;
-	createdAt?: string;
-}
+import { TauriBackend } from "./tauri-provider";
 
 interface TraySyncStatus {
 	status: string;
 	detail?: string;
-}
-
-interface TrayAccountState {
-	label: string;
-	tier?: string;
 }
 
 interface TrayUpdateState {
@@ -29,16 +19,24 @@ interface TrayUpdateState {
 }
 
 interface TrayUpdate {
-	notifications?: TrayNotification[];
 	unreadCount?: number;
 	syncStatus?: TraySyncStatus;
 	updateState?: TrayUpdateState;
-	accountState?: TrayAccountState;
+	signedIn?: boolean;
 }
+
+const NOTIFICATION_POLL_INTERVAL = 60_000;
+const UPDATE_CHECK_INTERVAL = 30 * 60_000;
+
+const pushTrayUpdate = (update: TrayUpdate) =>
+	invoke("tray_update_state", { update }).catch((error) =>
+		console.warn("Failed to update tray state", error),
+	);
 
 const TrayProvider: React.FC = () => {
 	const backend = useBackend();
 	const isOnline = useNetworkStatus();
+	const router = useRouter();
 
 	const syncStatus = useMemo<TraySyncStatus>(
 		() => ({
@@ -49,74 +47,72 @@ const TrayProvider: React.FC = () => {
 	);
 
 	useEffect(() => {
-		invoke("tray_update_state", {
-			update: {
-				syncStatus,
-			},
-		}).catch((error) =>
-			console.warn("Failed to update tray sync status", error),
-		);
+		pushTrayUpdate({ syncStatus });
 	}, [syncStatus]);
 
 	useEffect(() => {
 		let mounted = true;
-		let intervalId: NodeJS.Timeout | undefined;
 
 		const updateTrayMeta = async () => {
 			try {
-				const [overview, notifications, userInfo, updateAvailable] =
-					await Promise.all([
-						backend.userState.getNotifications().catch(() => null),
-						backend.userState.listNotifications(false, 0, 5).catch(() => []),
-						backend.userState.getInfo().catch(() => null),
-						check().catch(() => null),
-					]);
+				const overview = await backend.userState
+					.getNotifications()
+					.catch(() => null);
 
 				if (!mounted) return;
 
-				const trayNotifications = notifications.map((notification) => ({
-					id: notification.id,
-					title: notification.title,
-					read: notification.read,
-					createdAt: notification.created_at,
-				}));
-
-				const accountState: TrayAccountState = {
-					label:
-						userInfo?.name ??
-						userInfo?.email ??
-						userInfo?.username ??
-						"Signed out",
-					tier: userInfo?.tier ?? userInfo?.status ?? undefined,
-				};
-
-				const updateState: TrayUpdateState = {
-					available: Boolean(updateAvailable),
-				};
-
-				await invoke("tray_update_state", {
-					update: {
-						notifications: trayNotifications,
-						unreadCount: overview?.unread_count ?? 0,
-						accountState,
-						updateState,
-					},
-				});
-			} catch (error) {
-				console.warn("Failed to update tray metadata", error);
+				// Only report facts we positively know: a failed fetch must not
+				// flip the tray to zero-unread (offline is a normal state for a
+				// signed-in user). Auth state comes from the local OIDC context,
+				// not from network-call success, so it also resets on sign-out.
+				const update: TrayUpdate = {};
+				if (overview) update.unreadCount = overview.unread_count ?? 0;
+				if (backend instanceof TauriBackend) {
+					update.signedIn = Boolean(
+						backend.auth?.isAuthenticated && backend.auth?.user?.access_token,
+					);
+				}
+				if (Object.keys(update).length > 0) await pushTrayUpdate(update);
+			} catch {
+				// Backend not ready yet (fallback state throws synchronously)
 			}
 		};
 
 		updateTrayMeta();
-		intervalId = setInterval(updateTrayMeta, 60000);
+		const intervalId = setInterval(updateTrayMeta, NOTIFICATION_POLL_INTERVAL);
 
 		return () => {
 			mounted = false;
-			if (intervalId) clearInterval(intervalId);
+			clearInterval(intervalId);
 		};
 	}, [backend]);
 
 	useEffect(() => {
+		let mounted = true;
+
+		const checkForUpdate = async () => {
+			try {
+				const update = await check();
+				if (!mounted) return;
+				await pushTrayUpdate({ updateState: { available: Boolean(update) } });
+			} catch {
+				// Keep the last known update state on transient check failures
+			}
+		};
+
+		checkForUpdate();
+		const intervalId = setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL);
+
+		return () => {
+			mounted = false;
+			clearInterval(intervalId);
+		};
+	}, []);
+
+	useEffect(() => {
+		const unlistenNavigate = listen<string>("tray:navigate", (event) => {
+			if (typeof event.payload === "string") router.push(event.payload);
+		});
 		const unlistenOpenSpotlight = listen("tray:open-spotlight", () => {
 			useSpotlightStore.getState().open();
 		});
@@ -131,19 +127,18 @@ const TrayProvider: React.FC = () => {
 		});
 
 		return () => {
-			Promise.all([
+			Promise.allSettled([
+				unlistenNavigate,
 				unlistenOpenSpotlight,
 				unlistenQuickCreate,
 				unlistenUpdate,
-			])
-				.then((unlisteners) => {
-					for (const unlisten of unlisteners) {
-						unlisten();
-					}
-				})
-				.catch(() => undefined);
+			]).then((results) => {
+				for (const result of results) {
+					if (result.status === "fulfilled") result.value();
+				}
+			});
 		};
-	}, []);
+	}, [router]);
 
 	return null;
 };

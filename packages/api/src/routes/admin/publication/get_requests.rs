@@ -99,7 +99,7 @@ pub struct ListPublicationRequestsQuery {
         (status = 403, description = "Forbidden")
     )
 )]
-#[tracing::instrument(name = "GET /admin/publication/requests", skip(state, user))]
+#[tracing::instrument(name = "GET /admin/publication/requests", skip_all)]
 pub async fn get_requests(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

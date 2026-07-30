@@ -346,6 +346,7 @@ async fn execute_internal(
 
     let board_name = internal_run.board.name.clone();
     let run_data = RunData::with_metadata(
+        Some(app_id.clone()),
         &board_id,
         &payload.id,
         None,

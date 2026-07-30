@@ -1,0 +1,57 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "web",
+	"outputDir": "apps/docs/src/assets",
+	"httpFixture": "../fixtures/docs-reference.http.json",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 350,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "markdown-chart-playground",
+			"path": "/debug/markdown",
+			"query": {
+				"capture": "docs"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Markdown Debug Preview"
+				},
+				{
+					"type": "click",
+					"selector": "[data-example-title=\"Plotly Bar (CSV)\"] button:last-of-type"
+				},
+				{
+					"type": "delay",
+					"ms": 1800
+				},
+				{
+					"type": "press",
+					"key": "Home"
+				},
+				{
+					"type": "waitFor",
+					"selector": "[data-doc-screenshot=\"rendered-output\"] .js-plotly-plot",
+					"state": "visible"
+				},
+				{
+					"type": "capture",
+					"name": "markdown-chart-playground",
+					"output": "MarkdownChartPlayground.webp",
+					"mode": "viewport"
+				}
+			]
+		}
+	]
+}

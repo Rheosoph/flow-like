@@ -43,7 +43,7 @@ pub struct CypherPayload {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/graph/{overlay_id}/cypher",
-    skip(state, user, payload)
+    skip(state, user, scope, payload)
 )]
 pub async fn run_cypher(
     State(state): State<AppState>,

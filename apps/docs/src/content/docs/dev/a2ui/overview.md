@@ -1,275 +1,146 @@
 ---
-title: A2UI Integration
-description: Building agent-driven interfaces with Google's A2UI protocol
+title: A2UI in Flow-Like
+description: Build and render declarative interfaces for Pages and Widgets
 sidebar:
   order: 0
 ---
 
-## What is A2UI?
+Flow-Like uses an **Agent-to-UI (A2UI)** component model for interfaces that can be authored visually, generated with FlowPilot, rendered safely, and updated by a running workflow.
 
-**A2UI** (Agent-to-UI) is an open protocol created by **Google** that enables AI agents to generate rich, interactive user interfaces. Instead of text-only responses or risky code execution, A2UI lets agents send declarative component descriptions that clients render using native widgets.
+An A2UI surface is data, not executable frontend code. It contains allowlisted component types, a data model, styling, and actions. The Flow-Like renderer turns that description into native React components.
 
-Flow-Like integrates A2UI to bring agent-driven interfaces directly into your workflow automation—creating **Pages** and **Widgets** that connect seamlessly to your flows.
+![The A2UI authoring and runtime architecture in Flow-Like](../../../../assets/A2UIArchitecture.svg)
 
-## Human + AI: The Best of Both Worlds
+## Two Ways to Author One Surface
 
-Flow-Like doesn't just consume A2UI from agents—we provide a **visual drag-and-drop builder** that produces the same A2UI format. This means:
+| Authoring path | Best for | What it changes |
+| --- | --- | --- |
+| **Visual Builder** | Precise composition and inspection | The surface's components, styles, actions, and canvas settings |
+| **FlowPilot** | Generating a first draft or revising a selected area | The same surface model used by the builder |
+| **Combined** | Fast iteration with human review | FlowPilot proposes changes; you inspect, apply, and refine them |
 
+Because both paths work on the same model, a generated surface can be opened in the builder and a manually authored surface can be given back to FlowPilot as context.
+
+## Runtime Model
+
+A surface has a stable ID, a root component, a flat component graph, and optional data and canvas settings. Parent components refer to their children by ID.
+
+This is a minimal rendering message in the current Flow-Like format:
+
+```json
+{
+  "type": "beginRendering",
+  "surfaceId": "sales-dashboard",
+  "rootComponentId": "root",
+  "components": [
+    {
+      "id": "root",
+      "component": {
+        "type": "column",
+        "gap": { "literalString": "16px" },
+        "children": { "explicitList": ["title"] }
+      }
+    },
+    {
+      "id": "title",
+      "component": {
+        "type": "text",
+        "content": { "literalString": "Revenue" },
+        "variant": { "literalString": "heading" }
+      }
+    }
+  ],
+  "dataModel": []
+}
 ```
-┌─────────────────────────────────────────────────────────────┐
-│              Two Ways to Build UIs                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│   🤖 AI-Generated              👤 Human-Created             │
-│   ─────────────────           ─────────────────             │
-│   Agent creates UI             Visual builder               │
-│   from prompts                 drag-and-drop                │
-│          │                            │                      │
-│          └──────────┬─────────────────┘                     │
-│                     ▼                                        │
-│              ┌─────────────┐                                │
-│              │    A2UI     │                                │
-│              │   Format    │                                │
-│              └──────┬──────┘                                │
-│                     ▼                                        │
-│              ┌─────────────┐                                │
-│              │  Flow-Like  │                                │
-│              │  Renderer   │                                │
-│              └─────────────┘                                │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
 
-| Approach | Best For | Output |
-|----------|----------|--------|
-| **AI Agent** | Rapid prototyping, natural language descriptions | A2UI JSON |
-| **Visual Builder** | Precise control, pixel-perfect design | A2UI JSON |
-| **Combined** | AI generates, human refines | A2UI JSON |
+The flat graph matters for both humans and agents:
 
-### Why This Matters
+- A component can be updated by ID without replacing the whole surface.
+- Components can arrive incrementally while a workflow is running.
+- The hierarchy remains explicit and inspectable.
+- Values can be literal or resolved from a data-model path.
 
-- **Interoperable**: AI-generated and human-created UIs use the same format
-- **Iterate Freely**: Start with AI, refine manually—or vice versa
-- **No Lock-in**: Everything is standard A2UI, portable and future-proof
-- **Collaborate**: Designers use the builder, developers use code, AI assists both
+### Surface Messages
 
-:::note[Learn More]
-A2UI is Apache 2.0 licensed and developed openly on GitHub.
-📚 **Official Docs**: [a2ui.org](https://a2ui.org/)
-💻 **Source Code**: [github.com/google/A2UI](https://github.com/google/A2UI)
+The renderer handles a broader set of messages, but these are the core surface operations:
+
+| Message | Purpose |
+| --- | --- |
+| `beginRendering` | Create a surface with its root, components, and initial data |
+| `surfaceUpdate` | Add or replace components on an existing surface |
+| `dataModelUpdate` | Add or replace data entries |
+| `setCanvasSettings` | Update the surface background, padding, or custom CSS |
+| `createElement` / `removeElement` | Change the component graph incrementally |
+| `deleteSurface` | Remove a surface |
+
+Navigation, dialogs, global/page state, and query-parameter updates are represented as explicit messages too. They are handled by the host rather than executed as arbitrary code.
+
+## Component Catalog
+
+Flow-Like only renders registered component types. The current catalog includes:
+
+| Category | Examples |
+| --- | --- |
+| **Layout** | Row, Column, Stack, Grid, Scroll Area, Box, Center, Spacer |
+| **Display** | Text, Image, Markdown, Table, charts, Calendar, Gantt, Geo Map |
+| **Interactive** | Button, Text Field, Select, Checkbox, File Input, Voice Input, Link |
+| **Container** | Card, Modal, Tabs, Accordion, Drawer, Tooltip, Popover |
+| **Specialized** | File Preview, Diff View, image annotation, 2D and 3D scene components |
+
+The palette in the Visual Builder is the practical reference for the components currently available to authors. The renderer registry is the source of truth for what a client can display.
+
+:::note[Flow-Like extensions]
+Flow-Like follows the Agent-to-UI approach and uses declarative surfaces, but its component catalog and runtime messages include Flow-Like-specific capabilities. Do not assume an arbitrary external A2UI payload is portable without mapping its component types and messages to the Flow-Like catalog.
 :::
 
 ## Pages and Widgets
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       Your App                               │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│   ┌─────────────────────────────────────────────────────┐   │
-│   │                    PAGES                             │   │
-│   │           (App-specific layouts)                     │   │
-│   │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │   │
-│   │  │  Dashboard  │  │   Reports   │  │  Settings   │  │   │
-│   │  └──────┬──────┘  └──────┬──────┘  └─────────────┘  │   │
-│   └─────────┼────────────────┼──────────────────────────┘   │
-│             │                │                               │
-│             ▼                ▼                               │
-│   ┌─────────────────────────────────────────────────────┐   │
-│   │                   WIDGETS                            │   │
-│   │         (Reusable across projects)                   │   │
-│   │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐    │   │
-│   │  │KPI Card │ │ Chart   │ │ Table   │ │ Form    │    │   │
-│   │  └─────────┘ └─────────┘ └─────────┘ └─────────┘    │   │
-│   └─────────────────────────────────────────────────────┘   │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
-```
+Pages and Widgets both store A2UI components, but they have different lifecycles.
 
-### Pages vs Widgets
+| Concept | Scope | Runtime role |
+| --- | --- | --- |
+| **Page** | An app experience, usually connected to a flow | Rendered when an app event targets the page |
+| **Widget** | A reusable UI block | Inserted into a Page or another surface as a widget instance |
 
-Flow-Like extends A2UI with two concepts:
+A Page can also define load, unload, and interval events. A Widget can define
+named actions that a host instance maps to workflow bindings.
 
-| Concept | Scope | Description |
-|---------|-------|-------------|
-| **Pages** | App-specific | Full-screen layouts configured for your app. Define navigation, structure, and app-specific UI. |
-| **Widgets** | Reusable | Self-contained UI components that can be used across your project or shared with other projects. |
+## Actions and Workflow Updates
 
-## Why A2UI?
+The current action handler recognizes exact built-in action names:
 
-A2UI solves a fundamental problem: **how can AI agents safely send rich UIs across trust boundaries?**
+| Action | Required context | Behavior |
+| --- | --- | --- |
+| `workflow_event` | `nodeId`; the builder also stores `appId` and `boardId` | Executes the selected workflow Event |
+| `widget_event` | `actionId` | Resolves that Widget action through the instance's workflow binding |
+| `navigate_page` | `route`; optional `queryParams` | Navigates within the app |
+| `external_link` | `url` | Opens an external URL in a new tab |
 
-### Key Benefits
+`workflow_event` is not an arbitrary event label: `context.nodeId` identifies
+the Event node. Likewise, a Widget component always uses the literal
+`widget_event` name and selects its declared Widget action through
+`context.actionId`.
 
-| Feature | Description |
-|---------|-------------|
-| **Secure by Design** | Declarative data format, not executable code. Agents can only use pre-approved components. |
-| **LLM-Friendly** | Flat, streaming JSON structure designed for easy generation by language models. |
-| **Framework-Agnostic** | One agent response works everywhere—React, Angular, Flutter, native mobile. |
-| **Progressive Rendering** | Stream UI updates as they're generated. Users see interfaces building in real-time. |
+Unknown action names may be forwarded as a structured `userAction` message to
+an optional host callback, including the name, surface/source component IDs,
+timestamp, and context. That fallback does not execute a workflow by itself.
 
-### How It Works
+For workflow actions, the handler invokes the board with element values,
+input values, action context, and navigation state. During the run, Flow-Like
+can stream A2UI updates, state changes, navigation, progress, and logs back to
+the client.
 
-1. **User** sends a message to an AI agent
-2. **Agent** generates A2UI messages describing the UI
-3. **Messages** stream to the Flow-Like client
-4. **Client** renders using native components
-5. **User** interacts with the UI, sending actions back
-6. **Agent** responds with updated A2UI messages
+This keeps the boundary explicit:
 
-## A2UI Architecture
+1. A component declares one of the supported action contracts.
+2. The handler validates its required routing context.
+3. Flow-Like resolves the Event or Widget binding and runs it.
+4. The workflow returns declarative updates.
 
-### Message Types
+## Continue
 
-A2UI uses four message types:
-
-| Message | Purpose |
-|---------|---------|
-| \`surfaceUpdate\` | Define or update UI components |
-| \`dataModelUpdate\` | Update application state |
-| \`beginRendering\` | Signal the client to render |
-| \`deleteSurface\` | Remove a UI surface |
-
-### The Adjacency List Model
-
-Unlike nested JSON trees, A2UI uses a **flat adjacency list** where components reference children by ID:
-
-\`\`\`json
-{
-  "surfaceUpdate": {
-    "components": [
-      {"id": "root", "component": {"Column": {"children": {"explicitList": ["greeting", "buttons"]}}}},
-      {"id": "greeting", "component": {"Text": {"text": {"literalString": "Hello!"}}}},
-      {"id": "buttons", "component": {"Row": {"children": {"explicitList": ["cancel", "ok"]}}}},
-      {"id": "cancel", "component": {"Button": {"child": "cancel-text", "action": {"name": "cancel"}}}},
-      {"id": "cancel-text", "component": {"Text": {"text": {"literalString": "Cancel"}}}},
-      {"id": "ok", "component": {"Button": {"child": "ok-text", "action": {"name": "ok"}}}},
-      {"id": "ok-text", "component": {"Text": {"text": {"literalString": "OK"}}}}
-    ]
-  }
-}
-\`\`\`
-
-**Why flat lists?**
-- ✅ Easy for LLMs to generate (no perfect nesting required)
-- ✅ Send components incrementally as they're ready
-- ✅ Update any component by ID
-- ✅ Clear separation of structure and data
-
-### Standard Component Catalog
-
-A2UI defines a standard catalog organized by purpose:
-
-| Category | Components |
-|----------|------------|
-| **Layout** | Row, Column, List |
-| **Display** | Text, Image, Icon, Video, Divider |
-| **Interactive** | Button, TextField, CheckBox, DateTimeInput, Slider |
-| **Container** | Card, Tabs, Modal |
-
-## Flow-Like Integration
-
-### Connecting to Flows
-
-A2UI components integrate with Flow-Like's execution engine:
-
-\`\`\`
-┌──────────────┐     ┌──────────────┐     ┌──────────────┐
-│   A2UI       │ ──▶ │  Flow-Like   │ ──▶ │   A2UI      │
-│   Input      │     │   Board      │     │   Output    │
-│   Widget     │     │              │     │   Widget    │
-└──────────────┘     └──────────────┘     └──────────────┘
-\`\`\`
-
-- **Trigger Flows**: Button actions start flow executions
-- **Display Results**: Flow outputs bind to component data
-- **Bidirectional Binding**: Form inputs sync with flow variables
-- **Real-time Updates**: Stream results as flows execute
-
-### Custom Components
-
-Beyond the standard catalog, Flow-Like provides custom components for:
-
-- **Charts & Visualizations**: Data-bound charts connected to flows
-- **Flow Controls**: Start, stop, monitor flow executions
-- **Data Tables**: Display flow outputs with sorting/filtering
-- **File Handling**: Upload/download integrated with storage
-
-## Pages in Your App
-
-Pages define the full-screen layouts for your application:
-
-\`\`\`
-┌─────────────────────────────────────────────┐
-│  App Navigation                              │
-├─────────────────────────────────────────────┤
-│                                              │
-│  ┌─────────────────────────────────────┐    │
-│  │           Page: Dashboard            │    │
-│  │  ┌─────────┐  ┌─────────┐           │    │
-│  │  │ Widget  │  │ Widget  │           │    │
-│  │  │ (KPIs)  │  │ (Chart) │           │    │
-│  │  └─────────┘  └─────────┘           │    │
-│  │  ┌─────────────────────────────┐    │    │
-│  │  │      Widget (Data Table)     │    │    │
-│  │  └─────────────────────────────┘    │    │
-│  └─────────────────────────────────────┘    │
-│                                              │
-└─────────────────────────────────────────────┘
-\`\`\`
-
-- Configure navigation structure
-- Define page layouts
-- Set access permissions
-- Bind to app-specific data
-
-## Reusable Widgets
-
-Widgets are self-contained components you can share:
-
-\`\`\`
-┌──────────────────────────────────────────────────────┐
-│  Widget: Customer Card                               │
-│  ─────────────────────────────────────────────────── │
-│  ┌──────────┐                                        │
-│  │  Avatar  │  John Doe                              │
-│  │   [👤]   │  john@example.com                      │
-│  └──────────┘  Customer since 2023                   │
-│                                                       │
-│  [View Profile]  [Send Message]                      │
-└──────────────────────────────────────────────────────┘
-\`\`\`
-
-- **Create Once**: Build the widget in your project
-- **Reuse Anywhere**: Use it in any page of your app
-- **Share Across Projects**: Export and import widgets
-- **Bind to Any Data**: Configure data sources per usage
-
-## Roadmap
-
-| Phase | Features | Status |
-|-------|----------|--------|
-| **Phase 1** | A2UI renderer, basic components | 🔧 In Development |
-| **Phase 2** | Pages & widgets, flow bindings | 📋 Planned |
-| **Phase 3** | Widget sharing, custom components | 📋 Planned |
-| **Phase 4** | Visual builder, advanced theming | �� Planned |
-
-## Resources
-
-### Official A2UI Documentation
-
-- [A2UI Quickstart](https://a2ui.org/quickstart/) - Get started in 5 minutes
-- [Core Concepts](https://a2ui.org/concepts/overview/) - Understand the architecture
-- [Component Reference](https://a2ui.org/reference/components/) - Full component catalog
-- [A2UI Specification](https://a2ui.org/specification/v0.8-a2ui/) - Protocol details
-
-### Flow-Like Integration
-
-- [Pages Guide](/dev/a2ui/pages/) - Creating app pages *(coming soon)*
-- [Widgets Guide](/dev/a2ui/widgets/) - Building reusable widgets *(coming soon)*
-- [Flow Bindings](/dev/a2ui/bindings/) - Connecting to workflows *(coming soon)*
-
-:::tip[Get Early Access]
-Want to try A2UI integration early?
-📧 **info@great-co.de**
-:::
+- [Pages](/dev/a2ui/pages/) — create and configure app Pages
+- [Widgets](/dev/a2ui/widgets/) — build reusable UI blocks
+- [Visual Builder](/dev/a2ui/visual-builder/) — use the current builder interface
+- [Routes](/dev/a2ui/routes/) — map URL paths to app events

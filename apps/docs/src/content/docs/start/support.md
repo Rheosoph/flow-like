@@ -5,11 +5,18 @@ sidebar:
   order: 90
 ---
 
-For support, you can reach out to us at any time by:
+For help or project feedback:
 
-- Joining our [Discord Server](https://discord.gg/KTWMrS2)
-- Creating an issue on [GitHub](https://github.com/Rheosoph/flow-like)
-- Visiting [our FAQs](https://flow-like.com/#faq)
-- Discussing with us on [Reddit](https://www.reddit.com/user/tm9657/)
+- Join the [Discord community](https://discord.gg/KTWMrS2) for usage questions.
+- Open a [GitHub issue](https://github.com/Rheosoph/flow-like/issues) for a
+  reproducible bug or feature request.
+- Email [contact@flow-like.com](mailto:contact@flow-like.com) for questions
+  that do not belong in a public issue.
+- Review the [website FAQ](https://flow-like.com/#faq).
 
-We share the latest releases and major updates in our [Blog Posts](https://flow-like.com/blog/).
+Include your Flow-Like version, operating system, the result you expected, and
+the smallest set of steps that reproduces the problem. Remove credentials and
+private app data from screenshots, logs, and exported Flows.
+
+Release notes and major updates are published on the
+[Flow-Like blog](https://flow-like.com/blog/).

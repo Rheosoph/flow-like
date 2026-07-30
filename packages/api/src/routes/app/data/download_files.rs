@@ -39,7 +39,7 @@ pub struct DownloadFilesPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/data/download", skip(state, user))]
+#[tracing::instrument(name = "POST /apps/{app_id}/data/download", skip(state, user, payload))]
 pub async fn download_files(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -159,7 +159,10 @@ pub async fn download_files(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/data/user/download", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/data/user/download",
+    skip(state, user, payload)
+)]
 pub async fn download_user_files(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

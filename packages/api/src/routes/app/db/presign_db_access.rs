@@ -125,8 +125,8 @@ pub struct PresignDbAccessResponse {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/db/presign",
-    skip(state, user),
-    fields(app_id = %app_id, table = %payload.table_name, mode = %payload.access_mode)
+    skip(state, user, payload),
+    fields(app_id = %app_id)
 )]
 pub async fn presign_db_access(
     State(state): State<AppState>,
@@ -213,8 +213,8 @@ pub async fn presign_db_access(
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/db/presign/project",
-    skip(state, user),
-    fields(app_id = %app_id, table = %payload.table_name, mode = %payload.access_mode)
+    skip(state, user, payload),
+    fields(app_id = %app_id)
 )]
 pub async fn presign_project_db_access(
     State(state): State<AppState>,

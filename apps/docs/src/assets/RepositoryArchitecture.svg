@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title description">
+	<title id="title">Flow-Like repository architecture</title>
+	<desc id="description">Desktop, Web, Embedded, and Extension clients share the packages UI layer. Backend-state interfaces connect those clients to local Tauri and browser adapters or remote API deployments. Rust packages provide the workflow core, node catalogs, execution, compilation, storage, secrets, sinks, schemas, and shared types.</desc>
+	<defs>
+		<linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#151519"/>
+			<stop offset="0.55" stop-color="#1b1b20"/>
+			<stop offset="1" stop-color="#111115"/>
+		</linearGradient>
+		<linearGradient id="ui-layer" x1="0" y1="0" x2="1" y2="0">
+			<stop offset="0" stop-color="#34231f"/>
+			<stop offset="0.5" stop-color="#2a2020"/>
+			<stop offset="1" stop-color="#211d1e"/>
+		</linearGradient>
+		<pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+			<circle cx="2" cy="2" r="1.25" fill="#ffffff" opacity="0.06"/>
+		</pattern>
+		<filter id="shadow" x="-30%" y="-30%" width="160%" height="180%">
+			<feDropShadow dx="0" dy="14" stdDeviation="20" flood-color="#000000" flood-opacity="0.34"/>
+		</filter>
+		<marker id="arrow-orange" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+			<path d="M0 0L10 5L0 10Z" fill="#ff7652"/>
+		</marker>
+		<marker id="arrow-muted" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+			<path d="M0 0L10 5L0 10Z" fill="#8b8d96"/>
+		</marker>
+	</defs>
+
+	<rect width="1600" height="1000" rx="36" fill="url(#background)"/>
+	<rect x="28" y="28" width="1544" height="944" rx="28" fill="url(#dots)" stroke="#ffffff" stroke-opacity="0.08"/>
+
+	<text x="88" y="96" fill="#f4f0ec" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="42" font-weight="720">A shared UI over a modular Rust core</text>
+	<text x="88" y="137" fill="#aaa7a5" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="21">Clients reuse one component system while adapters select local or remote services.</text>
+	<text x="1480" y="100" text-anchor="end" fill="#ff7652" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="700" letter-spacing="3">FLOW-LIKE · REPOSITORY</text>
+
+	<!-- Applications -->
+	<text x="88" y="198" fill="#8e909a" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="760" letter-spacing="2">APPLICATIONS</text>
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="88" y="220" width="330" height="112" rx="21" fill="#202126" stroke="#ff7652" stroke-opacity="0.56"/>
+		<circle cx="132" cy="276" r="21" fill="#ff7652" fill-opacity="0.14"/>
+		<rect x="122" y="266" width="20" height="18" rx="3" fill="none" stroke="#ff987b" stroke-width="2.3"/>
+		<path d="M122 271h20" stroke="#ff987b" stroke-width="2.3"/>
+		<text x="166" y="270" fill="#f4f0ec" font-size="20" font-weight="700">apps/desktop</text>
+		<text x="166" y="296" fill="#aaa7a5" font-size="14">Next.js + Tauri</text>
+
+		<rect x="452" y="220" width="330" height="112" rx="21" fill="#202126" stroke="#59c7d8" stroke-opacity="0.52"/>
+		<circle cx="496" cy="276" r="21" fill="#59c7d8" fill-opacity="0.13"/>
+		<circle cx="496" cy="276" r="10" fill="none" stroke="#7ad8e7" stroke-width="2.2"/>
+		<path d="M486 276h20m-10-10c4 5 4 15 0 20m0-20c-4 5-4 15 0 20" fill="none" stroke="#7ad8e7" stroke-width="1.8"/>
+		<text x="530" y="270" fill="#f4f0ec" font-size="20" font-weight="700">apps/web</text>
+		<text x="530" y="296" fill="#aaa7a5" font-size="14">Next.js web client</text>
+
+		<rect x="816" y="220" width="330" height="112" rx="21" fill="#202126" stroke="#4fd2a0" stroke-opacity="0.52"/>
+		<circle cx="860" cy="276" r="21" fill="#4fd2a0" fill-opacity="0.12"/>
+		<path d="M850 267h20v18h-20zm4 4h12m-12 4h8" fill="none" stroke="#73ddb5" stroke-width="2.1" stroke-linecap="round"/>
+		<text x="894" y="270" fill="#f4f0ec" font-size="20" font-weight="700">apps/embedded</text>
+		<text x="894" y="296" fill="#aaa7a5" font-size="14">Embeddable experiences</text>
+
+		<rect x="1180" y="220" width="330" height="112" rx="21" fill="#202126" stroke="#a58aff" stroke-opacity="0.54"/>
+		<circle cx="1224" cy="276" r="21" fill="#a58aff" fill-opacity="0.13"/>
+		<path d="M1214 266h8v8h-8zm12 0h8v8h-8zm-12 12h8v8h-8zm12 0h8v8h-8z" fill="none" stroke="#beaaff" stroke-width="2"/>
+		<text x="1258" y="270" fill="#f4f0ec" font-size="20" font-weight="700">apps/extension</text>
+		<text x="1258" y="296" fill="#aaa7a5" font-size="14">Browser extension</text>
+	</g>
+
+	<!-- Shared UI -->
+	<path d="M253 332V368M617 332V368M981 332V368M1345 332V368" fill="none" stroke="#8b8d96" stroke-width="2.4"/>
+	<path d="M253 368H1345" fill="none" stroke="#8b8d96" stroke-width="2.4"/>
+	<path d="M799 368V394" fill="none" stroke="#ff7652" stroke-width="3.5" marker-end="url(#arrow-orange)"/>
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="226" y="410" width="1148" height="132" rx="26" fill="url(#ui-layer)" stroke="#ff7652" stroke-width="2.4"/>
+		<rect x="260" y="438" width="138" height="28" rx="14" fill="#ff7652" fill-opacity="0.15" stroke="#ff7652" stroke-opacity="0.48"/>
+		<text x="329" y="458" text-anchor="middle" fill="#ff9a7e" font-size="12" font-weight="760" letter-spacing="1.5">SHARED UI</text>
+		<text x="260" y="503" fill="#f7f2ee" font-size="27" font-weight="720">packages/ui</text>
+		<text x="478" y="496" fill="#cbc8c4" font-size="16">React components · XYFlow editor · A2UI builders · app interfaces</text>
+		<text x="478" y="522" fill="#aaa7a5" font-size="14">Backend-state interfaces keep UI code independent from its persistence and execution adapter.</text>
+	</g>
+
+	<!-- Adapter split -->
+	<path d="M800 542V578H482V600" fill="none" stroke="#59c7d8" stroke-width="2.8" marker-end="url(#arrow-muted)"/>
+	<path d="M800 542V578H1118V600" fill="none" stroke="#a58aff" stroke-width="2.8" marker-end="url(#arrow-muted)"/>
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="226" y="610" width="512" height="112" rx="22" fill="#202126" stroke="#59c7d8" stroke-opacity="0.56"/>
+		<text x="260" y="648" fill="#7ad8e7" font-size="13" font-weight="760" letter-spacing="1.5">LOCAL ADAPTERS</text>
+		<text x="260" y="682" fill="#f4f0ec" font-size="20" font-weight="700">Tauri commands · IndexedDB / Dexie</text>
+		<text x="260" y="706" fill="#aaa7a5" font-size="14">Desktop and browser-backed state</text>
+
+		<rect x="862" y="610" width="512" height="112" rx="22" fill="#202126" stroke="#a58aff" stroke-opacity="0.56"/>
+		<text x="896" y="648" fill="#beaaff" font-size="13" font-weight="760" letter-spacing="1.5">REMOTE SERVICES</text>
+		<text x="896" y="682" fill="#f4f0ec" font-size="20" font-weight="700">packages/api · apps/backend</text>
+		<text x="896" y="706" fill="#aaa7a5" font-size="14">Local · Docker Compose · Kubernetes · AWS</text>
+	</g>
+
+	<!-- Core package groups -->
+	<path d="M482 722V758H800M1118 722V758H800M800 758V782" fill="none" stroke="#ff7652" stroke-width="2.7" marker-end="url(#arrow-orange)"/>
+	<text x="88" y="802" fill="#8e909a" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="13" font-weight="760" letter-spacing="2">RUST WORKSPACE</text>
+	<g font-family="Inter, ui-sans-serif, system-ui, sans-serif" filter="url(#shadow)">
+		<rect x="88" y="824" width="220" height="104" rx="19" fill="#202126" stroke="#ff7652" stroke-opacity="0.58"/>
+		<text x="112" y="859" fill="#f4f0ec" font-size="18" font-weight="700">core</text>
+		<text x="112" y="886" fill="#aaa7a5" font-size="13">Boards · state</text>
+		<text x="112" y="907" fill="#aaa7a5" font-size="13">execution context</text>
+
+		<rect x="328" y="824" width="220" height="104" rx="19" fill="#202126" stroke="#4fd2a0" stroke-opacity="0.54"/>
+		<text x="352" y="859" fill="#f4f0ec" font-size="18" font-weight="700">catalog/*</text>
+		<text x="352" y="886" fill="#aaa7a5" font-size="13">Typed node</text>
+		<text x="352" y="907" fill="#aaa7a5" font-size="13">implementations</text>
+
+		<rect x="568" y="824" width="220" height="104" rx="19" fill="#202126" stroke="#59c7d8" stroke-opacity="0.54"/>
+		<text x="592" y="859" fill="#f4f0ec" font-size="18" font-weight="700">executor</text>
+		<text x="592" y="886" fill="#aaa7a5" font-size="13">Environment-neutral</text>
+		<text x="592" y="907" fill="#aaa7a5" font-size="13">remote runtime</text>
+
+		<rect x="808" y="824" width="220" height="104" rx="19" fill="#202126" stroke="#a58aff" stroke-opacity="0.56"/>
+		<text x="832" y="859" fill="#f4f0ec" font-size="18" font-weight="700">compiler · wasm</text>
+		<text x="832" y="886" fill="#aaa7a5" font-size="13">Compilation and</text>
+		<text x="832" y="907" fill="#aaa7a5" font-size="13">custom-node runtime</text>
+
+		<rect x="1048" y="824" width="220" height="104" rx="19" fill="#202126" stroke="#f1b35f" stroke-opacity="0.54"/>
+		<text x="1072" y="859" fill="#f4f0ec" font-size="18" font-weight="700">storage · sinks</text>
+		<text x="1072" y="886" fill="#aaa7a5" font-size="13">Files · events</text>
+		<text x="1072" y="907" fill="#aaa7a5" font-size="13">secrets · providers</text>
+
+		<rect x="1288" y="824" width="220" height="104" rx="19" fill="#202126" stroke="#8b8d96" stroke-opacity="0.6"/>
+		<text x="1312" y="859" fill="#f4f0ec" font-size="18" font-weight="700">types · schema · ast</text>
+		<text x="1312" y="886" fill="#aaa7a5" font-size="13">Shared contracts and</text>
+		<text x="1312" y="907" fill="#aaa7a5" font-size="13">FlowScript model</text>
+	</g>
+
+	<text x="88" y="958" fill="#8e909a" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15">Grouped by responsibility; see the workspace manifests for the complete package and deployment matrix.</text>
+</svg>

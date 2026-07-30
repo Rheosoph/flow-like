@@ -4,7 +4,7 @@ import { AlertTriangleIcon, CheckIcon, WrenchIcon } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../hooks";
-import { RolePermissions } from "../../../lib";
+import { RolePermissions } from "../../../lib/permission/role-permission";
 import { useBackend } from "../../../state/backend-state";
 import type { IBackendRole } from "../../../state/backend-state/types";
 import { Alert, AlertDescription, AlertTitle } from "../../ui/alert";

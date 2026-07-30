@@ -1,605 +1,153 @@
 ---
 title: API Integrations
-description: Connect to REST APIs, webhooks, and 300+ built-in platform integrations
+description: Connect Flow-Like workflows to HTTP APIs, webhooks, provider services, and MCP servers
 sidebar:
   order: 1
 ---
 
-Flow-Like provides comprehensive API integration capabilities—from raw HTTP requests to 300+ pre-built platform connectors for GitHub, Slack, Notion, Microsoft 365, Google Workspace, and more.
+Flow-Like can call raw HTTP APIs, receive event-driven input, and use provider-specific nodes for common services. Keep authentication, request construction, response validation, and failure handling visible in the workflow.
 
-## HTTP Requests
+![A Flow-Like API workflow from trigger through a typed response](../../../../assets/APIIntegrationsOverview.svg)
 
-### Make Any API Call
+## Choose an integration path
 
-```
-Make Request
-├── URL: "https://api.example.com/users"
-├── Method: GET
-├── Headers: {"Authorization": "Bearer {token}"}
-└── Body: (optional)
-    │
-    ▼
-API Call (Fetch)
-    │
-    ▼
-Response
-├── Status: 200
-├── Headers: {...}
-└── Body: [{user data}]
-```
+| Need | Recommended path |
+|------|------------------|
+| Call a REST or GraphQL endpoint | Build an HTTP request and run **API Call** |
+| Reuse a supported service operation | Use the provider's typed nodes |
+| Receive an external event | Expose an app event or webhook entry point |
+| Stream a long response | Use **Streaming API Call** |
+| Download a remote file | Use **HTTP Download** |
+| Let an AI workflow call external tools | Connect an MCP server |
 
-### Request Building
+Provider coverage changes as packages evolve. Search the [node catalog](/nodes/overview/) for the service and operation you need instead of relying on a fixed connector count.
 
-Build requests step by step:
+## Build and send HTTP requests
 
-```
-Make Request
-    │
-    ▼
-Set URL ("https://api.example.com/orders")
-    │
-    ▼
-Set Method (POST)
-    │
-    ▼
-Set Header ("Content-Type", "application/json")
-    │
-    ▼
-Set Bearer Auth (api_key)
-    │
-    ▼
-Set Struct Body ({ customer_id: 123, items: [...] })
-    │
-    ▼
-API Call ──▶ Response
-```
+The HTTP nodes separate request construction from execution. That makes the URL, method, headers, authentication, body, and timeout policy inspectable before the network call runs.
 
-### Response Handling
+| Stage | Useful nodes |
+|-------|--------------|
+| Create | [Make Request](/nodes/web/api/request/http-make-request/) |
+| Address | [Set Url](/nodes/web/api/request/http-set-url/), [Set Method](/nodes/web/api/request/http-set-method/) |
+| Headers | [Set Header](/nodes/web/api/request/http-set-header/), [Set Headers](/nodes/web/api/request/http-set-headers/) |
+| Authentication | [Set Bearer Auth](/nodes/web/api/request/http-set-bearer-auth/) |
+| Body | [Set Struct Body](/nodes/web/api/request/http-set-struct-body/), [Set String Body](/nodes/web/api/request/http-set-string-body/), [Set Form Body](/nodes/web/api/request/http-set-form-body/) |
+| Execute | [API Call](/nodes/web/api/http-fetch/) or [Streaming API Call](/nodes/web/api/streaming-http-fetch/) |
 
-Parse responses based on content type:
+A typical JSON request uses this sequence:
 
-```
-API Call Response
-    │
-    ├──▶ To Struct (JSON) ──▶ Typed data object
-    ├──▶ To Text ──▶ Raw string
-    ├──▶ To Bytes ──▶ Binary data
-    │
-    ├──▶ Get Status ──▶ 200
-    ├──▶ Is Success ──▶ true
-    └──▶ Get Header ("Content-Type") ──▶ "application/json"
+1. Create the request.
+2. Set the URL and HTTP method.
+3. Add the content type and authentication.
+4. Attach a structured body.
+5. Execute the request.
+6. validate the status before parsing or storing the response.
+
+For example, the structured body can be a regular JSON-compatible value:
+
+```json
+{
+  "customer_id": 123,
+  "items": [
+    {
+      "sku": "FLOW-001",
+      "quantity": 2
+    }
+  ]
+}
 ```
 
-### Streaming Responses
+### Authentication
 
-Handle large or streaming responses:
+Use the narrowest authentication mechanism supported by the service:
 
-```
-Streaming API Call
-├── URL: "https://api.openai.com/v1/chat/completions"
-├── stream: true
-└── Handler: process each chunk
-```
+| Method | Guidance |
+|--------|----------|
+| Bearer token | Read the token from a Flow-Like secret and apply **Set Bearer Auth** |
+| API key header | Read the key from a secret and apply **Set Header** |
+| OAuth provider | Configure the provider connection and use its typed nodes |
+| Basic or custom scheme | Construct the required header from secret-backed values |
 
-### File Downloads
+Do not paste credentials into request examples, board constants, logs, or screenshots. Keep request-building examples focused on field names and retrieve the actual credential at runtime.
 
-Download files from URLs:
+## Validate and parse responses
 
-```
-HTTP Download
-├── URL: "https://example.com/report.pdf"
-└── Path: /downloads/report.pdf
-    │
-    ▼
-File saved to path
-```
+Treat status validation and body parsing as separate steps. The response node family exposes:
 
-## Authentication Methods
+| Check or conversion | Node |
+|---------------------|------|
+| Status code | [Get Status Code](/nodes/web/api/response/http-response-get-status/) |
+| Success range | [Is Success](/nodes/web/api/response/http-response-is-success/) |
+| One header | [Get Header](/nodes/web/api/response/http-response-get-header/) |
+| All headers | [Get Headers](/nodes/web/api/response/http-response-get-headers/) |
+| JSON body | [To Struct](/nodes/web/api/response/http-response-to-json/) |
+| Text body | [To Text](/nodes/web/api/response/http-response-to-text/) |
+| Binary body | [To Bytes](/nodes/web/api/response/http-response-to-bytes/) |
 
-### Bearer Token
+Route unsuccessful responses into an explicit error path. Include enough context to diagnose the request, but redact authorization headers and sensitive response fields before logging.
 
-```
-Set Bearer Auth (token)
-    │
-    ▼
-Header: "Authorization: Bearer {token}"
-```
+### Reliability checklist
 
-### API Key in Header
+- Set a timeout appropriate to the service.
+- Retry only transient failures and rate limits; do not retry every `4xx` response.
+- Make write operations idempotent when the API supports idempotency keys.
+- Preserve the status and a safe response excerpt in the error path.
+- Validate required fields after parsing JSON.
+- Batch or paginate list operations instead of assuming one response contains every record.
 
-```
-Set Header ("X-API-Key", api_key)
-```
+## Provider integrations
 
-### Basic Auth
+The catalog includes typed nodes for services such as GitHub, Microsoft 365, Google Workspace, Notion, Atlassian, and Databricks. Exact operations differ by provider and package version.
 
-```
-Set Header ("Authorization", "Basic " + base64(user:pass))
-```
+| Provider family | Typical operations |
+|-----------------|--------------------|
+| GitHub | repositories, issues, pull requests, files, actions, releases |
+| Microsoft 365 | OneDrive, SharePoint, Outlook, Planner, To Do |
+| Google Workspace | Drive, Gmail, Sheets, Slides, Meet, Calendar |
+| Notion | databases, pages, search, files |
+| Atlassian | Jira issues and attachments, Confluence pages and content |
+| Data platforms | jobs, SQL execution, storage, and catalog operations |
+| Collaboration | Teams, email, calendars, files, and notifications |
 
-### OAuth 2.0
+Use a provider node when its typed inputs match the operation. Use the raw HTTP path when you need an endpoint or option that the package does not expose.
 
-Pre-built OAuth flows for major platforms:
+## Incoming events and webhooks
 
-```
-Google Provider (OAuth)
-├── Scopes: ["drive.readonly", "gmail.send"]
-└── Credentials from Secrets
-    │
-    ▼
-Authenticated requests to Google APIs
-```
+For an incoming webhook, design the board around a small, auditable boundary:
 
-## Built-in Integrations
+1. Accept the request through the appropriate app event.
+2. Verify the provider signature before trusting the body.
+3. Parse and validate the event schema.
+4. Branch on the event type.
+5. Make repeated delivery safe with the provider's event or idempotency identifier.
+6. Return promptly and move long-running work to an asynchronous path where appropriate.
 
-### GitHub
+See [App events](/apps/events/) for the app-side event model.
 
-Full GitHub API coverage with 35+ nodes:
+## Files, email, and MCP
 
-| Category | Nodes |
-|----------|-------|
-| **Repos** | List, Get, Search, Clone, Fork |
-| **Issues** | List, Get, Create, Update, Search, Comment |
-| **Pull Requests** | List, Get, Create, Merge, Review, Files |
-| **Files** | Get Contents, Create/Update, Delete, Download |
-| **Branches** | List, Get, Create, Delete |
-| **Commits** | List, Get, Compare |
-| **Actions** | List Workflows, Trigger, Get Runs, Cancel |
-| **Releases** | List, Get, Create |
+- [HTTP Download](/nodes/web/http-download/) writes a remote file through the workflow's file abstraction.
+- [Send Mail](/nodes/email/smtp/email-smtp-send/) sends email over an SMTP connection.
+- [MCP Local Server](/nodes/ai/github/copilot/mcp/copilot-mcp-local-server/) starts a configured local MCP process.
+- [MCP HTTP Server](/nodes/ai/github/copilot/mcp/copilot-mcp-http-server/) connects to an MCP endpoint over HTTP.
 
-**Example: Create issue on error**
-```
-Try
-    │
-    ▼
-Your workflow
-    │
-    └── Catch
-            │
-            ▼
-        GitHub Create Issue
-        ├── repo: "myorg/myrepo"
-        ├── title: "Workflow Error: {error_type}"
-        └── body: "Error details: {error_message}"
-```
+MCP tools can expand what an AI workflow is able to call. Review the server's tools, credentials, and data access as carefully as any other external integration.
 
-### Microsoft 365
+## Design checklist
 
-50+ nodes for Microsoft Graph API:
+- [ ] Authentication comes from secrets or a provider connection
+- [ ] Request timeout and retry behavior are explicit
+- [ ] Non-success responses have a dedicated path
+- [ ] Parsed responses are validated before downstream use
+- [ ] Logs redact tokens and sensitive payload fields
+- [ ] Pagination, batching, and rate limits are considered
+- [ ] Webhook signatures and replay behavior are handled
+- [ ] Provider-specific nodes are preferred when they improve type safety
 
-| Service | Capabilities |
-|---------|--------------|
-| **OneDrive** | List, Upload, Download, Share, Copy, Move |
-| **SharePoint** | Sites, Libraries, Files, Folders |
-| **Outlook** | Send, List, Read, Reply, Forward, Folders |
-| **To Do** | Lists, Tasks, Complete |
-| **Planner** | Plans, Buckets, Tasks |
-| **Teams** | (via Graph API) |
+## Related guides
 
-**Example: Save report to SharePoint**
-```
-Generate Report (data)
-    │
-    ▼
-Microsoft Provider (OAuth)
-    │
-    ▼
-SharePoint Upload File
-├── site_id: "contoso.sharepoint.com"
-├── library: "Documents"
-├── path: "/Reports/monthly.pdf"
-└── content: report_pdf
-```
-
-### Google Workspace
-
-30+ nodes for Google APIs:
-
-| Service | Capabilities |
-|---------|--------------|
-| **Drive** | List, Upload, Download, Delete, Share |
-| **Gmail** | Send, Draft, List Labels |
-| **Sheets** | Read, Write, Append |
-| **Slides** | Create, Add Slides, Export |
-| **Meet** | Create, Get Meetings |
-| **Calendar** | Events management |
-
-**Example: Upload to Drive and share**
-```
-Google Provider (OAuth)
-    │
-    ▼
-Drive Upload File
-├── file: report.pdf
-├── folder_id: "abc123"
-└── name: "Q4 Report.pdf"
-    │
-    ▼
-Get file_id
-    │
-    ▼
-Drive Share
-├── file_id: file_id
-├── email: "team@company.com"
-└── role: "reader"
-```
-
-### Notion
-
-Full Notion API integration:
-
-| Feature | Nodes |
-|---------|-------|
-| **Databases** | List, Get, Query |
-| **Pages** | Get, Create, Update |
-| **Search** | Search across workspace |
-
-**Example: Sync data to Notion**
-```
-SQL Query (get_customers)
-    │
-    ▼
-For Each customer
-    │
-    ▼
-Notion Create Page
-├── database_id: "customers_db"
-└── properties:
-    ├── Name: customer.name
-    ├── Email: customer.email
-    └── Status: customer.status
-```
-
-### Atlassian (Jira & Confluence)
-
-60+ nodes for Atlassian products:
-
-**Jira:**
-| Category | Nodes |
-|----------|-------|
-| **Issues** | Create, Get, Update, Delete, Search, Batch |
-| **Comments** | Add, List |
-| **Transitions** | Get, Execute |
-| **Sprints** | List, Create, Start, Complete |
-| **Boards** | List, Get, Config |
-| **Attachments** | Get, Download, Delete |
-
-**Confluence:**
-| Category | Nodes |
-|----------|-------|
-| **Spaces** | List |
-| **Pages** | Get, Create, Update, Delete |
-| **Search** | Search content |
-| **Comments** | Get, Add |
-| **Labels** | Get, Add, Remove |
-
-**Example: Auto-create Jira issues from form**
-```
-HTTP Event (POST /submit-bug)
-    │
-    ▼
-Jira Create Issue
-├── project: "BUGS"
-├── type: "Bug"
-├── summary: request.title
-├── description: request.description
-└── priority: request.priority
-    │
-    ▼
-Return { issue_key: "BUGS-123" }
-```
-
-### Databricks
-
-20+ nodes for data platform integration:
-
-| Category | Nodes |
-|----------|-------|
-| **Clusters** | List, Get, Start, Stop |
-| **Jobs** | List, Get, Run, Status |
-| **SQL** | Execute queries |
-| **DBFS** | List, Read, Write |
-| **Unity Catalog** | Catalogs, Schemas, Tables |
-
-### Discord & Telegram
-
-Messaging platform integrations:
-
-**Discord (25+ nodes):**
-- Send/edit/delete messages
-- Channel management
-- DMs, reactions, polls
-- Interactive components (buttons, menus)
-
-**Telegram (60+ nodes):**
-- Messages, media, files
-- Chats, forums, topics
-- Payments, games
-- Inline mode, commands
-
-**Example: Discord notification bot**
-```
-Scheduled Event (every hour)
-    │
-    ▼
-Check system metrics
-    │
-    ├── Alert condition? ──▶ Discord Send Message
-    │                        ├── channel_id: "alerts"
-    │                        └── content: "⚠️ High CPU: {value}%"
-    │
-    └── Normal ──▶ Done
-```
-
-### LinkedIn
-
-Post updates and share content:
-
-```
-LinkedIn Provider (OAuth)
-    │
-    ▼
-Share Text Post
-├── text: "Excited to announce our Q4 results!"
-└── visibility: "PUBLIC"
-```
-
-## Webhooks (HTTP Events)
-
-Receive incoming webhooks:
-
-```
-HTTP Event
-├── Method: POST
-├── Path: /webhooks/stripe
-└── Outputs: body, headers
-    │
-    ▼
-Verify Signature (headers.stripe-signature)
-    │
-    ▼
-Branch: event.type
-├── "payment_succeeded" ──▶ Process payment
-├── "subscription_created" ──▶ Provision access
-└── "invoice.paid" ──▶ Send receipt
-```
-
-## Email (SMTP/IMAP)
-
-### Send Emails
-
-```
-SMTP Connection
-├── host: "smtp.example.com"
-├── port: 587
-├── username: {from secrets}
-└── password: {from secrets}
-    │
-    ▼
-Send Mail
-├── to: "customer@example.com"
-├── subject: "Your order has shipped"
-├── body: email_content
-└── attachments: [tracking_pdf]
-```
-
-### Read Emails
-
-```
-IMAP Connection
-├── host: "imap.example.com"
-└── credentials: {from secrets}
-    │
-    ▼
-List Messages (folder: "INBOX", unread: true)
-    │
-    ▼
-For Each message
-    │
-    ├── Extract data
-    └── Process
-```
-
-## AI Provider APIs
-
-Pre-built integrations for 18+ AI providers:
-
-| Provider | Capabilities |
-|----------|--------------|
-| OpenAI | GPT-4, Embeddings, Vision |
-| Anthropic | Claude models |
-| Google | Gemini models |
-| Groq | Fast inference |
-| Ollama | Local models |
-| Cohere | Embeddings, Rerank |
-| Mistral | Open models |
-| Together AI | Open models |
-| Perplexity | Search + AI |
-| HuggingFace | Model hub |
-| VoyageAI | Embeddings |
-| xAI | Grok models |
-
-## MCP (Model Context Protocol)
-
-Connect to MCP servers for AI tools:
-
-```
-MCP Local Server
-├── command: "npx"
-├── args: ["-y", "@modelcontextprotocol/server-filesystem"]
-└── env: { "ROOT_PATH": "/data" }
-```
-
-```
-MCP HTTP Server
-├── url: "https://mcp.example.com"
-└── auth: Bearer token
-```
-
-## DataFusion External Sources
-
-Query external databases via SQL:
-
-```
-Create DataFusion Session
-    │
-    ▼
-Register PostgreSQL ("prod_db", connection_string)
-    │
-    ▼
-Register MySQL ("legacy_db", connection_string)
-    │
-    ▼
-SQL Query:
-"SELECT p.*, l.customer_name
- FROM prod_db.orders p
- JOIN legacy_db.customers l ON p.customer_id = l.id"
-```
-
-**Supported sources:**
-- PostgreSQL, MySQL, SQLite
-- ClickHouse, DuckDB, Oracle
-- Delta Lake, Iceberg
-- S3, Azure Blob, GCS
-
-## Patterns & Best Practices
-
-### 1. Centralize Authentication
-
-Create a dedicated board for each service:
-
-```
-Board: GitHubService
-├── Variables:
-│   └── provider: GitHubProvider (initialized once)
-│
-└── Quick Actions:
-    ├── CreateIssue (title, body)
-    ├── GetPullRequests (repo)
-    └── TriggerWorkflow (workflow_id)
-```
-
-### 2. Handle Rate Limits
-
-```
-Retry
-├── max_attempts: 3
-├── delay: 1000ms
-├── backoff: exponential
-└── retry_on: [429, 503]
-    │
-    ▼
-API Call
-```
-
-### 3. Validate Responses
-
-```
-API Call
-    │
-    ▼
-Is Success?
-├── Yes ──▶ To Struct ──▶ Process
-└── No ──▶ Get Status ──▶ Handle error
-```
-
-### 4. Use Webhooks Over Polling
-
-Instead of:
-```
-❌ Every 5 minutes: Check for new orders
-```
-
-Use:
-```
-✅ HTTP Event: Receive order webhook
-```
-
-### 5. Store Credentials Securely
-
-```
-Get Secret ("GITHUB_PAT")
-    │
-    ▼
-GitHub Provider (token)
-```
-
-Never hardcode tokens in workflows.
-
-### 6. Log API Calls
-
-```
-Console Log: "Calling {api_name} with {params}"
-    │
-    ▼
-API Call
-    │
-    ▼
-Console Log: "Response: {status} in {duration}ms"
-```
-
-## Example: Multi-Platform Sync
-
-Sync data across platforms:
-
-```
-HTTP Event (POST /customer-created)
-    │
-    ├──▶ Notion Create Page (customers database)
-    │
-    ├──▶ Jira Create Issue (onboarding task)
-    │
-    ├──▶ Slack Send Message (sales channel)
-    │
-    └──▶ HubSpot Create Contact (CRM)
-```
-
-## Example: Automated Reporting
-
-Generate and distribute reports:
-
-```
-Scheduled Event (Monday 9am)
-    │
-    ▼
-DataFusion Query (weekly metrics)
-    │
-    ▼
-Generate Charts (Nivo)
-    │
-    ▼
-Render Template (report.md)
-    │
-    ▼
-Convert to PDF
-    │
-    ├──▶ SharePoint Upload
-    │
-    ├──▶ Slack Post (with PDF)
-    │
-    └──▶ Email to stakeholders
-```
-
-## FAQ
-
-### How do I add a new API?
-Use the HTTP Request nodes for any REST API. Build request, set auth, call, parse response.
-
-### Can I use GraphQL?
-Yes—use HTTP Request with POST method, set body to your GraphQL query.
-
-### What about SOAP APIs?
-Use HTTP Request with appropriate XML body and headers.
-
-### How do I handle pagination?
-Loop with While node, updating page/cursor until no more results.
-
-### Can I cache API responses?
-Store results in Variables or Database, check before calling API.
-
-## Next Steps
-
-- **[Building Chatbots](/topics/chatbots/overview/)** – Chat integrations
-- **[Data Pipelines](/topics/data-pipelines/overview/)** – ETL with APIs
-- **[Building Internal Tools](/topics/internal-tools/overview/)** – UIs for API data
-- **[GenAI](/topics/genai/overview/)** – AI API integrations
+- [App events](/apps/events/)
+- [Data pipelines](/topics/data-pipelines/overview/)
+- [Document processing](/topics/document-processing/overview/)
+- [Node catalog](/nodes/overview/)

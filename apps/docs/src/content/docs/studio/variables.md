@@ -5,43 +5,64 @@ sidebar:
   order: 40
 ---
 
-Variables act as shared, in-memory storage at the board level. Typical scenarios for using variables include:
-- Configuring the name of a database and reusing it across multiple flows (e.g., for ingestion and retrieval).
-- Recursively scraping a website for outgoing links and pushing each link into an array.
-- During each *While Loop* iteration, evaluating whether a certain condition is still *true*. The condition is set somewhere downstream in the *While Loop* leaf branch.
+Variables are typed values shared by the nodes in one Flow. Each run receives
+its own in-memory variable state.
 
-All flows within a board can read and write variables through the *Get Variable* and *Set Variable* nodes:
-- To *read* a variable, either search the node catalog for *Get variable_name* or drag and drop the variable from the variables menu onto the canvas.
-- To *write* a variable, either search for *Set variable_name* or drag it from the variables menu.
+Use a variable when several parts of a Flow need the same value or when a value
+changes during execution—for example, an environment-specific table name, an
+array accumulated in a loop, or a Boolean loop condition.
+
+Nodes read and write variables through generated **Get _variable_** and
+**Set _variable_** nodes:
+
+- Search for the generated node in the Node Catalog.
+- Or drag a variable from the variables panel onto the canvas and choose the
+  read or write operation.
 
 ![A screenshot showing how to manage variables in Flow-Like Desktop and integrate them in flows](../../../assets/WorkingWithVariables.webp)
 
-To specify a variable *type*, open the variables menu, click the variable you want to configure, and select the type from the drop-down list:
+To set a variable's data type, open the variables panel, select the variable,
+and choose its type:
+
 ![A screenshot showing how to set the type of a variable](../../../assets/SetVariableType.webp)
 
-To specify a variable *value* (*Single*, *Array*, *Set*, or *Map*), click the pill-shaped color indicator next to *Variable Types*:
+Choose a value shape—**Single**, **Array**, **Set**, or **Map**—and provide a
+default when the variable is neither exposed nor configured at runtime:
+
 ![A screenshot showing how to set the value of a variable](../../../assets/SetVariableValue.webp)
 
 ## Variable Settings
 
-Each variable has additional settings you can configure:
-
-### Editable
-When enabled, the variable can be modified by *Set Variable* nodes during execution.
-
 ### Exposed
-When enabled, the variable becomes an input parameter when the board is used as a layer or triggered by an event.
+
+An exposed variable appears in the App configuration and can accept a value
+from a compatible Event or invocation. If no external value is supplied, the
+Flow uses its configured default.
 
 ### Secret
-When enabled, the variable's value is masked in the UI. Useful for sensitive data like API keys. Combine with **Runtime Configured** for maximum security.
+
+A secret variable is masked in editors and treated as sensitive by Flow-Like's
+authoring and diagnostic paths. Configure the actual value through the trusted
+Runtime Variables screen instead of placing it in FlowScript or a normal
+default.
 
 ### Runtime Configured
-When enabled, the variable's value is **not stored in the flow definition**. Instead, you configure it separately in your app's [Runtime Variables settings](/apps/runtime-variables/). This is the recommended approach for:
-- API keys and tokens
-- Passwords and secrets
-- Device-specific configuration
-- Values that differ between team members
+
+A runtime-configured value is not stored in the Flow definition. Configure it
+per user and device in the App's
+[Runtime Variables settings](/apps/runtime-variables/). Use this for:
+
+- API keys, tokens, and passwords;
+- local paths and device-specific settings;
+- endpoints or identifiers that differ between environments;
+- any value each runner should supply independently.
 
 :::tip[Keeping Secrets Safe]
-For sensitive data, enable both **Secret** and **Runtime Configured**. This ensures the value is stored locally on your device, never synced to the cloud, and never sent during remote execution. Learn more in the [Runtime Variables guide](/apps/runtime-variables/).
+For a credential, enable both **Secret** and **Runtime Configured**. The value
+is then held in local application storage and excluded from remote execution
+payloads. A remote Flow that needs a credential must use the server-side
+credential mechanism for that deployment.
+
+See [Runtime Variables](/apps/runtime-variables/) for the storage and execution
+rules.
 :::

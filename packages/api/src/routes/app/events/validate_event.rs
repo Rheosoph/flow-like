@@ -41,7 +41,7 @@ pub struct VersionQuery {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/events/{event_id}/validate",
-    skip(state, user)
+    skip(state, user, query)
 )]
 pub async fn validate_event(
     State(state): State<AppState>,

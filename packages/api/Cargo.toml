@@ -54,6 +54,7 @@ image.workspace = true
 webp.workspace = true
 ipnetwork = "0.21.1"
 ed25519-dalek = "2.2"
+sourcemap.workspace = true
 
 # ---- AWS dependencies ----
 aws-config = {workspace = true, optional=true}

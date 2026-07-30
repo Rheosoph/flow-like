@@ -36,7 +36,7 @@ pub struct ListFilesPayload {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/data/list", skip(state, user))]
+#[tracing::instrument(name = "POST /apps/{app_id}/data/list", skip(state, user, payload))]
 pub async fn list_files(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -98,7 +98,10 @@ pub async fn list_files(
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/data/user/list", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/data/user/list",
+    skip(state, user, payload)
+)]
 pub async fn list_user_files(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

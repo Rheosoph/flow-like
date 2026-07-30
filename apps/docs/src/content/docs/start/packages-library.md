@@ -1,148 +1,117 @@
 ---
 title: Package Library
-description: Manage your installed WASM packages
+description: Manage installed packages and local package projects
 sidebar:
   order: 29
 ---
 
-The Package Library shows all WASM packages installed on your system. From here you can update packages, uninstall ones you no longer need, and publish your own packages.
+Flow-Like Desktop separates packages into three related scopes:
 
-## Accessing Your Library
+| Scope | Where to manage it | Purpose |
+| --- | --- | --- |
+| Registry | **Explore → Packages** | Discover package versions and inspect their declared capabilities |
+| Device | **Library → Packages** | Manage packages installed on this computer |
+| App | Open an App → **Packages** | Declare the package versions that belong to that App |
 
-Navigate to **Library → Packages** in the sidebar to view your installed packages.
+This separation lets a device cache several packages while each App keeps an
+explicit dependency set.
 
-## Installed Packages View
+## Manage installed packages
 
-Each installed package shows:
+Open **Library → Packages**. The **Installed Packages** page shows each
+package's:
 
-- **Package name and icon**
-- **Current version** installed
-- **Update available** indicator (if a newer version exists)
-- **Action buttons** for update and uninstall
+- name, description, keywords, and installed version;
+- local compile status where available;
+- newer registry version, when one is available;
+- **Details**, **Update**, and **Uninstall** actions.
 
-## Updating Packages
+Search filters the installed collection by name, description, or keyword.
+Select **Update All** when you have reviewed the listed updates and want to
+apply them to the device.
 
-### Update Single Package
-
-1. Find the package with an update available
-2. Click the **Update** button
-3. Wait for the new version to download
-
-### Update All Packages
-
-If you have multiple packages with updates available:
-
-1. Click the **Update All** button at the top
-2. All outdated packages will update sequentially
-
-:::tip
-Keep packages updated to get the latest features, bug fixes, and security patches.
+:::note[Installed version and App version]
+Updating the device copy does not automatically rewrite every App's dependency
+declaration. Open the App's **Packages** screen to review its linked version and
+automatic-update setting.
 :::
 
-## Uninstalling Packages
+## Link a package to an App
 
-1. Find the package you want to remove
-2. Click the **Uninstall** button
-3. Confirm the removal
+1. Open the App.
+2. Select **Packages** in its navigation.
+3. Select **Add Package**.
+4. Choose a package and version.
+5. For an online App, decide whether that dependency should update
+   automatically.
 
-After uninstalling:
-- The package's nodes will no longer appear in the workflow editor
-- Any workflows using those nodes will show errors
-- You can reinstall the package anytime from the Store
+The App screen lists nodes contributed by each linked package. Removing a
+package from the App removes that dependency and its nodes from the App
+catalog; it does not necessarily uninstall the package from the device.
 
-## Publishing Your Own Package
+## Develop a package locally
 
-Click **Publish Package** to open the publishing wizard:
+Use the Desktop **Developer** workspace for source projects:
 
-### Step 1: Upload
+1. Create a project from a supported language template or add an existing
+   package project.
+2. Build the project and inspect its `flow-like.toml` manifest.
+3. Select **Load into Catalog** to compile and test its nodes locally.
+4. Reload it after the WASM output changes.
+5. Use **Debug & Test** before publishing.
 
-- Click **Select File** or drag your `.wasm` file
-- The file will be validated automatically
-- Maximum file size: 50MB
+The developer-loaded package is a local development source. It is distinct
+from a published registry version and can be iterated without submitting each
+build.
 
-### Step 2: Manifest
+## Publish from Developer
 
-Review and edit your package metadata:
+Publishing starts from a package project in **Developer**, not from the
+Installed Packages list:
 
-| Field | Description |
-|-------|-------------|
-| **ID** | Unique identifier (e.g., `my-org.my-package`) |
-| **Name** | Display name |
-| **Version** | Semantic version (e.g., `1.0.0`) |
-| **Description** | What your package does |
-| **Author** | Your name or organization |
-| **License** | Open source license (MIT, Apache-2.0, etc.) |
-| **Repository** | GitHub repository URL (optional) |
-| **Homepage** | Project website (optional) |
-| **Keywords** | Search terms to help users find your package |
+1. Open the project's **Publish to Registry** action.
+2. Confirm the package ID and version.
+3. Review the manifest metadata.
+4. Review resource tiers and permissions.
+5. Build and publish the release artifact.
 
-### Step 3: Permissions
+The publisher checks package-ID and version availability, locates the release
+WASM artifact, uploads it, and creates the registry version. A new package is
+published privately first. Manage its metadata and request publication review
+from its registry detail page when it is ready.
 
-Configure what system access your package needs:
+Declared permissions currently cover:
 
-- **File System Access**: Can read/write files
-- **Network Access**: Can make HTTP requests
-- **Environment Access**: Can read environment variables
-- **Process Access**: Can spawn processes (rarely needed)
+- memory and execution-time tiers;
+- HTTP, WebSocket, TCP, UDP, and DNS access, including allowed HTTP hosts;
+- node-scoped and user-scoped storage;
+- OAuth scopes;
+- variables, cache, streaming, A2UI, and model capabilities.
 
-:::caution
-Only request permissions your package actually uses. Packages requesting unnecessary permissions may be declined during review.
-:::
+Request only the capabilities the nodes actually use. Package consumers see
+this declaration before installation.
 
-### Step 4: Review & Submit
+## Publication states
 
-- Review all information
-- Accept the terms of service
-- Click **Publish Package**
+A package or version can be private, pending review, active, deprecated,
+rejected, disabled, or yanked depending on ownership and review state. The
+registry detail page is the source of truth for the current state and includes
+publication-review history for maintainers.
 
-After submission, your package enters the review queue. You'll be notified when it's approved or if changes are needed.
+Do not promise a review date to users. Respond to the review record, publish a
+new version when code changes are required, and keep previous versions
+available only when they remain safe to use.
 
-## Package Status
+## Before uninstalling
 
-Your published packages can have these statuses:
-
-| Status | Meaning |
-|--------|---------|
-| **Pending Review** | Waiting for admin approval |
-| **Active** | Approved and available in the store |
-| **Changes Requested** | Reviewer requested modifications |
-| **Deprecated** | Still works but not recommended |
-| **Disabled** | Removed from the registry |
-
-## Local Development
-
-For testing packages during development:
-
-1. Build your WASM module locally
-2. In Library → Packages, use **Install from file**
-3. Select your local `.wasm` file
-4. Test the package in your workflows
-5. When ready, publish to the registry
-
-This lets you iterate quickly without going through review for every change.
-
-## Troubleshooting
-
-### Upload Fails
-
-- Ensure the file is a valid `.wasm` module
-- Check file size is under 50MB
-- Verify your internet connection
-
-### Manifest Errors
-
-- Package ID must be in `org.package-name` format
-- Version must follow semver (e.g., `1.0.0`)
-- Description is required
-
-### Review Takes Too Long
-
-- Most packages are reviewed within 48-72 hours
-- Complex packages may take longer
-- Contact support if waiting more than a week
+Check the Apps that link the package. Uninstalling its device copy can make
+those nodes unavailable for local editing or execution until the required
+version is installed again. The App dependency remains until you remove it
+from that App.
 
 ## Next Steps
 
-- [Package Store](/start/packages-store) - Browse and install packages
-- [Creating WASM Nodes](/dev/wasm-nodes/overview) - Build custom nodes
-- [Governance & Approval](/dev/wasm-nodes/registry#governance--approval-process) - Learn about the review process
+- [Package Store](/start/packages-store/) — browse and install packages
+- [Creating WASM Nodes](/dev/wasm-nodes/overview/) — build custom nodes
+- [Registry and Governance](/dev/wasm-nodes/registry/) — publication and
+  review

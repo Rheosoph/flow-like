@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title desc">
+  <title id="title">White-label deployment modes</title>
+  <desc id="desc">A comparison of embedded, headless, and hybrid Flow-Like product architectures.</desc>
+  <rect width="1600" height="900" fill="#090b11"/>
+  <circle cx="1472" cy="86" r="148" fill="#17111d"/>
+  <circle cx="92" cy="836" r="178" fill="#101722"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+    <text x="72" y="76" fill="#ff8268" font-size="19" font-weight="700" letter-spacing="3">WHITE-LABEL ARCHITECTURE</text>
+    <text x="72" y="130" fill="#f8fafc" font-size="42" font-weight="750">Choose the surface your customers see</text>
+    <text x="72" y="166" fill="#9ca3af" font-size="21">One automation platform, three ways to integrate it into your product.</text>
+
+    <g>
+      <rect x="72" y="210" width="464" height="500" rx="28" fill="#11151d" stroke="#343b49" stroke-width="2"/>
+      <rect x="100" y="238" width="116" height="34" rx="17" fill="#42231f"/>
+      <text x="158" y="261" text-anchor="middle" fill="#ff927c" font-size="15" font-weight="700" letter-spacing="1.5">EMBEDDED</text>
+      <text x="100" y="316" fill="#f8fafc" font-size="30" font-weight="720">Inside your product</text>
+      <text x="100" y="350" fill="#a8b0bd" font-size="18">Visual authoring without leaving your UI</text>
+
+      <rect x="104" y="392" width="400" height="214" rx="20" fill="#171c26" stroke="#465062" stroke-width="2"/>
+      <circle cx="130" cy="419" r="6" fill="#ff8268"/>
+      <circle cx="150" cy="419" r="6" fill="#fbbf24"/>
+      <circle cx="170" cy="419" r="6" fill="#34d399"/>
+      <text x="200" y="425" fill="#cbd5e1" font-size="15" font-weight="650">YOUR PRODUCT</text>
+      <rect x="132" y="456" width="344" height="118" rx="16" fill="#251f2e" stroke="#a78bfa" stroke-width="2"/>
+      <rect x="156" y="480" width="74" height="70" rx="11" fill="#322740"/>
+      <path d="M174 520 L193 497 L212 520 L193 541 Z" fill="#ff8268"/>
+      <text x="252" y="509" fill="#f5f3ff" font-size="18" font-weight="700">Flow-Like workspace</text>
+      <text x="252" y="538" fill="#b5a9c9" font-size="15">iframe or web component</text>
+      <text x="100" y="656" fill="#d8dee8" font-size="17">Parent shell owns navigation and session</text>
+      <text x="100" y="682" fill="#8f99a8" font-size="15">Events connect the host and embedded surface</text>
+    </g>
+
+    <g>
+      <rect x="568" y="210" width="464" height="500" rx="28" fill="#11151d" stroke="#343b49" stroke-width="2"/>
+      <rect x="596" y="238" width="110" height="34" rx="17" fill="#15342c"/>
+      <text x="651" y="261" text-anchor="middle" fill="#5ee3b3" font-size="15" font-weight="700" letter-spacing="1.5">HEADLESS</text>
+      <text x="596" y="316" fill="#f8fafc" font-size="30" font-weight="720">Behind your interface</text>
+      <text x="596" y="350" fill="#a8b0bd" font-size="18">Custom UI or automation with no frontend</text>
+
+      <rect x="604" y="404" width="116" height="78" rx="15" fill="#17202b" stroke="#4b6177" stroke-width="2"/>
+      <text x="662" y="436" text-anchor="middle" fill="#dbeafe" font-size="16" font-weight="700">YOUR UI</text>
+      <text x="662" y="459" text-anchor="middle" fill="#8ba5bd" font-size="13">or system</text>
+      <path d="M724 443 H760" stroke="#64748b" stroke-width="3"/>
+      <path d="M760 443 L748 435 V451 Z" fill="#64748b"/>
+      <rect x="768" y="404" width="112" height="78" rx="15" fill="#1c2925" stroke="#34d399" stroke-width="2"/>
+      <text x="824" y="436" text-anchor="middle" fill="#d1fae5" font-size="16" font-weight="700">API</text>
+      <text x="824" y="459" text-anchor="middle" fill="#85baa8" font-size="13">REST + WS</text>
+      <path d="M884 443 H920" stroke="#64748b" stroke-width="3"/>
+      <path d="M920 443 L908 435 V451 Z" fill="#64748b"/>
+      <rect x="928" y="404" width="76" height="78" rx="15" fill="#292117" stroke="#fbbf24" stroke-width="2"/>
+      <path d="M949 438 H983 M955 427 L949 438 L955 449 M977 427 L983 438 L977 449" fill="none" stroke="#fde68a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="966" y="469" text-anchor="middle" fill="#c9ad65" font-size="12">RUN</text>
+      <rect x="612" y="526" width="392" height="62" rx="14" fill="#171c26"/>
+      <text x="808" y="552" text-anchor="middle" fill="#e2e8f0" font-size="16" font-weight="650">Flow-Like engine and services</text>
+      <text x="808" y="576" text-anchor="middle" fill="#8f99a8" font-size="14">Programmatic management and execution</text>
+      <text x="596" y="656" fill="#d8dee8" font-size="17">Your product defines every customer surface</text>
+      <text x="596" y="682" fill="#8f99a8" font-size="15">The automation layer stays behind the API</text>
+    </g>
+
+    <g>
+      <rect x="1064" y="210" width="464" height="500" rx="28" fill="#11151d" stroke="#343b49" stroke-width="2"/>
+      <rect x="1092" y="238" width="102" height="34" rx="17" fill="#2b213d"/>
+      <text x="1143" y="261" text-anchor="middle" fill="#c4a7ff" font-size="15" font-weight="700" letter-spacing="1.5">HYBRID</text>
+      <text x="1092" y="316" fill="#f8fafc" font-size="30" font-weight="720">Builder plus API</text>
+      <text x="1092" y="350" fill="#a8b0bd" font-size="18">Different surfaces for different audiences</text>
+
+      <rect x="1100" y="392" width="400" height="92" rx="17" fill="#251f2e" stroke="#a78bfa" stroke-width="2"/>
+      <rect x="1124" y="416" width="46" height="44" rx="10" fill="#392b4a"/>
+      <path d="M1136 446 L1147 429 L1158 446 Z" fill="#ff8268"/>
+      <text x="1190" y="429" fill="#f5f3ff" font-size="17" font-weight="700">Branded visual builder</text>
+      <text x="1190" y="454" fill="#b5a9c9" font-size="14">for workflow authors</text>
+      <path d="M1300 486 V516" stroke="#64748b" stroke-width="3"/>
+      <path d="M1300 516 L1292 504 H1308 Z" fill="#64748b"/>
+      <rect x="1158" y="524" width="284" height="56" rx="14" fill="#1c2925" stroke="#34d399" stroke-width="2"/>
+      <text x="1300" y="559" text-anchor="middle" fill="#d1fae5" font-size="17" font-weight="700">API-driven execution</text>
+      <path d="M1300 582 V610" stroke="#64748b" stroke-width="3"/>
+      <path d="M1300 610 L1292 598 H1308 Z" fill="#64748b"/>
+      <rect x="1100" y="618" width="188" height="56" rx="14" fill="#17202b" stroke="#4b6177" stroke-width="2"/>
+      <text x="1194" y="652" text-anchor="middle" fill="#dbeafe" font-size="15" font-weight="700">CUSTOM UI</text>
+      <rect x="1312" y="618" width="188" height="56" rx="14" fill="#292117" stroke="#fbbf24" stroke-width="2"/>
+      <text x="1406" y="652" text-anchor="middle" fill="#fef3c7" font-size="15" font-weight="700">DASHBOARDS</text>
+      <text x="1092" y="698" fill="#8f99a8" font-size="15">Shared automation, purpose-built experiences</text>
+    </g>
+
+    <rect x="72" y="758" width="1456" height="92" rx="22" fill="#151922" stroke="#343b49" stroke-width="2"/>
+    <rect x="96" y="782" width="44" height="44" rx="12" fill="#42231f"/>
+    <path d="M118 792 V811 M118 821 V823" stroke="#ff927c" stroke-width="4" stroke-linecap="round"/>
+    <text x="162" y="796" fill="#f1f5f9" font-size="18" font-weight="700">Architecture is only one part of the scope.</text>
+    <text x="162" y="824" fill="#9ca3af" font-size="16">Identity, isolation, branding, operations, support, and commercial rights are agreed for your product.</text>
+  </g>
+</svg>

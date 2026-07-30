@@ -90,7 +90,10 @@ pub struct CreateNotificationResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "POST /apps/{app_id}/notifications/create", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /apps/{app_id}/notifications/create",
+    skip(state, user, params)
+)]
 pub async fn create_notification(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

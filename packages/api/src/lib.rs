@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    middleware::from_fn_with_state,
+    middleware::{from_fn, from_fn_with_state},
     routing::{get, post},
 };
 use error::InternalError;
@@ -36,6 +36,7 @@ pub mod publication;
 pub mod push_notifications;
 pub mod state;
 pub mod storage_config;
+pub mod telemetry;
 pub mod usage_accounting;
 pub mod usage_limits;
 pub mod user_management;
@@ -107,11 +108,13 @@ pub fn construct_router(state: Arc<State>) -> Router {
         .nest("/solution", routes::solution::routes())
         .nest("/execution", routes::execution::routes())
         .nest("/interaction", routes::interaction::routes())
+        .nest("/maintenance", routes::maintenance::routes())
         .nest("/usage", routes::usage::routes())
         .nest("/registry", routes::registry::routes())
         .nest("/audit", routes::audit::routes())
         .nest("/sink", routes::sink::routes())
         .nest("/aliases", routes::alias::routes())
+        .nest("/telemetry", routes::telemetry::routes())
         .route("/webhook/stripe", post(routes::webhook::stripe_webhook))
         .with_state(state.clone())
         .route("/version", get(|| async { "0.0.0" }))
@@ -128,7 +131,10 @@ pub fn construct_router(state: Arc<State>) -> Router {
                 .layer(CompressionLayer::new().compress_when(
                     DefaultPredicate::new().and(NotForContentType::new("text/event-stream")),
                 )),
-        );
+        )
+        // Outermost, so the server span covers the whole request and every
+        // handler span nests inside the trace the client started.
+        .layer(from_fn(telemetry::trace_context_middleware));
 
     // Inbound REST/MCP routers. They deliberately bypass the JWT
     // middleware (per-registration auth is enforced inside the handler)

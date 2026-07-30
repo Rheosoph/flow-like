@@ -96,7 +96,11 @@ pub async fn jwks(State(state): State<AppState>) -> Redirect {
     )
 }
 
-#[tracing::instrument(name = "GET /auth/authorize (proxy)", skip(state))]
+// The proxy handlers skip `req`: `Debug` on a `Request` prints the full URI —
+// including the OAuth `code` and `state` query parameters — and the entire
+// header map with `Authorization` in clear. `endpoint` is the safe correlation
+// field and stays recorded.
+#[tracing::instrument(name = "GET /auth/authorize (proxy)", skip(state, req))]
 async fn proxy_authorize(
     State(state): State<AppState>,
     req: Request<Body>,
@@ -104,7 +108,7 @@ async fn proxy_authorize(
     proxy_request(state, req, "authorize").await
 }
 
-#[tracing::instrument(name = "GET /auth/token (proxy)", skip(state))]
+#[tracing::instrument(name = "GET /auth/token (proxy)", skip(state, req))]
 async fn proxy_token(
     State(state): State<AppState>,
     req: Request<Body>,
@@ -112,7 +116,7 @@ async fn proxy_token(
     proxy_request(state, req, "token").await
 }
 
-#[tracing::instrument(name = "GET /auth/userinfo (proxy)", skip(state))]
+#[tracing::instrument(name = "GET /auth/userinfo (proxy)", skip(state, req))]
 async fn proxy_userinfo(
     State(state): State<AppState>,
     req: Request<Body>,
@@ -120,7 +124,7 @@ async fn proxy_userinfo(
     proxy_request(state, req, "userinfo").await
 }
 
-#[tracing::instrument(name = "GET /auth/revoke (proxy)", skip(state))]
+#[tracing::instrument(name = "GET /auth/revoke (proxy)", skip(state, req))]
 async fn proxy_revoke(
     State(state): State<AppState>,
     req: Request<Body>,
@@ -128,7 +132,7 @@ async fn proxy_revoke(
     proxy_request(state, req, "revoke").await
 }
 
-#[tracing::instrument(skip(state))]
+#[tracing::instrument(skip(state, req))]
 async fn proxy_request(
     state: AppState,
     mut req: Request<Body>,

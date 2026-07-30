@@ -108,7 +108,7 @@ fn default_n() -> usize {
 )]
 #[tracing::instrument(
     name = "GET /apps/{app_id}/graph/imports/{import_id}/sample",
-    skip(state, user)
+    skip(state, user, params)
 )]
 pub async fn sample_import(
     State(state): State<AppState>,

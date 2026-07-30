@@ -75,6 +75,7 @@ pub mod futures {
 pub use async_stream;
 pub mod interaction;
 pub mod intercom;
+pub mod maintenance;
 pub mod utils;
 
 /// OAuth token input for execution requests

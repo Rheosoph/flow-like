@@ -30,28 +30,25 @@ curl -fsSL -o wasi_snapshot_preview1.reactor.wasm \
   "https://github.com/bytecodealliance/wasmtime/releases/download/v29.0.1/wasi_snapshot_preview1.reactor.wasm"
 ```
 
-## Project Structure
+## Important Files
 
-```
-wasm-node-zig/
-├── build.zig              # Zig build config (wasm32-wasi target)
-├── build.zig.zon          # Package manifest
-├── flow-like.toml         # Flow-Like package manifest
-├── mise.toml              # Build tasks (setup, generate, build)
-├── src/
-│   └── main.zig           # Node implementation
-└── wit/
-    └── flow-like-node.wit # WIT interface definition
-```
+| Path | Purpose |
+|------|---------|
+| `build.zig` | Configures the `wasm32-wasi` executable and links the generated bindings |
+| `build.zig.zon` | Declares the Zig package |
+| `src/main.zig` | Defines node metadata, run logic, and WIT export adapters |
+| `examples/http_request.zig` | Demonstrates an HTTP request |
+| `wit/flow-like-node.wit` | References the canonical Flow-Like node interface |
+| `flow-like.toml` | Declares the Flow-Like package |
+| `mise.toml` | Provides setup, generation, build, test, and clean tasks |
 
-After running `mise run generate`, a `gen/` directory appears with the C bindings:
+Running `mise run generate` creates three binding artifacts:
 
-```
-gen/
-├── flow_like_node.c
-├── flow_like_node.h
-└── flow_like_node_component_type.o
-```
+| Generated path | Purpose |
+|----------------|---------|
+| `gen/flow_like_node.h` | C declarations imported by Zig |
+| `gen/flow_like_node.c` | WIT-generated C implementation |
+| `gen/flow_like_node_component_type.o` | Component-type metadata linked into the module |
 
 ## Quick Start
 

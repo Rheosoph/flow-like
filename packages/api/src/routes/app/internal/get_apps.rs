@@ -28,7 +28,7 @@ use sea_orm::{
         (status = 401, description = "Unauthorized")
     )
 )]
-#[tracing::instrument(name = "GET /apps", skip(state, user))]
+#[tracing::instrument(name = "GET /apps", skip_all)]
 pub async fn get_apps(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

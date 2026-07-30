@@ -170,7 +170,7 @@ pub struct ListCourseAssetsQuery {
         (status = 404, description = "Course not found")
     )
 )]
-#[tracing::instrument(name = "GET /courses/{course_id}/assets", skip(state, user))]
+#[tracing::instrument(name = "GET /courses/{course_id}/assets", skip(state, user, query))]
 pub async fn list_course_assets(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

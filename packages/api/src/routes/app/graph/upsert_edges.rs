@@ -46,7 +46,7 @@ pub struct UpsertEdgesPayload {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/graph/{overlay_id}/edges",
-    skip(state, user, payload)
+    skip(state, user, scope, payload)
 )]
 pub async fn upsert_edges(
     State(state): State<AppState>,

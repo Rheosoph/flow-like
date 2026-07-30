@@ -36,7 +36,7 @@ const ENTERPRISE_CONTACT_EMAIL: &str = "enterprise@flow-like.com";
         ("bearer_auth" = [])
     )
 )]
-#[tracing::instrument(name = "POST /user/subscribe", skip(state, user))]
+#[tracing::instrument(name = "POST /user/subscribe", skip_all)]
 pub async fn create_subscription_checkout(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

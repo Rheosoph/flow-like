@@ -103,7 +103,7 @@ pub fn routes() -> Router<AppState> {
         (status = 500, description = "Internal server error")
     )
 )]
-#[tracing::instrument(name = "GET /solution/upload", skip(state))]
+#[tracing::instrument(name = "GET /solution/upload", skip_all)]
 pub async fn get_upload_url(
     State(state): State<AppState>,
     Query(params): Query<UploadParams>,
@@ -524,7 +524,7 @@ fn get_status_description(status: &str) -> String {
         (status = 500, description = "Internal server error")
     )
 )]
-#[tracing::instrument(name = "GET /solution/track/{token}", skip(state))]
+#[tracing::instrument(name = "GET /solution/track/{token}", skip_all)]
 pub async fn track_solution(
     State(state): State<AppState>,
     axum::extract::Path(token): axum::extract::Path<String>,

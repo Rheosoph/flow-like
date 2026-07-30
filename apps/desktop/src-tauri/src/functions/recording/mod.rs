@@ -177,10 +177,23 @@ pub async fn resume_recording(handler: AppHandle) -> Result<(), TauriFunctionErr
 
 #[tauri::command(async)]
 pub async fn stop_recording(handler: AppHandle) -> Result<Vec<RecordedAction>, TauriFunctionError> {
+    let result = stop_recording_inner(&handler).await;
+
+    // Restore the tray even when stopping fails — otherwise the recording
+    // icon sticks and left-click stays detached from the menu.
+    #[cfg(desktop)]
+    crate::tray::restore_tray_icon(&handler).await;
+
+    result
+}
+
+async fn stop_recording_inner(
+    handler: &AppHandle,
+) -> Result<Vec<RecordedAction>, TauriFunctionError> {
     tracing::debug!(" ========== STOP RECORDING CALLED ==========");
     tracing::info!("[Recording] stop_recording called");
 
-    let recording_state = RecordingState::construct(&handler).await?;
+    let recording_state = RecordingState::construct(handler).await?;
 
     // First, deactivate the capture (stops recording new events)
     {
@@ -256,9 +269,6 @@ pub async fn stop_recording(handler: AppHandle) -> Result<Vec<RecordedAction>, T
         *capture_guard = None;
     }
     tracing::debug!(" ========== STOP RECORDING COMPLETE ==========");
-
-    #[cfg(desktop)]
-    crate::tray::restore_tray_icon(&handler).await;
 
     Ok(actions)
 }

@@ -91,7 +91,6 @@ axum = { version = "0.8.6", features = ["multipart"] }
 tower = "0.5.2"
 chrono-tz.workspace = true
 mimalloc.workspace = true
-sysinfo = "0.37.2"
 
 blake3.workspace = true
 tauri-plugin-flow-like-dexie-blob-offload.workspace = true

@@ -82,6 +82,141 @@ export interface ChartInput {
 	jsonData?: Record<string, unknown>;
 }
 
+const DEFAULT_NIVO_MARGIN = { top: 30, right: 30, bottom: 50, left: 60 };
+
+function nivoLegend(
+	position: NonNullable<CSVConfig["legendPosition"]>,
+): Record<string, unknown> {
+	switch (position) {
+		case "top":
+			return {
+				anchor: "top",
+				direction: "row",
+				justify: false,
+				translateY: -24,
+				itemsSpacing: 8,
+				itemWidth: 90,
+				itemHeight: 18,
+				itemDirection: "left-to-right",
+				symbolSize: 12,
+				symbolShape: "circle",
+			};
+		case "left":
+			return {
+				anchor: "left",
+				direction: "column",
+				justify: false,
+				translateX: -112,
+				itemsSpacing: 6,
+				itemWidth: 100,
+				itemHeight: 18,
+				itemDirection: "left-to-right",
+				symbolSize: 12,
+				symbolShape: "circle",
+			};
+		case "right":
+			return {
+				anchor: "right",
+				direction: "column",
+				justify: false,
+				translateX: 112,
+				itemsSpacing: 6,
+				itemWidth: 100,
+				itemHeight: 18,
+				itemDirection: "left-to-right",
+				symbolSize: 12,
+				symbolShape: "circle",
+			};
+		case "bottom":
+			return {
+				anchor: "bottom",
+				direction: "row",
+				justify: false,
+				translateY: 64,
+				itemsSpacing: 8,
+				itemWidth: 90,
+				itemHeight: 18,
+				itemDirection: "left-to-right",
+				symbolSize: 12,
+				symbolShape: "circle",
+			};
+	}
+}
+
+function nivoMargin(config: CSVConfig): Record<string, number> {
+	const margin = { ...DEFAULT_NIVO_MARGIN };
+	if (config.xLabel) margin.bottom = 68;
+	if (config.yLabel) margin.left = 78;
+
+	if (config.showLegend || config.legendPosition) {
+		switch (config.legendPosition ?? "bottom") {
+			case "top":
+				margin.top = Math.max(margin.top, 64);
+				break;
+			case "bottom":
+				margin.bottom = Math.max(margin.bottom, 88);
+				break;
+			case "left":
+				margin.left = Math.max(margin.left, 136);
+				break;
+			case "right":
+				margin.right = Math.max(margin.right, 136);
+				break;
+		}
+	}
+	return margin;
+}
+
+function plotlyTitle(text: string): { text: string } {
+	return { text };
+}
+
+export function normalizePlotlyTitle(value: unknown): Record<string, unknown> {
+	if (typeof value === "string") return plotlyTitle(value);
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
+function plotlyLegend(
+	position: NonNullable<CSVConfig["legendPosition"]>,
+): Record<string, unknown> {
+	switch (position) {
+		case "top":
+			return {
+				orientation: "h",
+				x: 0.5,
+				xanchor: "center",
+				y: 1.08,
+				yanchor: "bottom",
+			};
+		case "left":
+			return {
+				orientation: "v",
+				x: -0.08,
+				xanchor: "right",
+				y: 0.5,
+				yanchor: "middle",
+			};
+		case "right":
+			return {
+				orientation: "v",
+				x: 1.04,
+				xanchor: "left",
+				y: 0.5,
+				yanchor: "middle",
+			};
+		case "bottom":
+			return {
+				orientation: "h",
+				x: 0.5,
+				xanchor: "center",
+				y: -0.16,
+				yanchor: "top",
+			};
+	}
+}
+
 // ============================================================================
 // CSV PARSING
 // ============================================================================
@@ -109,7 +244,7 @@ function parseCSV(csvContent: string): CSVData {
 		const cells = lines[i].split(",").map((cell) => {
 			const trimmed = cell.trim();
 			const num = Number(trimmed);
-			return isNaN(num) ? trimmed : num;
+			return Number.isNaN(num) ? trimmed : num;
 		});
 		rows.push(cells);
 	}
@@ -122,7 +257,7 @@ function parseCSV(csvContent: string): CSVData {
  * Simple key: value parser, no full YAML support needed
  */
 function parseConfig(configBlock: string): CSVConfig {
-	const config: CSVConfig = {};
+	const config: Record<string, string | number | boolean | string[]> = {};
 	const lines = configBlock.trim().split("\n");
 
 	for (const line of lines) {
@@ -135,9 +270,9 @@ function parseConfig(configBlock: string): CSVConfig {
 			.trim();
 
 		// Parse common values
-		if (value === "true") value = true as any;
-		else if (value === "false") value = false as any;
-		else if (!isNaN(Number(value))) value = Number(value);
+		if (value === "true") value = true;
+		else if (value === "false") value = false;
+		else if (!Number.isNaN(Number(value))) value = Number(value);
 		else if (value.startsWith("[") && value.endsWith("]")) {
 			// Parse array: [a, b, c]
 			value = value
@@ -146,10 +281,10 @@ function parseConfig(configBlock: string): CSVConfig {
 				.map((v) => v.trim().replace(/^["']|["']$/g, ""));
 		}
 
-		(config as any)[key] = value;
+		config[key] = value;
 	}
 
-	return config;
+	return config as CSVConfig;
 }
 
 /**
@@ -290,10 +425,9 @@ export function csvToNivoScatter(data: CSVData): unknown[] {
 		const x = typeof row[1] === "number" ? row[1] : 0;
 		const y = typeof row[2] === "number" ? row[2] : 0;
 
-		if (!groups.has(group)) {
-			groups.set(group, []);
-		}
-		groups.get(group)!.push({ x, y });
+		const points = groups.get(group);
+		if (points) points.push({ x, y });
+		else groups.set(group, [{ x, y }]);
 	}
 
 	return Array.from(groups.entries()).map(([id, dataPoints]) => ({
@@ -354,7 +488,7 @@ export function csvToPlotly(
 	return {
 		data: traces,
 		layout: {
-			xaxis: { title: xKey },
+			xaxis: { title: plotlyTitle(xKey) },
 			barmode: chartType === "bar" ? "group" : undefined,
 		},
 	};
@@ -433,7 +567,8 @@ export function toNivoData(input: ChartInput): {
 
 	// CSV mode
 	const chartType = input.config.type || "bar";
-	const csvData = input.csvData!;
+	const csvData = input.csvData;
+	if (!csvData) throw new Error("CSV chart data is missing.");
 	const props: Record<string, unknown> = {};
 
 	let data: unknown;
@@ -462,7 +597,6 @@ export function toNivoData(input: ChartInput): {
 		case "scatter":
 			data = csvToNivoScatter(csvData);
 			break;
-		case "bar":
 		default:
 			data = csvToNivoBar(csvData);
 			props.indexBy = csvData.headers[0];
@@ -470,8 +604,8 @@ export function toNivoData(input: ChartInput): {
 			if (input.config.layout === "horizontal") {
 				props.layout = "horizontal";
 			}
-			if (input.config.stacked) {
-				props.groupMode = "stacked";
+			if (input.config.stacked !== undefined) {
+				props.groupMode = input.config.stacked ? "stacked" : "grouped";
 			}
 			break;
 	}
@@ -482,12 +616,29 @@ export function toNivoData(input: ChartInput): {
 			? input.config.colors
 			: { scheme: input.config.colors };
 	}
-	if (input.config.showLegend !== undefined) {
-		props.showLegend = input.config.showLegend;
+	if (input.config.xLabel) {
+		props.axisBottom = {
+			legend: input.config.xLabel,
+			legendOffset: 44,
+			legendPosition: "middle",
+		};
+	}
+	if (input.config.yLabel) {
+		props.axisLeft = {
+			legend: input.config.yLabel,
+			legendOffset: -52,
+			legendPosition: "middle",
+		};
+	}
+	if (input.config.showLegend === false) {
+		props.legends = [];
+	} else if (input.config.showLegend || input.config.legendPosition) {
+		props.legends = [nivoLegend(input.config.legendPosition ?? "bottom")];
 	}
 	if (input.config.animate !== undefined) {
 		props.animate = input.config.animate;
 	}
+	props.margin = nivoMargin(input.config);
 
 	return { data, chartType, props };
 }
@@ -511,7 +662,9 @@ export function toPlotlyData(input: ChartInput): {
 
 	// CSV mode
 	const chartType = input.config.type || "bar";
-	const result = csvToPlotly(input.csvData!, chartType);
+	const csvData = input.csvData;
+	if (!csvData) throw new Error("CSV chart data is missing.");
+	const result = csvToPlotly(csvData, chartType);
 
 	// Apply config
 	const layout: Record<string, unknown> = {
@@ -523,19 +676,51 @@ export function toPlotlyData(input: ChartInput): {
 	};
 
 	if (input.config.title) {
-		layout.title = input.config.title;
+		layout.title = plotlyTitle(input.config.title);
 	}
 	if (input.config.xLabel) {
 		layout.xaxis = {
 			...((layout.xaxis as object) || {}),
-			title: input.config.xLabel,
+			title: plotlyTitle(input.config.xLabel),
 		};
 	}
 	if (input.config.yLabel) {
-		layout.yaxis = { title: input.config.yLabel };
+		layout.yaxis = { title: plotlyTitle(input.config.yLabel) };
 	}
 	if (input.config.showLegend !== undefined) {
 		layout.showlegend = input.config.showLegend;
+	}
+	if (input.config.legendPosition) {
+		layout.legend = plotlyLegend(input.config.legendPosition);
+		const margin = {
+			...((layout.margin as Record<string, number>) || {}),
+		};
+		switch (input.config.legendPosition) {
+			case "top":
+				margin.t = Math.max(margin.t ?? 0, 76);
+				break;
+			case "bottom":
+				margin.b = Math.max(margin.b ?? 0, 76);
+				break;
+			case "left":
+				margin.l = Math.max(margin.l ?? 0, 112);
+				break;
+			case "right":
+				margin.r = Math.max(margin.r ?? 0, 112);
+				break;
+		}
+		layout.margin = margin;
+	}
+	if (chartType === "bar" && input.config.stacked) {
+		layout.barmode = "stack";
+	}
+	if (chartType === "bar" && input.config.layout === "horizontal") {
+		for (const trace of result.data as Array<Record<string, unknown>>) {
+			const x = trace.x;
+			trace.x = trace.y;
+			trace.y = x;
+			trace.orientation = "h";
+		}
 	}
 	if (input.config.height) {
 		layout.height = input.config.height;

@@ -1,258 +1,149 @@
 ---
 title: Execution Backends
-description: Understanding job isolation and choosing the right execution backend.
+description: Configure how the Flow-Like API dispatches server-side runs
 sidebar:
   order: 55
 ---
 
-Flow-Like supports multiple execution backends, each with different isolation guarantees, performance characteristics, and use cases.
+Flow-Like's server API builds a normalized run request and hands it to a
+configured dispatch backend. The backend controls transport and worker
+lifecycle; it does not change the Flow graph itself.
 
-## Backend Overview
+## Dispatch model
 
-| Backend | Isolation Level | Latency | Best For |
-|---------|-----------------|---------|----------|
-| HTTP → Warm Pool | Process | Low | Trusted workloads, low latency |
-| HTTP → Lambda | MicroVM (Firecracker) | Medium | Multi-tenant SaaS |
-| Lambda SDK Invoke | MicroVM (Firecracker) | Medium | Fire-and-forget batch |
-| Lambda SDK Stream | MicroVM (Firecracker) | Medium | Streaming from private Lambdas |
-| Kubernetes Job | Pod | High | Untrusted code, compliance |
-| Docker Compose | Container | Low | Development, small deployments |
+![Flow-Like execution dispatch, including the implemented destinations and the Kubernetes Job dispatcher whose job runner is still pending](../../../assets/ExecutionBackends.svg)
 
-## Isolation & Security Model
-
-### AWS Lambda (Strongest Isolation)
-
-AWS Lambda provides **hardware-level isolation** via [Firecracker microVMs](https://firecracker-microvm.github.io/):
-
-- Each execution runs in its own microVM with hardware-level isolation
-- Memory is wiped between invocations from different tenants
-- No shared filesystem between executions
-- Cold starts create fresh environments
-- Warm starts reuse the same microVM for the **same function** only (not shared across tenants)
-
-**Invocation methods:**
-
-| Method | Description | Use Case |
-|--------|-------------|----------|
-| HTTP (Function URL) | HTTP POST to Lambda Function URL | Streaming responses, simple setup |
-| Lambda SDK Invoke | Async invocation via AWS SDK | Fire-and-forget batch jobs |
-| Lambda SDK Stream | Streaming invocation via AWS SDK | Streaming from private Lambdas |
-
-**Best for:** Multi-tenant SaaS, untrusted workloads, pay-per-use pricing.
-
-### Kubernetes Warm Pool (HTTP → Deployment)
-
-A pool of long-running executor pods handles requests:
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  Kubernetes Cluster                  │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐             │
-│  │Executor │  │Executor │  │Executor │  ← Warm Pool │
-│  │  Pod 1  │  │  Pod 2  │  │  Pod 3  │             │
-│  └────┬────┘  └────┬────┘  └────┬────┘             │
-│       │            │            │                   │
-│       └────────────┼────────────┘                   │
-│                    │                                 │
-│              ┌─────┴─────┐                          │
-│              │  Service  │ ← Load balanced          │
-│              └───────────┘                          │
-└─────────────────────────────────────────────────────┘
-```
-
-**Characteristics:**
-
-- **Process-level isolation**: Each request runs in the same pod but can use separate processes
-- **Shared resources**: Pods handle multiple requests over their lifetime
-- **Faster response**: No cold start - pods are already running
-- **Cost efficient**: Fewer pod creations, better resource utilization
-
-**Security considerations:**
-
-Requests from different users may run on the same pod. This is suitable when:
-
-- Tenants are trusted (same organization)
-- Execution code is sandboxed (e.g., WASM, containers within pods)
-- Performance is prioritized over strict isolation
-
-**Best for:** Internal/trusted workloads, low-latency requirements, cost optimization.
-
-### Kubernetes Isolated Job (Strongest K8s Isolation)
-
-Each execution creates a dedicated Kubernetes Job:
-
-```
-┌─────────────────────────────────────────────────────┐
-│                  Kubernetes Cluster                  │
-│                                                      │
-│  Request 1 → ┌─────────┐                            │
-│              │  Job 1  │ ← Fresh pod                │
-│              │  Pod    │                            │
-│              └─────────┘                            │
-│                                                      │
-│  Request 2 → ┌─────────┐                            │
-│              │  Job 2  │ ← Fresh pod                │
-│              │  Pod    │                            │
-│              └─────────┘                            │
-│                                                      │
-│  Request 3 → ┌─────────┐                            │
-│              │  Job 3  │ ← Fresh pod                │
-│              │  Pod    │                            │
-│              └─────────┘                            │
-└─────────────────────────────────────────────────────┘
-```
-
-**Characteristics:**
-
-- **Pod-level isolation**: Fresh pod for every execution
-- **Resource guarantees**: Dedicated CPU/memory per job
-- **Clean environment**: No state leakage between executions
-- **Network policies**: Can apply per-job network restrictions
-- **Kata Containers**: Optional hardware-level isolation via `RuntimeClass`
-- **Slower startup**: Pod scheduling + image pull overhead (mitigated with pre-pulled images)
-
-**Best for:** Untrusted code execution, strict compliance requirements, resource-intensive workloads.
-
-### Docker Compose (Development)
-
-For local development and small deployments:
-
-- **Container-level isolation**: Each executor is a separate container
-- **Shared host resources**: Containers share the Docker host
-- **Simpler setup**: No orchestration complexity
-
-**Best for:** Development, testing, small-scale deployments.
-
-## Choosing a Backend
-
-### Decision Matrix
-
-| Requirement | Recommended Backend |
-|-------------|---------------------|
-| Multi-tenant SaaS | Lambda (strongest isolation) |
-| Low latency | HTTP → Warm Pool (K8s/Lambda) |
-| Untrusted code | Kubernetes Job or Lambda |
-| Batch processing | Lambda SDK Invoke (fire-and-forget) |
-| Streaming response | HTTP or Lambda SDK Stream |
-| Cost optimization | HTTP → Warm Pool |
-| Compliance/audit | Kubernetes Job (per-job logging) |
-| Development | Docker Compose |
-
-### Latency Comparison
-
-| Backend | Cold Start | Warm Request |
-|---------|------------|--------------|
-| Warm Pool (K8s) | N/A (always warm) | ~10-50ms |
-| Lambda | ~100-500ms | ~10-50ms |
-| Kubernetes Job | ~2-10s | N/A (always cold) |
-
-### Cost Comparison
-
-| Backend | Idle Cost | Per-Request Cost |
-|---------|-----------|------------------|
-| Warm Pool | High (running pods) | Low |
-| Lambda | None | Medium (per-ms billing) |
-| Kubernetes Job | Low (no idle pods) | High (pod overhead) |
-
-## Configuration
-
-### Environment Variables
+Two environment variables select the default lanes:
 
 ```bash
-# Backend selection for streaming/sync requests (/invoke endpoints)
-EXECUTION_BACKEND=http              # http, lambda_invoke, lambda_stream, kubernetes_job
+# /invoke and streaming endpoints
+EXECUTION_BACKEND=http
 
-# Backend selection for async requests (/invoke/async endpoints)
-ASYNC_EXECUTION_BACKEND=redis       # http, redis, sqs, kafka
-
-# HTTP backend (Warm Pool, Lambda Function URL, Azure, GCP)
-EXECUTOR_URL=https://executor.example.com
-
-# Lambda backends
-LAMBDA_EXECUTOR_FUNCTION=arn:aws:lambda:us-east-1:123456789:function:executor
-AWS_REGION=us-east-1
-
-# Kubernetes Job backend
-K8S_NAMESPACE=flow-like
-K8S_EXECUTOR_IMAGE=ghcr.io/rheosoph/flow-like-executor:latest
+# /invoke/async endpoints
+ASYNC_EXECUTION_BACKEND=redis
 ```
 
-### Runtime Selection
+Both variables are parsed into the same backend enum, but not every transport
+is appropriate for every endpoint. In particular, `lambda_stream` uses the
+streaming dispatcher, while queue backends are normally selected for
+asynchronous endpoints.
 
-You can override the backend per-request via the API:
+## Supported backend values
 
-```json
-POST /apps/{app_id}/events/{event_id}/invoke
-{
-  "payload": { ... },
-  "mode": "kubernetes_job",
-  "backend_config": {
-    "executor_url": "https://custom-executor.example.com"
-  }
-}
+| Value | Dispatch behavior | Required configuration |
+| --- | --- | --- |
+| `http` | Posts to an executor's `/execute` or `/execute/sse` endpoint | `EXECUTOR_URL` |
+| `lambda_invoke` | Uses the AWS SDK with asynchronous `Event` invocation | `lambda` build feature, `LAMBDA_EXECUTOR_FUNCTION`, AWS region and credentials |
+| `lambda_stream` | Uses the AWS SDK response-stream API | `lambda` build feature, function name, region and credentials |
+| `kubernetes_job` | Creates a Kubernetes Job, but the checked-in executor's one-job entrypoint is not implemented | `kubernetes` build feature, cluster access, `K8S_NAMESPACE`, `K8S_EXECUTOR_IMAGE`; a separately implemented compatible job runner |
+| `redis` | Pushes the serialized job to a Redis list | `redis` build feature, `REDIS_URL`; optional `REDIS_EXECUTION_QUEUE` |
+| `sqs` | Sends the job to an AWS SQS queue | `sqs` build feature, `SQS_EXECUTION_QUEUE_URL` and AWS credentials |
+| `kafka` | Posts a record to a Kafka-compatible REST proxy | `KAFKA_BROKERS` as the proxy base URL and `KAFKA_EXECUTION_TOPIC` |
+| `sqs_event_bridge` | Stages the payload in object storage, then sends a compact SQS reference for an EventBridge-to-ECS path | `sqs` build feature, staging store, `SQS_EVENT_BRIDGE_EXECUTION_QUEUE_URL`, AWS credentials, and the external Pipe/ECS resources |
+
+Aliases accepted by the parser include `lambda_sdk`, `lambda_streaming`,
+`k8s_job`, `isolated`, `redis_queue`, `aws_sqs`, `sqs_ecs`, and `ecs`.
+Unknown values fall back to `http`, so validate rendered configuration rather
+than relying on a typo to fail closed.
+
+## HTTP executors
+
+`http` describes the protocol, not the platform. `EXECUTOR_URL` can point to:
+
+- The Docker Compose runtime service
+- The Kubernetes executor-pool Service
+- A Lambda Function URL
+- Another compatible HTTP execution service
+
+This is the default synchronous backend in the checked-in Compose and Helm
+configurations. It supports ordinary dispatch and an SSE endpoint for streamed
+state.
+
+Long-running workers may handle multiple runs over their lifetime. Treat them
+as a shared execution environment and verify cleanup, filesystem, credential,
+and concurrency behavior for your threat model.
+
+## Kubernetes Job dispatcher
+
+`kubernetes_job` asks the API to create a fresh Kubernetes Job in isolated
+mode. The dispatcher builds a pod with run identifiers, scoped credentials,
+JWT, callback URL, payload, resource limits, and an optional `RuntimeClass`.
+
+The repository's `flow-like-k8s-executor` image does **not** currently consume
+that one-job environment. Unless `EXECUTOR_SERVER_MODE=true`, its entrypoint
+logs that job-once mode is unimplemented and exits with status `1`. The
+dispatcher therefore proves Job creation, not a functioning end-to-end
+execution backend.
+
+Do not select `kubernetes_job` with the checked-in image. Use the HTTP executor
+pool, or supply and validate your own compatible one-job runner.
+
+Even with a runner, a fresh pod is not automatically a hardware-isolated
+sandbox. Isolation still depends on the container runtime, node configuration,
+workload identity, mounted resources, and policies. If a Job names a Kata
+runtime class, the matching runtime handler must already exist on the nodes.
+
+## Lambda modes
+
+`lambda_invoke` and `lambda_stream` use AWS SDK clients compiled into the API:
+
+- `lambda_invoke` sends an asynchronous event and returns dispatch metadata.
+- `lambda_stream` uses `InvokeWithResponseStream` for a private Lambda.
+- A Lambda Function URL can instead be used through the generic `http`
+  backend.
+
+The operational and isolation properties are those of the Lambda function and
+AWS account configuration. Confirm concurrency, retry, timeout, networking,
+and downstream callback behavior for the selected mode.
+
+## Queue backends
+
+Queue transports decouple API response time from worker execution:
+
+- **Redis** uses `LPUSH`; Flow-Like runtime workers consume the configured list.
+- **SQS** sends a complete serialized request to the configured queue.
+- **Kafka** uses an HTTP REST proxy rather than an embedded Kafka client.
+- **SQS + EventBridge + ECS** stores the full payload first and queues a signed
+  reference, avoiding ECS container-override payload limits.
+
+Provisioning a queue is only half of the system. A compatible consumer must
+claim the message, execute the run, report state, and apply the retry and
+dead-letter policy you require.
+
+## Choosing a backend
+
+| Need | Start with | Verify before production |
+| --- | --- | --- |
+| Compose or a trusted internal cluster | `http` + warm runtime pool | Cross-run cleanup, worker concurrency, host access |
+| Background work in Compose | `redis` | Persistence, queue depth, retry and poison-message handling |
+| Background work in the checked-in Kubernetes chart | `http` | The chart's executor pool has no Redis queue consumer; deploy one before selecting `redis` |
+| Kubernetes with the checked-in executor | `http` + Helm executor pool | Pool capacity, cross-run cleanup, service account, egress |
+| A new Kubernetes pod per run | Not available end to end in the checked-in executor | Implement the job runner first; then verify startup, callbacks, identity, runtime class, and egress |
+| Private streaming Lambda | `lambda_stream` | AWS feature build, response streaming, timeouts, concurrency |
+| AWS asynchronous Lambda | `lambda_invoke` or `sqs` | Retry semantics, DLQ, idempotency, callback reachability |
+| Long AWS container task | `sqs_event_bridge` | Staging-store lifetime, signed URL scope, Pipe and ECS task configuration |
+| Existing Kafka platform | `kafka` | REST proxy compatibility, authentication, partitions, consumer contract |
+
+Benchmark with your own Flow, image size, region, cluster, and concurrency.
+The repository does not define universal latency or cost numbers for these
+backends.
+
+## Common configuration
+
+```bash
+# HTTP
+EXECUTION_BACKEND=http
+EXECUTOR_URL=http://runtime:9000
+
+# Redis for background runs
+ASYNC_EXECUTION_BACKEND=redis
+REDIS_URL=redis://redis:6379
+REDIS_EXECUTION_QUEUE=exec:jobs
+
+# AWS Lambda SDK
+LAMBDA_EXECUTOR_FUNCTION=arn:aws:lambda:eu-central-1:123456789012:function:flow-like-executor
+AWS_REGION=eu-central-1
 ```
 
-Available modes:
-- `local` - Track only, no execution
-- `http` - HTTP POST to executor
-- `lambda_invoke` - AWS Lambda async invoke
-- `lambda_stream` - AWS Lambda streaming invoke
-- `kubernetes_job` - Isolated K8s Job
-
-## Security Recommendations
-
-### Multi-Tenant SaaS
-
-Use **Lambda** or **Kubernetes Isolated Jobs** with Kata Containers:
-
-```yaml
-# Kubernetes Job with Kata runtime
-spec:
-  template:
-    spec:
-      runtimeClassName: kata-qemu  # Hardware isolation
-```
-
-### Internal/Trusted Workloads
-
-Use **Warm Pool** for best performance:
-
-```yaml
-# Kubernetes Deployment for warm pool
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: executor-pool
-spec:
-  replicas: 3
-  template:
-    spec:
-      containers:
-      - name: executor
-        resources:
-          requests:
-            memory: "512Mi"
-            cpu: "250m"
-```
-
-### Network Isolation
-
-Apply network policies for Kubernetes backends:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: executor-isolation
-spec:
-  podSelector:
-    matchLabels:
-      app: executor
-  policyTypes:
-  - Egress
-  egress:
-  - to:
-    - namespaceSelector:
-        matchLabels:
-          name: flow-like
-```
+Keep credentials in your platform's secret store. Environment-variable names
+belong in documentation and configuration; their secret values do not.
