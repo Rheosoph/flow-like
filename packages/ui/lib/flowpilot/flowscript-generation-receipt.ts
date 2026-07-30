@@ -1,4 +1,7 @@
-import type { FlowScriptWorkspaceCandidate } from "../../components/flowpilot/flowscript-workspace-candidates";
+import {
+	type FlowScriptWorkspaceCandidate,
+	parseFlowScriptWorkspaceCandidate,
+} from "../../components/flowpilot/flowscript-workspace-candidates";
 import type { BoardEditJob } from "../schema/copilot";
 
 export const FLOWSCRIPT_GENERATION_RUN_SCHEMA =
@@ -151,23 +154,7 @@ function workspaceCandidate(
 	}
 	const candidate = record(value);
 	if (!candidate || typeof candidate.source !== "string") return undefined;
-	const source = candidate.source;
-	if (!source.trim()) return undefined;
-	return {
-		source,
-		...(typeof candidate.status === "string"
-			? { status: candidate.status }
-			: {}),
-		...(typeof candidate.completion === "string"
-			? { completion: candidate.completion }
-			: {}),
-		...(typeof candidate.retained_full_source === "string"
-			? { retained_full_source: candidate.retained_full_source }
-			: {}),
-		...(record(candidate.regression)
-			? { regression: record(candidate.regression) }
-			: {}),
-	};
+	return parseFlowScriptWorkspaceCandidate(JSON.stringify(candidate));
 }
 
 function compilerPayloadScore(value: Record<string, unknown>): number {

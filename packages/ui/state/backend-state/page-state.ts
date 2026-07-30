@@ -2,11 +2,11 @@ import type { SurfaceComponent } from "../../components/a2ui/types";
 import type { Version } from "./widget-state";
 
 export type PageLayoutType =
-	| "Freeform"
-	| "Stack"
-	| "Grid"
-	| "Sidebar"
-	| "HolyGrail";
+	| "freeform"
+	| "stack"
+	| "grid"
+	| "sidebar"
+	| "holyGrail";
 
 export interface Spacing {
 	value: string;

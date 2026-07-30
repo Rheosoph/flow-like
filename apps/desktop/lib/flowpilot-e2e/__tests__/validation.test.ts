@@ -66,6 +66,7 @@ function caseDefinition(
 					anyOf: ["insert_local_db", "upsert_local_db"],
 				},
 			],
+			requiredPageBoardBindings: [],
 			...overrides,
 		},
 	};
@@ -596,6 +597,63 @@ function memory() { return database({ name: "prefix-adventure_memory" }) }`,
 		expect(codes).toContain("flowscript.lint.available.board-empty");
 		expect(codes).toContain("flowscript.reconcile.available.board-empty");
 		expect(codes).toContain("boards.nonempty.board-empty");
+	});
+
+	test("requires exact page-to-board ownership and lifecycle-node affinity", () => {
+		const definition = caseDefinition({
+			requiredPageBoardBindings: [
+				{
+					page: "Expense Queue",
+					board: "Expense Workflow",
+					requireOnLoadEvent: true,
+				},
+			],
+		});
+		const exact = evaluateAppCreationCase(definition, snapshot());
+		expect(exact.failures.map(({ code }) => code)).not.toContain(
+			"pages.board_binding.expense_queue.expense_workflow",
+		);
+		expect(exact.failures.map(({ code }) => code)).not.toContain(
+			"pages.board_load_binding.expense_queue.expense_workflow",
+		);
+
+		const wrongBoard = snapshot();
+		wrongBoard.pages = [{ ...wrongBoard.pages[0], boardId: "board-other" }];
+		wrongBoard.boards = [
+			...wrongBoard.boards,
+			{
+				id: "board-other",
+				name: "Other Workflow",
+				nodeCount: 1,
+				nodeIds: ["other-load"],
+				flowScript: 'eventsSimple() { logInfo({ message: "other" }) }',
+				lintDiagnostics: [],
+				reconcile: {
+					parseValid: true,
+					reconcileValid: true,
+					idempotent: true,
+					commandCount: 0,
+				},
+			},
+		];
+		const report = evaluateAppCreationCase(definition, wrongBoard);
+		const codes = report.failures.map(({ code }) => code);
+		expect(codes).toContain(
+			"pages.board_binding.expense_queue.expense_workflow",
+		);
+		expect(codes).not.toContain(
+			"pages.board_load_binding.expense_queue.expense_workflow",
+		);
+
+		const wrongLoad = snapshot();
+		wrongLoad.pages = [
+			{ ...wrongLoad.pages[0], onLoadEventId: "node-from-another-board" },
+		];
+		expect(
+			evaluateAppCreationCase(definition, wrongLoad).failures.map(
+				({ code }) => code,
+			),
+		).toContain("pages.board_load_binding.expense_queue.expense_workflow");
 	});
 
 	test("formats compact reports and stable failure fingerprints", () => {

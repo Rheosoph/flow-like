@@ -12,6 +12,7 @@ import {
 import Link from "next/link";
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useAssetImage } from "../../hooks/use-asset-image";
 import { hashToGradient, useThemeInfo } from "../../hooks/use-theme-gradient";
 import { formatAppCategory } from "../../lib/app-category";
 import { categoryColor } from "../../lib/category-meta";
@@ -22,6 +23,30 @@ import { VISIBILITY_META } from "../settings/visibility-status/visibility-meta";
 import { AppTypeMark } from "./app-type-mark";
 
 const MotionLink = motion.create(Link);
+
+/**
+ * The app's hash gradient, painted under every piece of card artwork.
+ *
+ * It costs nothing to draw and never fails, so leaving it in place beneath cover
+ * art means a card is never blank while a thumbnail decodes and never reflows
+ * when one turns out to be missing — the artwork just fades in over it.
+ */
+function GradientWash({
+	appId,
+	className,
+}: Readonly<{ appId: string; className?: string }>) {
+	const { primaryHue, isDark } = useThemeInfo();
+	const grad = hashToGradient(appId, primaryHue, isDark);
+	return (
+		<div
+			className={cn("absolute inset-0", className)}
+			style={{
+				background: `linear-gradient(${grad.angle}deg, ${grad.from}, ${grad.to})`,
+				opacity: grad.opacity,
+			}}
+		/>
+	);
+}
 
 interface AppCardProps {
 	app: IApp;
@@ -218,8 +243,7 @@ function SmallAppCard({
 	>
 >) {
 	const formatPrice = (price: number) => `€${(price / 100).toFixed(2)}`;
-	const { primaryHue, isDark } = useThemeInfo();
-	const [thumbFailed, setThumbFailed] = useState(false);
+	const thumbnail = useAssetImage(metadata?.thumbnail);
 	const handleCardKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
 		if (!onClick || event.defaultPrevented) return;
 		if (event.key === "Enter" || event.key === " ") {
@@ -264,33 +288,26 @@ function SmallAppCard({
 					</div>
 				)}
 				<div className="absolute left-0 top-0 bottom-0 w-32 opacity-20 group-hover:opacity-50 transition-all duration-300 overflow-hidden">
-					{metadata?.thumbnail && !thumbFailed ? (
+					<GradientWash appId={app.id} />
+					{thumbnail.canRender && (
 						<img
-							src={metadata.thumbnail}
-							alt={metadata.name ?? app.id}
-							className="w-full h-full object-cover object-right"
+							ref={thumbnail.imgRef}
+							src={thumbnail.src}
+							alt={metadata?.name ?? app.id}
+							className={cn(
+								"absolute inset-0 h-full w-full object-cover object-right transition-opacity duration-500",
+								thumbnail.loaded ? "opacity-100" : "opacity-0",
+							)}
 							width={1280}
 							height={640}
 							loading="lazy"
 							decoding="async"
 							fetchPriority="low"
-							onError={() => setThumbFailed(true)}
+							onLoad={thumbnail.onLoad}
+							onError={thumbnail.onError}
 						/>
-					) : (
-						(() => {
-							const g = hashToGradient(app.id, primaryHue, isDark);
-							return (
-								<div
-									className="absolute inset-0"
-									style={{
-										background: `linear-gradient(${g.angle}deg, ${g.from}, ${g.to})`,
-										opacity: g.opacity,
-									}}
-								/>
-							);
-						})()
 					)}
-					<div className="absolute inset-0 bg-gradient-to-r from-transparent to-card" />
+					<div className="absolute inset-0 bg-linear-to-r from-transparent to-card" />
 				</div>
 
 				<div className="relative shrink-0 z-10">
@@ -388,11 +405,9 @@ function ExtendedAppCard({
 	const appName = metadata?.name ?? app.id;
 	const appIcon = metadata?.icon ?? "/app-logo.webp";
 	const hasRating = app.rating_count > 0;
-	const { primaryHue, isDark } = useThemeInfo();
-	const [thumbFailed, setThumbFailed] = useState(false);
-	const [iconFailed, setIconFailed] = useState(false);
-	const hasThumb = Boolean(metadata?.thumbnail) && !thumbFailed;
-	const grad = hashToGradient(app.id, primaryHue, isDark);
+	const thumbnail = useAssetImage(metadata?.thumbnail);
+	const ambientIcon = useAssetImage(appIcon);
+	const hasThumb = thumbnail.canRender;
 	const eyebrowColor = app.primary_category
 		? categoryColor(app.primary_category)
 		: "var(--primary)";
@@ -437,41 +452,43 @@ function ExtendedAppCard({
 			>
 				{/* full-bleed cover art (or the app's icon as ambient art) behind everything */}
 				<div className="absolute inset-0">
+					<GradientWash appId={app.id} />
 					{hasThumb ? (
 						<motion.img
-							className="absolute inset-0 h-full w-full object-cover"
-							src={metadata?.thumbnail ?? ""}
+							ref={thumbnail.imgRef}
+							className={cn(
+								"absolute inset-0 h-full w-full object-cover transition-opacity duration-500",
+								thumbnail.loaded ? "opacity-100" : "opacity-0",
+							)}
+							src={thumbnail.src}
 							alt=""
 							width={1280}
 							height={640}
 							loading="lazy"
 							decoding="async"
 							fetchPriority="low"
-							onError={() => setThumbFailed(true)}
+							onLoad={thumbnail.onLoad}
+							onError={thumbnail.onError}
 							variants={{ hover: { scale: 1.04 } }}
 							transition={{ type: "spring", stiffness: 200 }}
 						/>
 					) : (
-						<>
-							<div
-								className="absolute inset-0"
-								style={{
-									background: `linear-gradient(${grad.angle}deg, ${grad.from}, ${grad.to})`,
-									opacity: grad.opacity,
-								}}
+						ambientIcon.canRender && (
+							<img
+								ref={ambientIcon.imgRef}
+								src={ambientIcon.src}
+								alt=""
+								aria-hidden="true"
+								loading="lazy"
+								decoding="async"
+								className={cn(
+									"absolute left-1/2 top-[38%] h-[150%] w-[150%] -translate-x-1/2 -translate-y-1/2 object-contain blur-2xl saturate-150 transition-opacity duration-500",
+									ambientIcon.loaded ? "opacity-40" : "opacity-0",
+								)}
+								onLoad={ambientIcon.onLoad}
+								onError={ambientIcon.onError}
 							/>
-							{appIcon && !iconFailed && (
-								<img
-									src={appIcon}
-									alt=""
-									aria-hidden="true"
-									loading="lazy"
-									decoding="async"
-									className="absolute left-1/2 top-[38%] h-[150%] w-[150%] -translate-x-1/2 -translate-y-1/2 object-contain opacity-40 blur-2xl saturate-150"
-									onError={() => setIconFailed(true)}
-								/>
-							)}
-						</>
+						)
 					)}
 					<div className="absolute inset-0 bg-linear-to-t from-black/90 via-black/45 to-black/5" />
 				</div>
@@ -630,18 +647,15 @@ export function SpotlightCard({
 		"app" | "metadata" | "isOwned" | "onClick" | "href" | "className"
 	>
 >) {
-	const { primaryHue, isDark } = useThemeInfo();
-	const [thumbFailed, setThumbFailed] = useState(false);
-	const [iconFailed, setIconFailed] = useState(false);
-
 	const appName = metadata?.name ?? app.id;
 	const appIcon = metadata?.icon ?? "/app-logo.webp";
-	const hasThumb = Boolean(metadata?.thumbnail) && !thumbFailed;
+	const thumbnail = useAssetImage(metadata?.thumbnail);
+	const ambientIcon = useAssetImage(appIcon);
+	const hasThumb = thumbnail.canRender;
 	const useCase = metadata?.use_case?.trim() || metadata?.description || "";
 	const tags = (metadata?.tags ?? []).filter(Boolean).slice(0, 4);
 	const author = app.authors?.find(Boolean);
 	const hasRating = app.rating_count > 0;
-	const grad = hashToGradient(app.id, primaryHue, isDark);
 
 	const cta = isOwned ? (
 		<span className="flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/40 bg-emerald-500/15 px-3.5 py-1.5 text-xs font-semibold text-emerald-400">
@@ -657,36 +671,40 @@ export function SpotlightCard({
 	const body = (
 		<>
 			<div className="relative min-h-40 overflow-hidden sm:min-h-0">
+				<GradientWash appId={app.id} />
 				{hasThumb ? (
 					// real cover art speaks for itself — the icon lives in the body title
 					<img
-						src={metadata?.thumbnail ?? ""}
+						ref={thumbnail.imgRef}
+						src={thumbnail.src}
 						alt=""
 						loading="lazy"
 						decoding="async"
-						className="absolute inset-0 h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-105"
-						onError={() => setThumbFailed(true)}
+						className={cn(
+							"absolute inset-0 h-full w-full object-cover transition-all duration-500 ease-out group-hover:scale-105",
+							thumbnail.loaded ? "opacity-100" : "opacity-0",
+						)}
+						onLoad={thumbnail.onLoad}
+						onError={thumbnail.onError}
 					/>
 				) : (
 					// no thumbnail → the app's own icon becomes blurred ambient art,
 					// with a crisp medallion on top (never a flat gradient slab)
 					<>
-						<div
-							className="absolute inset-0"
-							style={{
-								background: `linear-gradient(${grad.angle}deg, ${grad.from}, ${grad.to})`,
-								opacity: grad.opacity,
-							}}
-						/>
-						{appIcon && !iconFailed && (
+						{ambientIcon.canRender && (
 							<img
-								src={appIcon}
+								ref={ambientIcon.imgRef}
+								src={ambientIcon.src}
 								alt=""
 								aria-hidden="true"
 								loading="lazy"
 								decoding="async"
-								className="absolute left-1/2 top-1/2 h-[200%] w-[200%] -translate-x-1/2 -translate-y-1/2 object-contain opacity-45 blur-2xl saturate-150"
-								onError={() => setIconFailed(true)}
+								className={cn(
+									"absolute left-1/2 top-1/2 h-[200%] w-[200%] -translate-x-1/2 -translate-y-1/2 object-contain blur-2xl saturate-150 transition-opacity duration-500",
+									ambientIcon.loaded ? "opacity-45" : "opacity-0",
+								)}
+								onLoad={ambientIcon.onLoad}
+								onError={ambientIcon.onError}
 							/>
 						)}
 						<div className="absolute inset-0 grid place-items-center">

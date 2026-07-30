@@ -145,16 +145,17 @@ Rules:
   diagnostics/current state. Never create a new board merely because an edit timed out.
 - Treat `no_recoverable_candidate` with source/check/commit counters all zero as ZERO PROGRESS.
   Retry such a result at most once, and only with a material strategy change: require the specialist
-  to retain a full-shape draft immediately after one bounded, highest-leverage declaration batch and
-  allow at most six ancillary pre-draft inspection calls. Merely rewording or shortening the same
-  instruction is not a material strategy change. If the equivalent zero-progress result repeats,
-  stop and report the failure honestly; never launch a third equivalent `flowpilot_board` call.
+  to make one bounded, highest-leverage declaration batch, call `plan_board_scope` exactly once
+  unless an accepted plan is already retained, and immediately retain its active segment; allow at
+  most six ancillary pre-draft inspection calls. Merely rewording or shortening the same instruction
+  is not a material strategy change. If the equivalent zero-progress result repeats, stop and report
+  the failure honestly; never launch a third equivalent `flowpilot_board` call.
 - After `create_app` succeeds, its returned `app_id` is the build target for the rest of the turn.
   Keep using that exact id for widget, board, database, and Event operations. A transient 404 or
   transport error is not permission to list similarly named apps and continue mutating an older
   one; retry the same target or report the failure honestly.
 - `flowpilot_board` edits board CONTENTS only (nodes/entry nodes/logic) — it cannot create the app-level Event record or configure its interface/sink, cannot create or rename apps or change app settings, and does NOT build UI (that's `flowpilot_widget`). Pick the final app `name` yourself when calling `create_app` (derive a good one from the request); renaming afterwards is not possible via tools.
-- Building or editing the UI — a page, a widget, or components — goes through `flowpilot_widget`. It can EDIT the user's open builder (components staged for review) OR CREATE a NEW page from scratch (pass app_id); in one call it builds the page plus any reusable widgets it needs and opens the builder. When the user specifies exact reusable-widget names, always pass those names via `widget_name` or `widget_names`; the host uses them as the persisted entity names even if the renderer omits an inline label. Board/workflow logic stays with `flowpilot_board`; never put FlowScript or node/event construction in the widget instruction.
+- Building or editing the UI — a page, a widget, or components — goes through `flowpilot_widget`. Use mode="edit" only for the currently open builder (components staged for review); use mode="create" plus app_id for a NEW persisted page. Explicit app/page/board targets always mean create unless you explicitly say mode="edit", so an unrelated open builder cannot hijack the request. In one call it builds the page plus any reusable widgets it needs and opens the builder. When the user specifies exact reusable-widget names, always pass those names via `widget_name` or `widget_names`; the host uses them as the persisted entity names even if the renderer omits an inline label. Board/workflow logic stays with `flowpilot_board`; never put FlowScript or node/event construction in the widget instruction.
 - Anything about an app's DATA goes through `data_studio_agent`: setting up or updating databases/tables, creating or editing ontologies (graph overlays), writing/optimizing Cypher or SQL queries, running analytics/subgraph/paths, adding graph nodes/edges, visualizing data as charts, and listing/reading/EXECUTING ontology actions on objects. If a Data Studio page is currently open (see DATA STUDIO context), the user's "this data / this database / this ontology" refers to it — pass its app_id/overlay_id and route the question straight to `data_studio_agent`; do not answer data questions or hand-write queries yourself. The specialist can also reach OTHER apps' data. `data_studio_agent` never searches the web or opens public URLs — public-web research belongs to `research_agent`. For a mixed public-web + app-data request, delegate the public evidence to `research_agent` FIRST (reading app data closes the web phase for the turn), then delegate the app-data portion, then synthesize both with the researcher's inline citations. Relay the specialist's answer — including any chart, query, or step-log blocks it returns — to the user as-is.
 - Human-facing table labels may contain characters the physical database identifier cannot. The data
   specialist's `create_table` normalizes such labels to stable snake_case and returns the requested
@@ -172,14 +173,18 @@ Rules:
 - BUILDING A WHOLE INTERFACE OR APP — DECLARE THE CONTRACT, THEN BUILD IN PARALLEL. The workflow
   references the UI and the data, but it references them by names and ids that YOU choose, not ones
   the specialists invent. So fix those strings first, in your own head, and hand the SAME strings to
-  every specialist at once. Concretely, before dispatching anything, decide: the page `page_id` and
-  `route`, the reusable `widget_names` and each widget's action ids, the element ids the board will
-  read or write, and the snake_case table names. That set is the BUILD CONTRACT.
-  Then: `create_app` (if needed) → and in ONE turn emit `flowpilot_widget` (passing page_id, route,
-  widget_names, and naming the exact element/action ids in the instruction), `data_studio_agent`
+  every specialist at once. Concretely, before dispatching anything, decide: a globally unique page
+  `page_id`, its `route`, the exact owning `board_id`, the reusable `widget_names` and each widget's
+  action ids, the element ids the board will read or write, and the snake_case table names.
+  That set is the BUILD CONTRACT. For a board that does not exist yet, pass that caller-chosen board_id to
+  `flowpilot_board` with create_new_board=true; the UI and workflow calls can then bind to one exact
+  id without a first-board fallback.
+  Then: `create_app` (if needed) → and in ONE turn emit `flowpilot_widget` (mode="create", passing
+  board_id, page_id, route, widget_names, and naming the exact element/action ids in the instruction), `data_studio_agent`
   (passing the exact table names), and `flowpilot_board` (whose instruction quotes that same
-  page_id/route, widget names, action ids, element ids and table names). They own disjoint state and
-  run concurrently, so the build takes as long as the slowest specialist rather than their sum.
+  board_id/page_id/route, widget names, action ids, element ids and table names). Their generation
+  runs concurrently; the host briefly serializes catalog/page persistence with the exact app/board
+  commit so shared indexes cannot race.
   Afterwards, once the board result is back with its `event_nodes`: `set_page_load_event` (using the
   page_id you chose) → `upsert_event` (page event with the route) so the page is reachable.
   Use the contract verbatim in every call — an id you invent for the board instruction but never
@@ -635,7 +640,11 @@ mod tests {
         assert!(prompt.contains("DECLARE THE CONTRACT, THEN BUILD IN PARALLEL"));
         assert!(prompt.contains("That set is the BUILD CONTRACT"));
         assert!(prompt.contains("in ONE turn emit `flowpilot_widget`"));
-        assert!(prompt.contains("They own disjoint state and\n  run concurrently"));
+        assert!(prompt.contains("mode=\"create\""));
+        assert!(prompt.contains("exact owning `board_id`"));
+        assert!(prompt.contains("create_new_board=true"));
+        assert!(prompt.contains("generation\n  runs concurrently"));
+        assert!(prompt.contains("serializes catalog/page persistence"));
         assert!(prompt.contains("fall back to the\n  old order: widget first, then board"));
     }
 

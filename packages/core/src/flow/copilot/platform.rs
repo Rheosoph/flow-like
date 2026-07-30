@@ -187,6 +187,75 @@ fn is_editing_flowpilot_board_call(name: &str, arguments: &Value) -> bool {
     name == "flowpilot_board" && spec_arg_str(arguments, "mode", "mode") != "explain"
 }
 
+fn target_values_may_match(
+    left: &Value,
+    right: &Value,
+    snake_case: &str,
+    camel_case: &str,
+) -> bool {
+    let left = spec_arg_str(left, snake_case, camel_case).trim();
+    let right = spec_arg_str(right, snake_case, camel_case).trim();
+    left.is_empty() || right.is_empty() || left == right
+}
+
+fn calls_may_share_app(left: &Value, right: &Value) -> bool {
+    target_values_may_match(left, right, "app_id", "appId")
+}
+
+fn is_related_editing_board_call(
+    dependent_arguments: &Value,
+    candidate_name: &str,
+    candidate_arguments: &Value,
+) -> bool {
+    is_editing_flowpilot_board_call(candidate_name, candidate_arguments)
+        && calls_may_share_app(dependent_arguments, candidate_arguments)
+        && target_values_may_match(
+            dependent_arguments,
+            candidate_arguments,
+            "board_id",
+            "boardId",
+        )
+}
+
+fn is_creating_flowpilot_widget_call(name: &str, arguments: &Value) -> bool {
+    if name != "flowpilot_widget" {
+        return false;
+    }
+    match spec_arg_str(arguments, "mode", "mode").trim() {
+        "edit" => false,
+        "create" => true,
+        _ => [
+            ("app_id", "appId"),
+            ("board_id", "boardId"),
+            ("page_id", "pageId"),
+            ("page_name", "pageName"),
+            ("route", "route"),
+        ]
+        .iter()
+        .any(|(snake, camel)| !spec_arg_str(arguments, snake, camel).trim().is_empty()),
+    }
+}
+
+fn is_related_widget_create_call(
+    dependent_arguments: &Value,
+    candidate_name: &str,
+    candidate_arguments: &Value,
+) -> bool {
+    if !is_creating_flowpilot_widget_call(candidate_name, candidate_arguments)
+        || !calls_may_share_app(dependent_arguments, candidate_arguments)
+    {
+        return false;
+    }
+    let dependent_page = spec_arg_str(dependent_arguments, "page_id", "pageId").trim();
+    let candidate_page = spec_arg_str(candidate_arguments, "page_id", "pageId").trim();
+    if !dependent_page.is_empty() && !candidate_page.is_empty() {
+        return dependent_page == candidate_page;
+    }
+    let dependent_route = spec_arg_str(dependent_arguments, "route", "route").trim();
+    let candidate_route = spec_arg_str(candidate_arguments, "route", "route").trim();
+    dependent_route.is_empty() || candidate_route.is_empty() || dependent_route == candidate_route
+}
+
 /// The serialization lane a call belongs to, or `None` when it may run alongside anything.
 ///
 /// A round is scheduled by lane rather than as one all-or-nothing decision: calls sharing a lane
@@ -274,6 +343,51 @@ fn same_round_workflow_event_guard_result(
         })
         .to_string()
     })
+}
+
+fn is_page_event_upsert_call(name: &str, arguments: &Value) -> bool {
+    name == "upsert_event"
+        && !spec_arg_str(arguments, "page_id", "pageId")
+            .trim()
+            .is_empty()
+}
+
+/// Page lifecycle wiring and page Event registration need identities that only the completed
+/// authoring tools can make authoritative. Lanes can order calls, but they cannot repair guessed
+/// ids that the model authored before seeing those results, so defer the dependent call to the
+/// next model round instead of racing it against page/board persistence.
+fn same_round_page_dependency_guard_result(
+    name: &str,
+    arguments: &Value,
+    round_has_editing_board_call: bool,
+    round_has_widget_call: bool,
+) -> Option<String> {
+    let sets_page_lifecycle = name == "set_page_load_event";
+    let waits_for_page = round_has_widget_call
+        && (sets_page_lifecycle || is_page_event_upsert_call(name, arguments));
+    let waits_for_board = round_has_editing_board_call && sets_page_lifecycle;
+    if !waits_for_page && !waits_for_board {
+        return None;
+    }
+
+    let pending = match (waits_for_page, waits_for_board) {
+        (true, true) => "flowpilot_widget and flowpilot_board",
+        (true, false) => "flowpilot_widget",
+        (false, true) => "flowpilot_board",
+        (false, false) => unreachable!(),
+    };
+    Some(
+        json!({
+            "status": "error",
+            "code": "page_authoring_dependency_pending",
+            "retryable": true,
+            "next_action": "wait_for_page_and_board_authoring_results_then_retry",
+            "message": format!(
+                "{name} cannot run in the same assistant round as {pending}. Wait for authoring to succeed, use the exact persisted page_id, board_id, and event node ids from those results, then retry in the next assistant round. No page lifecycle or Event registration was changed."
+            )
+        })
+        .to_string(),
+    )
 }
 
 /// Global platform assistant. Holds just the state + profile needed to resolve a model; the tools and
@@ -727,12 +841,6 @@ impl PlatformCopilot {
                 frame_ids.push(frame_id);
             }
 
-            let round_has_editing_board_call = tool_calls.iter().any(|tool_call| {
-                is_editing_flowpilot_board_call(
-                    &tool_call.function.name,
-                    &tool_call.function.arguments,
-                )
-            });
             // Group the round into serialization lanes, then run the lanes concurrently. A lane
             // preserves the model's declared order internally; laneless (read-only) calls each get
             // their own lane so they never wait on anything.
@@ -763,22 +871,59 @@ impl PlatformCopilot {
                     let calls: Vec<_> = lane
                         .into_iter()
                         .map(|index| {
+                            let raw_arguments = &tool_calls[index].function.arguments;
+                            let round_has_related_editing_board_call =
+                                tool_calls.iter().any(|candidate| {
+                                    is_related_editing_board_call(
+                                        raw_arguments,
+                                        &candidate.function.name,
+                                        &candidate.function.arguments,
+                                    )
+                                });
+                            let round_has_related_widget_create_call =
+                                tool_calls.iter().any(|candidate| {
+                                    is_related_widget_create_call(
+                                        raw_arguments,
+                                        &candidate.function.name,
+                                        &candidate.function.arguments,
+                                    )
+                                });
                             (
                                 index,
                                 tool_calls[index].id.clone(),
                                 tool_calls[index].function.name.clone(),
                                 tool_calls[index].function.arguments.clone(),
                                 prepared_arguments[index].clone(),
+                                round_has_related_editing_board_call,
+                                round_has_related_widget_create_call,
                             )
                         })
                         .collect();
                     async move {
                         let mut lane_results = Vec::with_capacity(calls.len());
-                        for (index, id, name, raw_arguments, prepared) in calls {
+                        for (
+                            index,
+                            id,
+                            name,
+                            raw_arguments,
+                            prepared,
+                            round_has_related_editing_board_call,
+                            round_has_related_widget_create_call,
+                        ) in calls
+                        {
+                            if let Some(output) = same_round_page_dependency_guard_result(
+                                &name,
+                                &raw_arguments,
+                                round_has_related_editing_board_call,
+                                round_has_related_widget_create_call,
+                            ) {
+                                lane_results.push((index, (id, name, output, Vec::new())));
+                                continue;
+                            }
                             if let Some(output) = same_round_workflow_event_guard_result(
                                 &name,
                                 &raw_arguments,
-                                round_has_editing_board_call,
+                                round_has_related_editing_board_call,
                             ) {
                                 lane_results.push((index, (id, name, output, Vec::new())));
                                 continue;
@@ -1803,6 +1948,129 @@ mod tests {
     }
 
     #[test]
+    fn page_event_upsert_is_deferred_when_page_is_authored_in_same_round() {
+        let page_event_args = json!({
+            "app_id": "app",
+            "name": "Dashboard",
+            "page_id": "guessed-page",
+            "route": "/dashboard",
+        });
+        let output =
+            same_round_page_dependency_guard_result("upsert_event", &page_event_args, false, true)
+                .expect("page Event must wait for the authoritative page result");
+        let payload: Value = serde_json::from_str(&output).expect("structured guard result");
+
+        assert_eq!(payload["status"], "error");
+        assert_eq!(payload["code"], "page_authoring_dependency_pending");
+        assert_eq!(payload["retryable"], true);
+    }
+
+    #[test]
+    fn page_lifecycle_is_deferred_for_same_round_page_or_board_authoring() {
+        let lifecycle_args = json!({
+            "app_id": "app",
+            "page_id": "page",
+            "board_id": "board",
+            "on_load_event_id": "entry",
+        });
+
+        for (has_board, has_widget) in [(true, false), (false, true), (true, true)] {
+            let output = same_round_page_dependency_guard_result(
+                "set_page_load_event",
+                &lifecycle_args,
+                has_board,
+                has_widget,
+            )
+            .expect("lifecycle wiring must wait for same-round authoring");
+            let payload: Value = serde_json::from_str(&output).expect("structured guard result");
+            assert_eq!(payload["code"], "page_authoring_dependency_pending");
+            assert_eq!(
+                payload["next_action"],
+                "wait_for_page_and_board_authoring_results_then_retry"
+            );
+        }
+    }
+
+    #[test]
+    fn page_dependencies_are_allowed_after_authoring_results_exist() {
+        let lifecycle_args = json!({
+            "app_id": "app",
+            "page_id": "page",
+            "board_id": "board",
+            "on_load_event_id": "entry",
+        });
+        assert!(
+            same_round_page_dependency_guard_result(
+                "set_page_load_event",
+                &lifecycle_args,
+                false,
+                false,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn dependency_matching_ignores_unrelated_apps_pages_and_widget_edits() {
+        let dependent = json!({
+            "app_id": "app-a",
+            "page_id": "page-a",
+            "board_id": "board-a",
+        });
+        assert!(!is_related_widget_create_call(
+            &dependent,
+            "flowpilot_widget",
+            &json!({
+                "mode": "create",
+                "app_id": "app-b",
+                "page_id": "page-a",
+            }),
+        ));
+        assert!(!is_related_widget_create_call(
+            &dependent,
+            "flowpilot_widget",
+            &json!({
+                "mode": "create",
+                "app_id": "app-a",
+                "page_id": "page-b",
+            }),
+        ));
+        assert!(!is_related_widget_create_call(
+            &dependent,
+            "flowpilot_widget",
+            &json!({
+                "mode": "edit",
+                "app_id": "app-a",
+                "page_id": "page-a",
+            }),
+        ));
+        assert!(!is_related_editing_board_call(
+            &dependent,
+            "flowpilot_board",
+            &json!({
+                "mode": "edit",
+                "app_id": "app-a",
+                "board_id": "board-b",
+            }),
+        ));
+    }
+
+    #[test]
+    fn dependency_matching_keeps_unresolved_related_targets_conservative() {
+        let dependent = json!({ "app_id": "app-a", "page_id": "page-a" });
+        assert!(is_related_widget_create_call(
+            &dependent,
+            "flowpilot_widget",
+            &json!({ "mode": "create", "app_id": "app-a" }),
+        ));
+        assert!(is_related_editing_board_call(
+            &dependent,
+            "flowpilot_board",
+            &json!({ "mode": "edit", "app_id": "app-a" }),
+        ));
+    }
+
+    #[test]
     fn workflow_event_upsert_is_allowed_without_same_round_board_edit() {
         let event_args = json!({
             "app_id": "app",
@@ -1829,7 +2097,7 @@ mod tests {
     }
 
     #[test]
-    fn terminal_bridge_failures_never_render_as_done() {
+    fn terminal_bridge_statuses_distinguish_failures_from_validation_progress() {
         for status in [
             "error",
             "failed",
@@ -1837,7 +2105,6 @@ mod tests {
             "timed_out",
             "denied",
             "cancelled",
-            "validation_errors",
         ] {
             let output = json!({ "status": status }).to_string();
             assert_eq!(
@@ -1850,7 +2117,17 @@ mod tests {
                 Some(status)
             );
         }
-        for status in ["ok", "done", "queued", "applied", "completed"] {
+        for status in [
+            "ok",
+            "done",
+            "queued",
+            "applied",
+            "completed",
+            // The validator call completed and its candidate lifecycle carries the
+            // unresolved/repaired state. An explicit provider is_error still fails.
+            "validation_errors",
+            "draft_needs_repair",
+        ] {
             assert_eq!(
                 tool_result_stream_status(&json!({ "status": status }).to_string()),
                 "done"

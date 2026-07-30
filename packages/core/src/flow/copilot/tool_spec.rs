@@ -875,9 +875,10 @@ SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use creat
                         "instruction": { "type": "string", "description": "Complete natural-language instruction or question for the board copilot. For mode=edit: preserve the original full acceptance contract across retries; when a prior result retained a draft, include the original user request text verbatim, name the retained draft_id + expected_revision, and request repair of that same retained production candidate with its diagnostics — never a minimal replacement or a new draft id. For a single retry after zero progress, materially change strategy by requiring a scope plan that splits the build into smaller segments so the first source write lands quickly, after one bounded declaration batch and no more than six ancillary pre-draft inspections; rewording alone is not a retry strategy. For mode=explain: the user's question about the board." },
                         "mode": { "type": "string", "enum": ["edit", "explain"], "description": "\"explain\" to answer a question about the board (read-only, no changes, no approval); \"edit\" to build/modify it. Defaults to \"edit\"." },
                         "app_id": { "type": "string", "description": "App id (from list_apps, create_app, or the CURRENTLY OPEN BOARD context)." },
-                        "board_id": { "type": "string", "description": "Target board id within the app. Optional; defaults to the app's first board (or the open board), creating one if none exists." },
+                        "board_id": { "type": "string", "description": "Target board id within the app. Optional; defaults to the app's first board (or the open board), creating one if none exists. With create_new_board=true you may choose a new id here so flowpilot_board and flowpilot_widget can share the exact board contract." },
                         "board_name": { "type": "string", "description": "Name for the board if one has to be created. Optional." },
-                        "create_new_board": { "type": "boolean", "description": "Create an ADDITIONAL board in an app that already has one, instead of editing the existing board. Only for genuinely independent workflows with their own trigger event — boards of one app cannot call each other, so connected logic must stay in a single board. Ignored when board_id is given." }
+                        "create_new_board": { "type": "boolean", "description": "Create or ensure an ADDITIONAL board instead of editing the app's first board. Only for genuinely independent workflows with their own trigger event — boards of one app cannot call each other, so connected logic must stay in a single board. When board_id is supplied, that exact caller-chosen id is created/ensured." },
+                        "idempotency_key": { "type": "string", "description": "Stable caller-chosen retry key for this exact app/board creation target. Reuse it only for retries of the same target." }
                     },
                     "required": ["instruction", "app_id"]
                 })
@@ -897,24 +898,26 @@ SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use creat
         PlatformToolSpec {
             name: "flowpilot_widget",
             description: r#"The UI specialist — design and build interfaces (A2UI). Two modes:
-- EDIT the user's currently OPEN widget/page builder (generated components are staged for review), OR
-- CREATE a NEW page from scratch in an app (pass app_id). A page is board-scoped, so a board is created automatically if the app has none.
+- mode="edit": edit the user's currently OPEN widget/page builder (generated components are staged for review). Ambient open-builder state is used only in this mode.
+- mode="create": create a NEW page from scratch in an app (pass app_id). Supplying app_id/page_id/board_id/page_name/route defaults to create mode even when another builder is open. A page is board-scoped, so a board is created automatically if the app has none.
 	It builds the page AND any reusable widgets it needs — repeated or dynamic elements like list/grid cards, project or save-state rows, email-list items — in ONE call, then navigates the user to the page builder. A simple one-off layout (e.g. a dashboard with a chart and a table) needs no widget. Give a complete instruction for layout, content, and interaction affordances. When the user specified exact reusable-widget names, pass them in widget_names so the persisted entities keep those names even if the UI renderer omits an inline label. Side-effecting; asks for approval.
 SCOPE: UI only — pages, widgets, components. This specialist has no FlowScript or board-mutation authority and cannot build nodes, connections, entry events, or data wiring. A page may require an empty board record as its owner; that metadata scaffold is NOT workflow logic and is never proof that the board was built. Any requested behavior must be delegated separately to flowpilot_board. Never include FlowScript in this instruction and never treat this tool's success as satisfying board work.
 
-RUN IT ALONGSIDE THE BOARD. You do NOT have to wait for this result before calling flowpilot_board. Every identifier the board needs to point at is one YOU choose, not one this tool invents: pass `page_id`, `route`, `widget_names` and the element/action ids you named in the instruction, then send those same strings to flowpilot_board in the SAME turn. Both specialists bind to the contract you declared, so the page and its logic are built concurrently. Only fall back to sequencing — widget first, then board — when you did not fix the ids up front."#,
+RUN IT ALONGSIDE THE BOARD. You do NOT have to wait for this result before calling flowpilot_board. Every identifier the board needs to point at is one YOU choose, not one this tool invents: pass `board_id`, `page_id`, `route`, `widget_names` and the element/action ids you named in the instruction, then send those same strings to flowpilot_board in the SAME turn. When the board does not exist yet, call flowpilot_board with that exact board_id plus create_new_board=true. Both specialists bind to the contract you declared, so generation runs concurrently and persistence is safely coordinated. Only fall back to sequencing — widget first, then board — when you did not fix the ids up front."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
                         "instruction": { "type": "string", "description": "Complete natural-language description of the UI to build or modify (layout, content, and any reusable/repeated widgets)." },
+                        "mode": { "type": "string", "enum": ["create", "edit"], "description": "\"create\" to persist a new page, or \"edit\" to stage changes on the currently open builder. Defaults to create when any persisted-page target is supplied; otherwise edits the open builder when one exists." },
                         "app_id": { "type": "string", "description": "App to create a NEW page in (from list_apps/create_app). Omit when editing the currently open builder surface." },
-                            "page_id": { "type": "string", "description": "Id to create the new page UNDER, chosen by you. Pass this when you are building the page and its board in the same turn: it lets you put the page id into the board instruction (element refs, set_page_load_event, a page upsert_event) before this tool has returned, so both run concurrently. Must be unique within the app; reusing an existing page's id targets that page instead of creating one. Optional — a fresh id is generated when omitted." },
+                            "page_id": { "type": "string", "description": "Globally unique id for the new page, chosen by you. Prefix a friendly slug with app_id or use a UUID-like token. Pass this when building the page and board in the same turn so both specialists share the contract. An existing id is rejected rather than overwritten; open that page and use mode=edit instead. Optional — a fresh id is generated when omitted." },
                             "page_name": { "type": "string", "description": "Name for the new page. Optional; a generic name is used if omitted." },
                             "route": { "type": "string", "description": "URL route for the new page, e.g. \"/dashboard\". Optional; derived from the page name." },
-                            "board_id": { "type": "string", "description": "Board the new page binds to. Optional; defaults to the app's first board, creating one if none exists." },
+                            "board_id": { "type": "string", "description": "Exact board the new page binds to. Required when the app has more than one board. For a new secondary board, choose the id up front and pass the same id to flowpilot_board with create_new_board=true." },
                             "widget_name": { "type": "string", "description": "Exact persisted name of the one reusable widget requested for this page. Use widget_names instead when more than one is requested." },
-                            "widget_names": { "type": "array", "items": { "type": "string" }, "description": "Exact persisted reusable-widget names, in the same order they are requested in the instruction. Pass this whenever the user specified widget names." }
+                            "widget_names": { "type": "array", "items": { "type": "string" }, "description": "Exact persisted reusable-widget names, in the same order they are requested in the instruction. Pass this whenever the user specified widget names." },
+                            "idempotency_key": { "type": "string", "description": "Stable retry key for this exact app/board/page target. Reuse it only for retries of the same target; different targets are independently scoped." }
                     },
                     "required": ["instruction"]
                 })
@@ -2051,10 +2054,33 @@ mod tests {
                 .description
                 .contains("never treat this tool's success as satisfying board work")
         );
+        assert!(widget.description.contains("mode=\"create\""));
+        assert!(widget.description.contains("exact board_id"));
         assert!(widget.description.contains("pass them in widget_names"));
+        let widget_schema = (widget.schema)();
         assert_eq!(
-            (widget.schema)()["properties"]["widget_names"]["items"]["type"],
+            widget_schema["properties"]["widget_names"]["items"]["type"],
             json!("string")
+        );
+        assert_eq!(
+            widget_schema["properties"]["mode"]["enum"],
+            json!(["create", "edit"])
+        );
+        assert_eq!(
+            widget_schema["properties"]["idempotency_key"]["type"],
+            json!("string")
+        );
+
+        let board_schema = (board.schema)();
+        assert_eq!(
+            board_schema["properties"]["idempotency_key"]["type"],
+            json!("string")
+        );
+        assert!(
+            board_schema["properties"]["create_new_board"]["description"]
+                .as_str()
+                .expect("create_new_board description")
+                .contains("exact caller-chosen id")
         );
     }
 

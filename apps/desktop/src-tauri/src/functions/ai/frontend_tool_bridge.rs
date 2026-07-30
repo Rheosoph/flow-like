@@ -839,9 +839,9 @@ fn lost_frontend_response_result(
     })
 }
 
-/// Tool names of the Data Studio specialist. Unlike board runtime tools, these accept the current
-/// app/overlay as DEFAULTS the model may override to reach another project, so their ids are filled
-/// only when absent instead of being overwritten.
+/// Tool names whose overlay target is supplied by the Data Studio specialist. The surrounding
+/// app context is also a default, but that policy is derived from the absence of an authoritative
+/// board below so database and interface-inspection tools behave consistently too.
 fn is_data_studio_tool(tool_name: &str) -> bool {
     matches!(
         tool_name,
@@ -879,21 +879,59 @@ fn apply_tool_context(
     };
     let data_studio = is_data_studio_tool(tool_name);
     let cross_board_source = is_cross_board_source_tool(tool_name);
-    if let Some(app_id) = context.app_id.as_ref() {
-        if data_studio || cross_board_source {
-            fill_default_arg(arguments, "app_id", app_id);
+    // A resolved board specialist owns one exact app/board and its runtime calls must not escape
+    // that authority boundary. App-only contexts are different: Data Studio and Project Scout use
+    // the selected app merely as a starting point and are explicitly allowed to inspect another
+    // accessible app. Treating every ambient app id as authoritative made those specialists
+    // silently query the seed app even when the model supplied an explicit candidate.
+    let authoritative_board_scope = context
+        .board_id
+        .as_deref()
+        .is_some_and(|board_id| !board_id.trim().is_empty())
+        && !cross_board_source;
+    if let Some(app_id) = context
+        .app_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|app_id| !app_id.is_empty())
+    {
+        if authoritative_board_scope {
+            arguments.insert("app_id".to_string(), Value::String(app_id.to_string()));
         } else {
-            arguments.insert("app_id".to_string(), Value::String(app_id.clone()));
+            fill_default_arg(arguments, "app_id", app_id);
         }
     }
-    if data_studio && let Some(overlay_id) = context.overlay_id.as_ref() {
+    let effective_app_matches_context = context
+        .app_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|app_id| !app_id.is_empty())
+        .is_none_or(|context_app_id| {
+            arguments
+                .get("app_id")
+                .and_then(Value::as_str)
+                .is_some_and(|effective_app_id| effective_app_id.trim() == context_app_id)
+        });
+    if data_studio
+        && effective_app_matches_context
+        && let Some(overlay_id) = context
+            .overlay_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|overlay_id| !overlay_id.is_empty())
+    {
         fill_default_arg(arguments, "overlay_id", overlay_id);
     }
-    if let Some(board_id) = context.board_id.as_ref() {
+    if let Some(board_id) = context
+        .board_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|board_id| !board_id.is_empty())
+    {
         if cross_board_source {
             fill_default_arg(arguments, "board_id", board_id);
         } else {
-            arguments.insert("board_id".to_string(), Value::String(board_id.clone()));
+            arguments.insert("board_id".to_string(), Value::String(board_id.to_string()));
         }
     }
 }
@@ -1394,7 +1432,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_context_overrides_model_supplied_scope() {
+    fn board_tool_context_overrides_model_supplied_scope() {
         let mut arguments = json!({
             "app_id": "wrong-app",
             "board_id": "wrong-board",
@@ -1424,6 +1462,79 @@ mod tests {
         assert_eq!(
             arguments.get("operation").and_then(Value::as_str),
             Some("list_tables")
+        );
+    }
+
+    #[test]
+    fn app_only_context_is_a_default_for_cross_app_specialists() {
+        let context = FrontendToolContext {
+            app_id: Some("seed-app".to_string()),
+            overlay_id: Some("seed-overlay".to_string()),
+            ..Default::default()
+        };
+        let mut explicit_database_target = json!({
+            "app_id": "candidate-app",
+            "operation": "list_tables"
+        });
+        apply_tool_context(
+            "database_tool",
+            &mut explicit_database_target,
+            Some(&context),
+        );
+        assert_eq!(
+            explicit_database_target
+                .get("app_id")
+                .and_then(Value::as_str),
+            Some("candidate-app")
+        );
+
+        let mut explicit_scout_target = json!({ "app_id": "candidate-app" });
+        apply_tool_context("get_app_detail", &mut explicit_scout_target, Some(&context));
+        assert_eq!(
+            explicit_scout_target.get("app_id").and_then(Value::as_str),
+            Some("candidate-app")
+        );
+
+        let mut cross_app_graph = json!({ "app_id": "candidate-app" });
+        apply_tool_context("graph_query_tool", &mut cross_app_graph, Some(&context));
+        assert_eq!(
+            cross_app_graph.get("app_id").and_then(Value::as_str),
+            Some("candidate-app")
+        );
+        assert!(cross_app_graph.get("overlay_id").is_none());
+
+        let mut defaulted = json!({});
+        apply_tool_context("graph_query_tool", &mut defaulted, Some(&context));
+        assert_eq!(
+            defaulted.get("app_id").and_then(Value::as_str),
+            Some("seed-app")
+        );
+        assert_eq!(
+            defaulted.get("overlay_id").and_then(Value::as_str),
+            Some("seed-overlay")
+        );
+    }
+
+    #[test]
+    fn blank_board_context_never_erases_an_explicit_target() {
+        let context = FrontendToolContext {
+            app_id: Some("seed-app".to_string()),
+            board_id: Some("   ".to_string()),
+            ..Default::default()
+        };
+        let mut arguments = json!({
+            "app_id": "candidate-app",
+            "board_id": "candidate-board",
+        });
+        apply_tool_context("database_tool", &mut arguments, Some(&context));
+
+        assert_eq!(
+            arguments.get("app_id").and_then(Value::as_str),
+            Some("candidate-app")
+        );
+        assert_eq!(
+            arguments.get("board_id").and_then(Value::as_str),
+            Some("candidate-board")
         );
     }
 

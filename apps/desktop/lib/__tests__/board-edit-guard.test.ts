@@ -12,10 +12,13 @@ import {
 	boardEditLockKey,
 	boardEditRecoveryKey,
 	creationRequestFingerprint,
+	flowPilotBoardInitialLockKey,
 	flowScriptSnapshotChanged,
 	flowScriptSnapshotFingerprint,
 	hasActiveFrontendRequestOwnership,
+	isCancellableNestedCopilotTool,
 	isCreatedAppBuildTargetMismatch,
+	resolveFlowPilotBoardCreationId,
 	resolveFrontendToolExecutionDeadline,
 	retainedFlowScriptRecoveryInstruction,
 	retainedFlowScriptReferenceInstruction,
@@ -65,6 +68,49 @@ eventsSimple() {
 }`;
 
 describe("board edit guard", () => {
+	test("all delegated native agents are cancellation-scoped", () => {
+		for (const toolName of [
+			"flowpilot_board",
+			"flowpilot_widget",
+			"data_studio_agent",
+			"project_scout",
+			"research_agent",
+		]) {
+			expect(isCancellableNestedCopilotTool(toolName)).toBe(true);
+		}
+		expect(isCancellableNestedCopilotTool("database_tool")).toBe(false);
+	});
+
+	test("caller-selected new boards start on the app manifest lock", () => {
+		expect(flowPilotBoardInitialLockKey("app", "board-secondary", true)).toBe(
+			"app",
+		);
+		expect(flowPilotBoardInitialLockKey("app", "board-secondary", false)).toBe(
+			boardEditLockKey("app", "board-secondary"),
+		);
+	});
+
+	test("caller-selected board ids win over recovery and generation", () => {
+		expect(
+			resolveFlowPilotBoardCreationId({
+				requestedBoardId: "board-secondary",
+				journaledBoardId: "board-recovered",
+				createId: () => "board-generated",
+			}),
+		).toBe("board-secondary");
+		expect(
+			resolveFlowPilotBoardCreationId({
+				journaledBoardId: "board-recovered",
+				createId: () => "board-generated",
+			}),
+		).toBe("board-recovered");
+		expect(
+			resolveFlowPilotBoardCreationId({
+				createId: () => "board-generated",
+			}),
+		).toBe("board-generated");
+	});
+
 	test("retained FlowScript recovery overrides delegated tiny diagnostic fallbacks", () => {
 		const instruction =
 			retainedFlowScriptRecoveryInstruction(completeSupportFlow);

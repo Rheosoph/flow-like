@@ -49,19 +49,19 @@ const LAYOUT_TYPES: {
 	description: string;
 }[] = [
 	{
-		value: "Freeform",
+		value: "freeform",
 		label: "Freeform",
 		description: "Free positioning of elements",
 	},
-	{ value: "Stack", label: "Stack", description: "Vertical stacking layout" },
-	{ value: "Grid", label: "Grid", description: "Grid-based layout" },
+	{ value: "stack", label: "Stack", description: "Vertical stacking layout" },
+	{ value: "grid", label: "Grid", description: "Grid-based layout" },
 	{
-		value: "Sidebar",
+		value: "sidebar",
 		label: "Sidebar",
 		description: "Main content with sidebar",
 	},
 	{
-		value: "HolyGrail",
+		value: "holyGrail",
 		label: "Holy Grail",
 		description: "Classic web layout pattern",
 	},
@@ -186,7 +186,7 @@ export default function PageBuilderPage() {
 					id: pageId,
 					name: "New Page",
 					content: [],
-					layoutType: "Freeform",
+					layoutType: "freeform",
 					components: [],
 					createdAt: new Date().toISOString(),
 					updatedAt: new Date().toISOString(),

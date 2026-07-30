@@ -19,6 +19,96 @@ export function mapPlanStepStatus(status: unknown): PlanStepStatus {
 	return "progress";
 }
 
+const FAILED_TOOL_RESULT_STATUSES = new Set([
+	"error",
+	"failed",
+	"failure",
+	"timeout",
+	"timed_out",
+	"denied",
+	"cancelled",
+	"canceled",
+	"unresolved",
+	"infeasible",
+	"zero_progress_circuit_open",
+]);
+
+const FAILED_TOOL_RESULT_SUFFIXES = [
+	"_error",
+	"_errors",
+	"_failed",
+	"_failure",
+	"_timeout",
+	"_rejected",
+	"_unavailable",
+	"_violation",
+	"_mismatch",
+	"_conflict",
+	"_exhausted",
+	"_stalled",
+	"_blocked",
+	"_refused",
+	"_needs_repair",
+] as const;
+
+const ADVISORY_TOOL_RESULT_STATUSES = new Set([
+	"validation_error",
+	"validation_errors",
+	"draft_needs_repair",
+	"module_needs_repair",
+	"scope_plan_accepted",
+	"scope_plan_required",
+	"declaration_lookup_required",
+	"declaration_lookup_in_flight",
+	"declaration_batch_required",
+	"declaration_follow_up_unrelated",
+	"diagnostic_lookup_required",
+	"duplicate_declaration_lookup",
+	"retained_revision_required",
+	"flowscript_draft_required",
+	"commit_validated_prefix",
+	"predraft_inspection_budget_exhausted",
+	"discovery_budget_exhausted",
+	"time_budget_extended",
+	"time_budget_unavailable",
+	"deferred",
+]);
+
+function explicitToolResultError(
+	record: Record<string, unknown>,
+): boolean | undefined {
+	const value = record.is_error ?? record.isError;
+	return typeof value === "boolean" ? value : undefined;
+}
+
+/**
+ * Settle a completed tool call without maintaining a provider-status allowlist.
+ *
+ * Explicit `is_error` metadata is authoritative. Without it, only known-negative status names
+ * fail; accepted plans, host redirects/advisories, and future successful status names settle as
+ * done instead of becoming false failures in the activity timeline.
+ */
+export function toolEndPlanStepStatus(data: unknown): "done" | "failed" {
+	const record =
+		data && typeof data === "object"
+			? (data as Record<string, unknown>)
+			: { status: data };
+	const explicitError = explicitToolResultError(record);
+	if (explicitError !== undefined) return explicitError ? "failed" : "done";
+
+	const status = String(record.status ?? record.terminal_status ?? "")
+		.trim()
+		.toLowerCase();
+	if (ADVISORY_TOOL_RESULT_STATUSES.has(status)) return "done";
+	if (
+		FAILED_TOOL_RESULT_STATUSES.has(status) ||
+		FAILED_TOOL_RESULT_SUFFIXES.some((suffix) => status.endsWith(suffix))
+	) {
+		return "failed";
+	}
+	return "done";
+}
+
 export function readPlanStep(
 	data: unknown,
 ): (Omit<IPlanStep, "timestamp"> & { toolName?: string }) | null {
@@ -208,26 +298,10 @@ export function applyStreamEvent(
 		case "tool_end": {
 			const id = toolFieldId(event.data, "");
 			const existing = id ? acc.steps.get(id) : undefined;
-			const record = (event.data ?? {}) as Record<string, unknown>;
 			if (existing) {
-				const terminalStatus = String(
-					record.status ?? record.terminal_status ?? "done",
-				).toLowerCase();
-				const failed = [
-					"error",
-					"failed",
-					"failure",
-					"timeout",
-					"timed_out",
-					"cancelled",
-					"canceled",
-					"denied",
-					"validation_error",
-					"validation_errors",
-				].includes(terminalStatus);
 				acc.steps.set(id, {
 					...existing,
-					status: failed ? "failed" : "done",
+					status: toolEndPlanStepStatus(event.data),
 				});
 			}
 			acc.currentStepId = undefined;

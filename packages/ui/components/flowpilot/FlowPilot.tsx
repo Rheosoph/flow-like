@@ -53,6 +53,7 @@ import {
 } from "../../lib/flowpilot-db";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
+import { toolEndPlanStepStatus } from "../../state/global-chat/copilot-stream-steps";
 
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
@@ -2809,7 +2810,10 @@ function FlowPilotImpl({
 								typeof eventData?.tool === "string"
 									? eventData.tool
 									: undefined;
-							const status = eventData?.status === "error" ? "error" : "done";
+							const status =
+								toolEndPlanStepStatus(eventData) === "failed"
+									? "error"
+									: "done";
 							const resultSummary =
 								stringifyPreview(eventData?.result_summary) ??
 								stringifyPreview(eventData?.error);

@@ -11,6 +11,7 @@ import {
 	IExecutionStage,
 	ILogLevel,
 	type IMetadata,
+	type IPage,
 	IRole,
 	Response,
 	nowSystemTime,
@@ -89,10 +90,13 @@ import {
 	boardEditInterruptionResult,
 	boardEditLockKey,
 	boardEditRecoveryKey,
+	flowPilotBoardInitialLockKey,
 	flowScriptSnapshotChanged,
 	flowScriptSnapshotFingerprint,
 	hasActiveFrontendRequestOwnership,
+	isCancellableNestedCopilotTool,
 	isCreatedAppBuildTargetMismatch,
+	resolveFlowPilotBoardCreationId,
 	resolveFrontendToolExecutionDeadline,
 	retainedFlowScriptRecoveryInstruction,
 	retainedFlowScriptReferenceInstruction,
@@ -102,6 +106,8 @@ import {
 import { composeDelegatedRawUserPrompt } from "../flowpilot/copilot-request-context";
 import {
 	type FlowScriptWorkspaceCandidate,
+	flowScriptWorkspaceDiagnostics,
+	flowScriptWorkspaceRepairResolved,
 	isFlowScriptWorkspaceApplicable,
 	isPartialFlowScriptWorkspace,
 	parseFlowScriptWorkspaceCandidate,
@@ -127,6 +133,11 @@ import type {
 } from "../interfaces/chat-default/chat-db";
 import type { IAttachment, IMessage } from "../interfaces/chat-default/chat-db";
 import { processChatEvents } from "../interfaces/chat-default/event-processor";
+import {
+	flowPilotWidgetCreationScope,
+	isFlowPilotPageNotFoundError,
+	resolveFlowPilotWidgetTarget,
+} from "./flowpilot-widget-target";
 import { readFlowScriptSource } from "./read-flowscript-source";
 import {
 	scoutForkPreview,
@@ -756,14 +767,53 @@ function compactFlowScriptDiagnostic(diagnostic: unknown): unknown {
 		"line",
 		"column",
 		"span",
+		"source_span",
 		"path",
+		"ast_path",
+		"scope",
 		"function",
+		"expected",
+		"actual",
+		"declaration",
+		"pin",
+		"fix",
+		"occurrences",
+		"related_messages",
 	]) {
 		const value = record[key];
 		if (value === undefined) continue;
-		compacted[key] = typeof value === "string" ? value.slice(0, 400) : value;
+		if (
+			value === null ||
+			typeof value === "number" ||
+			typeof value === "boolean"
+		) {
+			compacted[key] = value;
+		} else if (typeof value === "string") {
+			compacted[key] = value.slice(0, 400);
+		} else {
+			try {
+				compacted[key] = JSON.stringify(value).slice(0, 400);
+			} catch {
+				compacted[key] = "[diagnostic detail unavailable]";
+			}
+		}
 	}
-	return Object.keys(compacted).length > 0 ? compacted : record;
+	return Object.keys(compacted).length > 0
+		? compacted
+		: "[unstructured diagnostic omitted]";
+}
+
+function flowScriptCandidatePlanReasoning(
+	candidate: FlowScriptWorkspaceCandidate,
+): string {
+	const diagnostics = flowScriptWorkspaceDiagnostics(candidate)
+		.slice(0, 10)
+		.map(compactFlowScriptDiagnostic);
+	const diagnosticPreview =
+		diagnostics.length > 0
+			? `Validation diagnostics:\n\`\`\`json\n${JSON.stringify(diagnostics, null, 2).slice(0, 4_000)}\n\`\`\`\n\n`
+			: "";
+	return `${diagnosticPreview}${safeFlowScriptPlanReasoning(candidate.source, 3_000)}`;
 }
 
 interface NestedScopePlanSegment {
@@ -2833,7 +2883,9 @@ export function GlobalToolBridge() {
 						undefined;
 					let page: Awaited<ReturnType<typeof backend.pageState.getPage>>;
 					try {
-						page = await backend.pageState.getPage(appId, pageId, boardId);
+						// Resolve by page id first. An exact-board lookup would turn an ownership
+						// mismatch into a misleading "not found" result.
+						page = await backend.pageState.getPage(appId, pageId);
 					} catch (error) {
 						return {
 							status: "error",
@@ -2851,72 +2903,106 @@ export function GlobalToolBridge() {
 					const onInterval =
 						argString(args, "on_interval_event_id") ||
 						argString(args, "onIntervalEventId");
-					const pageBoardId = boardId || page.boardId;
-					const configuredEntryIds = [
-						["on_load_event_id", onLoad],
-						["on_unload_event_id", onUnload],
-						["on_interval_event_id", onInterval],
-					].filter((entry): entry is [string, string] => Boolean(entry[1]));
-					if (configuredEntryIds.length > 0) {
-						if (!pageBoardId) {
+					if (boardId && page.boardId && boardId !== page.boardId) {
+						return {
+							status: "error",
+							code: "FLOWPILOT_PAGE_BOARD_MISMATCH",
+							message: `Page '${pageId}' belongs to board '${page.boardId}', not '${boardId}'. No lifecycle event was changed.`,
+						};
+					}
+					// The persisted page owns this choice. A caller-supplied board is only a scope
+					// assertion, never a fallback ownership assignment.
+					const pageBoardId = page.boardId;
+					if (!pageBoardId) {
+						return {
+							status: "error",
+							message:
+								"The page has no board_id. Recreate or repair its ownership before wiring lifecycle events.",
+						};
+					}
+					const releasePageLifecycle = await boardEditCoordinator.acquire(
+						boardEditLockKey(appId, pageBoardId),
+						{
+							deadlineAtMs: requestDeadline(request),
+							signal:
+								requestExecutionLeasesRef.current.get(request)?.controller
+									.signal,
+							onInvalidated: () => markRequestExpired(request.requestId),
+						},
+					);
+					try {
+						assertRequestActive(request, "page lifecycle persistence");
+						// The board may have changed while this request waited. Re-read page
+						// ownership inside the same board lock before validating nodes and saving.
+						page = await backend.pageState.getPage(appId, pageId);
+						if (page.boardId !== pageBoardId) {
 							return {
 								status: "error",
-								message:
-									"The page has no board_id. Build the board first and pass the exact board_id plus runnable Simple Event node returned by flowpilot_board.",
+								code: "FLOWPILOT_PAGE_BOARD_CHANGED",
+								message: `Page '${pageId}' ownership changed from board '${pageBoardId}' to '${page.boardId ?? "none"}' while lifecycle wiring waited. Retry against the current page.`,
 							};
 						}
-						let pageBoard: Awaited<
-							ReturnType<typeof backend.boardState.getBoard>
-						>;
+						const configuredEntryIds = [
+							["on_load_event_id", onLoad],
+							["on_unload_event_id", onUnload],
+							["on_interval_event_id", onInterval],
+						].filter((entry): entry is [string, string] => Boolean(entry[1]));
+						if (configuredEntryIds.length > 0) {
+							let pageBoard: Awaited<
+								ReturnType<typeof backend.boardState.getBoard>
+							>;
+							try {
+								pageBoard = await backend.boardState.getBoard(
+									appId,
+									pageBoardId,
+									undefined,
+									true,
+								);
+							} catch (error) {
+								return {
+									status: "error",
+									message: `Failed to load the page board: ${error instanceof Error ? error.message : String(error)}`,
+								};
+							}
+							for (const [field, nodeId] of configuredEntryIds) {
+								const entryNode = pageBoard?.nodes?.[nodeId];
+								if (
+									entryNode?.name !== "events_simple" ||
+									!isRunnableWorkflowEventEntry(pageBoard, nodeId)
+								) {
+									return {
+										status: "error",
+										message: `${field} '${nodeId}' is not a connected events_simple entry on board '${pageBoardId}'. Build and connect the board logic first; the page was not changed.`,
+									};
+								}
+							}
+						}
+						page.onLoadEventId = onLoad || undefined;
+						if (onUnload) page.onUnloadEventId = onUnload;
+						if (onInterval) {
+							page.onIntervalEventId = onInterval;
+							const secs = args.on_interval_seconds ?? args.onIntervalSeconds;
+							if (typeof secs === "number" && secs > 0)
+								page.onIntervalSeconds = secs;
+						}
 						try {
-							pageBoard = await backend.boardState.getBoard(
-								appId,
-								pageBoardId,
-								undefined,
-								true,
-							);
+							await backend.pageState.updatePage(appId, page);
 						} catch (error) {
 							return {
 								status: "error",
-								message: `Failed to load the page board: ${error instanceof Error ? error.message : String(error)}`,
+								message: `Failed to update page: ${error instanceof Error ? error.message : String(error)}`,
 							};
 						}
-						for (const [field, nodeId] of configuredEntryIds) {
-							const entryNode = pageBoard?.nodes?.[nodeId];
-							if (
-								entryNode?.name !== "events_simple" ||
-								!isRunnableWorkflowEventEntry(pageBoard, nodeId)
-							) {
-								return {
-									status: "error",
-									message: `${field} '${nodeId}' is not a connected events_simple entry on board '${pageBoardId}'. Build and connect the board logic first; the page was not changed.`,
-								};
-							}
-						}
-					}
-					page.onLoadEventId = onLoad || undefined;
-					if (onUnload) page.onUnloadEventId = onUnload;
-					if (onInterval) {
-						page.onIntervalEventId = onInterval;
-						const secs = args.on_interval_seconds ?? args.onIntervalSeconds;
-						if (typeof secs === "number" && secs > 0)
-							page.onIntervalSeconds = secs;
-					}
-					try {
-						await backend.pageState.updatePage(appId, page);
-					} catch (error) {
+						scope.referenceApp(appId);
 						return {
-							status: "error",
-							message: `Failed to update page: ${error instanceof Error ? error.message : String(error)}`,
+							status: "ok",
+							note: onLoad
+								? "Page onLoad event wired — it runs when the page opens."
+								: "Page onLoad event cleared.",
 						};
+					} finally {
+						releasePageLifecycle();
 					}
-					scope.referenceApp(appId);
-					return {
-						status: "ok",
-						note: onLoad
-							? "Page onLoad event wired — it runs when the page opens."
-							: "Page onLoad event cleared.",
-					};
 				}
 				case "data_studio_agent": {
 					const instruction = argString(args, "instruction");
@@ -3404,6 +3490,7 @@ export function GlobalToolBridge() {
 							isReady,
 						});
 					let boardId = liveSurface?.boardId ?? boardIdArg;
+					const createNewBoard = argBoolean(args, "create_new_board") === true;
 					if (boardId) {
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
 							key: boardEditRecoveryKey(appId, boardId),
@@ -3420,10 +3507,10 @@ export function GlobalToolBridge() {
 					// A known board target locks only that board so runs on different boards of the
 					// same app can overlap. Without a target the app-scoped key serializes board
 					// creation/selection; the board-scoped lock is acquired below once resolved.
-					const lockScopedToBoard = Boolean(boardId);
+					const lockScopedToBoard = Boolean(boardId) && !createNewBoard;
 					let releaseBoardEdit: (() => void) | undefined =
 						await boardEditCoordinator.acquire(
-							boardEditLockKey(appId, boardId),
+							flowPilotBoardInitialLockKey(appId, boardId, createNewBoard),
 							boardEditAcquireOptions(),
 						);
 					let releaseBoardScopedEdit: (() => void) | undefined;
@@ -3445,8 +3532,6 @@ export function GlobalToolBridge() {
 						// trigger: boards of one app cannot call each other, so connected logic must
 						// stay in one board as function layers. Without this opt-in the first-board
 						// fallback below silently retargets the existing board instead of creating one.
-						const createNewBoard =
-							!boardId && argBoolean(args, "create_new_board") === true;
 						// Resolve the target again only after acquiring the board/app lock. Another
 						// overlapping run may have created or changed it while this request waited.
 						if (!boardId && !createNewBoard) {
@@ -3459,8 +3544,9 @@ export function GlobalToolBridge() {
 						// New apps have no board yet — create one instead of bouncing the task back
 						// to the user. An explicit create_new_board also lands here, having skipped
 						// the first-board fallback above.
-						if (!boardId) {
+						if (!boardId || createNewBoard) {
 							assertRequestActive(request, "board creation");
+							const callerChosenBoardId = boardId;
 							const boardConversationId = conversationScopeId(request);
 							const boardIdempotencyKey =
 								argString(args, "idempotency_key") ||
@@ -3469,7 +3555,9 @@ export function GlobalToolBridge() {
 								? {
 										conversationId: boardConversationId,
 										toolName: "flowpilot_board",
-										scope: appId,
+										scope: callerChosenBoardId
+											? `${appId}\u0000board:${callerChosenBoardId}`
+											: appId,
 										instruction,
 										...(boardIdempotencyKey
 											? { idempotencyKey: boardIdempotencyKey }
@@ -3479,12 +3567,18 @@ export function GlobalToolBridge() {
 							// Reuse the board this conversation already created for the same request
 							// (e.g. a crash/reload retry whose listing has not propagated) instead of
 							// minting a duplicate; upsert on the recorded id is idempotent.
-							boardId =
-								(boardCreationIdentity
+							boardId = resolveFlowPilotBoardCreationId({
+								requestedBoardId: callerChosenBoardId,
+								journaledBoardId: boardCreationIdentity
 									? createdArtifactJournalRef.current.find(
 											boardCreationIdentity,
 										)?.artifacts.boardId
-									: undefined) ?? createId();
+									: undefined,
+								createId,
+							});
+							const boardAlreadyExisted = (
+								await backend.boardState.getBoards(appId)
+							).some((candidate) => candidate.id === boardId);
 							await backend.boardState.upsertBoard(
 								appId,
 								boardId,
@@ -3494,7 +3588,7 @@ export function GlobalToolBridge() {
 								ILogLevel.Debug,
 								IExecutionStage.Dev,
 							);
-							createdBoard = true;
+							createdBoard = !boardAlreadyExisted;
 							if (boardCreationIdentity) {
 								createdArtifactJournalRef.current.record(
 									boardCreationIdentity,
@@ -3655,6 +3749,9 @@ export function GlobalToolBridge() {
 						});
 						let workspaceCandidates: FlowScriptWorkspaceCandidate[] =
 							retainedCandidateAtStart ? [retainedCandidateAtStart] : [];
+						let validationCandidateAttempts = 0;
+						const validationCandidateFingerprints =
+							new Set<FlowScriptBaselineFingerprint>();
 						// Latest FlowScript validation tool result observed on the nested stream. When
 						// the run ends with validation_errors this carries the concrete defect list and
 						// the retained draft identity back to the outer agent.
@@ -3738,6 +3835,52 @@ export function GlobalToolBridge() {
 							draftingWorkspaceTimer = undefined;
 							pendingDraftingWorkspace = undefined;
 						};
+						const updateFlowScriptCandidateStep = (
+							candidate: FlowScriptWorkspaceCandidate,
+						) => {
+							const id = "flowscript";
+							if (candidate.status === "validation_errors") {
+								const fingerprint = flowScriptSnapshotFingerprint(
+									candidate.source,
+								);
+								if (!validationCandidateFingerprints.has(fingerprint)) {
+									validationCandidateFingerprints.add(fingerprint);
+									validationCandidateAttempts += 1;
+								}
+								if (!subAcc.steps.has(id)) subAcc.stepOrder.push(id);
+								const diagnostics =
+									flowScriptWorkspaceDiagnostics(candidate).length;
+								subAcc.steps.set(id, {
+									id,
+									title: "FlowScript",
+									description:
+										diagnostics > 0
+											? `${diagnostics} validation issue${diagnostics === 1 ? "" : "s"} found — repair in progress`
+											: "Validation issues found — repair in progress",
+									// A rejected intermediate candidate is not the run's terminal
+									// outcome. Keep one evolving row and settle it only when repaired
+									// or when the run actually ends with this invalid revision.
+									status: "progress",
+									reasoning: flowScriptCandidatePlanReasoning(candidate),
+									timestamp: subAcc.steps.get(id)?.timestamp ?? Date.now(),
+								});
+								return true;
+							}
+							if (
+								validationCandidateAttempts > 0 &&
+								flowScriptWorkspaceRepairResolved(candidate)
+							) {
+								const existing = subAcc.steps.get(id);
+								if (!existing) return false;
+								subAcc.steps.set(id, {
+									...existing,
+									description: `${validationCandidateAttempts} earlier validation candidate${validationCandidateAttempts === 1 ? "" : "s"} repaired`,
+									status: "done",
+								});
+								return true;
+							}
+							return false;
+						};
 						const consumeSubRunEvents = (
 							events: ReturnType<typeof pushSubRunChunk>,
 						) => {
@@ -3771,21 +3914,7 @@ export function GlobalToolBridge() {
 												baselineFingerprint,
 											);
 										}
-										// Keep rejected drafts inspectable in the nested process log even
-										// when a later candidate becomes the final/applicable workspace.
-										if (candidate.status === "validation_errors") {
-											const id = `workspace-candidate-${workspaceCandidates.length}`;
-											subAcc.stepOrder.push(id);
-											subAcc.steps.set(id, {
-												id,
-												title: "FlowScript candidate",
-												description: "Not applied — validation errors",
-												status: "failed",
-												reasoning: safeFlowScriptPlanReasoning(
-													candidate.source,
-												),
-												timestamp: Date.now(),
-											});
+										if (updateFlowScriptCandidateStep(candidate)) {
 											stepsChanged = true;
 										}
 										// Authoritative submitted/validation/queued snapshots bypass the
@@ -3896,9 +4025,9 @@ export function GlobalToolBridge() {
 Answer the user's question about this board clearly and concisely, grounded in its actual nodes and connections. Do NOT modify the board — make no edits and submit no FlowScript.`
 								: `${instruction}
 
-Execute the change NOW in this run: draft the complete FlowScript workspace for this request and submit it via your edit tools. Do not stop after analysis and do not merely describe a plan — the run only counts as successful once the complete workspace validates and returns status queued. A partial foundation or a submitted/failed preview is not success.
+Execute the change NOW in this run. Follow the required lifecycle in order: one focused declaration batch, one plan_board_scope call, then write_flowscript for the host-accepted active segment. Do not stop after analysis and do not merely describe a plan. Under a single-segment plan, success requires the complete workspace to validate and return queued; under a segmented plan, success requires the complete active segment to validate and queue without dropping the rest of the accepted scope. A submitted/failed preview is not success.
 
-Create an early retained full-shape FlowScript draft before exhaustive discovery: after one focused declaration batch, submit a draft that preserves the complete requested scope and its end-to-end structure, even when validation diagnostics are still expected. Do not chase every omitted or unmatched declaration before that first write, and perform at most six ancillary database/schema/UI/storage inspection calls before it. This retained diagnostic checkpoint is not success; use its compiler and acceptance diagnostics for narrow follow-up lookups, repair the complete draft, then check and commit it until the workspace is queued.
+Create an early retained FlowScript checkpoint before exhaustive discovery: after the focused declaration batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then submit its active segment even when validation diagnostics are still expected. A single plan's segment is the complete full-shape request; a segmented plan must preserve the complete accepted scope and follow the returned strategy_rule. Do not chase every omitted or unmatched declaration before that first write, and perform at most six ancillary database/schema/UI/storage inspection calls before it. This retained diagnostic checkpoint is not success; use its compiler and acceptance diagnostics for narrow follow-up lookups, repair the same retained draft, then check and commit it until the active segment is queued.
 
 Completion contract: build complete helper logic first and add the Event entry last. The Event must connect to runnable logic; every helper needs body nodes plus an observable return or side effect; consume accumulators/outputs instead of discarding them; trace execution and data connections end-to-end before submitting. Use eventsSimple() for execution-only/quick-action/scheduled logic, eventsGeneric(payload: Struct, fieldName: string, ...) for typed form/request pins, or eventsChat(...) for chat context. Cron is app Event setup on eventsSimple(), never a catalog node. This board run builds the workflow; the outer assistant attaches its Event interface after success.`) +
 							recoveryContinuation;
@@ -4041,6 +4170,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 										recoverable,
 										baselineFingerprint,
 									);
+								}
+								if (updateFlowScriptCandidateStep(selectedWorkspace)) {
+									publishSubSteps();
 								}
 							}
 							source = selectedWorkspace?.source;
@@ -4632,28 +4764,40 @@ Completion contract: build complete helper logic first and add the Event entry l
 						}
 						// Close the run with a summary step; the FlowScript itself is expandable.
 						if (source) {
-							subAcc.stepOrder.push("flowscript");
+							if (!subAcc.steps.has("flowscript")) {
+								subAcc.stepOrder.push("flowscript");
+							}
+							const repairedSuffix =
+								validationCandidateAttempts > 0 &&
+								workspaceStatus !== "validation_errors" &&
+								!applyFailed
+									? ` after repairing ${validationCandidateAttempts} validation candidate${validationCandidateAttempts === 1 ? "" : "s"}`
+									: "";
 							subAcc.steps.set("flowscript", {
 								id: "flowscript",
 								title: "FlowScript",
 								description:
 									workspaceStatus === "validation_errors"
-										? "Not applied — validation errors"
+										? `${flowScriptWorkspaceDiagnostics(selectedWorkspace ?? { source }).length || "Unresolved"} validation issue${flowScriptWorkspaceDiagnostics(selectedWorkspace ?? { source }).length === 1 ? "" : "s"} — not applied`
 										: workspaceStatus === "no_changes"
-											? "No changes needed"
+											? `No changes needed${repairedSuffix}`
 											: applyFailed
 												? `Not applied — ${diagnostics[0]?.slice(0, 120) ?? "apply failed"}`
 												: partialWorkingSlice
 													? `${appliedCommands} command${appliedCommands === 1 ? "" : "s"} applied as an incomplete testable slice`
 													: canonicalSourceCorrected && appliedCommands === 0
-														? "Canonical FlowScript anchors repaired"
-														: `${appliedCommands} command${appliedCommands === 1 ? "" : "s"} applied${blockedDeletion ? " (deletions blocked)" : deletionApproved ? " (deletions approved)" : ""}`,
+														? `Canonical FlowScript anchors repaired${repairedSuffix}`
+														: `${appliedCommands} command${appliedCommands === 1 ? "" : "s"} applied${blockedDeletion ? " (deletions blocked)" : deletionApproved ? " (deletions approved)" : ""}${repairedSuffix}`,
 								status:
 									workspaceStatus === "validation_errors" || applyFailed
 										? "failed"
 										: "done",
-								reasoning: safeFlowScriptPlanReasoning(source),
-								timestamp: Date.now(),
+								reasoning:
+									workspaceStatus === "validation_errors" && selectedWorkspace
+										? flowScriptCandidatePlanReasoning(selectedWorkspace)
+										: safeFlowScriptPlanReasoning(source),
+								timestamp:
+									subAcc.steps.get("flowscript")?.timestamp ?? Date.now(),
 							});
 							publishSubSteps();
 						}
@@ -4737,11 +4881,17 @@ Completion contract: build complete helper logic first and add the Event entry l
 						}
 
 						// Prefer the structured diagnostics captured from the nested validation tools;
-						// the local apply-path diagnostics are the fallback.
+						// transports that only return the final workspace carry the same evidence on
+						// that candidate, and the local apply-path diagnostics are the final fallback.
+						const workspaceDiagnostics = selectedWorkspace
+							? flowScriptWorkspaceDiagnostics(selectedWorkspace)
+							: [];
 						const validationDiagnostics = lastFlowScriptValidation?.diagnostics
 							.length
 							? lastFlowScriptValidation.diagnostics
-							: diagnostics;
+							: workspaceDiagnostics.length
+								? workspaceDiagnostics
+								: diagnostics;
 						// A segmented build can legitimately end with some segments applied and others
 						// missing. Name them, so the caller reports "3 of 5 applied" instead of
 						// presenting a half-built board as a finished one.
@@ -4822,7 +4972,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							...(noFlowScript
 								? {
 										flowscript_status: "no_flowscript",
-										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most once, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, then immediately retain a full-shape draft and repair it from diagnostics. If an equivalent zero-progress result already occurred, do not retry by merely rewording or shortening the instruction; stop and tell the user honestly that the edit failed.",
+										note: "IMPORTANT: the board copilot ended WITHOUT submitting a FlowScript — the board was NOT modified and contains no new nodes. Do not tell the user the workflow was built. Retry flowpilot_board at most once, and only with a materially different bounded pre-draft strategy: use one focused declaration batch, no more than six ancillary inspections, call plan_board_scope exactly once unless a plan is already retained, then immediately retain its active segment and repair it from diagnostics. If an equivalent zero-progress result already occurred, do not retry by merely rewording or shortening the instruction; stop and tell the user honestly that the edit failed.",
 									}
 								: {}),
 							...(workspaceStatus === "validation_errors"
@@ -4961,69 +5111,123 @@ Completion contract: build complete helper logic first and add the Event entry l
 						.filter(
 							(name, index, names) => name && names.indexOf(name) === index,
 						);
-					// Edit mode targets the OPEN builder surface. When none is open we create a NEW
-					// board-scoped page from scratch (mirrors how flowpilot_board bootstraps a board).
 					const widgetSurface = useAssistantSurface.getState().widgetSurface;
-					const createMode = !widgetSurface;
-					const appId =
-						widgetSurface?.appId ||
-						argString(args, "app_id") ||
-						argString(args, "appId");
-					if (!appId)
-						return {
-							status: "error",
-							message: createMode
-								? "No widget/page builder is open. To create a NEW page pass app_id (from list_apps/create_app); otherwise ask the user to open a builder first."
-								: "The open widget/page builder has no app scope. Reopen it from an app before using FlowPilot.",
-						};
-					const targetAppId = appId;
-					let boardId =
+					const requestedAppId =
+						argString(args, "app_id") || argString(args, "appId");
+					const requestedPageId =
+						argString(args, "page_id") || argString(args, "pageId");
+					const requestedPageName =
+						argString(args, "page_name") ||
+						argString(args, "pageName") ||
+						argString(args, "name");
+					const requestedRoute = argString(args, "route");
+					const requestedBoardId =
 						argString(args, "board_id") || argString(args, "boardId");
+					const targetResolution = resolveFlowPilotWidgetTarget({
+						mode: argString(args, "mode"),
+						appId: requestedAppId,
+						boardId: requestedBoardId,
+						pageId: requestedPageId,
+						pageName: requestedPageName,
+						route: requestedRoute,
+						surface: widgetSurface
+							? {
+									kind: widgetSurface.kind,
+									appId: widgetSurface.appId,
+									boardId: widgetSurface.boardId,
+									pageId: widgetSurface.pageId,
+									widgetId: widgetSurface.widgetId,
+								}
+							: null,
+					});
+					if (!targetResolution.ok)
+						return { status: "error", message: targetResolution.message };
+					const createMode = targetResolution.mode === "create";
+					// Ambient builder state is input only for an actual edit. A mounted page/widget
+					// must never leak its components or app scope into an explicit create request.
+					const editSurface = createMode ? null : widgetSurface;
+					const targetAppId = targetResolution.appId;
+					const appId = targetAppId;
+					let boardId = createMode
+						? requestedBoardId
+						: editSurface?.boardId || "";
 					let createdBoard = false;
+					const pageName = requestedPageName || "New Page";
+					const route = slugifyRoute(requestedRoute || pageName);
+					const pageId = createMode ? requestedPageId || createId() : "";
 					const widgetIdempotencyKey =
 						argString(args, "idempotency_key") ||
 						argString(args, "idempotencyKey");
+					if (createMode && !boardId) {
+						const boards = await backend.boardState.getBoards(targetAppId);
+						if (boards.length > 1) {
+							return {
+								status: "error",
+								code: "FLOWPILOT_WIDGET_BOARD_ID_REQUIRED",
+								message: `App '${targetAppId}' has ${boards.length} boards. Pass the exact board_id for this page; FlowPilot will not silently attach it to the first board.`,
+							};
+						}
+						boardId = boards[0]?.id ?? "";
+					}
 					const widgetConversationId = conversationScopeId(request);
-					const widgetCreationIdentity =
+					const widgetCreationIdentityForBoard = (targetBoardId: string) =>
 						createMode && widgetConversationId
 							? {
 									conversationId: widgetConversationId,
 									toolName: "flowpilot_widget",
-									scope: targetAppId,
+									scope: flowPilotWidgetCreationScope({
+										appId: targetAppId,
+										boardId: targetBoardId,
+										pageId: requestedPageId,
+										route,
+										pageName,
+									}),
 									instruction,
 									...(widgetIdempotencyKey
 										? { idempotencyKey: widgetIdempotencyKey }
 										: {}),
 								}
 							: undefined;
-					if (widgetCreationIdentity) {
-						const journaledPage = createdArtifactJournalRef.current.find(
-							widgetCreationIdentity,
-						);
-						if (journaledPage?.artifacts.pageId) {
-							scope.referenceApp(targetAppId);
-							return {
-								status: "ok",
-								already_created: true,
-								app_id: targetAppId,
-								...(journaledPage.artifacts.boardId
-									? { board_id: journaledPage.artifacts.boardId }
-									: {}),
-								page: { id: journaledPage.artifacts.pageId },
-								widgets: (journaledPage.artifacts.widgetIds ?? []).map(
-									(id) => ({ id }),
-								),
-								specialist_scope: "ui_only",
-								board_logic_built_by_this_tool: false,
-								workflow_logic_handoff: "flowpilot_board",
-								note: "A page for this exact request was already created earlier in this conversation; its ids are returned instead of creating a duplicate. Wire or edit that page instead. Only if the user truly wants a second, separate page, call flowpilot_widget again with a distinct `idempotency_key`.",
-							};
+					const journaledWidgetCreationResult = async (
+						identity: ReturnType<typeof widgetCreationIdentityForBoard>,
+					) => {
+						if (!identity) return undefined;
+						const journaledPage =
+							createdArtifactJournalRef.current.find(identity);
+						if (!journaledPage?.artifacts.pageId) return undefined;
+						try {
+							await backend.pageState.getPage(
+								targetAppId,
+								journaledPage.artifacts.pageId,
+							);
+						} catch (error) {
+							if (isFlowPilotPageNotFoundError(error)) return undefined;
+							throw error;
 						}
-					}
-					if (createMode && !boardId) {
-						const boards = await backend.boardState.getBoards(targetAppId);
-						boardId = boards?.[0]?.id ?? "";
-					}
+						scope.referenceApp(targetAppId);
+						return {
+							status: "ok" as const,
+							already_created: true,
+							app_id: targetAppId,
+							...(journaledPage.artifacts.boardId
+								? { board_id: journaledPage.artifacts.boardId }
+								: {}),
+							page: { id: journaledPage.artifacts.pageId },
+							widgets: (journaledPage.artifacts.widgetIds ?? []).map((id) => ({
+								id,
+							})),
+							specialist_scope: "ui_only",
+							board_logic_built_by_this_tool: false,
+							workflow_logic_handoff: "flowpilot_board",
+							note: "This exact app/board/page target was already created earlier in the conversation; its ids are returned instead of creating a duplicate. A different page_id, route, board_id, or idempotency_key is treated as a separate page.",
+						};
+					};
+					const widgetCreationIdentity =
+						widgetCreationIdentityForBoard(boardId);
+					const alreadyCreated = await journaledWidgetCreationResult(
+						widgetCreationIdentity,
+					);
+					if (alreadyCreated) return alreadyCreated;
 
 					// Run the widget copilot as a sub-agent, using the global chat's selected model.
 					const turnSelection = scope.turnSelection();
@@ -5130,9 +5334,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 								board_id: boardId,
 								instruction,
 								create_mode: createMode,
-								selected_component_ids:
-									widgetSurface?.selectedComponentIds ?? [],
-								current_components: widgetSurface?.currentComponents ?? [],
+								selected_component_ids: editSurface?.selectedComponentIds ?? [],
+								current_components: editSurface?.currentComponents ?? [],
 							},
 							summary: "Delegated UI sub-agent started.",
 						}),
@@ -5178,8 +5381,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 							null,
 							undefined,
 							[],
-							widgetSurface?.currentComponents ?? [],
-							widgetSurface?.selectedComponentIds ?? [],
+							editSurface?.currentComponents ?? [],
+							editSurface?.selectedComponentIds ?? [],
 							instruction,
 							[],
 							undefined /* images */,
@@ -5250,49 +5453,126 @@ Completion contract: build complete helper logic first and add the Event entry l
 					publishSubSteps();
 
 					if (createMode) {
-						// A page is board-scoped: reuse the app's board or create one (like
-						// flowpilot_board) so the page's logic can be wired next.
-						if (!boardId) {
-							boardId = createId();
-							await backend.boardState.upsertBoard(
-								targetAppId,
-								boardId,
-								argString(args, "board_name") || "Main Board",
-								instruction.slice(0, 140),
-								ILogLevel.Debug,
-								IExecutionStage.Dev,
-							);
-							createdBoard = true;
-						}
-
-						// Persist each reusable widget the copilot embedded inline, and point the
-						// page's instances at the saved widget via widgetRefs (keyed by instance id).
-						const inlineWidgets = collectInlineWidgets(components);
-						const widgetRefs: Record<string, unknown> = {};
-						const realIdByCopilotId = new Map<string, string>();
-						const widgetByRealId = new Map<string, unknown>();
-						// Concrete ids/names/action-ids so the orchestrator can reference these
-						// widgets when it calls flowpilot_board to wire the logic.
-						const createdWidgets: Array<{
-							id: string;
-							name: string;
-							action_ids: string[];
-						}> = [];
+						const persistenceAcquireOptions = () => ({
+							deadlineAtMs: requestDeadline(request),
+							signal:
+								requestExecutionLeasesRef.current.get(request)?.controller
+									.signal,
+							onInvalidated: () => markRequestExpired(request.requestId),
+						});
+						let releaseAppPersistence: (() => void) | undefined;
+						let releasePageBoardPersistence: (() => void) | undefined;
 						try {
+							// Widget ids live in the app manifest. Resolve/create the owning board and
+							// perform the reusable-widget check/create/update sequence under the same
+							// app-scoped lock used by new-board creation, so parallel page builds cannot
+							// lose either catalog or board ids through stale whole-manifest writes.
+							releaseAppPersistence = await boardEditCoordinator.acquire(
+								boardEditLockKey(targetAppId),
+								persistenceAcquireOptions(),
+							);
+							assertRequestActive(request, "UI catalog persistence");
+							const currentBoards =
+								await backend.boardState.getBoards(targetAppId);
+							if (boardId) {
+								if (!currentBoards.some((board) => board.id === boardId)) {
+									await backend.boardState.upsertBoard(
+										targetAppId,
+										boardId,
+										argString(args, "board_name") || "Main Board",
+										instruction.slice(0, 140),
+										ILogLevel.Debug,
+										IExecutionStage.Dev,
+									);
+									createdBoard = true;
+								}
+							} else {
+								if (currentBoards.length > 1) {
+									return finishWidgetRun({
+										status: "error",
+										code: "FLOWPILOT_WIDGET_BOARD_ID_REQUIRED",
+										message: `App '${targetAppId}' now has ${currentBoards.length} boards. Pass the exact board_id for this page; no page was persisted.`,
+									});
+								}
+								boardId = currentBoards[0]?.id ?? createId();
+								if (currentBoards.length === 0) {
+									await backend.boardState.upsertBoard(
+										targetAppId,
+										boardId,
+										argString(args, "board_name") || "Main Board",
+										instruction.slice(0, 140),
+										ILogLevel.Debug,
+										IExecutionStage.Dev,
+									);
+									createdBoard = true;
+								}
+							}
+							// A concurrent identical request may have finished while this one was
+							// generating UI. Recheck both the original unresolved scope and the now
+							// resolved board scope under the app lock before mutating widgets/pages.
+							const alreadyCreatedAfterLock =
+								(await journaledWidgetCreationResult(widgetCreationIdentity)) ??
+								(await journaledWidgetCreationResult(
+									widgetCreationIdentityForBoard(boardId),
+								));
+							if (alreadyCreatedAfterLock)
+								return finishWidgetRun(alreadyCreatedAfterLock);
+							let pageBeforeCatalog:
+								| Awaited<ReturnType<typeof backend.pageState.getPage>>
+								| undefined;
+							try {
+								pageBeforeCatalog = await backend.pageState.getPage(
+									targetAppId,
+									pageId,
+								);
+							} catch (error) {
+								if (!isFlowPilotPageNotFoundError(error)) throw error;
+							}
+							if (pageBeforeCatalog) {
+								return finishWidgetRun({
+									status: "error",
+									code: "FLOWPILOT_WIDGET_PAGE_ALREADY_EXISTS",
+									message:
+										pageBeforeCatalog.boardId &&
+										pageBeforeCatalog.boardId !== boardId
+											? `Page id '${pageId}' already belongs to board '${pageBeforeCatalog.boardId}', not '${boardId}'. Choose a globally unique page_id.`
+											: `Page '${pageId}' already exists. Open it and use mode='edit', or choose a different page_id for a new page.`,
+								});
+							}
+
+							// Persist each reusable widget the copilot embedded inline, and point the
+							// page's instances at the saved widget via widgetRefs (keyed by instance id).
+							const inlineWidgets = collectInlineWidgets(components);
+							const widgetRefs: Record<string, unknown> = {};
+							const realIdByCopilotId = new Map<string, string>();
+							const widgetByRealId = new Map<string, unknown>();
+							// Concrete ids/names/action-ids so the orchestrator can reference these
+							// widgets when it calls flowpilot_board to wire the logic.
+							const createdWidgets: Array<{
+								id: string;
+								name: string;
+								action_ids: string[];
+							}> = [];
 							for (const iw of inlineWidgets) {
 								let realId = realIdByCopilotId.get(iw.copilotWidgetId);
 								if (!realId) {
-									const widgetName =
-										requestedWidgetNames[createdWidgets.length] ||
-										(typeof iw.inlineDef.name === "string" &&
-										iw.inlineDef.name.trim()
+									const requestedWidgetName =
+										requestedWidgetNames[createdWidgets.length];
+									const inlineWidgetName =
+										typeof iw.inlineDef.name === "string"
 											? iw.inlineDef.name.trim()
-											: "Widget");
+											: "";
+									const widgetName =
+										requestedWidgetName || inlineWidgetName || "Widget";
+									const hasStableWidgetName = Boolean(
+										requestedWidgetName || inlineWidgetName,
+									);
 									// Specialist retries re-emit the same inline widget definition.
 									// Reuse the app's existing widget with this exact name instead of
 									// minting a duplicate: a second "Incident Row" makes the name
-									// ambiguous for the board specialist and is never cleaned up.
-									// The latest definition wins either way.
+									// ambiguous for the board specialist and is never cleaned up. An
+									// unnamed fallback "Widget" is not stable identity and never reuses
+									// another page's artifact.
 									let widget:
 										| Awaited<ReturnType<typeof backend.widgetState.getWidget>>
 										| undefined;
@@ -5301,60 +5581,80 @@ Completion contract: build complete helper logic first and add the Event entry l
 										// back to fetching each widget and comparing its real name.
 										const entries =
 											await backend.widgetState.getWidgets(targetAppId);
-										for (const [, widgetId, metadata] of entries) {
-											if (metadata?.name?.trim() === widgetName) {
-												realId = widgetId;
-												break;
-											}
-										}
-										if (!realId) {
-											for (const [, widgetId] of entries) {
-												try {
-													const candidate = await backend.widgetState.getWidget(
-														targetAppId,
-														widgetId,
-													);
-													if (candidate?.name?.trim() === widgetName) {
-														realId = widgetId;
-														widget = candidate;
-														break;
-													}
-												} catch {
-													// Skip unreadable widgets.
+										if (hasStableWidgetName) {
+											for (const [, widgetId, metadata] of entries) {
+												if (metadata?.name?.trim() === widgetName) {
+													realId = widgetId;
+													break;
 												}
 											}
-										} else if (realId) {
-											widget = await backend.widgetState.getWidget(
-												targetAppId,
-												realId,
-											);
+											if (!realId) {
+												for (const [, widgetId] of entries) {
+													try {
+														const candidate =
+															await backend.widgetState.getWidget(
+																targetAppId,
+																widgetId,
+															);
+														if (candidate?.name?.trim() === widgetName) {
+															realId = widgetId;
+															widget = candidate;
+															break;
+														}
+													} catch {
+														// Skip unreadable widgets.
+													}
+												}
+											} else {
+												widget = await backend.widgetState.getWidget(
+													targetAppId,
+													realId,
+												);
+											}
 										}
 									} catch {
 										// Reuse is best-effort; fall through to creation.
 									}
+									const creatingWidget = !realId || !widget;
 									if (!realId || !widget) {
 										realId = createId();
-										widget = await backend.widgetState.createWidget(
-											targetAppId,
-											realId,
-											widgetName,
-										);
+										const createdAt = new Date().toISOString();
+										// Build the complete object before its first upsert. Calling
+										// createWidget here used to publish an empty widget and then a
+										// second populated update; a failed second delivery could make
+										// later reads restore that empty remote copy.
+										widget = {
+											id: realId,
+											name: widgetName,
+											rootComponentId: "root",
+											components: [],
+											dataModel: [],
+											customizationOptions: [],
+											tags: [],
+											createdAt,
+											updatedAt: createdAt,
+										};
 									}
-									widget.components = ensureRootId(
-										collectComponents(iw.inlineDef.components),
-									);
-									widget.rootComponentId = "root";
-									if (Array.isArray(iw.inlineDef.exposedProps))
-										(widget as { exposedProps?: unknown }).exposedProps =
-											iw.inlineDef.exposedProps;
-									if (Array.isArray(iw.inlineDef.actions))
-										(widget as { actions?: unknown }).actions =
-											iw.inlineDef.actions;
-									await backend.widgetState.updateWidget(targetAppId, widget);
+									if (creatingWidget) {
+										widget.components = ensureRootId(
+											collectComponents(iw.inlineDef.components),
+										);
+										widget.rootComponentId = "root";
+										if (Array.isArray(iw.inlineDef.exposedProps))
+											(widget as { exposedProps?: unknown }).exposedProps =
+												iw.inlineDef.exposedProps;
+										if (Array.isArray(iw.inlineDef.actions))
+											(widget as { actions?: unknown }).actions =
+												iw.inlineDef.actions;
+										widget.updatedAt = new Date().toISOString();
+										await backend.widgetState.updateWidget(targetAppId, widget);
+									}
 									realIdByCopilotId.set(iw.copilotWidgetId, realId);
 									widgetByRealId.set(realId, widget);
-									const actionIds = Array.isArray(iw.inlineDef.actions)
-										? (iw.inlineDef.actions as Array<Record<string, unknown>>)
+									const widgetActions = (widget as { actions?: unknown })
+										.actions;
+									const actionIds = Array.isArray(widgetActions)
+										? (widgetActions as Array<Record<string, unknown>>)
 												.map((action) =>
 													typeof action?.id === "string" ? action.id : "",
 												)
@@ -5373,90 +5673,133 @@ Completion contract: build complete helper logic first and add the Event entry l
 								iw.component.inlineWidgetDef = undefined;
 								widgetRefs[iw.instanceId] = widgetByRealId.get(realId);
 							}
-						} catch (error) {
-							return finishWidgetRun({
-								status: "error",
-								message: `Failed to create the page's widgets: ${error instanceof Error ? error.message : String(error)}`,
-							});
-						}
 
-						// A caller-chosen page id is what lets the orchestrator wire the board to this
-						// page without waiting for this call to return — it can put the id into the
-						// board instruction up front and dispatch both specialists in one turn.
-						const pageId = argString(args, "page_id") || createId();
-						const pageName =
-							argString(args, "page_name") ||
-							argString(args, "name") ||
-							"New Page";
-						const route = slugifyRoute(argString(args, "route") || pageName);
-						try {
-							const page = await backend.pageState.createPage(
-								targetAppId,
-								pageId,
-								pageName,
-								route,
-								boardId,
+							// Keep the app lock while acquiring the narrower board lock, then through
+							// the short duplicate check + page save. This preserves the global page-id
+							// invariant across two different boards and follows the one safe lock
+							// order (app, then board) used by board creation.
+							releasePageBoardPersistence = await boardEditCoordinator.acquire(
+								boardEditLockKey(targetAppId, boardId),
+								persistenceAcquireOptions(),
 							);
-							page.components = ensureRootId(components);
+							assertRequestActive(request, "board-scoped page persistence");
+
+							// A caller-chosen page id lets the orchestrator quote it in the board
+							// contract before either specialist has returned.
+							let existingPage:
+								| Awaited<ReturnType<typeof backend.pageState.getPage>>
+								| undefined;
+							try {
+								existingPage = await backend.pageState.getPage(
+									targetAppId,
+									pageId,
+								);
+							} catch (error) {
+								if (!isFlowPilotPageNotFoundError(error)) throw error;
+							}
+							if (existingPage) {
+								return finishWidgetRun({
+									status: "error",
+									code: "FLOWPILOT_WIDGET_PAGE_ALREADY_EXISTS",
+									message:
+										existingPage.boardId && existingPage.boardId !== boardId
+											? `Page id '${pageId}' already belongs to board '${existingPage.boardId}', not '${boardId}'. Choose a globally unique page_id.`
+											: `Page '${pageId}' already exists. Open it and use mode='edit', or choose a different page_id for a new page.`,
+								});
+							}
+							const timestamp = new Date().toISOString();
+							// Persist the complete page in one upsert. The previous create-then-update
+							// sequence briefly published an empty remote page; if the second delivery
+							// failed, FlowPilot reported failure but left that empty artifact behind.
+							const page: IPage = {
+								id: pageId,
+								name: pageName,
+								route,
+								content: [],
+								layoutType: "freeform",
+								components: ensureRootId(components),
+								version: [0, 0, 1],
+								createdAt: timestamp,
+								updatedAt: timestamp,
+								boardId,
+							};
 							if (canvasSettings) page.canvasSettings = canvasSettings;
 							if (Object.keys(widgetRefs).length > 0)
 								(page as { widgetRefs?: unknown }).widgetRefs = widgetRefs;
 							await backend.pageState.updatePage(targetAppId, page);
-						} catch (error) {
-							return finishWidgetRun({
-								status: "error",
-								message: `Failed to create the page: ${error instanceof Error ? error.message : String(error)}`,
-							});
-						}
 
-						scope.referenceApp(targetAppId);
-						if (widgetCreationIdentity) {
-							createdArtifactJournalRef.current.record(
-								widgetCreationIdentity,
-								{
+							scope.referenceApp(targetAppId);
+							if (widgetCreationIdentity) {
+								const artifacts = {
 									appId: targetAppId,
 									boardId,
 									pageId,
 									...(createdWidgets.length > 0
-										? { widgetIds: createdWidgets.map((widget) => widget.id) }
+										? {
+												widgetIds: createdWidgets.map((widget) => widget.id),
+											}
 										: {}),
-								},
-								request.requestId,
-							);
+								};
+								createdArtifactJournalRef.current.record(
+									widgetCreationIdentity,
+									artifacts,
+									request.requestId,
+								);
+								const resolvedIdentity =
+									widgetCreationIdentityForBoard(boardId);
+								if (resolvedIdentity) {
+									// A no-board app starts with an "unresolved" target scope. Also
+									// record the resolved board scope so a restart/retry after the
+									// scaffold exists still finds the original page.
+									createdArtifactJournalRef.current.record(
+										resolvedIdentity,
+										artifacts,
+										request.requestId,
+									);
+								}
+							}
+							// Defer the navigation: router.push mid-stream tears down the run. The
+							// bridge navigates once the requesting run ends.
+							useGlobalChatStore.getState().setPendingNavigation({
+								target: `/page-builder?id=${pageId}&app=${targetAppId}&board=${boardId}`,
+								runId: scope.runId,
+							});
+							return finishWidgetRun({
+								status: "ok",
+								message: response.message,
+								component_count: components.length,
+								app_id: targetAppId,
+								board_id: boardId,
+								page: { id: pageId, name: pageName, route },
+								widgets: createdWidgets,
+								...(createdBoard ? { created_board_id: boardId } : {}),
+								note: "Created and applied UI only; no workflow logic was built. If the user's request includes behavior, wiring, data loading, actions, nodes, connections, or events, the next required step is flowpilot_board with this app_id and the returned page route plus widget/action_ids. Do not report the overall build complete until that board specialist succeeds.",
+							});
+						} catch (error) {
+							return finishWidgetRun({
+								status: "error",
+								message: `Failed to persist the page and its widgets: ${error instanceof Error ? error.message : String(error)}`,
+							});
+						} finally {
+							releasePageBoardPersistence?.();
+							releaseAppPersistence?.();
 						}
-						// Defer the navigation: router.push mid-stream tears down the run. The bridge
-						// navigates once the requesting run ends.
-						useGlobalChatStore.getState().setPendingNavigation({
-							target: `/page-builder?id=${pageId}&app=${targetAppId}&board=${boardId}`,
-							runId: scope.runId,
-						});
-						return finishWidgetRun({
-							status: "ok",
-							message: response.message,
-							component_count: components.length,
-							app_id: targetAppId,
-							board_id: boardId,
-							page: { id: pageId, name: pageName, route },
-							widgets: createdWidgets,
-							...(createdBoard ? { created_board_id: boardId } : {}),
-							note: "Created and applied UI only; no workflow logic was built. If the user's request includes behavior, wiring, data loading, actions, nodes, connections, or events, the next required step is flowpilot_board with this app_id and the returned page route plus widget/action_ids. Do not report the overall build complete until that board specialist succeeds.",
-						});
 					}
 
 					// Edit mode: stage for the user's inline review. The tool never applies this
 					// itself; only the review card does, either on a click or via auto mode.
 					let staged = false;
-					if (runIsLive() && widgetSurface) {
+					if (runIsLive() && editSurface) {
 						scope.setPendingComponents({
 							components,
 							canvasSettings,
 							warnings: warnings.length > 0 ? warnings : undefined,
-							surfaceId: widgetSurface.surfaceId,
-							appId: widgetSurface.appId,
+							surfaceId: editSurface.surfaceId,
+							appId: editSurface.appId,
 						});
 						staged = true;
 					}
-					if (widgetSurface?.appId) scope.referenceApp(widgetSurface.appId);
+					if (editSurface?.appId) scope.referenceApp(editSurface.appId);
 					if (!staged)
 						return finishWidgetRun({
 							status: "error",
@@ -5967,8 +6310,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						}
 						cancelRequestDialogs(request.requestId, reason);
 						if (
-							(request.toolName === "flowpilot_board" ||
-								request.toolName === "flowpilot_widget") &&
+							isCancellableNestedCopilotTool(request.toolName) &&
 							backend.boardState.cancelCopilotChat
 						) {
 							void backend.boardState
@@ -6251,8 +6593,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 							// correlated native sub-run as well so it cannot continue issuing tools or
 							// mutate after its owning MCP request disappeared.
 							if (
-								(cancelledToolName === "flowpilot_board" ||
-									cancelledToolName === "flowpilot_widget") &&
+								isCancellableNestedCopilotTool(cancelledToolName) &&
 								backend.boardState.cancelCopilotChat
 							) {
 								void backend.boardState
@@ -6340,8 +6681,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 				controller.abort();
 				pendingDialogRequestIds.add(request.requestId);
 				if (
-					(request.toolName === "flowpilot_board" ||
-						request.toolName === "flowpilot_widget") &&
+					isCancellableNestedCopilotTool(request.toolName) &&
 					backend.boardState.cancelCopilotChat
 				) {
 					void backend.boardState

@@ -4,6 +4,10 @@ export interface FlowScriptWorkspaceCandidate {
 	completion?: string;
 	retained_full_source?: string;
 	regression?: Record<string, unknown>;
+	/** Bounded legacy compiler diagnostics carried with this exact source snapshot. */
+	diagnostics?: unknown[];
+	/** Bounded structured compiler diagnostics carried with this exact source snapshot. */
+	structured_diagnostics?: unknown[];
 }
 
 export interface FlowScriptCandidateProfile {
@@ -240,6 +244,106 @@ function sourceKey(source: string): string {
 	return source.replace(/\r\n/g, "\n").trim();
 }
 
+const MAX_WORKSPACE_DIAGNOSTICS = 20;
+const MAX_WORKSPACE_DIAGNOSTIC_TEXT_CHARS = 600;
+const WORKSPACE_DIAGNOSTIC_FIELDS = [
+	"id",
+	"code",
+	"phase",
+	"severity",
+	"message",
+	"line",
+	"column",
+	"span",
+	"source_span",
+	"path",
+	"ast_path",
+	"scope",
+	"function",
+	"expected",
+	"actual",
+	"declaration",
+	"pin",
+	"fix",
+	"occurrences",
+	"related_messages",
+] as const;
+
+function boundedWorkspaceDiagnostic(value: unknown): unknown {
+	if (typeof value === "string") {
+		return value.slice(0, MAX_WORKSPACE_DIAGNOSTIC_TEXT_CHARS);
+	}
+	if (
+		value === null ||
+		typeof value === "number" ||
+		typeof value === "boolean"
+	) {
+		return value;
+	}
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		return String(value).slice(0, MAX_WORKSPACE_DIAGNOSTIC_TEXT_CHARS);
+	}
+
+	const record = value as Record<string, unknown>;
+	const bounded: Record<string, unknown> = {};
+	for (const key of WORKSPACE_DIAGNOSTIC_FIELDS) {
+		const field = record[key];
+		if (field === undefined) continue;
+		if (
+			field === null ||
+			typeof field === "number" ||
+			typeof field === "boolean"
+		) {
+			bounded[key] = field;
+			continue;
+		}
+		if (typeof field === "string") {
+			bounded[key] = field.slice(0, MAX_WORKSPACE_DIAGNOSTIC_TEXT_CHARS);
+			continue;
+		}
+		try {
+			bounded[key] = JSON.stringify(field).slice(
+				0,
+				MAX_WORKSPACE_DIAGNOSTIC_TEXT_CHARS,
+			);
+		} catch {
+			bounded[key] = "[diagnostic detail unavailable]";
+		}
+	}
+	return Object.keys(bounded).length > 0
+		? bounded
+		: "[unstructured diagnostic omitted]";
+}
+
+function boundedWorkspaceDiagnostics(value: unknown): unknown[] | undefined {
+	if (!Array.isArray(value) || value.length === 0) return undefined;
+	return value
+		.slice(0, MAX_WORKSPACE_DIAGNOSTICS)
+		.map(boundedWorkspaceDiagnostic);
+}
+
+/** Prefer the structured compiler list while retaining compatibility with legacy diagnostics. */
+export function flowScriptWorkspaceDiagnostics(
+	candidate: FlowScriptWorkspaceCandidate,
+): readonly unknown[] {
+	return candidate.structured_diagnostics?.length
+		? candidate.structured_diagnostics
+		: (candidate.diagnostics ?? []);
+}
+
+/** A later clean candidate supersedes earlier transient validation-error snapshots. */
+export function flowScriptWorkspaceRepairResolved(
+	candidate: FlowScriptWorkspaceCandidate,
+): boolean {
+	return [
+		"valid",
+		"queued",
+		"already_queued",
+		"no_changes",
+		"applied",
+	].includes(candidate.status?.trim().toLowerCase() ?? "");
+}
+
 /** Parse either a raw FlowScript document or the streamed `{source,status}` envelope. */
 export function parseFlowScriptWorkspaceCandidate(
 	workspace: string | undefined,
@@ -271,6 +375,14 @@ export function parseFlowScriptWorkspaceCandidate(
 				!Array.isArray(parsed.regression)
 			) {
 				candidate.regression = parsed.regression as Record<string, unknown>;
+			}
+			const diagnostics = boundedWorkspaceDiagnostics(parsed.diagnostics);
+			if (diagnostics) candidate.diagnostics = diagnostics;
+			const structuredDiagnostics = boundedWorkspaceDiagnostics(
+				parsed.structured_diagnostics,
+			);
+			if (structuredDiagnostics) {
+				candidate.structured_diagnostics = structuredDiagnostics;
 			}
 			return candidate;
 		}

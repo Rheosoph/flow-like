@@ -4899,17 +4899,26 @@ async fn external_code_agent_chat_internal(
                 let mut ready_since: Option<Instant> = None;
                 loop {
                     tokio::time::sleep(Duration::from_secs(1)).await;
-                    let waiting = match state.lock() {
-                        Ok(state) => workflow_waiting_for_initial_source_checkpoint(&state),
+                    let checkpoint = match state.lock() {
+                        Ok(state) => workflow_initial_source_checkpoint_phase(&state),
                         Err(_) => return,
                     };
-                    if !waiting {
-                        if ready_since.is_some() {
+                    match checkpoint {
+                        InitialSourceCheckpointPhase::Complete => {
                             // A source operation started or a draft was retained; the soft
                             // checkpoint did its job and must not interfere with validation.
                             return;
                         }
-                        continue;
+                        InitialSourceCheckpointPhase::AwaitingPrerequisites
+                        | InitialSourceCheckpointPhase::AncillaryContextInFlight => {
+                            // Planning is a prerequisite, not part of the source-writing budget.
+                            // Likewise, a context read admitted by the shared workflow session may
+                            // legitimately run longer than this checkpoint. Give the model a fresh
+                            // source-writing window after either prerequisite settles.
+                            ready_since = None;
+                            continue;
+                        }
+                        InitialSourceCheckpointPhase::AwaitingInitialSource => {}
                     }
                     let started = ready_since.get_or_insert_with(Instant::now);
                     if started.elapsed() >= EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET {
@@ -4985,7 +4994,7 @@ async fn external_code_agent_chat_internal(
                 state.last_status = Some("declarations_ready_no_source".to_string());
             }
             run_result = Err(format!(
-                "FlowPilot pre-draft source checkpoint timed out after {} seconds with usable declarations but no source operation; continue in a fresh bounded phase and call write_flowscript immediately",
+                "FlowPilot pre-draft source checkpoint timed out after {} seconds with usable declarations but no source operation; continue in a fresh bounded phase, reuse the accepted scope plan or call plan_board_scope exactly once, then call write_flowscript for its active segment",
                 EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET.as_secs()
             ));
         } else if circuit_open_fired.load(AtomicOrdering::Relaxed) {
@@ -5127,8 +5136,13 @@ async fn external_code_agent_chat_internal(
                 .is_some_and(|state| state.typed_draft_retained)
             {
                 "The host retained an exact typed draft revision. Continue that draft/revision and do not start a second mutation path."
+            } else if final_workflow_snapshot
+                .as_ref()
+                .is_some_and(|state| state.scope_plan.is_some())
+            {
+                "The host retained the accepted scope plan. Do not call plan_board_scope again; create the first draft for its active segment with write_flowscript."
             } else {
-                "No draft revision was retained. Resume the bounded pre-draft loop from host-retained declaration/read state, then create the first draft with write_flowscript."
+                "No draft revision was retained. Resume the bounded pre-draft loop from host-retained declaration/read state: obtain usable declarations if needed, call plan_board_scope exactly once, then create the first draft with write_flowscript."
             };
             repair_request.push_str(&format!(
                 "\n\nINTERNAL TRANSIENT RECOVERY: the previous provider/transport phase ended with `{}`. The host opened a fresh bounded phase. {recovery_action}",
@@ -6532,12 +6546,13 @@ async fn copilot_sdk_chat_internal(
         .or_else(|| {
             workflow_snapshot.as_ref().and_then(|snapshot| {
                 snapshot.last_flowscript.as_deref().map(|source| {
-                    flowscript_workspace_envelope(
+                    flowscript_response_workspace_envelope(
                         source,
                         snapshot
                             .last_status
                             .as_deref()
                             .unwrap_or("validation_errors"),
+                        Some(snapshot),
                     )
                 })
             })
@@ -6564,24 +6579,66 @@ fn flowscript_response_workspace_envelope(
     let Some(snapshot) = snapshot else {
         return flowscript_workspace_envelope(source, status);
     };
-    let Some(regression) = snapshot.modular_fallback.as_ref() else {
-        return flowscript_workspace_envelope(source, status);
-    };
-    serde_json::json!({
+
+    let mut payload = serde_json::json!({
         "source": source,
         "status": status,
-        "completion": "partial_working_slice",
-        "retained_full_source": snapshot.retained_full_source.as_deref(),
-        "regression": {
-            "previous_call_sites": regression.previous_call_sites,
-            "candidate_call_sites": regression.candidate_call_sites,
-            "previous_statements": regression.previous_statements,
-            "candidate_statements": regression.candidate_statements,
-            "previous_scope_symbols": regression.previous_scope_symbols,
-            "retained_scope_symbols": regression.retained_scope_symbols,
+    });
+    if let Some(object) = payload.as_object_mut() {
+        if matches!(
+            status,
+            "validation_error" | "validation_errors" | "draft_needs_repair" | "edit_interrupted"
+        ) {
+            let diagnostic_count = snapshot.last_errors.len();
+            if diagnostic_count > 0 {
+                object.insert(
+                    "diagnostic_count".to_string(),
+                    serde_json::json!(diagnostic_count),
+                );
+                object.insert(
+                    "diagnostics".to_string(),
+                    serde_json::json!(
+                        snapshot
+                            .last_errors
+                            .iter()
+                            .take(MAX_TERMINAL_REPORT_DIAGNOSTICS)
+                            .collect::<Vec<_>>()
+                    ),
+                );
+            }
+            if !snapshot.last_structured_diagnostics.is_empty() {
+                object.insert(
+                    "structured_diagnostics".to_string(),
+                    serde_json::Value::Array(snapshot.last_structured_diagnostics.clone()),
+                );
+            }
         }
-    })
-    .to_string()
+        if let Some(regression) = snapshot.modular_fallback.as_ref() {
+            object.insert(
+                "completion".to_string(),
+                serde_json::Value::String("partial_working_slice".to_string()),
+            );
+            if let Some(retained) = snapshot.retained_full_source.as_deref() {
+                object.insert(
+                    "retained_full_source".to_string(),
+                    serde_json::Value::String(retained.to_string()),
+                );
+            }
+            object.insert(
+                "regression".to_string(),
+                serde_json::json!({
+                    "previous_call_sites": regression.previous_call_sites,
+                    "candidate_call_sites": regression.candidate_call_sites,
+                    "previous_statements": regression.previous_statements,
+                    "candidate_statements": regression.candidate_statements,
+                    "previous_scope_symbols": regression.previous_scope_symbols,
+                    "retained_scope_symbols": regression.retained_scope_symbols,
+                }),
+            );
+        }
+    }
+    serde_json::to_string(&payload)
+        .unwrap_or_else(|_| flowscript_workspace_envelope(source, status))
 }
 
 fn send_stream_json_event(channel: &Channel<String>, tag: &str, payload: &serde_json::Value) {
@@ -6741,6 +6798,29 @@ fn flowscript_workspace_result_payload(
             if let Some(value) = result.get(key) {
                 object.insert(key.to_string(), value.clone());
             }
+        }
+        let diagnostics = workflow_result_diagnostics(Some(result));
+        if !diagnostics.is_empty() {
+            object.insert(
+                "diagnostic_count".to_string(),
+                serde_json::json!(diagnostics.len()),
+            );
+            object.insert(
+                "diagnostics".to_string(),
+                serde_json::json!(
+                    diagnostics
+                        .iter()
+                        .take(MAX_TERMINAL_REPORT_DIAGNOSTICS)
+                        .collect::<Vec<_>>()
+                ),
+            );
+        }
+        let structured_diagnostics = workflow_result_structured_diagnostics(Some(result));
+        if !structured_diagnostics.is_empty() {
+            object.insert(
+                "structured_diagnostics".to_string(),
+                serde_json::Value::Array(structured_diagnostics),
+            );
         }
     }
     Some(payload)
@@ -6960,31 +7040,7 @@ fn extract_json_status(content: &str) -> Option<String> {
 }
 
 fn direct_sdk_tool_result_stream_status(content: &str) -> &'static str {
-    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) else {
-        return flow_like::flow::copilot::stream::tool_result_stream_status(content);
-    };
-    let status = parsed
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default();
-    if matches!(
-        status,
-        "draft_started" | "draft_updated" | "module_validated"
-    ) && !workflow_result_has_explicit_diagnostics(&parsed)
-    {
-        // Missing expected modules are normal staged progress here. Preserve them for an idle
-        // continuation, but do not paint a successful begin/upsert tool call as failed.
-        return "done";
-    }
-    let diagnostics = workflow_result_diagnostics(Some(&parsed));
-    if workflow_result_requires_repair(&parsed, &diagnostics) {
-        return "error";
-    }
-    match status {
-        "draft_started" | "draft_updated" | "module_validated" | "draft_valid" | "rendered"
-        | "queued" | "already_queued" | "valid" => "done",
-        _ => flow_like::flow::copilot::stream::tool_result_stream_status(content),
-    }
+    flow_like::flow::copilot::stream::tool_result_stream_status(content)
 }
 
 fn summarize_tool_result(content: Option<&str>, error: Option<&str>) -> String {
@@ -7732,12 +7788,12 @@ fn mcp_progress_heartbeat_notification(
 /// diagnostics) instead of an opaque outer-channel timeout after a burned turn.
 const NESTED_RUN_WALL_CLOCK_BUDGET: Duration = Duration::from_secs(12 * 60);
 const MAX_EXTERNAL_WORKFLOW_CONTINUATIONS: u8 = 2;
-// Once a usable live declaration batch exists, a provider phase must dispatch its first source
-// checkpoint promptly. If it silently composes until this soft bound, retain the discovery state
-// and move to a fresh continuation instead of letting the phase consume the full nested budget.
-// Keep this at 3 minutes: a high-reasoning-effort provider legitimately spends >90s composing the
-// first full-shape draft, and every premature kill burns one of only two continuations.
-const EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET: Duration = Duration::from_secs(3 * 60);
+// Once usable declarations AND an accepted scope plan exist, a provider phase must dispatch its
+// first source checkpoint within this soft bound. Planning and admitted ancillary reads do not
+// consume it. Five minutes leaves enough room for a high-reasoning provider to compose and encode
+// a substantial first tool call; a shorter bound repeatedly kills that call before dispatch and
+// burns one of only two continuations. The shared 12-minute run ceiling remains authoritative.
+const EXTERNAL_PREDRAFT_SOURCE_CHECKPOINT_BUDGET: Duration = Duration::from_secs(5 * 60);
 const MAX_EXTERNAL_WORKFLOW_EDIT_ATTEMPTS: u8 = 12;
 const MAX_EXTERNAL_WORKFLOW_STALLED_EDIT_ATTEMPTS: u8 = 3;
 // A continuation phase whose instructions demand more patching must actually be executable:
@@ -8358,6 +8414,38 @@ impl WorkflowToolLoopState {
         let payload = accepted.acceptance_payload();
         self.scope_plan = Some(accepted);
         Ok(payload)
+    }
+
+    /// Return the existing plan when a restarted provider repeats the same execution shape.
+    ///
+    /// External continuations run in fresh processes. Even though the continuation prompt carries
+    /// the accepted plan, a provider may defensively submit it again. That replay must be
+    /// idempotent: consuming the one revision allowance here would turn a harmless process
+    /// boundary into `SCOPE_PLAN_BUDGET_EXHAUSTED` before the first source write. Rationale is
+    /// deliberately excluded because it is descriptive; strategy plus ordered segments are the
+    /// executable identity.
+    fn repeated_scope_plan_payload(&self, args: &PlanBoardScopeArgs) -> Option<serde_json::Value> {
+        let existing = self.scope_plan.as_ref()?;
+        let proposed = accept_scope_plan(args.clone()).ok()?;
+        if existing.strategy != proposed.strategy
+            || serde_json::to_value(&existing.segments).ok()
+                != serde_json::to_value(&proposed.segments).ok()
+        {
+            return None;
+        }
+
+        let mut payload = existing.acceptance_payload();
+        if let Some(object) = payload.as_object_mut() {
+            object.insert("idempotent".to_string(), serde_json::Value::Bool(true));
+            object.insert(
+                "message".to_string(),
+                serde_json::Value::String(
+                    "This exact scope plan is already accepted. Its host-owned active and committed state was preserved; do not call plan_board_scope again. Continue with the returned active segment and next_action."
+                        .to_string(),
+                ),
+            );
+        }
+        Some(payload)
     }
 
     /// A staged plan grows one draft, so the host cannot see segment boundaries in the source. Each
@@ -8985,13 +9073,45 @@ fn workflow_state_has_retained_candidate(
     }
 }
 
-fn workflow_waiting_for_initial_source_checkpoint(state: &WorkflowToolLoopState) -> bool {
-    state.initial_declaration_lookup_usable
-        && !state.queued
-        && !state.flowscript_draft_retained
-        && !state.typed_draft_retained
-        && state.flowscript_operation_attempts == 0
-        && state.typed_operation_attempts == 0
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InitialSourceCheckpointPhase {
+    /// The model still needs usable declarations and an accepted host scope plan. Time spent
+    /// obtaining either is not part of the bounded source-composition window.
+    AwaitingPrerequisites,
+    /// An ancillary database/UI/storage read admitted by the shared workflow session is still
+    /// executing. Its own handler deadline is authoritative while it owns a context-read lease.
+    AncillaryContextInFlight,
+    /// All prerequisites are ready and no recoverable source operation has started yet.
+    AwaitingInitialSource,
+    /// A source operation started, a draft was retained, or the workflow was already queued.
+    Complete,
+}
+
+fn workflow_initial_source_checkpoint_phase(
+    state: &WorkflowToolLoopState,
+) -> InitialSourceCheckpointPhase {
+    if state.queued
+        || state.flowscript_draft_retained
+        || state.typed_draft_retained
+        || state.flowscript_operation_attempts > 0
+        || state.typed_operation_attempts > 0
+    {
+        return InitialSourceCheckpointPhase::Complete;
+    }
+    if !state.initial_declaration_lookup_usable || state.scope_plan.is_none() {
+        return InitialSourceCheckpointPhase::AwaitingPrerequisites;
+    }
+
+    let shared_elapsed_ms = state.shared_session_elapsed_ms();
+    if state.shared_session.as_ref().is_some_and(|session| {
+        !session
+            .snapshot(shared_elapsed_ms)
+            .in_flight_context_reads
+            .is_empty()
+    }) {
+        return InitialSourceCheckpointPhase::AncillaryContextInFlight;
+    }
+    InitialSourceCheckpointPhase::AwaitingInitialSource
 }
 
 /// Outcome of preparing the workflow loop budget for one SDK idle continuation.
@@ -9216,7 +9336,11 @@ fn workflow_predraft_context_preflight_with_lease(
                     "code": "PREDRAFT_INSPECTION_BUDGET_EXHAUSTED",
                     "retryable": true,
                     "next_action": if state.initial_declaration_lookup_usable {
-                        "write_flowscript"
+                        if state.scope_plan.is_some() {
+                            "write_flowscript"
+                        } else {
+                            "plan_board_scope"
+                        }
                     } else if state.current_reads > 0 {
                         "get_declarations"
                     } else {
@@ -9224,7 +9348,7 @@ fn workflow_predraft_context_preflight_with_lease(
                     },
                     "inspection_calls": state.predraft_context_reads,
                     "inspection_budget": MAX_EXTERNAL_PREDRAFT_CONTEXT_READS,
-                    "message": "The bounded ancillary inspection budget is exhausted before a recoverable workflow draft exists. Reuse the database, UI, and storage context already returned. After one usable declaration batch, call write_flowscript immediately with a full-shape draft; do not repeat or exhaustively inventory schemas and pages."
+                    "message": "The bounded ancillary inspection budget is exhausted before a recoverable workflow draft exists. Reuse the database, UI, and storage context already returned. After one usable declaration batch, call plan_board_scope exactly once unless a plan is already accepted, then call write_flowscript for its active segment; do not repeat or exhaustively inventory schemas and pages."
                 }),
                 false,
             )),
@@ -9912,10 +10036,12 @@ fn workflow_tool_preflight_with_args(
                 "retryable": true,
                 "next_action": if state.needs_initial_declaration_coverage() {
                     "get_declarations"
+                } else if state.scope_plan.is_none() {
+                    "plan_board_scope"
                 } else {
                     "write_flowscript"
                 },
-                "message": "No host-authorized FlowScript draft is retained for this run. Start with live declaration coverage and write_flowscript; patch, check, and commit cannot create or guess a draft."
+                "message": "No host-authorized FlowScript draft is retained for this run. Obtain live declaration coverage, call plan_board_scope exactly once unless a plan is already accepted, then call write_flowscript for its active segment; patch, check, and commit cannot create or guess a draft."
             }),
             false,
         ));
@@ -10115,6 +10241,15 @@ fn workflow_tool_preflight_with_args(
         // Planning is host-owned state, so the accepted plan is recorded here rather than trusted
         // from the tool's own response. The tool handler mirrors this exact validation.
         "plan_board_scope" => {
+            // A fresh external provider process can replay the plan it received in continuation
+            // context. Recognize that before enforcing the revision-call ceiling so an identical
+            // replay remains a read of host state rather than a second planning mutation.
+            if state.scope_plan.is_some()
+                && let Ok(parsed) = serde_json::from_value::<PlanBoardScopeArgs>(args.clone())
+                && let Some(payload) = state.repeated_scope_plan_payload(&parsed)
+            {
+                return Some(workflow_loop_result(payload, false));
+            }
             if state.scope_plan_calls >= MAX_EXTERNAL_SCOPE_PLAN_CALLS {
                 return Some(workflow_loop_result(
                     serde_json::json!({
@@ -10190,7 +10325,7 @@ fn workflow_tool_preflight_with_args(
                     "status": "declaration_lookup_required",
                     "retryable": true,
                     "next_action": "get_declarations",
-                    "message": "Before the first FlowScript draft, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape. Do not enumerate every utility operation. After any usable live result, write and retain the full-shape draft immediately; compiler diagnostics authorize focused later lookups."
+                    "message": "Before the first FlowScript draft, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape. Do not enumerate every utility operation. After any usable live result, call plan_board_scope exactly once, then write and retain its active segment immediately; compiler diagnostics authorize focused later lookups."
                 }),
                 false,
             ))
@@ -10341,8 +10476,16 @@ fn workflow_tool_preflight_with_args(
             Some(workflow_loop_result(
                 serde_json::json!({
                     "status": "discovery_blocked",
-                    "next_action": "continue_workflow_draft",
-                    "message": "This is a workflow mutation run. Broad catalog/graph discovery is disabled. Read the current FlowScript once, use one bounded get_declarations batch for the highest-leverage calls, then immediately write_flowscript, patch/check the retained source, and commit_flowscript."
+                    "next_action": if state.flowscript_draft_retained {
+                        "continue_workflow_draft"
+                    } else if state.needs_initial_declaration_coverage() {
+                        "get_declarations"
+                    } else if state.scope_plan.is_none() {
+                        "plan_board_scope"
+                    } else {
+                        "write_flowscript"
+                    },
+                    "message": "This is a workflow mutation run. Broad catalog/graph discovery is disabled. Read the current FlowScript once, use one bounded get_declarations batch for the highest-leverage calls, call plan_board_scope exactly once unless the host already retained a plan, then write_flowscript, patch/check the retained source, and commit_flowscript."
                 }),
                 true,
             ))
@@ -10350,8 +10493,14 @@ fn workflow_tool_preflight_with_args(
         "get_current_flowscript" if state.current_reads >= 1 => Some(workflow_loop_result(
             serde_json::json!({
                 "status": "already_returned",
-                "next_action": "write_flowscript",
-                "message": "The current FlowScript was already returned in this run. Write the complete retained source document; do not fetch it again."
+                "next_action": if state.needs_initial_declaration_coverage() {
+                    "get_declarations"
+                } else if state.scope_plan.is_none() {
+                    "plan_board_scope"
+                } else {
+                    "write_flowscript"
+                },
+                "message": "The current FlowScript was already returned in this run; do not fetch it again. Continue in order with one usable declaration batch, one accepted scope plan, then write_flowscript for its active segment."
             }),
             true,
         )),
@@ -10434,8 +10583,14 @@ fn workflow_tool_preflight_with_args(
         "get_declarations" if state.declarations_since_edit >= 1 => Some(workflow_loop_result(
             serde_json::json!({
                 "status": "discovery_budget_exhausted",
-                "next_action": "write_or_patch_flowscript",
-                "message": "A usable declaration batch is retained. Submit the full-shape source with write_flowscript now, or patch the retained revision. Do not chase omitted or unmatched entries before the first draft; use compiler diagnostics for focused follow-up lookups."
+                "next_action": if state.flowscript_draft_retained {
+                    "patch_flowscript"
+                } else if state.scope_plan.is_none() {
+                    "plan_board_scope"
+                } else {
+                    "write_flowscript"
+                },
+                "message": "A usable declaration batch is retained. If no source exists, call plan_board_scope exactly once unless the host already retained a plan, then submit its active segment with write_flowscript. Otherwise patch the retained revision. Do not chase omitted or unmatched entries before the first draft; use compiler diagnostics for focused follow-up lookups."
             }),
             false,
         )),
@@ -11021,28 +11176,6 @@ fn flowscript_repair_fingerprint(
         normalized.join("\u{1e}"),
         structured_subjects.join("\u{1e}")
     )
-}
-
-fn workflow_result_has_explicit_diagnostics(parsed: &serde_json::Value) -> bool {
-    [
-        "errors",
-        "diagnostics",
-        "structured_diagnostics",
-        "module_budget_violations",
-    ]
-    .into_iter()
-    .any(|key| {
-        parsed
-            .get(key)
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|entries| !entries.is_empty())
-    }) || parsed.get("capability_plan").is_some_and(|plan| {
-        plan.get("feasible").and_then(serde_json::Value::as_bool) == Some(false)
-            || plan
-                .get("module_budget_violations")
-                .and_then(serde_json::Value::as_array)
-                .is_some_and(|entries| !entries.is_empty())
-    })
 }
 
 fn workflow_result_requires_repair(parsed: &serde_json::Value, diagnostics: &[String]) -> bool {
@@ -12193,10 +12326,10 @@ fn flowpilot_mcp_server_instructions<'a>(
     let has_data = names.contains("graph_overlay_tool") || names.contains("graph_query_tool");
 
     if workflow_mutation && has_ui {
-        return "This is an explicit combined root FlowPilot surface, not a widget or board specialist. Keep UI changes in emit_ui and executable workflow behavior in the FlowScript lifecycle; never let UI generation author FlowScript or let board generation emit components. For the board portion, read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls, then immediately retain a full-shape source with write_flowscript. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections.";
+        return "This is an explicit combined root FlowPilot surface, not a widget or board specialist. Keep UI changes in emit_ui and executable workflow behavior in the FlowScript lifecycle; never let UI generation author FlowScript or let board generation emit components. For the board portion, read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections.";
     }
     if workflow_mutation {
-        return "You are the FlowPilot BOARD specialist. FlowScript is the sole model-authored representation for executable workflow behavior. Read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, then immediately retain the full-shape source with write_flowscript. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments. Cross-domain context tools are read-only: database, storage, and UI inspection. Never emit UI, mutate app data/storage directly, use public-web/ask-user tools, or use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools and hand any requested UI work back to the parent for the UI specialist. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes.";
+        return "You are the FlowPilot BOARD specialist. FlowScript is the sole model-authored representation for executable workflow behavior. Read get_current_flowscript once, make one bounded get_declarations batch for the highest-leverage catalog calls needed to establish the end-to-end shape, call plan_board_scope exactly once, then retain the accepted active segment with write_flowscript. After a plan is accepted, do not call plan_board_scope again unless its tool result explicitly authorizes one revision. Do not enumerate every utility or chase omitted queries before that checkpoint. Repair the retained source with patch_flowscript, use structured compiler diagnostics for focused declaration follow-ups, run check_flowscript, and finish with commit_flowscript at the latest revision. Before the first write, use at most six ancillary database/UI/storage inspections. Preserve every requested capability, helper, Event, and kept //@n anchor across repairs; never replace a failed production draft with a smoke test or empty Event. Use emit_commands only for position-only MoveNode or canvas comments. Cross-domain context tools are read-only: database, storage, and UI inspection. Never emit UI, mutate app data/storage directly, use public-web/ask-user tools, or use Read/shell/filesystem tools for FlowPilot artifacts. After commit_flowscript returns queued/already_queued, stop workflow tools and hand any requested UI work back to the parent for the UI specialist. Cron/schedules are app Event setup on an eventsSimple() entry, never catalog nodes.";
     }
     match (has_board, has_ui, has_data) {
         (false, true, false) => {
@@ -13048,10 +13181,11 @@ fn build_external_agent_prompt(
 THIS IS A WORKFLOW MUTATION RUN. Follow this bounded loop exactly:
 1. FlowScript is the ONE model-authored representation for executable workflow behavior. Direct commands are reserved for visual/layout and non-FlowScript changes; never author workflow logic as command JSON.
 2. Read get_current_flowscript once. Plan the whole request, then make ONE bounded, focused get_declarations batch for only the highest-leverage catalog calls needed to establish the end-to-end shape. Never enumerate every utility or guess a declaration or pin. Use at most six ancillary database/UI/storage inspections before the first write.
-3. After any usable declaration result, call write_flowscript IMMEDIATELY with a stable draft id and a full-shape checkpoint that preserves the complete requested scope. It may retain compiler diagnostics; that is recoverable progress, not success. Do not chase omitted/unmatched declaration queries first. For an existing board, edit the exact returned document and preserve every kept //@n anchor. For a new board, author real functions and Event entries with concrete catalog calls.
-4. If compilation fails, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Call check_flowscript next. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery.
-5. Call commit_flowscript at the latest checked revision. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
-6. When commit_flowscript returns `queued`/`already_queued`, stop workflow tools. A BOARD specialist hands any requested UI work back to the parent for the UI specialist; only an explicit combined root session may finish it with emit_ui.
+3. After any usable declaration result and BEFORE the first source write, call plan_board_scope exactly ONCE. Use one `single` segment for an ordinary edit; split only work too large to compose safely in one pass. Once the host accepts a plan, never call plan_board_scope again unless the host explicitly rejects the plan or a source repair proves the active segment impossible and the tool explicitly permits one revision.
+4. Then call write_flowscript IMMEDIATELY with a stable draft id and the accepted active segment as a real executable checkpoint. Under a `single` plan this is the complete full-shape request; under a segmented plan follow the returned strategy_rule without dropping the remaining accepted scope. It may retain compiler diagnostics; that is recoverable progress, not success. Do not chase omitted/unmatched declaration queries first. For an existing board, edit the exact returned document and preserve every kept //@n anchor. For a new board, author real functions and Event entries with concrete catalog calls.
+5. If compilation fails, repair the SAME retained source with patch_flowscript. A coherent whole-document rewrite may use write_flowscript with the same draft id and `replace_existing: true`; then use the newly returned revision. Call check_flowscript next. Structured line/column, declaration, pin, type and execution diagnostics are authoritative. A newly named missing declaration permits one bounded deduplicated lookup; never restart broad discovery.
+6. Call commit_flowscript at the latest checked revision. Only commit may create the exact review claim. Preserve every requested capability, helper, variable and Event across retries; a tiny smoke test, empty Event, or reduced workflow never counts as success.
+7. When commit_flowscript returns `queued`/`already_queued`, stop workflow tools. A BOARD specialist hands any requested UI work back to the parent for the UI specialist; only an explicit combined root session may finish it with emit_ui.
 
 Helper rule: every helper declaration requires the literal keyword `function`, for example `function fetchMail(...) { ... }`. A bare `fetchMail(...) { ... }` block is not a helper. Keep each helper declaration in the same full document as its calls; never invent helper calls and expect them to resolve as catalog nodes. If a helper returns a value, declare a named return signature such as `function classify(...): (isSupport: bool) { ...; return result.value }`.
 
@@ -13153,6 +13287,16 @@ fn build_external_workflow_continuation_prompt(
         snapshot.is_some_and(|state| state.mutation_path == Some(WorkflowMutationPath::TypedIr));
     let retained_source_mode = snapshot
         .is_some_and(|state| state.flowscript_draft_retained && state.last_flowscript.is_some());
+    let has_accepted_scope_plan = snapshot.is_some_and(|state| state.scope_plan.as_ref().is_some());
+    let accepted_scope_plan = snapshot
+        .and_then(|state| state.scope_plan.as_ref())
+        .and_then(|plan| serde_json::to_string_pretty(&plan.acceptance_payload()).ok())
+        .map(|plan| {
+            format!(
+                "\nACCEPTED SCOPE PLAN RETAINED BY THE HOST (author the returned active_segment; preserve committed state and the full remaining scope):\n```json\n{plan}\n```\nThis plan is already accepted. DO NOT call plan_board_scope again in this continuation. Continue directly with its returned next_action and strategy_rule.\n"
+            )
+        })
+        .unwrap_or_default();
     let draft = if typed_mode {
         snapshot
             .map(|state| {
@@ -13194,7 +13338,11 @@ fn build_external_workflow_continuation_prompt(
                 }
             })
             .unwrap_or_else(|| {
-                "\nNo FlowScript draft was submitted. Reuse any retained current source and declarations, then call write_flowscript immediately with a full-shape implementation checkpoint. Do not postpone the first retained source for exhaustive discovery.\n".to_string()
+                if has_accepted_scope_plan {
+                    "\nNo FlowScript draft was submitted. Reuse the retained current source, declarations, and ACCEPTED SCOPE PLAN below; call write_flowscript immediately for its active segment. Do not re-plan or postpone the first retained source for exhaustive discovery.\n".to_string()
+                } else {
+                    "\nNo FlowScript draft was submitted. Reuse any retained current source and declarations. If a usable declaration batch is already present, call plan_board_scope exactly once and then call write_flowscript immediately for the accepted active segment. Otherwise obtain one bounded declaration batch first. Do not postpone the first retained source for exhaustive discovery.\n".to_string()
+                }
             })
     };
     let declarations = snapshot
@@ -13250,15 +13398,19 @@ fn build_external_workflow_continuation_prompt(
     let continuation_action = if typed_mode {
         "Continue only the typed-IR lifecycle selected by the retained state. Repair the same module/draft, validate it, and call commit_flow_ir_draft at the latest revision. Do not switch to FlowScript text or another mutation representation."
     } else if retained_source_mode {
-        "Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript, run check_flowscript, and call commit_flowscript at the latest revision. Do not repeat broad searches or restart with a smaller candidate."
+        "Continue the SAME retained FlowScript draft. Repair it through write_flowscript/patch_flowscript, run check_flowscript, and call commit_flowscript at the latest revision. Do not repeat broad searches, call plan_board_scope again, or restart with a smaller candidate."
+    } else if has_accepted_scope_plan {
+        "The host already accepted and retained the scope plan. DO NOT call plan_board_scope again. Call write_flowscript now for the returned active segment, then check and commit according to its strategy_rule."
+    } else if snapshot.is_some_and(|state| state.last_declarations.is_some()) {
+        "Usable declarations are already retained but no scope plan or source exists. Call plan_board_scope exactly once, then call write_flowscript immediately for the accepted active segment. Do not repeat declarations or ancillary inspections first; use compiler diagnostics for narrow follow-ups, then check and commit."
     } else {
-        "No source draft is retained yet. Continue the bounded pre-draft lifecycle: reuse any retained declarations and call write_flowscript immediately with a full-shape checkpoint. Do not resolve every omitted or unmatched query first; use compiler diagnostics for narrow follow-ups, then check and commit."
+        "No source draft is retained yet. Continue the bounded pre-draft lifecycle in this exact order: obtain one usable declaration batch, call plan_board_scope exactly once, then call write_flowscript immediately for the accepted active segment. Do not resolve every omitted or unmatched query first; use compiler diagnostics for narrow follow-ups, then check and commit."
     };
 
     format!(
         r#"INTERNAL FLOWPILOT EXTERNAL CONTINUATION #{attempt}
 The previous CLI turn ended without queueing workflow changes (last status: {status}, prior checks: {prior_attempts}, source operations: {source_operations}/{MAX_EXTERNAL_FLOWSCRIPT_OPERATION_ATTEMPTS}). Nothing has been applied.
-{errors}{structured_diagnostics}{draft}{retained_revision}{declarations}{unresolved_declarations}{repair_declarations}
+{errors}{structured_diagnostics}{draft}{retained_revision}{declarations}{unresolved_declarations}{repair_declarations}{accepted_scope_plan}
 {continuation_action} The turn is complete only when commit returns `queued`/`already_queued` or the bounded repair budget reports its final compiler diagnostics.
 
 Original user request:
@@ -13842,27 +13994,23 @@ fn external_result_details(
             }
             .to_string()
         });
-    let status = if error.is_some()
-        || !matches!(
-            terminal_status.trim().to_ascii_lowercase().as_str(),
-            "ok" | "done"
-                | "success"
-                | "draft_started"
-                | "draft_updated"
-                | "valid"
-                | "queued"
-                | "already_queued"
-                // A check of a board that already matches the source — success, not an error.
-                | "no_changes"
-                | "applied"
-                | "completed"
-                | "rendered"
-        ) {
-        "error"
+    // Provider event envelopes and direct SDK results carry different status vocabularies. Route
+    // both through the core classifier instead of maintaining another success allowlist here:
+    // accepted plans and advisory redirects are completed tool calls, while explicit error flags
+    // and known-negative terminal statuses remain errors.
+    let status = if error.is_some() {
+        "error".to_string()
+    } else if let Some(result_text) = result_text
+        .as_deref()
+        .filter(|text| serde_json::from_str::<serde_json::Value>(text).is_ok())
+    {
+        flow_like::flow::copilot::stream::tool_result_stream_status(result_text).to_string()
     } else {
-        "done"
-    }
-    .to_string();
+        flow_like::flow::copilot::stream::tool_result_stream_status(
+            &serde_json::json!({ "status": &terminal_status }).to_string(),
+        )
+        .to_string()
+    };
     let result_summary = error
         .map(|error| flow_like::flow::copilot::stream::safe_text_preview(error, 600))
         .unwrap_or_else(|| {
@@ -14972,17 +15120,10 @@ fn nested_copilot_run_gate_key(
                 .or_else(context_board)
                 .or_else(context_app),
         ),
-        // Data runs own tables and overlays, which are app-scoped, not board-scoped. Keying these on
-        // a board id (or on the shared fallback) queued every data build in the process behind an
-        // unrelated one.
-        CopilotScope::DataStudio => lane(
-            "data",
-            tool_context
-                .and_then(|context| context.overlay_id.clone())
-                .filter(|id| !id.trim().is_empty())
-                .map(|overlay| format!("{}#{overlay}", context_app().unwrap_or_default()))
-                .or_else(context_app),
-        ),
+        // Data runs can touch both an overlay and app-level tables. The app is therefore the
+        // smallest safe lock scope: two different overlays in one app may still update the same
+        // database catalog, while different apps remain independent.
+        CopilotScope::DataStudio => lane("data", context_app()),
         // Retained draft stores are board-scoped and their base-fingerprint integrity requires that
         // two runs mutating the same board never interleave. Runs targeting DIFFERENT boards are
         // independent. A board run with no resolved target yet still has to serialize per app, since
@@ -19136,8 +19277,8 @@ event onTicket() {
         assert_ne!(board_key, data_key);
         assert_ne!(widget_key, data_key);
 
-        // Data work is app-scoped, so two data runs on different apps stay independent while two on
-        // the same overlay still serialize.
+        // Data work is app-scoped, so two data runs on different apps stay independent while any
+        // two overlays in the same app serialize around shared tables and catalogs.
         assert_ne!(
             data_key,
             nested_copilot_run_gate_key(
@@ -19156,7 +19297,7 @@ event onTicket() {
         };
         assert_eq!(
             nested_copilot_run_gate_key(CopilotScope::DataStudio, None, Some(&overlay_context)),
-            "data:app-a#ontology-1"
+            "data:app-a"
         );
     }
 
@@ -19881,9 +20022,8 @@ event onTicket() {
     fn board_prompt_submits_flowscript_before_database_setup() {
         let prompt = flow_like::copilot::prompts::board_sdk_flowscript_system_prompt("", 0);
         assert!(prompt.contains("database setup is\nnever a prerequisite"));
-        assert!(
-            prompt.contains("submit the full-shape board through `write_flowscript` immediately")
-        );
+        assert!(prompt.contains("call `plan_board_scope` exactly once"));
+        assert!(prompt.contains("submit its active segment through `write_flowscript`"));
         assert!(prompt.contains("ONE bounded, focused `get_declarations`"));
         assert!(prompt.contains("One such result proves the capability mismatch"));
         assert!(prompt.contains(
@@ -19896,28 +20036,103 @@ event onTicket() {
         let prompt =
             build_external_agent_prompt("system", "build it", CopilotScope::Board, true, false);
         assert!(prompt.contains("ONE bounded, focused get_declarations batch"));
-        assert!(prompt.contains("call write_flowscript IMMEDIATELY"));
+        assert!(prompt.contains("call plan_board_scope exactly ONCE"));
+        assert!(prompt.contains("Then call write_flowscript IMMEDIATELY"));
+        let declarations = prompt
+            .find("ONE bounded, focused get_declarations batch")
+            .expect("declaration instruction");
+        let plan = prompt
+            .find("call plan_board_scope exactly ONCE")
+            .expect("scope-plan instruction");
+        let write = prompt
+            .find("Then call write_flowscript IMMEDIATELY")
+            .expect("source-write instruction");
+        assert!(declarations < plan && plan < write);
         assert!(prompt.contains("at most six ancillary"));
         assert!(prompt.contains("It may retain compiler diagnostics"));
         assert!(!prompt.contains("every required catalog-signature search"));
     }
 
     #[test]
-    fn predraft_checkpoint_watchdog_arms_until_a_source_operation_starts() {
+    fn predraft_checkpoint_waits_for_declarations_and_an_accepted_scope_plan() {
         let mut state = WorkflowToolLoopState::default();
-        assert!(!workflow_waiting_for_initial_source_checkpoint(&state));
+        assert_eq!(
+            workflow_initial_source_checkpoint_phase(&state),
+            InitialSourceCheckpointPhase::AwaitingPrerequisites
+        );
         state.initial_declaration_lookup_usable = true;
-        assert!(workflow_waiting_for_initial_source_checkpoint(&state));
+        assert_eq!(
+            workflow_initial_source_checkpoint_phase(&state),
+            InitialSourceCheckpointPhase::AwaitingPrerequisites,
+            "usable declarations alone must not start the source-writing clock"
+        );
+        state.scope_plan = Some(single_segment_plan());
+        assert_eq!(
+            workflow_initial_source_checkpoint_phase(&state),
+            InitialSourceCheckpointPhase::AwaitingInitialSource
+        );
         // An unrelated position/comment operation must not permanently disarm the source
         // checkpoint. Source/typed operation counters are the authoritative transition.
         state.edit_in_flight = true;
-        assert!(workflow_waiting_for_initial_source_checkpoint(&state));
+        assert_eq!(
+            workflow_initial_source_checkpoint_phase(&state),
+            InitialSourceCheckpointPhase::AwaitingInitialSource
+        );
         state.flowscript_operation_attempts = 1;
-        assert!(!workflow_waiting_for_initial_source_checkpoint(&state));
+        assert_eq!(
+            workflow_initial_source_checkpoint_phase(&state),
+            InitialSourceCheckpointPhase::Complete
+        );
     }
 
     #[test]
-    fn continuation_writes_after_partial_but_usable_declaration_coverage() {
+    fn predraft_checkpoint_pauses_for_an_admitted_ancillary_context_read() {
+        let board = flowscript_recovery_test_board();
+        let manifest = BoardContextManifest::from_board(
+            &board,
+            &[],
+            &[],
+            ManifestSource::absent(),
+            ManifestAudit::default(),
+            ManifestAugmentations::default(),
+            default_flowscript_module_templates(),
+        )
+        .expect("checkpoint test manifest");
+        let mut loop_state = WorkflowToolLoopState::default();
+        loop_state.initial_declaration_lookup_usable = true;
+        loop_state.scope_plan = Some(single_segment_plan());
+        loop_state.attach_shared_session(Some(manifest));
+        let state = Arc::new(StdMutex::new(loop_state));
+        let args = serde_json::json!({
+            "operation": "get_page",
+            "page_id": "page-under-inspection"
+        });
+
+        let admitted = workflow_predraft_context_preflight_with_lease(&state, "ui_inspect", &args);
+        assert!(admitted.result.is_none());
+        assert!(admitted.lease.is_some());
+        assert_eq!(
+            workflow_initial_source_checkpoint_phase(&state.lock().expect("state lock")),
+            InitialSourceCheckpointPhase::AncillaryContextInFlight,
+            "the source checkpoint must defer to the admitted inspector's own deadline"
+        );
+
+        workflow_tool_abort_with_args(
+            &state,
+            admitted.lease.as_ref(),
+            "ui_inspect",
+            &args,
+            "test inspector finished",
+        );
+        assert_eq!(
+            workflow_initial_source_checkpoint_phase(&state.lock().expect("state lock")),
+            InitialSourceCheckpointPhase::AwaitingInitialSource,
+            "the source-writing window starts only after the inspector lease settles"
+        );
+    }
+
+    #[test]
+    fn continuation_plans_then_writes_after_partial_but_usable_declaration_coverage() {
         let snapshot = WorkflowToolLoopSnapshot {
             last_declarations: Some(
                 "declare function emailImapConnect({ host: string }): (connection: Struct);"
@@ -19930,11 +20145,35 @@ event onTicket() {
         let prompt =
             build_external_workflow_continuation_prompt("build support mail", Some(&snapshot), 1);
         assert!(prompt.contains("DECLARATIONS ALREADY FETCHED"));
-        assert!(prompt.contains("call write_flowscript immediately"));
+        assert!(prompt.contains(
+            "Call plan_board_scope exactly once, then call write_flowscript immediately"
+        ));
         assert!(prompt.contains("last status: declarations_ready_no_source"));
         assert!(!prompt.contains("UNRESOLVED DECLARATION COVERAGE"));
+        assert!(!prompt.contains("ACCEPTED SCOPE PLAN RETAINED BY THE HOST"));
         let error = external_workflow_incomplete_error(Some(&snapshot), 0);
         assert!(error.contains("last status: declarations_ready_no_source"));
+    }
+
+    #[test]
+    fn continuation_serializes_the_accepted_plan_and_forbids_replanning() {
+        let snapshot = WorkflowToolLoopSnapshot {
+            last_declarations: Some("declare function logInfo(...): void".to_string()),
+            scope_plan: Some(single_segment_plan()),
+            ..Default::default()
+        };
+
+        let prompt =
+            build_external_workflow_continuation_prompt("build support mail", Some(&snapshot), 1);
+        assert!(prompt.contains("ACCEPTED SCOPE PLAN RETAINED BY THE HOST"));
+        assert!(prompt.contains("\"active_segment\""));
+        assert!(prompt.contains("\"id\": \"s1\""));
+        assert!(prompt.contains("\"title\": \"Whole request\""));
+        assert!(prompt.contains("DO NOT call plan_board_scope again"));
+        assert!(prompt.contains("Call write_flowscript now for the returned active segment"));
+        assert!(!prompt.contains(
+            "Usable declarations are already retained but no scope plan or source exists"
+        ));
     }
 
     #[test]
@@ -20187,7 +20426,8 @@ event onTicket() {
             .join("\n");
         assert!(redirected.contains("declaration_lookup_required"));
         assert!(redirected.contains("one bounded get_declarations batch"));
-        assert!(redirected.contains("full-shape draft"));
+        assert!(redirected.contains("call plan_board_scope exactly once"));
+        assert!(redirected.contains("active segment"));
         assert!(!state.lock().expect("state lock").edit_in_flight);
 
         let empty_lookup = workflow_tool_preflight_with_args(
@@ -20294,7 +20534,7 @@ event onTicket() {
             .expect("a second pre-draft lookup must redirect to the retained source checkpoint");
         let rejected = workflow_call_result_json(&rejected);
         assert_eq!(rejected["status"], "discovery_budget_exhausted");
-        assert_eq!(rejected["next_action"], "write_or_patch_flowscript");
+        assert_eq!(rejected["next_action"], "write_flowscript");
         assert!(
             rejected["message"]
                 .as_str()
@@ -21660,7 +21900,7 @@ event onTicket() {
                 .expect("the next exhaustive inspection must redirect to source retention");
         let blocked = workflow_call_result_json(&blocked);
         assert_eq!(blocked["status"], "predraft_inspection_budget_exhausted");
-        assert_eq!(blocked["next_action"], "write_flowscript");
+        assert_eq!(blocked["next_action"], "plan_board_scope");
         assert_eq!(
             blocked["inspection_budget"],
             u64::from(MAX_EXTERNAL_PREDRAFT_CONTEXT_READS)
@@ -21944,17 +22184,34 @@ event onTicket() {
     #[test]
     fn a_scope_plan_may_be_revised_once_and_never_re_declares_applied_segments() {
         let state = Arc::new(StdMutex::new(WorkflowToolLoopState::default()));
+        let original = staged_plan_args(3);
         assert_eq!(
-            accept_plan(&state, staged_plan_args(3))["status"],
+            accept_plan(&state, original.clone())["status"],
             "scope_plan_accepted"
         );
+
+        let repeated = accept_plan(&state, original);
+        assert_eq!(repeated["status"], "scope_plan_accepted");
+        assert_eq!(repeated["idempotent"], true);
+        {
+            let guard = state.lock().expect("state lock");
+            assert_eq!(
+                guard.scope_plan_calls, 1,
+                "an equivalent replay is not a plan revision"
+            );
+            assert_eq!(guard.scope_plan.as_ref().expect("plan").revisions, 0);
+        }
 
         let revised = accept_plan(&state, staged_plan_args(2));
         assert_eq!(revised["status"], "scope_plan_accepted");
 
+        let replayed_revision = accept_plan(&state, staged_plan_args(2));
+        assert_eq!(replayed_revision["status"], "scope_plan_accepted");
+        assert_eq!(replayed_revision["idempotent"], true);
+
         let third =
-            workflow_tool_preflight_with_args(&state, "plan_board_scope", &staged_plan_args(2))
-                .expect("a third plan call is refused");
+            workflow_tool_preflight_with_args(&state, "plan_board_scope", &staged_plan_args(4))
+                .expect("a third materially different plan call is refused");
         assert_eq!(
             workflow_call_result_json(&third)["code"],
             "SCOPE_PLAN_BUDGET_EXHAUSTED"
@@ -22688,6 +22945,32 @@ eventsSimple() {
         let parsed: serde_json::Value = serde_json::from_str(&failed).unwrap();
         assert_eq!(parsed["source"], rich_support_flowscript());
         assert_eq!(parsed["status"], "validation_errors");
+
+        let snapshot = WorkflowToolLoopSnapshot {
+            last_errors: vec!["missing required input `message`".to_string()],
+            last_structured_diagnostics: vec![serde_json::json!({
+                "code": "FS_REQUIRED_INPUT",
+                "phase": "execution_wiring",
+                "message": "missing required input `message`",
+                "pin": "message",
+            })],
+            ..Default::default()
+        };
+        let detailed = flowscript_response_workspace_envelope(
+            rich_support_flowscript(),
+            "validation_errors",
+            Some(&snapshot),
+        );
+        let detailed: serde_json::Value = serde_json::from_str(&detailed).unwrap();
+        assert_eq!(detailed["diagnostic_count"], 1);
+        assert_eq!(
+            detailed["diagnostics"][0],
+            "missing required input `message`"
+        );
+        assert_eq!(
+            detailed["structured_diagnostics"][0]["code"],
+            "FS_REQUIRED_INPUT"
+        );
     }
 
     #[test]
@@ -22711,6 +22994,39 @@ eventsSimple() {
         assert_eq!(checked["draft_id"], "support-flow");
         assert_eq!(checked["revision"], 4);
         assert_eq!(checked["base_fingerprint"], "board-v1");
+
+        let invalid = flowscript_workspace_result_payload(
+            "check_flowscript",
+            &serde_json::json!({
+                "status": "validation_errors",
+                "draft_id": "support-flow",
+                "revision": 5,
+                "source": submitted,
+                "errors": ["missing required input `message`"],
+                "structured_diagnostics": [{
+                    "code": "FS_REQUIRED_INPUT",
+                    "phase": "execution_wiring",
+                    "message": "missing required input `message`",
+                    "pin": "message",
+                }],
+            }),
+            None,
+        )
+        .expect("invalid retained source should carry its concrete diagnostics");
+        assert_eq!(invalid["diagnostic_count"], 2);
+        assert!(
+            invalid["diagnostics"]
+                .as_array()
+                .is_some_and(|entries| entries.iter().any(|entry| {
+                    entry
+                        .as_str()
+                        .is_some_and(|message| message.contains("missing required input"))
+                }))
+        );
+        assert_eq!(
+            invalid["structured_diagnostics"][0]["code"],
+            "FS_REQUIRED_INPUT"
+        );
 
         let queued = flowscript_workspace_result_payload(
             "commit_flowscript",
@@ -22776,7 +23092,7 @@ eventsSimple() {
     }
 
     #[test]
-    fn typed_structured_diagnostics_drive_direct_sdk_status() {
+    fn typed_structured_diagnostics_drive_repair_without_failing_the_validator_call() {
         let rejected = serde_json::json!({
             "status": "draft_started",
             "structured_diagnostics": [{
@@ -22797,7 +23113,8 @@ eventsSimple() {
         assert!(workflow_result_requires_repair(&rejected, &diagnostics));
         assert_eq!(
             direct_sdk_tool_result_stream_status(&rejected.to_string()),
-            "error"
+            "done",
+            "the validator completed successfully; the evolving draft row owns its repair state"
         );
 
         let valid = serde_json::json!({ "status": "draft_valid", "diagnostics": [] });
@@ -25437,6 +25754,42 @@ eventsSimple() {
         assert!(end.contains("missing Done edge"));
         assert!(end.contains("redacted"));
         assert!(!end.contains("must-not-leak"));
+    }
+
+    #[test]
+    fn external_tool_results_use_the_provider_neutral_status_classifier() {
+        let accepted = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "{\"status\":\"scope_plan_accepted\",\"next_action\":\"write_flowscript\"}"
+            }]
+        });
+        let (status, terminal_status, _, _) =
+            external_result_details(Some(&accepted), Some("completed"), None);
+        assert_eq!(status, "done");
+        assert_eq!(terminal_status, "scope_plan_accepted");
+
+        let advisory = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "{\"status\":\"scope_plan_required\",\"next_action\":\"plan_board_scope\"}"
+            }]
+        });
+        assert_eq!(
+            external_result_details(Some(&advisory), Some("completed"), None).0,
+            "done"
+        );
+
+        let explicit_error = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "{\"status\":\"scope_plan_accepted\",\"is_error\":true}"
+            }]
+        });
+        assert_eq!(
+            external_result_details(Some(&explicit_error), Some("completed"), None).0,
+            "error"
+        );
     }
 
     #[test]

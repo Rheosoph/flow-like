@@ -234,6 +234,27 @@ describe("build lane steps", () => {
 		expect(html).toContain('data-open="false"');
 	});
 
+	test("failed tool attempts are subdued and do not hold a settled panel open", async () => {
+		const steps: IPlanStep[] = [
+			{
+				id: "failed-tool",
+				title: "Using ui_inspect",
+				status: "failed",
+			},
+			...Array.from({ length: 5 }, (_, index) => ({
+				id: `done-${index}`,
+				title: `Using tool_${index}`,
+				status: "done" as const,
+			})),
+		];
+		const { text, html } = await renderSteps(steps);
+
+		expect(html).toContain('data-open="false"');
+		expect(html).not.toContain("text-red-500");
+		expect(text).toContain("1 not completed");
+		expect(text).not.toContain("1 failed");
+	});
+
 	test("a plain step still renders as a row", async () => {
 		const { text } = await renderSteps([
 			{

@@ -257,7 +257,7 @@ const DECLARATION_PRIORITY_TRUNCATION_NOTICE: &str =
     "\n// [Additional matches omitted; priority declaration retained.]";
 const DECLARATION_SIGNATURE_TRUNCATION_NOTICE: &str =
     "\n// [Additional matches and usage notes omitted; exact declaration retained.]";
-const DECLARATION_OUTPUT_OMISSION_NOTICE: &str = "// [Exact declaration omitted because it exceeds the bounded batch response. Retain the full-shape draft now; retry this capability in one focused get_declarations call only if a later compiler diagnostic still requires it.]";
+const DECLARATION_OUTPUT_OMISSION_NOTICE: &str = "// [Exact declaration omitted because it exceeds the bounded batch response. Call plan_board_scope exactly once unless the host already accepted a plan, then retain its active segment now; retry this capability in one focused get_declarations call only if a later compiler diagnostic still requires it.]";
 const MAX_DECLARATION_PRIORITY_SECTION_IDENTITY_BYTES: usize = 48;
 
 fn declaration_query_key(query: &str) -> String {
@@ -781,7 +781,7 @@ impl Tool for CatalogTool {
             description: r#"Search the node catalog by functionality or name for read-only exploration and debugging.
 
 WHEN TO USE: Explore catalog metadata when explaining a board or investigating a declaration issue.
-FOR WORKFLOW EDITS: Prefer get_declarations, then write_flowscript → patch_flowscript as needed → check_flowscript → commit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact camelCase function signatures.
+FOR WORKFLOW EDITS: Prefer get_declarations → plan_board_scope exactly once unless already accepted → write_flowscript → patch_flowscript as needed → check_flowscript → commit_flowscript. get_declarations is backed by embedded .flow.d files and returns exact camelCase function signatures.
 EXAMPLE QUERIES: "http request", "parse json", "loop array", "condition if", "open database""#.to_string(),
             parameters: json!({
                 "type": "object",
@@ -1013,7 +1013,8 @@ RETURNS:
 WORKFLOW:
 1. list_board_nodes → see all nodes and positions
 2. get_node_details on relevant node → get pin names
-3. get_declarations → find signatures, then write/patch/check/commit FlowScript for behavior;
+3. get_declarations → find signatures, then plan_board_scope exactly once unless already accepted,
+   then write/patch/check/commit FlowScript for behavior;
    emit_commands is only for position-only MoveNode and canvas comments"#
                     .to_string(),
             parameters: json!({
@@ -1376,7 +1377,9 @@ impl Tool for EmitCommandsTool {
             description: r#"Execute low-level graph modifications. Commands are batched and applied atomically with undo support.
 
 PRIMARY WORKFLOW EDIT PATH:
-Use get_declarations to search embedded .flow.d signatures, then write_flowscript, repair with patch_flowscript, check_flowscript, and commit_flowscript.
+Use get_declarations to search embedded .flow.d signatures, call plan_board_scope exactly once
+unless the host already accepted a plan, then write_flowscript, repair with patch_flowscript,
+check_flowscript, and commit_flowscript.
 
 LOW-LEVEL FALLBACK WORKFLOW:
 1. Use catalog_search to get exact node_type
@@ -2130,8 +2133,9 @@ WORKFLOW: plan the complete requested scope, then query the highest-leverage con
 that establish its critical path. Keep each search focused on one concrete node capability rather
 than combining an entire subsystem into one query, e.g.
 {"queries": ["open local database", "datafusion sql query", "for each loop", "instantiate widget",
-"string format", "http fetch"]}. After ANY usable response, immediately call `write_flowscript` and
-retain a FULL-SHAPE draft, even when compiler repairs are expected. Do not make a second broad
+"string format", "http fetch"]}. After ANY usable response, call `plan_board_scope` exactly once
+unless the host already retained an accepted plan, then immediately call `write_flowscript` and
+retain its ACTIVE SEGMENT, even when compiler repairs are expected. Do not make a second broad
 declaration batch or chase `omitted_queries` / `unmatched_queries` before the first write. Defer
 those searches until compiler diagnostics identify a concrete gap, then use one narrow repair lookup.
 
@@ -2150,7 +2154,7 @@ typed arguments. This covers every package in the project's catalog, including t
                         "minItems": 1,
                         "maxItems": MAX_DECLARATION_QUERIES,
                         "uniqueItems": true,
-                        "description": "REQUIRED. One bounded initial batch of the highest-leverage concrete catalog calls needed to establish the end-to-end workflow shape; do not enumerate every utility operation. After any usable response, write the full-shape draft immediately and defer omitted/unmatched searches until compiler diagnostics. The result reports matched_queries, unmatched_queries, complete, and omitted_queries explicitly. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
+                        "description": "REQUIRED. One bounded initial batch of the highest-leverage concrete catalog calls needed to establish the end-to-end workflow shape; do not enumerate every utility operation. After any usable response, call plan_board_scope exactly once unless the host already accepted a plan, then write its active segment immediately and defer omitted/unmatched searches until compiler diagnostics. The result reports matched_queries, unmatched_queries, complete, and omitted_queries explicitly. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
                     },
                     "query": {
                         "type": "string",
@@ -3603,7 +3607,7 @@ impl Tool for CommitFlowScriptTool {
 
 pub fn build_list_board_nodes_output(graph_context: &GraphContext) -> String {
     if graph_context.nodes.is_empty() && graph_context.layers.is_empty() {
-        return "The board is empty - no nodes found. Use get_declarations to find FlowScript signatures, then write_flowscript, check_flowscript, and commit_flowscript. Use patch_flowscript for any diagnostic repairs."
+        return "The board is empty - no nodes found. Use get_declarations to find FlowScript signatures, call plan_board_scope exactly once unless the host already accepted a plan, then write_flowscript, check_flowscript, and commit_flowscript. Use patch_flowscript for any diagnostic repairs."
             .to_string();
     }
 
@@ -4630,7 +4634,7 @@ eventsGeneric(payload: Struct) {
     }
 
     #[tokio::test]
-    async fn declaration_tool_requires_an_early_full_shape_draft_after_a_bounded_batch() {
+    async fn declaration_tool_requires_one_scope_plan_then_an_early_draft() {
         let provider: Arc<dyn CatalogProvider> = Arc::new(BatchDispatchProvider::default());
         let tool = GetDeclarationsTool { provider };
 
@@ -4646,7 +4650,12 @@ eventsGeneric(payload: Struct) {
                 .contains("highest-leverage catalog calls")
         );
         assert!(definition.description.contains("After ANY usable response"));
-        assert!(definition.description.contains("FULL-SHAPE draft"));
+        assert!(
+            definition
+                .description
+                .contains("`plan_board_scope` exactly once")
+        );
+        assert!(definition.description.contains("ACTIVE SEGMENT"));
         assert!(definition.description.contains("omitted_queries"));
         assert!(definition.description.contains("compiler diagnostics"));
         assert!(!definition.description.contains("pass ALL the searches"));
@@ -4660,7 +4669,8 @@ eventsGeneric(payload: Struct) {
             .as_str()
             .expect("queries description");
         assert!(queries_description.contains("do not enumerate every utility operation"));
-        assert!(queries_description.contains("write the full-shape draft immediately"));
+        assert!(queries_description.contains("plan_board_scope exactly once"));
+        assert!(queries_description.contains("write its active segment immediately"));
         assert!(queries_description.contains("defer omitted/unmatched searches"));
     }
 
@@ -4841,7 +4851,8 @@ eventsGeneric(payload: Struct) {
         assert!(result.contains("\"matched_count\":0"));
         assert!(result.contains("\"complete\":false"));
         assert!(result.contains("Exact declaration omitted"));
-        assert!(result.contains("Retain the full-shape draft now"));
+        assert!(result.contains("Call plan_board_scope exactly once"));
+        assert!(result.contains("retain its active segment now"));
         assert!(result.contains("only if a later compiler diagnostic still requires it"));
     }
 

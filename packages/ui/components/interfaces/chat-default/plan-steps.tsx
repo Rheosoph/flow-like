@@ -6,12 +6,12 @@ import {
 	ChevronDown,
 	ChevronRight,
 	Circle,
+	CircleMinus,
 	DatabaseIcon,
 	History,
 	LayoutIcon,
 	Loader2,
 	WorkflowIcon,
-	XCircle,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib";
@@ -46,7 +46,9 @@ function StatusIcon({ status }: { status: PlanStepStatus }) {
 		case "done":
 			return <CheckCircle2 className="size-3.5 text-emerald-500" />;
 		case "failed":
-			return <XCircle className="size-3.5 text-red-500" />;
+			// A tool attempt can fail while the agent successfully takes another route. Keep the
+			// outcome legible without making it look like the whole response failed.
+			return <CircleMinus className="size-3.5 text-muted-foreground/70" />;
 	}
 }
 
@@ -98,7 +100,9 @@ function BuildLaneRow({
 				<span
 					className={cn(
 						"text-xs font-medium shrink-0",
-						step.status === "failed" ? "text-red-500" : "text-foreground/90",
+						step.status === "failed"
+							? "text-muted-foreground"
+							: "text-foreground/90",
 					)}
 				>
 					{label}
@@ -224,7 +228,9 @@ function StepRow({
 				<span
 					className={cn(
 						"text-xs font-medium truncate",
-						step.status === "failed" ? "text-red-500" : "text-foreground/90",
+						step.status === "failed"
+							? "text-muted-foreground"
+							: "text-foreground/90",
 					)}
 				>
 					{step.title}
@@ -323,7 +329,7 @@ export function InlineStepGroup({
 
 /**
  * Compact tool/step activity timeline for a chat message. Expanded while the agent is working;
- * collapses to a one-line summary once every step has settled (stays open on failures).
+ * collapses to a one-line summary once every step has settled.
  */
 export function PlanSteps({ steps, currentStepId, loading }: PlanStepsProps) {
 	const [expandedSteps, setExpandedSteps] = useState<Set<string>>(
@@ -333,6 +339,7 @@ export function PlanSteps({ steps, currentStepId, loading }: PlanStepsProps) {
 
 	const doneCount = steps.filter((s) => s.status === "done").length;
 	const failedCount = steps.filter((s) => s.status === "failed").length;
+	const settledCount = doneCount + failedCount;
 	const allSettled =
 		steps.length > 0 &&
 		steps.every((s) => s.status === "done" || s.status === "failed");
@@ -343,19 +350,20 @@ export function PlanSteps({ steps, currentStepId, loading }: PlanStepsProps) {
 		(s) => s.detail?.kind === "build_lane" && (s.detail.gaps?.length ?? 0) > 0,
 	);
 
-	// Expanded while running; auto-collapse once when everything settles cleanly. Messages loaded
-	// from history (settled from the start) begin collapsed; failures and gaps keep the list open.
-	const [open, setOpen] = useState(running || failedCount > 0 || hasGaps);
+	// Expanded while running; auto-collapse once everything settles. A failed tool attempt is
+	// activity detail, not proof that the response failed, so only actionable build gaps stay open.
+	// Messages loaded from history (settled from the start) begin collapsed for the same reason.
+	const [open, setOpen] = useState(running || hasGaps);
 	const wasRunningRef = useRef(running);
 	useEffect(() => {
-		if (wasRunningRef.current && !running && failedCount === 0 && !hasGaps) {
+		if (wasRunningRef.current && !running && !hasGaps) {
 			setOpen(false);
 		}
 		if (!wasRunningRef.current && running) {
 			setOpen(true);
 		}
 		wasRunningRef.current = running;
-	}, [running, failedCount, hasGaps]);
+	}, [running, hasGaps]);
 
 	useEffect(() => {
 		if (currentStepId) {
@@ -416,7 +424,7 @@ export function PlanSteps({ steps, currentStepId, loading }: PlanStepsProps) {
 				{running ? (
 					<Loader2 className="size-3.5 text-primary animate-spin shrink-0" />
 				) : failedCount > 0 ? (
-					<XCircle className="size-3.5 text-red-500 shrink-0" />
+					<CircleMinus className="size-3.5 text-muted-foreground/70 shrink-0" />
 				) : (
 					<CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
 				)}
@@ -427,9 +435,9 @@ export function PlanSteps({ steps, currentStepId, loading }: PlanStepsProps) {
 				</span>
 				<span className="text-xs text-muted-foreground truncate min-w-0 flex-1">
 					{running
-						? `${doneCount}/${steps.length}`
+						? `${settledCount}/${steps.length}`
 						: failedCount > 0
-							? `${failedCount} failed`
+							? `${failedCount} not completed`
 							: "completed"}
 				</span>
 				<ChevronDown

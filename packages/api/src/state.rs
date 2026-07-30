@@ -87,11 +87,43 @@ pub(crate) fn board_mutation_advisory_key(app_id: &str, board_id: &str) -> i64 {
 /// [`Self::release`] when a normal path wants to commit the otherwise read-free lock transaction
 /// explicitly; error and early-return paths can safely rely on drop/rollback.
 pub(crate) struct BoardMutationGuard {
-    _local: flow_like_types::tokio::sync::OwnedMutexGuard<()>,
+    _locals: Vec<flow_like_types::tokio::sync::OwnedMutexGuard<()>>,
     transaction: Option<DatabaseTransaction>,
 }
 
 impl BoardMutationGuard {
+    pub(crate) fn connection(&self) -> &DatabaseTransaction {
+        self.transaction
+            .as_ref()
+            .expect("mutation guard connection is unavailable after release")
+    }
+
+    /// Add another canonical board to this guard without opening a second transaction.
+    ///
+    /// Page mutations first lock the globally unique page id, then add its owning board. Keeping
+    /// both advisory locks on one transaction prevents concurrent cross-board page-id claims
+    /// without consuming two pooled database connections per request.
+    pub(crate) async fn acquire_additional_board(
+        &mut self,
+        state: &State,
+        app_id: &str,
+        board_id: &str,
+    ) -> std::result::Result<(), sea_orm::DbErr> {
+        let local = state
+            .board_mutation_lock(app_id, board_id)
+            .lock_owned()
+            .await;
+        self.connection()
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                "SELECT pg_advisory_xact_lock($1)",
+                [board_mutation_advisory_key(app_id, board_id).into()],
+            ))
+            .await?;
+        self._locals.push(local);
+        Ok(())
+    }
+
     pub(crate) async fn release(mut self) -> std::result::Result<(), sea_orm::DbErr> {
         if let Some(transaction) = self.transaction.take() {
             transaction.commit().await?;
@@ -163,9 +195,8 @@ pub struct State {
     /// Each store is internally bounded; the outer TTL/cap keeps abandoned board sessions finite.
     pub flow_ir_draft_stores:
         moka::sync::Cache<String, Arc<flow_like::flow::copilot::FlowIrDraftStore>>,
-    /// Serialize all canonical writers for one app+board within this API process. The registry is
-    /// process-local; multi-replica deployments still need a shared durable lock/CAS before a
-    /// retained review can be fully atomic across instances.
+    /// Process-local half of canonical app+board serialization. `board_mutation_guard` pairs each
+    /// mutex with a PostgreSQL advisory lock so API replicas enter the same mutation lane.
     board_mutation_locks:
         parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
     pub content_bucket: Arc<FlowLikeStore>,
@@ -247,7 +278,7 @@ impl State {
             .await?;
 
         Ok(BoardMutationGuard {
-            _local: local,
+            _locals: vec![local],
             transaction: Some(transaction),
         })
     }

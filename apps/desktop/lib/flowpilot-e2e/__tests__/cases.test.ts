@@ -18,7 +18,7 @@ import {
 } from "../index";
 
 describe("FlowPilot app-creation E2E cases", () => {
-	test("defines eleven stable cases and the three requested smoke archetypes", () => {
+	test("defines twelve stable cases and the three requested smoke archetypes", () => {
 		expect(FLOWPILOT_APP_CREATION_CASES.map(({ id }) => id)).toEqual([
 			"simple-agent",
 			"forum",
@@ -30,6 +30,7 @@ describe("FlowPilot app-creation E2E cases", () => {
 			"doc-compliance",
 			"webhook-enrichment",
 			"agent-tools",
+			"multi-board-pages",
 			"ai-adventure",
 		]);
 		expect(FLOWPILOT_APP_CREATION_SMOKE_CASES.map(({ id }) => id)).toEqual([
@@ -43,6 +44,34 @@ describe("FlowPilot app-creation E2E cases", () => {
 					caseDefinition.requirements.requireAuthoritativeReconcile,
 			),
 		).toBe(true);
+	});
+
+	test("pins a real multi-board page-ownership regression", () => {
+		const built = buildCasePrompt(
+			getFlowPilotAppCreationCase("multi-board-pages"),
+			"run-boards",
+		);
+		expect(built.prompt).toContain("board ids and globally unique page ids");
+		expect(built.prompt).toContain(
+			"Choose globally unique page ids and caller-selected new-board ids up front",
+		);
+		expect(built.prompt).toContain("create_new_board=true");
+		expect(built.caseDefinition.requirements.minBoards).toBe(2);
+		expect(built.caseDefinition.requirements.minPages).toBe(2);
+		expect(built.caseDefinition.requirements.requiredPageBoardBindings).toEqual(
+			[
+				{
+					page: "Operations",
+					board: "Operations Workflow",
+					requireOnLoadEvent: true,
+				},
+				{
+					page: "Analytics",
+					board: "Analytics Workflow",
+					requireOnLoadEvent: true,
+				},
+			],
+		);
 	});
 
 	test("defaults to Codex Terra with high reasoning", () => {
@@ -170,7 +199,7 @@ describe("FlowPilot app-creation E2E cases", () => {
 		expect(
 			resolveFlowPilotE2ERunCases({ suite: "smoke" }).map(({ id }) => id),
 		).toEqual(["simple-agent", "forum", "ops-dashboard"]);
-		expect(resolveFlowPilotE2ERunCases({ suite: "full" })).toHaveLength(11);
+		expect(resolveFlowPilotE2ERunCases({ suite: "full" })).toHaveLength(12);
 	});
 
 	test("rejects ambiguous runner selections", () => {

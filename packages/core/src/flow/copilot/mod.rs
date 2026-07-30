@@ -862,7 +862,7 @@ impl Copilot {
             );
         } else {
             system_prompt.push_str(
-                "\n\n## HOST MODE: FLOWSCRIPT AUTHORING\nUse the current FlowScript plus focused get_declarations batches, then write, patch, check, and commit the retained source. Broad graph/catalog discovery and direct command emission are not available in this authoring run; do not request catalog_search, graph inspection tools, search_by_pin, filter_category, find_connectable_nodes, or emit_commands. Runtime execution and log verification are deferred until the user has accepted and persisted this review; perform them in a later turn against the applied board.",
+                "\n\n## HOST MODE: FLOWSCRIPT AUTHORING\nUse the current FlowScript plus one focused get_declarations batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then write its active segment, patch, check, and commit the retained source. Broad graph/catalog discovery and direct command emission are not available in this authoring run; do not request catalog_search, graph inspection tools, search_by_pin, filter_category, find_connectable_nodes, or emit_commands. Runtime execution and log verification are deferred until the user has accepted and persisted this review; perform them in a later turn against the applied board.",
             );
         }
         if let Some(manifest_prompt) = workflow_manifest
@@ -933,6 +933,9 @@ impl Copilot {
 
         if tool_surface.exposes("write_flowscript") {
             agent_builder = agent_builder
+                // The in-process path does not have the desktop MCP preflight interceptor, so it
+                // must expose the same declaration -> plan -> source lifecycle explicitly.
+                .tool(PlanBoardScopeTool)
                 .tool(WriteFlowScriptTool {
                     board: board_for_tools.clone(),
                     provider: self.catalog_provider.clone(),
@@ -1196,7 +1199,7 @@ impl Copilot {
                 current_history.push(current_prompt.clone());
                 current_prompt = rig::message::Message::User {
                     content: OneOrMany::one(UserContent::Text(rig::message::Text {
-                        text: "HOST ARTIFACT SLA: No retained workflow artifact exists after the shared 90-second authoring deadline. Stop broad discovery now. Use the cached manifest plus one focused declaration batch, then call write_flowscript with the complete full-shape source before any further inspection."
+                        text: "HOST ARTIFACT SLA: No retained workflow artifact exists after the shared 90-second authoring deadline. Stop broad discovery now. Use the cached manifest plus one focused declaration batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then call write_flowscript for its active segment before any further inspection."
                             .to_string(),
                         additional_params: None,
                     })),
@@ -3342,8 +3345,8 @@ impl TypedIrOperationLedger {
     }
 }
 
-const FLOWSCRIPT_FORCE_INSTRUCTION: &str = "You have enough context. Continue the retained FlowScript source lifecycle now. If no source draft exists, call write_flowscript immediately with one fresh draft_id and the complete full-shape program; do not chase omitted or unmatched declaration queries before this recoverable checkpoint. If diagnostics exist, patch that exact revision in place and use only diagnostic-directed declaration lookups. If the retained revision has no diagnostics, call check_flowscript; after status valid, call commit_flowscript at that exact revision. Preserve all requested helpers, variables, Events, and //@n anchors across repairs. Do not submit TODOs, stubs, plan comments, a test-only Event, hand-authored command JSON, or requests for unavailable direct-command tools.";
-const FLOWSCRIPT_FORCE_ESCALATION: &str = "STOP analyzing and take the next FlowScript compiler action now: write the complete source, patch the retained diagnostic at its exact revision, check that revision, or commit it after status valid. Never restart from the live board after a failed draft, reduce the requested program to a smoke test, switch to JSON IR, or answer with only text.";
+const FLOWSCRIPT_FORCE_INSTRUCTION: &str = "You have enough context. Continue the retained FlowScript source lifecycle now. If no source draft exists, reuse or obtain one usable declaration batch, call plan_board_scope exactly once unless the host already retained an accepted plan, then call write_flowscript immediately with one fresh draft_id for its active segment; do not chase omitted or unmatched declaration queries before this recoverable checkpoint. If diagnostics exist, patch that exact revision in place and use only diagnostic-directed declaration lookups. If the retained revision has no diagnostics, call check_flowscript; after status valid, call commit_flowscript at that exact revision. Preserve all requested helpers, variables, Events, and //@n anchors across repairs. Do not submit TODOs, stubs, plan comments, a test-only Event, hand-authored command JSON, or requests for unavailable direct-command tools.";
+const FLOWSCRIPT_FORCE_ESCALATION: &str = "STOP analyzing and take the next FlowScript lifecycle action now: after usable declarations, call plan_board_scope exactly once unless an accepted plan is already retained; then write its active segment, patch the retained diagnostic at its exact revision, check that revision, or commit it after status valid. Never restart from the live board after a failed draft, reduce the requested program to a smoke test, switch to JSON IR, or answer with only text.";
 const TYPED_IR_FORCE_INSTRUCTION: &str = "Continue the active typed Flow IR path now. If plan_flow_ir returned selection_required, copy one semantically compatible candidate.node_type into exact_node_type for every required capability and resubmit the complete plan; only begin_flow_ir_draft after feasible is true. Otherwise repair the capability request from its structured feedback. After the draft exists, add or repair complete modules with update_flow_ir_draft and upsert_flow_ir_module at the exact latest revision, then validate_flow_ir_draft. Preserve every expected module and requested capability. Do not switch mutation representations or answer with only text.";
 const TYPED_IR_FORCE_ESCALATION: &str = "STOP analyzing and continue the typed Flow IR path. If the latest plan contains selection_required, resubmit the complete plan now with one compatible candidate.node_type copied into exact_node_type for every required capability. Otherwise use the exact latest revision and call the next typed draft operation now: begin the feasible planned draft, update its retained header, upsert a complete expected module, or validate it. Preserve full requested scope and do not switch mutation representations.";
 const TYPED_IR_REPAIR_INSTRUCTION: &str = "Repair the retained typed Flow IR at its exact current revision. Follow each structured diagnostic JSON-pointer path; use update_flow_ir_draft for header/expected-module repairs and upsert_flow_ir_module for the named module, then call validate_flow_ir_draft again. Keep all requested capabilities and expected modules. Do not switch mutation representations or replace the draft with a smaller smoke test.";

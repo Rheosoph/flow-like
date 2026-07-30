@@ -25,7 +25,8 @@
  * reuse this for paths that are written in place.
  */
 
-const STORAGE_KEY = "flow-like.asset-urls";
+const STORAGE_KEY = "flow-like.asset-urls.v2";
+const LEGACY_STORAGE_KEY = "flow-like.asset-urls";
 const MAX_ENTRIES = 600;
 const PERSIST_THROTTLE_MS = 2000;
 
@@ -38,6 +39,11 @@ const EXPIRY_SAFETY_MARGIN_MS = 10 * 60 * 1000;
 interface StoredUrl {
 	url: string;
 	expiresAt: number;
+	confirmed: boolean;
+	replacement?: {
+		url: string;
+		expiresAt: number;
+	};
 }
 
 type Registry = Map<string, StoredUrl>;
@@ -77,7 +83,7 @@ function signatureExpiry(url: URL): number | undefined {
 		if (!signedAt || !ttlSeconds) continue;
 		const start = parseCompactUtc(signedAt);
 		const ttl = Number(ttlSeconds);
-		if (start === undefined || !Number.isFinite(ttl)) continue;
+		if (start === undefined || !Number.isFinite(ttl) || ttl <= 0) continue;
 		return start + ttl * 1000;
 	}
 
@@ -88,7 +94,64 @@ function signatureExpiry(url: URL): number | undefined {
 		if (!Number.isNaN(parsed)) return parsed;
 	}
 
+	// Older S3/GCS V2 signatures use an epoch deadline.
+	const legacyExpiry = params.get("Expires");
+	if (
+		legacyExpiry &&
+		params.has("Signature") &&
+		(params.has("AWSAccessKeyId") || params.has("GoogleAccessId"))
+	) {
+		const parsed = Number(legacyExpiry);
+		if (Number.isFinite(parsed) && parsed > 0) return parsed * 1000;
+	}
+
 	return undefined;
+}
+
+/**
+ * Signing timestamps and signatures may change without changing the resource.
+ * Everything else is identity-bearing: versions, image transforms, response
+ * overrides, signed headers and credential/session identity must not collide.
+ */
+const VOLATILE_SIGNATURE_PARAMS = new Set([
+	"x-amz-date",
+	"x-amz-expires",
+	"x-amz-signature",
+	"x-goog-date",
+	"x-goog-expires",
+	"x-goog-signature",
+	"expires",
+	"signature",
+	"se",
+	"sig",
+	"st",
+]);
+
+function assetIdentity(url: URL): string {
+	const stableParams = [...url.searchParams.entries()]
+		.filter(([name]) => !VOLATILE_SIGNATURE_PARAMS.has(name.toLowerCase()))
+		.sort(([leftName, leftValue], [rightName, rightValue]) => {
+			const nameOrder = leftName.localeCompare(rightName);
+			return nameOrder || leftValue.localeCompare(rightValue);
+		});
+	const query = new URLSearchParams(stableParams).toString();
+	return `${url.origin}${url.pathname}${query ? `?${query}` : ""}${url.hash}`;
+}
+
+function parseSignedUrl(raw: string):
+	| {
+			key: string;
+			expiresAt: number;
+	  }
+	| undefined {
+	try {
+		const parsed = new URL(raw);
+		const expiresAt = signatureExpiry(parsed);
+		if (expiresAt === undefined) return undefined;
+		return { key: assetIdentity(parsed), expiresAt };
+	} catch {
+		return undefined;
+	}
 }
 
 function loadRegistry(): Registry {
@@ -98,17 +161,27 @@ function loadRegistry(): Registry {
 	if (typeof window === "undefined") return registry;
 
 	try {
+		// v1 keyed only by origin/path and could therefore collapse versions,
+		// transforms and credentials. Never carry those entries into v2.
+		window.localStorage.removeItem(LEGACY_STORAGE_KEY);
 		const raw = window.localStorage.getItem(STORAGE_KEY);
 		if (!raw) return registry;
-		const parsed = JSON.parse(raw) as Record<string, StoredUrl>;
+		const parsed = JSON.parse(raw) as Record<
+			string,
+			Pick<StoredUrl, "url" | "expiresAt">
+		>;
 		const now = Date.now();
 		for (const [key, entry] of Object.entries(parsed)) {
+			const signed =
+				typeof entry?.url === "string" ? parseSignedUrl(entry.url) : undefined;
 			if (
-				typeof entry?.url === "string" &&
+				signed &&
+				signed.key === key &&
 				typeof entry?.expiresAt === "number" &&
+				signed.expiresAt === entry.expiresAt &&
 				entry.expiresAt - EXPIRY_SAFETY_MARGIN_MS > now
 			) {
-				registry.set(key, entry);
+				registry.set(key, { ...entry, confirmed: true });
 			}
 		}
 	} catch {
@@ -122,9 +195,16 @@ function loadRegistry(): Registry {
 function persist() {
 	if (typeof window === "undefined" || !registry) return;
 	try {
+		const now = Date.now();
+		const confirmed = [...registry.entries()]
+			.filter(
+				([, entry]) =>
+					entry.confirmed && entry.expiresAt - EXPIRY_SAFETY_MARGIN_MS > now,
+			)
+			.map(([key, { url, expiresAt }]) => [key, { url, expiresAt }]);
 		window.localStorage.setItem(
 			STORAGE_KEY,
-			JSON.stringify(Object.fromEntries(registry)),
+			JSON.stringify(Object.fromEntries(confirmed)),
 		);
 	} catch {
 		// Quota exhausted or storage disabled — keep the in-memory registry.
@@ -164,35 +244,175 @@ function prune(store: Registry, now: number) {
 export function stableAssetUrl<T extends string | null | undefined>(raw: T): T {
 	if (!raw || typeof raw !== "string") return raw;
 
-	let parsed: URL;
-	try {
-		parsed = new URL(raw);
-	} catch {
-		return raw;
-	}
+	const signed = parseSignedUrl(raw);
+	if (!signed) return raw;
 
-	const expiresAt = signatureExpiry(parsed);
-	if (expiresAt === undefined) return raw;
-
-	const key = `${parsed.origin}${parsed.pathname}`;
 	const store = loadRegistry();
 	const now = Date.now();
+	const { key, expiresAt } = signed;
 
 	const known = store.get(key);
 	if (known && known.expiresAt - EXPIRY_SAFETY_MARGIN_MS > now) {
+		if (
+			known.url !== raw &&
+			expiresAt > known.expiresAt &&
+			expiresAt - EXPIRY_SAFETY_MARGIN_MS > now &&
+			(!known.replacement || known.replacement.expiresAt < expiresAt)
+		) {
+			// Keep the newest signature as an immediate retry, but continue
+			// returning the already-confirmed/cached URL on the happy path.
+			known.replacement = { url: raw, expiresAt };
+		}
 		return known.url as T;
 	}
 
-	store.set(key, { url: raw, expiresAt });
+	if (expiresAt - EXPIRY_SAFETY_MARGIN_MS <= now) return raw;
+
+	store.set(key, { url: raw, expiresAt, confirmed: false });
 	prune(store, now);
-	schedulePersist();
 	return raw;
 }
 
-interface AssetBearingMetadata {
+/**
+ * Marks a URL as browser-proven. Only proven URLs are persisted across reloads,
+ * so a transient 403/404 can never become a durable cache entry.
+ */
+export function confirmStableAssetUrl(raw: string | null | undefined): void {
+	if (!raw) return;
+	const signed = parseSignedUrl(raw);
+	if (!signed) return;
+
+	const store = loadRegistry();
+	const entry = store.get(signed.key);
+	if (!entry || entry.url !== raw) return;
+
+	entry.confirmed = true;
+	schedulePersist();
+}
+
+/**
+ * Evicts a URL that failed to load and promotes the newest signature observed
+ * for the same resource. Image components can retry the returned URL
+ * immediately instead of waiting for another query refetch.
+ */
+export function recoverStableAssetUrl(
+	raw: string | null | undefined,
+): string | undefined {
+	if (!raw) return undefined;
+	const signed = parseSignedUrl(raw);
+	if (!signed) return undefined;
+
+	const store = loadRegistry();
+	const entry = store.get(signed.key);
+	if (!entry) return undefined;
+
+	const now = Date.now();
+	if (entry.url !== raw) {
+		return entry.expiresAt - EXPIRY_SAFETY_MARGIN_MS > now
+			? entry.url
+			: undefined;
+	}
+
+	const replacement = entry.replacement;
+	if (
+		replacement &&
+		replacement.url !== raw &&
+		replacement.expiresAt - EXPIRY_SAFETY_MARGIN_MS > now
+	) {
+		store.set(signed.key, {
+			...replacement,
+			confirmed: false,
+		});
+		persist();
+		return replacement.url;
+	}
+
+	store.delete(signed.key);
+	persist();
+	return undefined;
+}
+
+/**
+ * True once a signature's deadline has passed. Such a URL is dead: the store
+ * answers 403 however many times it is asked, so rendering it only buys a
+ * broken image and a wasted request.
+ *
+ * Callers use this to decide what to *paint*, never to delete data. A dead URL
+ * still records which object the asset lives in, and the next metadata refresh
+ * signs that same object again.
+ */
+export function isExpiredAssetUrl(raw: string | null | undefined): boolean {
+	if (!raw) return false;
+	const signed = parseSignedUrl(raw);
+	if (!signed) return false;
+	return signed.expiresAt <= Date.now();
+}
+
+export interface AssetBearingMetadata {
 	icon?: string | null;
 	thumbnail?: string | null;
 	preview_media?: string[];
+}
+
+/**
+ * Picks the better of two values for one media field.
+ *
+ * A signature is a credential, not an address. A cached record froze whichever
+ * signature was current when it was written, so its media links die within a
+ * day even while the rest of the record stays perfectly good — and a record
+ * written before the app had artwork carries no link at all. Anything unsigned
+ * (Tauri's `asset://` form, a `data:` URL, a plain public URL) keeps working
+ * forever and is worth holding on to, because re-pointing an `<img>` at a
+ * differently signed copy of artwork the browser already has re-downloads it.
+ */
+function durableMedia(
+	cached: string | null | undefined,
+	fresh: string | null | undefined,
+): string | null | undefined {
+	if (cached && !parseSignedUrl(cached)) return cached;
+	return fresh ?? cached;
+}
+
+/**
+ * Takes the media fields of `fresh` into `cached` wherever `cached` cannot
+ * stand on its own, and returns `cached` untouched when it can — callers rely
+ * on that reference to tell "nothing changed" from "resync".
+ *
+ * Only media is merged. Everything else stays as `cached` has it, because the
+ * cached record is the copy the rest of the app treats as authoritative and
+ * adopting names or timestamps from a background sync reorders lists under the
+ * user.
+ */
+export function mergeMetadataMedia<T extends AssetBearingMetadata>(
+	cached: T,
+	fresh: AssetBearingMetadata | undefined,
+): T {
+	if (!fresh) return cached;
+
+	const icon = durableMedia(cached.icon, fresh.icon);
+	const thumbnail = durableMedia(cached.thumbnail, fresh.thumbnail);
+	// Preview galleries are ordered sets rather than slots, so they are taken
+	// whole: a cached gallery survives only while every entry in it is durable.
+	const previewMedia =
+		cached.preview_media?.length &&
+		cached.preview_media.every((url) => !parseSignedUrl(url))
+			? cached.preview_media
+			: (fresh.preview_media ?? cached.preview_media);
+
+	if (
+		icon === cached.icon &&
+		thumbnail === cached.thumbnail &&
+		previewMedia === cached.preview_media
+	) {
+		return cached;
+	}
+
+	return {
+		...cached,
+		icon,
+		thumbnail,
+		...(previewMedia ? { preview_media: previewMedia } : {}),
+	};
 }
 
 /**
@@ -262,6 +482,7 @@ export function resetStableAssetUrls() {
 	if (typeof window !== "undefined") {
 		try {
 			window.localStorage.removeItem(STORAGE_KEY);
+			window.localStorage.removeItem(LEGACY_STORAGE_KEY);
 		} catch {}
 	}
 }

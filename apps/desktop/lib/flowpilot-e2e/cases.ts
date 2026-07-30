@@ -108,6 +108,7 @@ function requirements(
 		requiredLazyDatabaseAliases: [],
 		requiredIdReferences: [],
 		requiredNodeCapabilities: [],
+		requiredPageBoardBindings: [],
 		...overrides,
 	};
 }
@@ -523,6 +524,47 @@ Construct the agent from a model (find the model with the model-preference node 
 		}),
 	},
 	{
+		id: "multi-board-pages",
+		title: "Two independently owned board pages",
+		description:
+			"Exercises exact caller-chosen board/page contracts, secondary-board page ownership, lifecycle-node affinity, and shared reusable-widget catalog persistence.",
+		appName: "Twin Board Console",
+		smoke: false,
+		prompt: `Build one app with exactly TWO independent workflow boards and exactly TWO pages.
+
+Name the boards exactly "Operations Workflow" and "Analytics Workflow". Name the pages exactly "Operations" and "Analytics". "Operations" must be owned by "Operations Workflow"; "Analytics" must be owned by "Analytics Workflow". Choose both board ids and globally unique page ids up front, then pass each exact board id to both flowpilot_widget and flowpilot_board. Create/ensure each board with create_new_board=true. Never rely on a first-board default.
+
+Each board must have its own connected eventsSimple page-load entry. Wire the Operations page only to the Operations board entry and the Analytics page only to the Analytics board entry. The Operations load flow writes a clearly labeled operational status and queue count to its page. The Analytics load flow writes a clearly labeled trend summary and total to its page. Register both pages as page events on distinct routes.
+
+Both pages should render one instance of the same reusable widget named exactly "Status Card", while keeping page-specific headings and element ids. The shared widget must exist only once in the app catalog and both pages must reference that persisted widget. Keep the two workflows independent; boards in one app cannot call each other.`,
+		requirements: requirements({
+			minFlowScriptNonWhitespaceChars: 500,
+			minBoards: 2,
+			minTotalNodes: 8,
+			minPages: 2,
+			minWidgets: 1,
+			minTables: 0,
+			minEvents: 2,
+			requiredIdReferences: [
+				{ entity: "page", alias: "operations", source: "canonical" },
+				{ entity: "page", alias: "analytics", source: "canonical" },
+				{ entity: "widget", alias: "status_card", source: "canonical" },
+			],
+			requiredPageBoardBindings: [
+				{
+					page: "Operations",
+					board: "Operations Workflow",
+					requireOnLoadEvent: true,
+				},
+				{
+					page: "Analytics",
+					board: "Analytics Workflow",
+					requireOnLoadEvent: true,
+				},
+			],
+		}),
+	},
+	{
 		id: "ai-adventure",
 		title: "AI adventure game with an agent-directed campaign",
 		description:
@@ -762,7 +804,7 @@ export function buildCasePrompt(
 		? "- Finish the UI and data setup, then implement every executable behavior as one compact, valid FlowScript program. Do not substitute command JSON or leave placeholder logic."
 		: "- Skip page, widget, and Data Studio scaffolding entirely: go straight to the workflow board and implement every behavior as one compact, valid FlowScript program. Do not substitute command JSON or leave placeholder logic.";
 	const idsLine = needsScaffolding
-		? "- Use ids returned by the created tables, pages, widgets, and actions. Never guess an id. Preserve the requested entity names exactly so the run can resolve their semantic aliases."
+		? "- Choose globally unique page ids and caller-selected new-board ids up front when parallel UI/workflow construction needs a shared contract. For tables, persisted widgets, and actions, use ids returned by their tools and never invent substitutes. Preserve requested entity names exactly so the run can resolve their semantic aliases."
 		: "- Database tables are created automatically by the workflow's first write: use the exact requested table names directly in the insert/upsert calls, and use entity ids that come from real tool results.";
 	const completionLine = needsScaffolding
 		? "- Complete the whole app in this run and do not report success from UI/data scaffolding alone."

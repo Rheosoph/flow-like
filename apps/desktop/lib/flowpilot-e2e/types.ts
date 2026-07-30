@@ -11,6 +11,7 @@ export type FlowPilotE2ECaseId =
 	| "doc-compliance"
 	| "webhook-enrichment"
 	| "agent-tools"
+	| "multi-board-pages"
 	| "ai-adventure";
 
 export type FlowPilotE2EReasoningEffort = "low" | "medium" | "high";
@@ -55,6 +56,15 @@ export interface FlowPilotE2ERequiredNodeCapability {
 	anyOf: readonly string[];
 }
 
+export interface FlowPilotE2ERequiredPageBoardBinding {
+	/** Semantic alias, name, or id of the persisted page. */
+	page: string;
+	/** Semantic alias, name, or id of the page's exact owning board. */
+	board: string;
+	/** Also require the page's onLoad node to exist on that same board. */
+	requireOnLoadEvent?: boolean;
+}
+
 export interface FlowPilotE2ECaseRequirements {
 	minFlowScriptNonWhitespaceChars: number;
 	/** Guards the compact-output contract. The minimum is only a truncation check, not a target. */
@@ -81,6 +91,7 @@ export interface FlowPilotE2ECaseRequirements {
 	requiredLazyDatabaseAliases: readonly string[];
 	requiredIdReferences: readonly FlowPilotE2ERequiredIdReference[];
 	requiredNodeCapabilities: readonly FlowPilotE2ERequiredNodeCapability[];
+	requiredPageBoardBindings: readonly FlowPilotE2ERequiredPageBoardBinding[];
 }
 
 export interface FlowPilotE2ECaseDefinition {

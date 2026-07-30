@@ -300,6 +300,17 @@ export function resolveFrontendToolExecutionDeadline(
 	return safeBackendDeadline;
 }
 
+/** Every delegated native chat must be cancelled when its owning frontend request ends. */
+export function isCancellableNestedCopilotTool(toolName: string | undefined) {
+	return (
+		toolName === "flowpilot_board" ||
+		toolName === "flowpilot_widget" ||
+		toolName === "data_studio_agent" ||
+		toolName === "project_scout" ||
+		toolName === "research_agent"
+	);
+}
+
 export interface CreatedAppReadinessRetryOptions<T = unknown> {
 	/** The app returned by create_app for the owning assistant message. */
 	createdAppId?: string;
@@ -425,6 +436,31 @@ export async function retryCreatedAppReadiness<T>(
  */
 export function boardEditLockKey(appId: string, boardId?: string) {
 	return boardId ? `${appId}\u0000board:${boardId}` : appId;
+}
+
+/**
+ * New-board creation mutates the app manifest even when the caller preselects the future board id,
+ * so it must start on the app lane before downgrading to that board's lane.
+ */
+export function flowPilotBoardInitialLockKey(
+	appId: string,
+	boardId: string | undefined,
+	createNewBoard: boolean,
+) {
+	return boardEditLockKey(appId, createNewBoard ? undefined : boardId);
+}
+
+/** Caller-selected ids are authoritative; journal recovery precedes fresh id generation. */
+export function resolveFlowPilotBoardCreationId(options: {
+	requestedBoardId?: string;
+	journaledBoardId?: string;
+	createId: () => string;
+}) {
+	return (
+		options.requestedBoardId?.trim() ||
+		options.journaledBoardId?.trim() ||
+		options.createId()
+	);
 }
 
 /**
@@ -936,13 +972,17 @@ export function creationRequestFingerprint(
 	>,
 ): string | undefined {
 	const idempotencyKey = identity.idempotencyKey?.trim();
+	const scope = identity.scope?.trim() ?? "";
 	if (idempotencyKey) {
 		if (idempotencyKey.length > 256) return undefined;
-		return `key:${idempotencyKey}`;
+		// A caller may reuse a human-friendly key on another app/page. The key replaces the
+		// instruction hash, not the target scope.
+		return scope
+			? `key:${fnv1a64Hex(scope)}:${idempotencyKey}`
+			: `key:${idempotencyKey}`;
 	}
 	const instruction = normalizeCreationInstruction(identity.instruction ?? "");
 	if (!instruction) return undefined;
-	const scope = identity.scope?.trim() ?? "";
 	return `hash:${fnv1a64Hex(`${scope}\u0000${instruction}`)}`;
 }
 

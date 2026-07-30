@@ -251,6 +251,31 @@ function resolveEntity(
 	};
 }
 
+function resolveBoardEntity(
+	alias: string,
+	boards: readonly FlowPilotBoardSnapshot[],
+): { entity?: ResolvableEntity; ambiguous: boolean } {
+	const normalizedAlias = normalizeSemanticAlias(alias);
+	const matches = boards
+		.map((board, index) => ({
+			id: board.id,
+			aliases: [board.semanticAlias ?? "", board.name, board.id],
+			path: `boards[${index}]`,
+		}))
+		.filter((entity) =>
+			entity.aliases.some(
+				(candidate) => normalizeSemanticAlias(candidate) === normalizedAlias,
+			),
+		);
+	const uniqueMatches = [
+		...new Map(matches.map((entity) => [entity.id, entity])).values(),
+	];
+	return {
+		entity: uniqueMatches.length === 1 ? uniqueMatches[0] : undefined,
+		ambiguous: uniqueMatches.length > 1,
+	};
+}
+
 function flowScriptStringValues(source: string | undefined): readonly string[] {
 	if (!source) return [];
 	const values: string[] = [];
@@ -1112,6 +1137,71 @@ export function evaluateAppCreationCase(
 				},
 			),
 		);
+	}
+
+	for (const binding of requirements.requiredPageBoardBindings) {
+		const pageResolution = resolveEntity("page", binding.page, snapshot);
+		const boardResolution = resolveBoardEntity(binding.board, boards);
+		const codeAlias = `${normalizeSemanticAlias(binding.page)}.${normalizeSemanticAlias(binding.board)}`;
+		if (
+			!pageResolution.entity ||
+			pageResolution.ambiguous ||
+			!boardResolution.entity ||
+			boardResolution.ambiguous
+		) {
+			checks.push(
+				check(
+					`pages.board_binding.${codeAlias}`,
+					false,
+					`Could not uniquely resolve page ${JSON.stringify(binding.page)} and board ${JSON.stringify(binding.board)}.`,
+					{
+						expected: `${binding.page} -> ${binding.board}`,
+						actual: "unresolved",
+					},
+				),
+			);
+			continue;
+		}
+		const page = pages.find(
+			(candidate) => candidate.id === pageResolution.entity?.id,
+		);
+		const board = boards.find(
+			(candidate) => candidate.id === boardResolution.entity?.id,
+		);
+		const ownsExactBoard = page?.boardId === board?.id;
+		checks.push(
+			check(
+				`pages.board_binding.${codeAlias}`,
+				ownsExactBoard,
+				ownsExactBoard
+					? `Page ${page?.id} is owned by exact board ${board?.id}.`
+					: `Page ${page?.id ?? binding.page} belongs to ${page?.boardId ?? "no board"}, expected ${board?.id ?? binding.board}.`,
+				{
+					path: pageResolution.entity.path,
+					expected: board?.id ?? binding.board,
+					actual: page?.boardId ?? "missing",
+				},
+			),
+		);
+		if (binding.requireOnLoadEvent) {
+			const onLoadBelongsToBoard = Boolean(
+				page?.onLoadEventId && board?.nodeIds?.includes(page.onLoadEventId),
+			);
+			checks.push(
+				check(
+					`pages.board_load_binding.${codeAlias}`,
+					onLoadBelongsToBoard,
+					onLoadBelongsToBoard
+						? `Page ${page?.id} onLoad node belongs to board ${board?.id}.`
+						: `Page ${page?.id ?? binding.page} has no onLoad node on board ${board?.id ?? binding.board}.`,
+					{
+						path: `${pageResolution.entity.path}.onLoadEventId`,
+						expected: true,
+						actual: onLoadBelongsToBoard,
+					},
+				),
+			);
+		}
 	}
 
 	for (const reference of requirements.requiredIdReferences) {

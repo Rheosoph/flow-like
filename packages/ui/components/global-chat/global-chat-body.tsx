@@ -167,6 +167,10 @@ const GLOBAL_CHAT_CONFIG = {
 	tools: [] as string[],
 };
 
+// FlowScript itself needs at least 420px. Keep app previews above the split until the remaining
+// conversation column is wide enough for a useful embedded desktop surface.
+const INLINE_ARTIFACT_COLUMN_LAYOUT_MIN_WIDTH = 1280;
+
 interface GlobalChatBodyProps {
 	variant?: "page" | "overlay";
 }
@@ -901,6 +905,17 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const canSideBySide = layoutWidth >= 768;
 	const showWorkspace = hasFlowscript && !flowscriptHidden;
 	const sideBySideWorkspace = showWorkspace && canSideBySide;
+	const hasInlineArtifacts =
+		inlineAppChats.length > 0 ||
+		inlineAppPages.length > 0 ||
+		inlineAppSurfaces.length > 0 ||
+		pendingComponents !== null;
+	const splitWorkspaceBelowInlineArtifacts =
+		sideBySideWorkspace &&
+		hasInlineArtifacts &&
+		layoutWidth < INLINE_ARTIFACT_COLUMN_LAYOUT_MIN_WIDTH;
+	const fullHeightConversationColumn =
+		sideBySideWorkspace && !splitWorkspaceBelowInlineArtifacts;
 
 	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
 	const modelOptions = useMemo<ProviderModelPickerModel[]>(
@@ -1289,113 +1304,147 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				<GlobalChatHistory />
 			</header>
 
-			{(inlineAppChats.length > 0 ||
-				inlineAppPages.length > 0 ||
-				inlineAppSurfaces.length > 0 ||
-				pendingComponents !== null) && (
-				<div className="shrink-0 max-h-[60vh] overflow-y-auto pt-2">
-					<PendingComponentsCard />
-					{inlineAppPages.map((page) => (
-						<InlineAppPageCard
-							key={page.id}
-							page={page}
-							onClose={removeInlineAppPage}
-							compact={compact}
-						/>
-					))}
-					{inlineAppSurfaces.map((surface) => (
-						<InlineAppSurfaceCard
-							key={surface.id}
-							surface={surface}
-							onClose={removeInlineAppSurface}
-							compact={compact}
-						/>
-					))}
-					{inlineAppChats.map((chat) => (
-						<InlineAppChatCard
-							key={chat.id}
-							chat={chat}
-							onClose={removeInlineAppChat}
-							compact={compact}
-						/>
-					))}
-				</div>
-			)}
-
 			<div
 				ref={layoutRef}
-				className={`flex min-h-0 flex-1 ${sideBySideWorkspace ? "flex-row" : "flex-col"}`}
+				className={`min-h-0 min-w-0 flex-1 overflow-hidden ${
+					fullHeightConversationColumn
+						? "flex flex-row"
+						: splitWorkspaceBelowInlineArtifacts
+							? "grid grid-cols-[minmax(0,1fr)_clamp(420px,48%,660px)] grid-rows-[auto_minmax(0,1fr)]"
+							: "flex flex-col"
+				}`}
 			>
-				{/* Must be a flex column: <Chat>'s root sizes itself with flex-1/min-h-0, and without a
-				    flex parent its height collapses to content size, breaking the internal scroll area.
-				    In a narrow dock the workspace replaces the chat rather than squeezing beside it, so
-				    hide (don't unmount) the chat to keep its scroll/stream state alive underneath. */}
 				<div
-					className={`relative flex flex-col flex-1 min-h-0 ${
-						showWorkspace && !canSideBySide ? "hidden" : ""
-					}`}
+					// On a roomy desktop surface, app previews belong to the conversation column so
+					// FlowScript can use the full height beside them. `contents` lets narrower split
+					// and stacked layouts position the same mounted children without losing app state.
+					className={
+						fullHeightConversationColumn
+							? "relative flex min-h-0 min-w-0 flex-1 flex-col"
+							: "contents"
+					}
 				>
-					{showEmptyState && (
-						<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center gap-5 px-6 text-center">
-							<span className="flex size-16 items-center justify-center rounded-[1.25rem] bg-linear-to-br from-primary/25 via-primary/10 to-purple-600/20 text-primary shadow-xl shadow-primary/25 ring-1 ring-primary/15">
-								<SparklesIcon className="size-8" />
-							</span>
-							<div className="space-y-1.5">
-								<h2 className="text-xl font-semibold tracking-tight">
-									Chat with FlowPilot
-								</h2>
-								<p className="mx-auto max-w-xs text-sm text-muted-foreground">
-									Ask anything — or let it create apps, open the store, and talk
-									to your apps for you.
-								</p>
-							</div>
-							<div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
-								{EMPTY_SUGGESTIONS.map(({ label, icon: Icon, prompt }) => (
-									<Button
-										key={label}
-										variant="outline"
-										size="sm"
-										className="h-10 md:h-8 gap-1.5 rounded-full border-border/60 bg-background/80 text-xs text-foreground/80 outline-none transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover:shadow-sm focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0 motion-safe:hover:-translate-y-px"
-										onClick={() => void handleSendMessage(prompt)}
-									>
-										<Icon className="size-3.5" />
-										{label}
-									</Button>
-								))}
-							</div>
+					{hasInlineArtifacts && (
+						<div
+							className={`min-w-0 shrink-0 max-h-[60vh] overflow-y-auto pt-2 ${
+								splitWorkspaceBelowInlineArtifacts
+									? "col-span-2 row-start-1"
+									: ""
+							}`}
+						>
+							<PendingComponentsCard />
+							{inlineAppPages.map((page) => (
+								<InlineAppPageCard
+									key={page.id}
+									page={page}
+									onClose={removeInlineAppPage}
+									compact={compact}
+								/>
+							))}
+							{inlineAppSurfaces.map((surface) => (
+								<InlineAppSurfaceCard
+									key={surface.id}
+									surface={surface}
+									onClose={removeInlineAppSurface}
+									compact={compact}
+								/>
+							))}
+							{inlineAppChats.map((chat) => (
+								<InlineAppChatCard
+									key={chat.id}
+									chat={chat}
+									onClose={removeInlineAppChat}
+									compact={compact}
+								/>
+							))}
 						</div>
 					)}
-					{/* Embedded-widget actions (ActionHandler's widget_event) route through
-					    runWidgetAction to the widget's originating use-case board. */}
-					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
-						<Chat
-							ref={chatRef}
-							sessionId={activeConversationId}
-							messages={messages}
-							onSendMessage={handleSendMessage}
-							isStreamActive={isStreaming}
-							// Supplying this is what unlocks the composer: sends are never blocked,
-							// they start another turn, queue, or steer the running one.
-							concurrency={chatConcurrency}
-							config={GLOBAL_CHAT_CONFIG}
-							activeInteractions={activeInteractions}
-							onRespondToInteraction={handleRespondToInteraction}
-							inlinePrompt={
-								toolPrompt ? (
-									<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
-								) : undefined
-							}
-						/>
-					</ChatWidgetExecutionProvider>
+
+					{/* Must be a flex column: <Chat>'s root sizes itself with flex-1/min-h-0, and
+					    without a flex parent its height collapses to content size, breaking the
+					    internal scroll area. In a narrow dock the workspace replaces the chat rather
+					    than squeezing beside it, so hide (don't unmount) the chat to keep its
+					    scroll/stream state alive underneath. */}
+					<div
+						className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${
+							splitWorkspaceBelowInlineArtifacts
+								? "col-start-1 row-start-2"
+								: ""
+						} ${showWorkspace && !canSideBySide ? "hidden" : ""}`}
+					>
+						{showEmptyState && (
+							<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center gap-5 px-6 text-center">
+								<span className="flex size-16 items-center justify-center rounded-[1.25rem] bg-linear-to-br from-primary/25 via-primary/10 to-purple-600/20 text-primary shadow-xl shadow-primary/25 ring-1 ring-primary/15">
+									<SparklesIcon className="size-8" />
+								</span>
+								<div className="space-y-1.5">
+									<h2 className="text-xl font-semibold tracking-tight">
+										Chat with FlowPilot
+									</h2>
+									<p className="mx-auto max-w-xs text-sm text-muted-foreground">
+										Ask anything — or let it create apps, open the store, and
+										talk to your apps for you.
+									</p>
+								</div>
+								<div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
+									{EMPTY_SUGGESTIONS.map(({ label, icon: Icon, prompt }) => (
+										<Button
+											key={label}
+											variant="outline"
+											size="sm"
+											className="h-10 md:h-8 gap-1.5 rounded-full border-border/60 bg-background/80 text-xs text-foreground/80 outline-none transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover:shadow-sm focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0 motion-safe:hover:-translate-y-px"
+											onClick={() => void handleSendMessage(prompt)}
+										>
+											<Icon className="size-3.5" />
+											{label}
+										</Button>
+									))}
+								</div>
+							</div>
+						)}
+						{/* Embedded-widget actions (ActionHandler's widget_event) route through
+						    runWidgetAction to the widget's originating use-case board. */}
+						<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
+							<Chat
+								ref={chatRef}
+								sessionId={activeConversationId}
+								messages={messages}
+								onSendMessage={handleSendMessage}
+								isStreamActive={isStreaming}
+								// Supplying this is what unlocks the composer: sends are never
+								// blocked; they start another turn, queue, or steer the running one.
+								concurrency={chatConcurrency}
+								config={GLOBAL_CHAT_CONFIG}
+								activeInteractions={activeInteractions}
+								onRespondToInteraction={handleRespondToInteraction}
+								inlinePrompt={
+									toolPrompt ? (
+										<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
+									) : undefined
+								}
+							/>
+						</ChatWidgetExecutionProvider>
+					</div>
 				</div>
-				{showWorkspace && flowscriptWorkspace && (
-					<FlowScriptWorkspacePanel
-						source={flowscriptWorkspace.source}
-						status={flowscriptWorkspace.status}
-						fill={!canSideBySide}
-						onClose={() => setFlowscriptHidden(true)}
-					/>
-				)}
+				{showWorkspace &&
+					flowscriptWorkspace &&
+					(splitWorkspaceBelowInlineArtifacts ? (
+						<div className="col-start-2 row-start-2 flex min-h-0 min-w-0 overflow-hidden border-l border-border/30">
+							<FlowScriptWorkspacePanel
+								source={flowscriptWorkspace.source}
+								status={flowscriptWorkspace.status}
+								fill
+								onClose={() => setFlowscriptHidden(true)}
+							/>
+						</div>
+					) : (
+						<FlowScriptWorkspacePanel
+							source={flowscriptWorkspace.source}
+							status={flowscriptWorkspace.status}
+							fill={!canSideBySide}
+							onClose={() => setFlowscriptHidden(true)}
+						/>
+					))}
 			</div>
 
 			{profileId && (

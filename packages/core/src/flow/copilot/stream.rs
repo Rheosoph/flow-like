@@ -1041,18 +1041,94 @@ pub fn tool_result_terminal_status(output: &str) -> Option<String> {
         })
 }
 
+fn explicitly_failing_tool_status(status: &str) -> bool {
+    matches!(
+        status,
+        "error"
+            | "failed"
+            | "failure"
+            | "timeout"
+            | "timed_out"
+            | "denied"
+            | "cancelled"
+            | "canceled"
+            | "unresolved"
+            | "infeasible"
+            | "zero_progress_circuit_open"
+    ) || [
+        "_error",
+        "_errors",
+        "_failed",
+        "_failure",
+        "_timeout",
+        "_rejected",
+        "_unavailable",
+        "_violation",
+        "_mismatch",
+        "_conflict",
+        "_exhausted",
+        "_stalled",
+        "_blocked",
+        "_refused",
+        "_needs_repair",
+    ]
+    .iter()
+    .any(|suffix| status.ends_with(suffix))
+}
+
+fn explicitly_advisory_tool_status(status: &str) -> bool {
+    matches!(
+        status,
+        "validation_error"
+            | "validation_errors"
+            | "draft_needs_repair"
+            | "module_needs_repair"
+            | "scope_plan_accepted"
+            | "scope_plan_required"
+            | "declaration_lookup_required"
+            | "declaration_lookup_in_flight"
+            | "declaration_batch_required"
+            | "declaration_follow_up_unrelated"
+            | "diagnostic_lookup_required"
+            | "duplicate_declaration_lookup"
+            | "retained_revision_required"
+            | "flowscript_draft_required"
+            | "commit_validated_prefix"
+            | "predraft_inspection_budget_exhausted"
+            | "discovery_budget_exhausted"
+            | "time_budget_extended"
+            | "time_budget_unavailable"
+            | "deferred"
+    )
+}
+
 /// The plan-step UI has only running/done/error states. Preserve the more specific backend status
-/// separately as `terminal_status`, while mapping every non-success terminal outcome to error.
+/// separately as `terminal_status`. Tool payloads may carry an explicit `is_error` bit; trust it
+/// ahead of provider-specific status vocabulary. Otherwise only known-negative statuses fail.
+/// Advisory and newly introduced success/progress statuses must not turn red merely because an
+/// older client does not recognise their name.
 pub fn tool_result_stream_status(output: &str) -> &'static str {
-    let Some(status) = tool_result_terminal_status(output) else {
+    let parsed = serde_json::from_str::<Value>(output).ok();
+    if let Some(is_error) = parsed
+        .as_ref()
+        .and_then(|value| value.get("is_error").or_else(|| value.get("isError")))
+        .and_then(Value::as_bool)
+    {
+        return if is_error { "error" } else { "done" };
+    }
+    let Some(status) = parsed
+        .as_ref()
+        .and_then(|value| value.get("status"))
+        .and_then(Value::as_str)
+    else {
         return "done";
     };
-    match status.trim().to_ascii_lowercase().as_str() {
-        "ok" | "done" | "success" | "queued" | "applied" | "completed" => "done",
+    let status = status.trim().to_ascii_lowercase();
+    match status.as_str() {
         "running" | "pending" | "submitted" => "running",
-        "error" | "failed" | "failure" | "timeout" | "timed_out" | "denied" | "cancelled"
-        | "canceled" | "validation_error" | "validation_errors" => "error",
-        _ => "error",
+        status if explicitly_advisory_tool_status(status) => "done",
+        status if explicitly_failing_tool_status(status) => "error",
+        _ => "done",
     }
 }
 
@@ -1571,7 +1647,9 @@ function pollSupportInbox() {
             "timed_out",
             "denied",
             "cancelled",
-            "validation_errors",
+            "scope_plan_rejected",
+            "request_identity_mismatch",
+            "edit_budget_exhausted",
         ] {
             let output = json!({ "status": status }).to_string();
             assert_eq!(tool_result_stream_status(&output), "error");
@@ -1580,11 +1658,53 @@ function pollSupportInbox() {
                 Some(status)
             );
         }
-        for status in ["ok", "done", "queued", "applied", "completed"] {
+        for status in [
+            "ok",
+            "done",
+            "queued",
+            "already_queued",
+            "applied",
+            "completed",
+            "valid",
+            "no_changes",
+            "validation_errors",
+            "draft_needs_repair",
+            "module_needs_repair",
+            "scope_plan_accepted",
+            "scope_plan_required",
+            "declaration_lookup_required",
+            "predraft_inspection_budget_exhausted",
+            "discovery_budget_exhausted",
+            "time_budget_extended",
+            "time_budget_unavailable",
+            "provider_specific_advisory",
+        ] {
             assert_eq!(
                 tool_result_stream_status(&json!({ "status": status }).to_string()),
                 "done"
             );
         }
+    }
+
+    #[test]
+    fn explicit_tool_error_flag_overrides_provider_status_vocabulary() {
+        assert_eq!(
+            tool_result_stream_status(
+                &json!({ "status": "validation_errors", "is_error": false }).to_string()
+            ),
+            "done"
+        );
+        assert_eq!(
+            tool_result_stream_status(
+                &json!({ "status": "validation_errors", "is_error": true }).to_string()
+            ),
+            "error"
+        );
+        assert_eq!(
+            tool_result_stream_status(
+                &json!({ "status": "scope_plan_accepted", "isError": false }).to_string()
+            ),
+            "done"
+        );
     }
 }

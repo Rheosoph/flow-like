@@ -228,6 +228,30 @@ export class WidgetState implements IWidgetState {
 
 		try {
 			const remote = await this.fetchRemoteWidget(appId, widgetId, version);
+			if (local && !version) {
+				const localUpdatedAt = Date.parse(local.updatedAt);
+				const remoteUpdatedAt = Date.parse(remote.updatedAt);
+				const localIsNewer =
+					(Number.isFinite(localUpdatedAt) &&
+						(!Number.isFinite(remoteUpdatedAt) ||
+							localUpdatedAt > remoteUpdatedAt)) ||
+					(localUpdatedAt === remoteUpdatedAt &&
+						local.components.length > remote.components.length);
+				if (localIsNewer) {
+					// Never replace a newer populated local definition with an older/empty
+					// remote copy left by an interrupted two-phase create.
+					try {
+						await this.pushWidgetRemote(appId, local);
+					} catch (pushError) {
+						console.warn(
+							"[WidgetState] Failed to repair stale remote widget:",
+							widgetId,
+							pushError,
+						);
+					}
+					return local;
+				}
+			}
 			if (!version) {
 				try {
 					await invoke("update_widget", { appId, widget: remote });
@@ -271,6 +295,7 @@ export class WidgetState implements IWidgetState {
 				await this.pushWidgetRemote(appId, widget);
 			} catch (e) {
 				console.warn("[WidgetState] Failed to push new widget to remote:", e);
+				throw e;
 			}
 		}
 		return widget;
@@ -289,6 +314,7 @@ export class WidgetState implements IWidgetState {
 					"[WidgetState] Failed to push widget update to remote:",
 					e,
 				);
+				throw e;
 			}
 		}
 	}

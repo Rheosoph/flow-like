@@ -430,7 +430,8 @@ draft unless the user explicitly asks you to wait.
   targeted `get_declarations` lookup.
 - Before the first retained FlowScript draft, make at most six total ancillary inspection calls
   across `database_tool`, `storage_tool`, and `ui_inspect`. Reuse those results instead of building
-  exhaustive inventories; after any usable declaration batch, `write_flowscript` takes priority.
+  exhaustive inventories; after any usable declaration batch, call `plan_board_scope` exactly once
+  (unless the host already retained an accepted plan), then `write_flowscript` takes priority.
 "#;
 
 /// The last-resort escape hatch that keeps a build from ending with nothing on the board.
@@ -758,8 +759,9 @@ specialist or outer orchestrator; report the needed schema as a handoff instead 
 In a CREATE/ADD/BUILD board mutation, out-of-band database setup is
 never a prerequisite for the first complete FlowScript submission. Use at most one table-list/schema
 inspection, make one bounded, focused `get_declarations` lookup for the highest-leverage catalog
-calls, and submit the full-shape board through `write_flowscript` immediately after any usable
-declaration batch. Do not chase omitted or unmatched searches or wait for every missing table before
+calls, call `plan_board_scope` exactly once after any usable declaration batch unless the host
+already retained an accepted plan, and submit its active segment through `write_flowscript`
+immediately. Do not chase omitted or unmatched searches or wait for every missing table before
 retaining source. Check and commit the retained source while explicit schemas are pending. The
 FlowScript may reference intended built-in table names and may implement the requested runtime
 first-write behavior; it must not mutate app data through a support tool while constructing the
@@ -856,7 +858,8 @@ filtering, or shaping rows for a dashboard. The lifecycle is always the same:
 Look up exact FlowScript signatures with ONE bounded, focused `get_declarations` call before writing
 these calls: put the highest-leverage searches in `queries` (never blank), e.g. `{"queries": ["open database",
 "datafusion create session register lance", "sql query", "push csv to chart", "embedding",
-"hybrid search build index"]}`. After any usable declaration response, retain the full-shape draft
+"hybrid search build index"]}`. After any usable declaration response, call `plan_board_scope`
+exactly once (unless the host already retained an accepted plan), then retain its active segment
 immediately. Defer omitted or unmatched searches until compiler diagnostics identify a concrete
 gap; use `catalog_search` only for read-only exploration, not to postpone the first write.
 "#;
@@ -1143,9 +1146,9 @@ Actionable empty-board edits:
   valid). Never reassign a `const` binding inside a branch arm — declare it with `let` instead.
   For a value chosen between branches, assign the same `let` in BOTH arms.
 - Do not submit comments-only drafts, TODOs, "replace this later" placeholders, or prose
-  implementation plans. After retaining the full-shape draft, if a compiler diagnostic identifies
-  a missing declaration, call `get_declarations` once with concrete terms rather than inventing a
-  stub.
+  implementation plans. After retaining the accepted active segment (the complete full-shape
+  document under a `single` plan), if a compiler diagnostic identifies a missing declaration, call
+  `get_declarations` once with concrete terms rather than inventing a stub.
 - Before checking or committing, trace every explicit user requirement to reachable FlowScript.
   Preserve exact requested variable names/defaults, persisted field and status names, decision
   predicates, and success ordering (for example, acknowledge/mark complete only after downstream
@@ -1928,15 +1931,15 @@ const GENERAL_PROMPT_HEADER: &str = r#"You are FlowPilot, an expert development 
 Analyze the user's request and immediately call the appropriate tool:
 - UI work → call `emit_ui` with complete A2UI JSON (it validates internally)
 - Workflow work with a board/FlowScript context → call `get_current_flowscript`, make ONE bounded,
-  focused `get_declarations` call for the highest-leverage catalog calls, then immediately retain a
-  full-shape source with `write_flowscript` after any usable response. Defer omitted or unmatched
-  searches until compiler diagnostics, repair with `patch_flowscript`, and `check_flowscript` +
-  `commit_flowscript` at the exact current revision
+  focused `get_declarations` call for the highest-leverage catalog calls, call `plan_board_scope`
+  exactly once after any usable response, then immediately retain its active segment with
+  `write_flowscript`. Defer omitted or unmatched searches until compiler diagnostics, repair with
+  `patch_flowscript`, and `check_flowscript` + `commit_flowscript` at the exact current revision
 - Workflow visual-only work → call `emit_commands` only for position-only MoveNode or canvas comments
 - Both → call both tools in sequence
 - Unclear workflow mutation → use the current FlowScript and one bounded, focused
-  `get_declarations` call, then submit an early full-shape source draft; reserve
-  `catalog_search`/`list_board_nodes` for read-only exploration
+  `get_declarations` call, call `plan_board_scope` exactly once, then submit an early source draft
+  for its active segment; reserve `catalog_search`/`list_board_nodes` for read-only exploration
 
 For workflows: write, patch, check, and commit FlowScript source for behavior. `emit_commands`
 accepts only position-only MoveNode and CreateComment/DeleteComment.
@@ -3183,9 +3186,8 @@ mod tests {
     fn database_setup_cannot_block_the_first_board_mutation() {
         let prompt = board_sdk_flowscript_system_prompt("", 0);
         assert!(prompt.contains("database setup is\nnever a prerequisite"));
-        assert!(
-            prompt.contains("submit the full-shape board through `write_flowscript` immediately")
-        );
+        assert!(prompt.contains("call `plan_board_scope` exactly once"));
+        assert!(prompt.contains("submit its active segment through `write_flowscript`"));
         assert!(prompt.contains("One such result proves the capability mismatch"));
         assert!(prompt.contains(
             "Record any remaining requested schemas as pending and finish/apply the board"

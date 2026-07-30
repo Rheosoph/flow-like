@@ -1,6 +1,7 @@
 "use client";
 
-import { type CSSProperties, type ReactNode, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { useAssetImage } from "../../hooks/use-asset-image";
 import { appTypeMeta } from "../../lib/app-type";
 import type { IAppType } from "../../lib/schema/app/app";
 import { cn } from "../../lib/utils";
@@ -60,12 +61,10 @@ export function AppTypeMark({
 	const badge = badgeSize(size);
 	const showBadge = !hideBadge && size >= MIN_SIZE_FOR_BADGE;
 
-	// A plain <img> paints a cached icon immediately, unlike Radix's Avatar,
-	// but it has no fallback of its own — a 404 would leave a broken image
-	// where the initials used to be. Tracking the failed URL rather than a
-	// boolean means a later src change retries instead of staying broken.
-	const [failedSrc, setFailedSrc] = useState<string | null>(null);
-	const showImage = !!src && failedSrc !== src;
+	// A plain <img> paints a cached icon immediately, unlike Radix's Avatar, but
+	// it has no fallback of its own — a 404 would leave a broken image where the
+	// initials used to be.
+	const image = useAssetImage(src);
 
 	return (
 		<span
@@ -74,25 +73,38 @@ export function AppTypeMark({
 			title={meta.label}
 		>
 			<span
-				className="flex h-full w-full items-center justify-center overflow-hidden bg-muted bg-cover bg-center font-bold leading-none text-white"
+				className="relative block h-full w-full overflow-hidden bg-muted bg-cover bg-center font-bold leading-none text-white"
 				style={{
 					...meta.shape,
 					background,
 					fontSize: Math.max(8, Math.round(size * 0.3)),
 				}}
 			>
-				{showImage ? (
+				{/* The initials sit underneath rather than instead of the icon, so an
+				    icon that arrives late fades over them instead of replacing them. */}
+				<span
+					className={cn(
+						"absolute inset-0 flex items-center justify-center transition-opacity duration-200",
+						image.loaded && "opacity-0",
+					)}
+				>
+					{fallback}
+				</span>
+				{image.canRender && (
 					<img
-						src={src}
+						ref={image.imgRef}
+						src={image.src}
 						alt=""
 						aria-hidden="true"
 						loading="lazy"
 						decoding="async"
-						className="h-full w-full object-cover"
-						onError={() => setFailedSrc(src)}
+						className={cn(
+							"absolute inset-0 h-full w-full object-cover transition-opacity duration-200",
+							image.loaded ? "opacity-100" : "opacity-0",
+						)}
+						onLoad={image.onLoad}
+						onError={image.onError}
 					/>
-				) : (
-					fallback
 				)}
 			</span>
 
