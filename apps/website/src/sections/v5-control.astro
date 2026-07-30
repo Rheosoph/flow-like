@@ -43,8 +43,8 @@ const items = [
   .control-section {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 10vw;
-    padding: 140px 7vw;
+    gap: clamp(60px, 10vw, 192px);
+    padding: 140px var(--website-content-edge);
     background: linear-gradient(125deg, color-mix(in oklab, var(--primary) 82%, black), var(--primary) 45%, var(--accent));
     color: var(--primary-foreground);
   }

@@ -1,4 +1,11 @@
-import type { IBoard, IMetadata, IVersionType } from "../../lib";
+import type {
+	IBoard,
+	IMetadata,
+	ITemplatePreview,
+	ITemplateSearchHit,
+	ITemplateSearchQuery,
+	IVersionType,
+} from "../../lib";
 
 export interface ITemplateState {
 	getTemplates(
@@ -6,6 +13,21 @@ export interface ITemplateState {
 		language?: string,
 		// [appId, templateId, metadata]
 	): Promise<[string, string, IMetadata | undefined][]>;
+	/**
+	 * Store-wide template search across publicly visible apps.
+	 * (GET /apps/templates/search)
+	 */
+	searchTemplates(query: ITemplateSearchQuery): Promise<ITemplateSearchHit[]>;
+	/**
+	 * A template's structural summary — counts and node types, never its
+	 * contents. Readable for any publicly visible app, so a template can be
+	 * evaluated before forking or joining.
+	 * (GET /apps/{app_id}/templates/{template_id}/preview)
+	 */
+	getTemplatePreview(
+		appId: string,
+		templateId: string,
+	): Promise<ITemplatePreview>;
 	getTemplate(
 		appId: string,
 		templateId: string,

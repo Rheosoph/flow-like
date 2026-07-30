@@ -3,7 +3,7 @@
 //! Walks exec edges to build ordered statement blocks, inlines pure nodes as expressions,
 //! and binds impure-node outputs to `const` names. See `todo/ast.md` §6.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use flow_like_ast::model::*;
 
@@ -1134,17 +1134,7 @@ impl<'a> Lowering<'a> {
             }
         } else {
             let mut block = Block::default();
-            let mut arms = Vec::new();
-            for pin in exec_outs {
-                let body = match self.first_exec_target(pin) {
-                    Some(target) => self.walk_from(&target),
-                    None => Block::default(),
-                };
-                arms.push(BranchArm {
-                    label: arm_label(entry, pin),
-                    body,
-                });
-            }
+            let (arms, join) = self.lower_exec_arms(entry, &exec_outs, None);
             block.stmts.push(Stmt::Branch {
                 bind: None,
                 call: self.build_call(entry),
@@ -1152,16 +1142,30 @@ impl<'a> Lowering<'a> {
                 arms,
                 anchor: Some(entry.id.clone()),
             });
+            if let Some(join) = join {
+                let mut continuation = self.walk_from(&join);
+                block.stmts.append(&mut continuation.stmts);
+            }
             block
         }
     }
 
     /// Follow the linear exec chain from `node_id`, opening nested blocks at branch nodes.
     fn walk_from(&mut self, node_id: &str) -> Block {
+        self.walk_from_until(node_id, None)
+    }
+
+    /// Follow an exec chain without consuming `stop_before`. Branch arms use this to leave a
+    /// shared post-branch continuation for the enclosing block instead of whichever arm happens
+    /// to be visited first.
+    fn walk_from_until(&mut self, node_id: &str, stop_before: Option<&str>) -> Block {
         let mut block = Block::default();
         let mut current = Some(node_id.to_string());
 
         while let Some(nid) = current.take() {
+            if stop_before == Some(nid.as_str()) {
+                break;
+            }
             if self.visited.contains(&nid) {
                 break;
             }
@@ -1192,24 +1196,14 @@ impl<'a> Lowering<'a> {
             }
 
             // Conditional branch: render `if (cond) { } [else { }]`, with the connected exec
-            // outputs as the arms. Always terminal; downstream joins are handled via `visited`.
+            // outputs as the arms. A common postdominating fan-in resumes the enclosing block.
             if node.name == CONTROL_BRANCH {
                 let condition = call
                     .args
                     .iter()
                     .find(|a| a.name == CONDITION_PIN)
                     .map(|a| a.value.clone());
-                let mut arms = Vec::new();
-                for pin in exec_outs {
-                    let body = match self.first_exec_target(pin) {
-                        Some(target) => self.walk_from(&target),
-                        None => Block::default(),
-                    };
-                    arms.push(BranchArm {
-                        label: arm_label(node, pin),
-                        body,
-                    });
-                }
+                let (arms, join) = self.lower_exec_arms(node, &exec_outs, stop_before);
                 block.stmts.push(Stmt::Branch {
                     bind: None,
                     call,
@@ -1217,7 +1211,7 @@ impl<'a> Lowering<'a> {
                     arms,
                     anchor: Some(node.id.clone()),
                 });
-                current = None;
+                current = join;
                 continue;
             }
 
@@ -1229,17 +1223,7 @@ impl<'a> Lowering<'a> {
                 // choosing a branch. Render the actual connected outputs as labelled arms so the
                 // reverse direction can preserve success/error/custom branches instead of
                 // flattening them into a guessed linear path.
-                let mut arms = Vec::new();
-                for pin in exec_outs {
-                    let body = match self.first_exec_target(pin) {
-                        Some(target) => self.walk_from(&target),
-                        None => Block::default(),
-                    };
-                    arms.push(BranchArm {
-                        label: arm_label(node, pin),
-                        body,
-                    });
-                }
+                let (arms, join) = self.lower_exec_arms(node, &exec_outs, stop_before);
                 block.stmts.push(Stmt::Branch {
                     bind: self.bindings.get(&node.id).cloned(),
                     call,
@@ -1247,12 +1231,183 @@ impl<'a> Lowering<'a> {
                     arms,
                     anchor: Some(node.id.clone()),
                 });
-                // Branch terminates the linear chain; joins are handled via `visited`.
-                current = None;
+                current = join;
             }
         }
 
         block
+    }
+
+    /// Lower every connected execution output as a labelled arm. When all arms must pass through
+    /// one nearest fan-in node, stop each arm immediately before that node and return it as the
+    /// enclosing continuation. Nested arms also inherit their caller's stop so they cannot consume
+    /// a join owned by an outer branch when they have no nearer structured join of their own.
+    fn lower_exec_arms(
+        &mut self,
+        node: &'a Node,
+        exec_outs: &[&'a Pin],
+        enclosing_stop: Option<&str>,
+    ) -> (Vec<BranchArm>, Option<String>) {
+        let join = self.shared_exec_join(exec_outs);
+        let arm_stop = join.as_deref().or(enclosing_stop);
+        let mut arms = Vec::with_capacity(exec_outs.len());
+        for pin in exec_outs {
+            let body = match self.first_exec_target(pin) {
+                Some(target) => self.walk_from_until(&target, arm_stop),
+                None => Block::default(),
+            };
+            arms.push(BranchArm {
+                label: arm_label(node, pin),
+                body,
+            });
+        }
+        (arms, join)
+    }
+
+    /// Find the nearest execution node that every connected output must reach. Reconcile models
+    /// statements after a branch as a legal multi-source exec input; lowering must recognize that
+    /// fan-in explicitly rather than relying on global `visited`, which nests the continuation in
+    /// whichever arm is traversed first.
+    fn shared_exec_join(&self, exec_outs: &[&Pin]) -> Option<String> {
+        if exec_outs.len() < 2 {
+            return None;
+        }
+
+        let starts: Vec<String> = exec_outs
+            .iter()
+            .map(|pin| self.first_exec_target(pin))
+            .collect::<Option<_>>()?;
+        let distances: Vec<HashMap<String, usize>> = starts
+            .iter()
+            .map(|start| self.exec_distances(start))
+            .collect();
+        let first = distances.first()?;
+
+        first
+            .keys()
+            .filter(|candidate| {
+                !self.visited.contains(candidate.as_str())
+                    && self.is_exec_fan_in(candidate)
+                    && distances
+                        .iter()
+                        .all(|reachable| reachable.contains_key(candidate.as_str()))
+                    && starts
+                        .iter()
+                        .all(|start| self.exec_postdominates(start, candidate))
+            })
+            .min_by_key(|candidate| {
+                let max_distance = distances
+                    .iter()
+                    .filter_map(|reachable| reachable.get(candidate.as_str()))
+                    .copied()
+                    .max()
+                    .unwrap_or(usize::MAX);
+                let total_distance = distances
+                    .iter()
+                    .filter_map(|reachable| reachable.get(candidate.as_str()))
+                    .copied()
+                    .sum::<usize>();
+                (max_distance, total_distance, (*candidate).clone())
+            })
+            .cloned()
+    }
+
+    /// Breadth-first execution distance from one arm target. Distances make the first common
+    /// postdominator win when several nodes in the shared continuation satisfy the predicate.
+    fn exec_distances(&self, start: &str) -> HashMap<String, usize> {
+        let mut distances = HashMap::from([(start.to_string(), 0usize)]);
+        let mut queue = VecDeque::from([start.to_string()]);
+        while let Some(current) = queue.pop_front() {
+            let next_distance = distances[&current].saturating_add(1);
+            let (successors, _) = self.exec_successors(&current);
+            for successor in successors {
+                if distances.contains_key(&successor) {
+                    continue;
+                }
+                distances.insert(successor.clone(), next_distance);
+                queue.push_back(successor);
+            }
+        }
+        distances
+    }
+
+    /// Whether every execution path from `start` reaches `candidate`. A reachable cycle or
+    /// terminal output that avoids the candidate fails closed, preventing an unsafe hoist from a
+    /// merely common-but-optional downstream node.
+    fn exec_postdominates(&self, start: &str, candidate: &str) -> bool {
+        fn all_paths_reach(
+            lowering: &Lowering<'_>,
+            current: &str,
+            candidate: &str,
+            visiting: &mut HashSet<String>,
+            memo: &mut HashMap<String, bool>,
+        ) -> bool {
+            if current == candidate {
+                return true;
+            }
+            if let Some(result) = memo.get(current) {
+                return *result;
+            }
+            if !visiting.insert(current.to_string()) {
+                return false;
+            }
+
+            let (successors, has_terminal_output) = lowering.exec_successors(current);
+            let result = !has_terminal_output
+                && !successors.is_empty()
+                && successors.iter().all(|successor| {
+                    all_paths_reach(lowering, successor, candidate, visiting, memo)
+                });
+            visiting.remove(current);
+            memo.insert(current.to_string(), result);
+            result
+        }
+
+        all_paths_reach(
+            self,
+            start,
+            candidate,
+            &mut HashSet::new(),
+            &mut HashMap::new(),
+        )
+    }
+
+    /// Downstream execution nodes plus whether this node has an output that terminates without
+    /// reaching another board node. The latter matters for postdominance: one unconnected branch
+    /// must prevent a downstream node from being hoisted as unconditional.
+    fn exec_successors(&self, node_id: &str) -> (Vec<String>, bool) {
+        let Some(node) = self.nodes_by_id.get(node_id).copied() else {
+            return (Vec::new(), true);
+        };
+        let mut outputs: Vec<&Pin> = node
+            .pins
+            .values()
+            .filter(|pin| pin.pin_type == PinType::Output && is_exec(pin))
+            .collect();
+        outputs.sort_by_key(|pin| (pin.index, pin.id.as_str()));
+        if outputs.is_empty() {
+            return (Vec::new(), true);
+        }
+
+        let mut successors = Vec::new();
+        let mut has_terminal_output = false;
+        for output in outputs {
+            match self.first_exec_target(output) {
+                Some(target) => successors.push(target),
+                None => has_terminal_output = true,
+            }
+        }
+        successors.sort();
+        successors.dedup();
+        (successors, has_terminal_output)
+    }
+
+    fn is_exec_fan_in(&self, node_id: &str) -> bool {
+        self.nodes_by_id.get(node_id).is_some_and(|node| {
+            node.pins.values().any(|pin| {
+                pin.pin_type == PinType::Input && is_exec(pin) && pin.depends_on.len() > 1
+            })
+        })
     }
 
     fn make_stmt(&mut self, node: &'a Node, call: Call) -> Stmt {

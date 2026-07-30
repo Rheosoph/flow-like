@@ -66,6 +66,16 @@ static STORED_META_FIELDS: Lazy<Vec<FieldRef>> = Lazy::new(|| {
     .expect("derive FieldRef for StoredLogMeta")
 });
 
+async fn wait_for_flush_tick_or_cancel(
+    interval: &mut flow_like_types::tokio::time::Interval,
+    cancel: &CancellationToken,
+) -> bool {
+    flow_like_types::tokio::select! {
+        _ = cancel.cancelled() => false,
+        _ = interval.tick() => true,
+    }
+}
+
 pub(super) async fn lock_with_timeout<'a, T>(
     mutex: &'a Mutex<T>,
     label: &str,
@@ -459,6 +469,7 @@ pub struct Run {
     pub logs: u64,
     pub stream_state: bool,
     pub log_spill_threshold: usize,
+    pub nodes_executed: Arc<AtomicU64>,
 
     pub event_id: Option<String>,
     pub event_version: Option<String>,
@@ -472,6 +483,27 @@ pub struct Run {
 }
 
 impl Run {
+    pub(crate) fn push_trace(&mut self, trace: Trace) {
+        let first_for_node = !self.visited_nodes.contains_key(trace.node_id.as_ref());
+        if first_for_node {
+            self.visited_nodes
+                .insert(trace.node_id.to_string(), LogLevel::Debug);
+        }
+
+        // Non-empty traces carry user-visible diagnostics and are never
+        // deduplicated. One empty trace per node is enough to retain visit
+        // metadata and a target for cancellation logs.
+        if !trace.logs.is_empty() || first_for_node {
+            self.traces.push(trace);
+        }
+    }
+
+    pub(crate) fn extend_traces(&mut self, traces: impl IntoIterator<Item = Trace>) {
+        for trace in traces {
+            self.push_trace(trace);
+        }
+    }
+
     pub(crate) fn prepare_flush(
         &mut self,
         finalize: bool,
@@ -496,10 +528,14 @@ impl Run {
         let mut logs = Vec::with_capacity(total);
         let mut highest = self.highest_log_level;
         for trace in self.traces.drain(..) {
+            if !self.visited_nodes.contains_key(trace.node_id.as_ref()) {
+                self.visited_nodes
+                    .insert(trace.node_id.to_string(), LogLevel::Debug);
+            }
             let node_level = self
                 .visited_nodes
-                .entry(trace.node_id.clone())
-                .or_insert(LogLevel::Debug);
+                .get_mut(trace.node_id.as_ref())
+                .expect("trace node was registered above");
 
             for log in trace.logs {
                 let lvl = log.log_level;
@@ -770,14 +806,39 @@ pub struct RunMeta {
 
 impl RunMeta {
     pub fn increment_nodes_executed(&self) {
-        self.nodes_executed
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.nodes_executed.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn get_nodes_executed(&self) -> u64 {
         self.nodes_executed
             .load(std::sync::atomic::Ordering::Relaxed)
     }
+}
+
+fn reset_execution_counters(
+    nodes: &AHashMap<String, Arc<InternalNode>>,
+    nodes_executed: &AtomicU64,
+) {
+    nodes_executed.store(0, Ordering::Relaxed);
+    for node in nodes.values() {
+        node.exec_calls.store(0, Ordering::Relaxed);
+    }
+}
+
+fn stack_for_entry(
+    nodes: &AHashMap<String, Arc<InternalNode>>,
+    entry_node_id: &str,
+) -> flow_like_types::Result<RunStack> {
+    let node = nodes
+        .get(entry_node_id)
+        .cloned()
+        .ok_or_else(|| anyhow!("Entry node {} not found", entry_node_id))?;
+    let mut stack = RunStack::with_capacity(1);
+    stack.push(ExecutionTarget {
+        node,
+        through_pins: Vec::new(),
+    });
+    Ok(stack)
 }
 
 fn model_usage_app_id_for_visibility(app_id: &str, visibility: &AppVisibility) -> Option<String> {
@@ -906,6 +967,7 @@ impl InternalRun {
             .and_then(|t| extract_sub_from_jwt(t).ok())
             .unwrap_or_else(|| "local".to_string());
 
+        let nodes_executed = Arc::new(AtomicU64::new(0));
         let run = Run {
             id: run_id.clone(),
             app_id: app_id.to_string(),
@@ -923,6 +985,7 @@ impl InternalRun {
             logs: 0,
             stream_state,
             log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
+            nodes_executed: nodes_executed.clone(),
 
             event_id: event.as_ref().map(|e| e.id.clone()),
             event_version: event.as_ref().map(|e| {
@@ -1188,14 +1251,12 @@ impl InternalRun {
             }
         }
 
-        if board.log_level <= LogLevel::Info {
-            println!(
-                "InternalRun::new took {:?} on {} nodes and {} pins",
-                before.elapsed(),
-                nodes.len(),
-                pins.len()
-            );
-        }
+        tracing::debug!(
+            elapsed = ?before.elapsed(),
+            nodes = nodes.len(),
+            pins = pins.len(),
+            "InternalRun::new completed"
+        );
 
         let cache = Arc::new(RwLock::new(AHashMap::new()));
         let temporary_store = {
@@ -1246,7 +1307,7 @@ impl InternalRun {
                 execution_mode,
                 log_spill_threshold: DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
                 log_flush_interval: DEFAULT_RUN_LOG_FLUSH_INTERVAL,
-                nodes_executed: Arc::new(AtomicU64::new(0)),
+                nodes_executed,
             },
             board: board.clone(),
         })
@@ -1334,14 +1395,25 @@ impl InternalRun {
             ));
         }
 
+        let entry_node_id = {
+            let run = lock_with_timeout(self.run.as_ref(), "run_fork_entry").await?;
+            run.payload.id.clone()
+        };
+        let next_stack = stack_for_entry(&self.nodes, &entry_node_id)?;
+
         self.cache.write().await.clear();
-        self.stack = Arc::new(RunStack::with_capacity(self.stack.len()));
+        self.stack = Arc::new(next_stack);
         self.concurrency_limit = 128_000;
         self.has_node_errors.store(false, Ordering::Relaxed);
+        reset_execution_counters(&self.nodes, &self.meta.nodes_executed);
         {
             let mut run = lock_with_timeout(self.run.as_ref(), "run_fork").await?;
             run.status = RunStatus::Running;
             run.traces.clear();
+            run.visited_nodes.clear();
+            run.logs = 0;
+            run.highest_log_level = LogLevel::Debug;
+            run.log_initialized = false;
             run.start = SystemTime::now();
             run.end = SystemTime::now();
         }
@@ -1371,7 +1443,7 @@ impl InternalRun {
     ) {
         let variables = &self.variables;
         let cache = &self.cache;
-        let dependencies = self.dependencies.clone();
+        let dependencies = &self.dependencies;
         let run = self.run.clone();
         let profile = self.profile.clone();
         let concurrency_limit = self.concurrency_limit;
@@ -1385,8 +1457,7 @@ impl InternalRun {
 
         let new_stack = futures::stream::iter(stack.stack.clone())
             .map(|target| {
-                // Clone per iteration as needed
-                let dependencies = dependencies.clone();
+                let dependencies = dependencies;
                 let handler = handler.clone();
                 let run = run.clone();
                 let meta = meta.clone();
@@ -1415,7 +1486,7 @@ impl InternalRun {
                         cache,
                         log_level,
                         stage,
-                        &dependencies,
+                        dependencies,
                         &profile,
                         &callback,
                         &completion_callbacks,
@@ -1451,7 +1522,7 @@ impl InternalRun {
             && let Ok(mut run_locked) =
                 lock_with_timeout(self.run.as_ref(), "run_traces_batch_merge").await
         {
-            run_locked.traces.extend(new_stack.1);
+            run_locked.extend_traces(new_stack.1);
         }
 
         self.stack = Arc::new(new_stack.0);
@@ -1505,7 +1576,7 @@ impl InternalRun {
                 && let Ok(mut run_locked) =
                     lock_with_timeout(self.run.as_ref(), "run_traces_single_merge").await
             {
-                run_locked.traces.extend(traces);
+                run_locked.extend_traces(traces);
             }
         }
 
@@ -1525,9 +1596,7 @@ impl InternalRun {
             _ => self.step_parallel(stack, &handler, log_level, stage).await,
         };
 
-        if self.log_level <= LogLevel::Debug {
-            println!("InternalRun::step took {:?}", start.elapsed());
-        }
+        tracing::debug!(elapsed = ?start.elapsed(), "InternalRun::step completed");
     }
 
     pub async fn execute(&mut self, handler: Arc<FlowLikeState>) -> Option<LogMeta> {
@@ -1547,18 +1616,16 @@ impl InternalRun {
 
         // Spawn background flush task for long-running nodes
         let run_clone = self.run.clone();
-        let flush_cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flush_cancel = CancellationToken::new();
         let flush_cancel_clone = flush_cancel.clone();
         let flush_task = flow_like_types::tokio::spawn(async move {
             let mut interval = flow_like_types::tokio::time::interval(flush_interval);
             interval.tick().await; // Skip first immediate tick
 
-            while !flush_cancel_clone.load(Ordering::Relaxed) {
-                interval.tick().await;
-                if flush_cancel_clone.load(Ordering::Relaxed) {
+            while wait_for_flush_tick_or_cancel(&mut interval, &flush_cancel_clone).await {
+                if flush_cancel_clone.is_cancelled() {
                     break;
                 }
-
                 let prepared: Option<PreparedFlush> =
                     match lock_with_timeout(run_clone.as_ref(), "run_flush_prepare").await {
                         Ok(mut run) => {
@@ -1618,7 +1685,7 @@ impl InternalRun {
             let new_stack_hash = self.stack.hash();
             if new_stack_hash == stack_hash {
                 errored = true;
-                println!("End Reason: Stack did not change");
+                tracing::warn!("Execution stopped because the stack did not change");
                 break;
             }
             stack_hash = new_stack_hash;
@@ -1636,7 +1703,7 @@ impl InternalRun {
         let cancellation_log_message = self.cancellation_log_message.clone();
 
         // Stop background flush task
-        flush_cancel.store(true, Ordering::Relaxed);
+        flush_cancel.cancel();
         let _ = flush_task.await;
 
         if self.trigger_completion_callbacks().await {
@@ -1673,7 +1740,7 @@ impl InternalRun {
                             } else {
                                 let mut system_trace = Trace::new("system");
                                 system_trace.logs.push(cancel_log);
-                                run.traces.push(system_trace);
+                                run.push_trace(system_trace);
                             }
                         }
                         match run.prepare_flush(true) {
@@ -1715,9 +1782,7 @@ impl InternalRun {
             }
         };
 
-        if self.log_level == LogLevel::Info {
-            println!("InternalRun::execute took {:?}", start.elapsed());
-        }
+        tracing::debug!(elapsed = ?start.elapsed(), "InternalRun::execute completed");
 
         meta
     }
@@ -1821,10 +1886,11 @@ impl InternalRun {
                     run.visited_nodes
                         .keys()
                         .next()
-                        .unwrap_or(&"system".to_string()),
+                        .map(String::as_str)
+                        .unwrap_or("system"),
                 );
                 system_trace.logs.push(cancel_log);
-                run.traces.push(system_trace);
+                run.push_trace(system_trace);
             }
 
             run.prepare_flush(true)?
@@ -2055,10 +2121,11 @@ pub async fn flush_run_cancelled(
                 run.visited_nodes
                     .keys()
                     .next()
-                    .unwrap_or(&"system".to_string()),
+                    .map(String::as_str)
+                    .unwrap_or("system"),
             );
             system_trace.logs.push(cancel_log);
-            run.traces.push(system_trace);
+            run.push_trace(system_trace);
         }
 
         run.prepare_flush(true)?
@@ -2081,6 +2148,64 @@ pub async fn flush_run_cancelled(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flow::node::{Node, NodeLogic};
+    use flow_like_types::{async_trait, tokio};
+
+    struct NoopLogic;
+
+    #[async_trait]
+    impl NodeLogic for NoopLogic {
+        fn get_node(&self) -> Node {
+            Node::new("noop", "Noop", "Noop", "Tests")
+        }
+
+        async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn background_flush_wait_is_interrupted_by_cancellation() {
+        let cancel = CancellationToken::new();
+        let task_cancel = cancel.clone();
+        let task = flow_like_types::tokio::spawn(async move {
+            let mut interval = flow_like_types::tokio::time::interval(Duration::from_secs(60));
+            interval.tick().await;
+            wait_for_flush_tick_or_cancel(&mut interval, &task_cancel).await
+        });
+
+        flow_like_types::tokio::task::yield_now().await;
+        cancel.cancel();
+
+        let ticked = flow_like_types::tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("flush wait should stop promptly")
+            .expect("flush wait task should complete");
+        assert!(!ticked);
+    }
+
+    #[test]
+    fn fork_helpers_reseed_entry_and_clear_execution_counts() {
+        let node_definition = Node::new("noop", "Noop", "Noop", "Tests");
+        let node_id = node_definition.id.clone();
+        let node = Arc::new(InternalNode::new(
+            node_definition,
+            AHashMap::new(),
+            Arc::new(NoopLogic),
+            AHashMap::new(),
+        ));
+        node.exec_calls.store(17, Ordering::Relaxed);
+        let nodes = AHashMap::from([(node_id.clone(), node.clone())]);
+        let nodes_executed = AtomicU64::new(23);
+
+        reset_execution_counters(&nodes, &nodes_executed);
+        let stack = stack_for_entry(&nodes, &node_id).expect("entry node should seed the stack");
+
+        assert_eq!(node.exec_calls.load(Ordering::Relaxed), 0);
+        assert_eq!(nodes_executed.load(Ordering::Relaxed), 0);
+        assert_eq!(stack.len(), 1);
+        assert_eq!(stack.stack[0].node.node_id(), node_id);
+    }
 
     #[test]
     fn offline_apps_are_not_attributed_as_server_apps() {

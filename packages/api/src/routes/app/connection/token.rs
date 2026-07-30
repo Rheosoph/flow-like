@@ -163,9 +163,7 @@ pub async fn create_app_connection_token(
     // Reject cycles (A -> B -> A) before extending the chain: revisiting an app
     // already in the chain would let calls loop indefinitely across apps.
     if app_chain.contains(&app_id) {
-        return Err(ApiError::forbidden(
-            "App connection chain contains a cycle",
-        ));
+        return Err(ApiError::forbidden("App connection chain contains a cycle"));
     }
     app_chain.push(app_id.clone());
 

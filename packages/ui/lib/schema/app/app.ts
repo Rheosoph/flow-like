@@ -21,6 +21,8 @@ export interface IApp {
 	rating_sum: number;
 	relevance_score?: number | null;
 	secondary_category?: IAppCategory | null;
+	/** Owner-declared app type. Null/undefined means unclassified. */
+	app_type?: IAppType | null;
 	status: IAppStatus;
 	templates: string[];
 	updated_at: ISystemTime;
@@ -45,6 +47,19 @@ export enum IAppExecutionMode {
 export interface IFrontendConfiguration {
 	landing_page?: null | string;
 	[property: string]: any;
+}
+
+/**
+ * What kind of thing the app is, structurally — orthogonal to
+ * {@link IAppCategory}, which says what the app is *about*.
+ */
+export enum IAppType {
+	Agent = "Agent",
+	CustomInterface = "CustomInterface",
+	DataFocus = "DataFocus",
+	DataPipeline = "DataPipeline",
+	Analytics = "Analytics",
+	Form = "Form",
 }
 
 export enum IAppCategory {

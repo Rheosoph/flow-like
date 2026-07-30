@@ -9,7 +9,7 @@ use std::{
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::{
         Arc, LazyLock, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -38,6 +38,11 @@ const MAX_OPEN_URL_CALLS_PER_ROUND: usize = 4;
 const MAX_OPEN_URL_CALLS_PER_SESSION: usize = 10;
 const MAX_OPEN_URL_CHARS_PER_ROUND: usize = 60_000;
 const MAX_OPEN_URL_CHARS_PER_SESSION: usize = 120_000;
+/// Session-wide caps. On the tool-driven path these are shared across every agent researching
+/// within one turn (see [`WebResearchSession`]); the rig loop in `platform.rs` applies the same
+/// numbers to its own per-run counters, so they are declared once here.
+pub(crate) const MAX_SEARCH_CALLS_PER_SESSION: usize = 12;
+pub(crate) const MAX_ARCHIVE_CALLS_PER_SESSION: usize = 4;
 const MAX_ARCHIVE_RESPONSE_BYTES: usize = 64 * 1024;
 const WAYBACK_AVAILABILITY_ENDPOINT: &str = "https://archive.org/wayback/available";
 const WAYBACK_CDX_ENDPOINT: &str = "https://web.archive.org/cdx/search/cdx";
@@ -55,15 +60,24 @@ static ARCHIVE_LOOKUP_CONCURRENCY: LazyLock<tokio::sync::Semaphore> =
 static HTML_CONVERSION_CONCURRENCY: LazyLock<Arc<tokio::sync::Semaphore>> =
     LazyLock::new(|| Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_HTML_CONVERSIONS)));
 
-/// Per-assistant-run provenance ledger for outbound page reads. Untrusted page text cannot grant
-/// itself network authority: `open_url` accepts only an exact URL supplied by the user or returned
-/// by this run's reviewed search/archive tools.
+/// Per-turn provenance ledger and spend budget for outbound page reads. Untrusted page text cannot
+/// grant itself network authority: `open_url` accepts only an exact URL supplied by the user or
+/// returned by this session's reviewed search/archive tools.
+///
+/// The call budgets live here rather than beside the tool handlers because a turn may run several
+/// research agents concurrently. They share one session, so they must share one budget — otherwise
+/// N parallel researchers each get a full allowance and the turn spends N times the intended cap.
+/// Sharing the ledger is also what makes their citations interoperable: a URL authorized by one
+/// researcher's search is citable by another's synthesis.
 #[derive(Debug, Default)]
 pub struct WebResearchSession {
     authorized_urls: Mutex<HashSet<String>>,
     opened_urls: Mutex<HashSet<String>>,
     non_citable_urls: Mutex<HashSet<String>>,
     public_web_closed: AtomicBool,
+    search_calls: AtomicUsize,
+    archive_calls: AtomicUsize,
+    open_url_budget: Mutex<OpenUrlSessionBudget>,
 }
 
 impl WebResearchSession {
@@ -71,6 +85,58 @@ impl WebResearchSession {
         let session = Self::default();
         session.authorize_user_text(user_prompt);
         session
+    }
+
+    /// Reserve one `internet_search` call against the session-wide cap. Returns false when the
+    /// turn's search allowance is spent, whichever agent spent it.
+    pub fn reserve_search_call(&self) -> bool {
+        reserve_capped_call(&self.search_calls, MAX_SEARCH_CALLS_PER_SESSION)
+    }
+
+    /// Reserve one `archive_lookup` call against the session-wide cap.
+    pub fn reserve_archive_call(&self) -> bool {
+        reserve_capped_call(&self.archive_calls, MAX_ARCHIVE_CALLS_PER_SESSION)
+    }
+
+    /// Reserve a bounded slice of the session's `open_url` allowance for one unbatched call,
+    /// returning the arguments to run with, or a ready-made refusal payload.
+    pub fn prepare_open_url_call(&self, arguments: Value) -> Result<Value, String> {
+        self.open_url_budget
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .prepare_unbatched_call(arguments)
+    }
+
+    /// Open a batched round of `open_url` calls, for the rig loop which plans a whole round at once.
+    pub fn begin_open_url_round(&self, planned_open_url_calls: usize) {
+        self.open_url_budget
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .begin_round(planned_open_url_calls);
+    }
+
+    /// Reserve one call of a batched round. Mirrors [`Self::prepare_open_url_call`] for the rig loop.
+    pub fn prepare_open_url_round_call(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> Result<Value, String> {
+        self.open_url_budget
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .prepare_call(tool_name, arguments)
+    }
+
+    /// How much of the session's web allowance is already spent. Surfaced so a synthesising agent
+    /// can say "I stopped searching because the budget ran out" rather than implying the evidence
+    /// was exhaustive.
+    pub fn spend_summary(&self) -> Value {
+        json!({
+            "search_calls_used": self.search_calls.load(Ordering::Relaxed),
+            "search_calls_limit": MAX_SEARCH_CALLS_PER_SESSION,
+            "archive_calls_used": self.archive_calls.load(Ordering::Relaxed),
+            "archive_calls_limit": MAX_ARCHIVE_CALLS_PER_SESSION,
+        })
     }
 
     pub fn authorize_user_text(&self, text: &str) {
@@ -250,6 +316,16 @@ impl WebResearchSession {
             .at(&url))
         }
     }
+}
+
+/// Atomically claim one unit of a capped allowance. Shared by the session's search and archive
+/// counters so concurrent researchers cannot both observe the last slot as free.
+fn reserve_capped_call(counter: &AtomicUsize, limit: usize) -> bool {
+    counter
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
+            (calls < limit).then_some(calls + 1)
+        })
+        .is_ok()
 }
 
 fn public_urls_in_user_text(text: &str) -> Vec<String> {

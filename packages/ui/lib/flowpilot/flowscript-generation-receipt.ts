@@ -1,4 +1,8 @@
-import type { FlowScriptWorkspaceCandidate } from "../../components/flowpilot/flowscript-workspace-candidates";
+import {
+	type FlowScriptWorkspaceCandidate,
+	parseFlowScriptWorkspaceCandidate,
+} from "../../components/flowpilot/flowscript-workspace-candidates";
+import type { BoardEditJob } from "../schema/copilot";
 
 export const FLOWSCRIPT_GENERATION_RUN_SCHEMA =
 	"flowpilot.flowscript-generation-run/v1" as const;
@@ -150,23 +154,7 @@ function workspaceCandidate(
 	}
 	const candidate = record(value);
 	if (!candidate || typeof candidate.source !== "string") return undefined;
-	const source = candidate.source;
-	if (!source.trim()) return undefined;
-	return {
-		source,
-		...(typeof candidate.status === "string"
-			? { status: candidate.status }
-			: {}),
-		...(typeof candidate.completion === "string"
-			? { completion: candidate.completion }
-			: {}),
-		...(typeof candidate.retained_full_source === "string"
-			? { retained_full_source: candidate.retained_full_source }
-			: {}),
-		...(record(candidate.regression)
-			? { regression: record(candidate.regression) }
-			: {}),
-	};
+	return parseFlowScriptWorkspaceCandidate(JSON.stringify(candidate));
 }
 
 function compilerPayloadScore(value: Record<string, unknown>): number {
@@ -476,6 +464,32 @@ export function flowScriptGenerationRunsForConversation(
 	conversationId: string,
 ): readonly FlowScriptGenerationRunReceipt[] {
 	return RUNS_BY_CONVERSATION.get(conversationId) ?? [];
+}
+
+/**
+ * Receipts keyed by the app they built, across every conversation. A nested board run inherits its
+ * conversation from the tool request and falls back to whichever chat is active, so with several
+ * turns in flight a run can be filed under a sibling's conversation. The app is unambiguous.
+ */
+export function flowScriptGenerationRunsForApp(
+	appId: string,
+): readonly FlowScriptGenerationRunReceipt[] {
+	const runs: FlowScriptGenerationRunReceipt[] = [];
+	for (const conversationRuns of RUNS_BY_CONVERSATION.values()) {
+		for (const run of conversationRuns) {
+			if (run.appId === appId) runs.push(run);
+		}
+	}
+	return runs.sort((left, right) => left.startedAtMs - right.startedAtMs);
+}
+
+export function boardEditJobAppliedCommandCount(
+	job: Pick<BoardEditJob, "phase" | "result" | "review">,
+): number {
+	if (job.phase !== "applied" && job.phase !== "applied_pending_delivery") {
+		return 0;
+	}
+	return job.result?.commands.length ?? job.review.commandCount;
 }
 
 /** Update a previously published run when an asynchronous native board-edit job settles. */

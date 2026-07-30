@@ -2341,8 +2341,8 @@ declare function pathExists({ path: Struct }): void;
 declare function pathGet({ path: Struct }): bytes[];
 
 /**
- * Diffs a folder against a manifest, emitting added, updated and deleted files. Auto mode trusts store ETags (hashing only weak/missing ones); Checksum mode always Blake3-hashes contents
- * @param manifest — FlowPath to the manifest file. May not exist yet — everything is then reported as added
+ * Diffs a folder against a manifest, emitting added, updated and deleted files while ignoring directory manifests. Auto mode trusts store ETags (hashing only weak/missing ones); Checksum mode always Blake3-hashes contents
+ * @param manifest — FlowPath to this workflow's manifest file. It may have any name and need not exist yet; use a distinct name when workflows share a root
  * @param root — Root folder to scan for changes
  * @param recursive (optional) — Scan the root folder recursively
  * @param mode (optional) — Auto: trust store ETags, hashing only files with a missing/weak ETag (fast). Checksum: always Blake3-hash contents, ignoring ETags (correct on backends with mtime-based ETags such as local disk)
@@ -2429,12 +2429,13 @@ declare function pathPut({ path: Struct, bytes: bytes[] }): void;
 declare function pathRename({ from: Struct, to: Struct, overwrite?: bool }): void;
 
 /**
- * Persists the manifest carried by a diff session, so the next diff sees the current state
+ * Commits all or selected paths from a directory diff session to its manifest, so the next diff only reports uncommitted changes
  * @param session — Diff session produced by 'Diff Directory'
+ * @param committedPaths (optional) — Optional changed paths to commit. Leave disconnected to commit the full diff; connect an array to commit only those paths (an empty array commits none)
  * @returns manifest — FlowPath of the written manifest file
  * @impure has side effects / drives control flow
  */
-declare function pathWriteManifest({ session: Struct }): Struct;
+declare function pathWriteManifest({ session: Struct, committedPaths?: Struct[] }): Struct;
 
 /**
  * Generates a signed URL for accessing a file
@@ -5928,4 +5929,3 @@ declare function eventsExtractActionContext({ actionContext: Struct, fieldName?:
  * @returns value — The current value of the component (null if not found)
  */
 declare function eventsExtractInputValue({ inputValues: Struct, componentId?: string }): any;
-

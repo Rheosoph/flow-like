@@ -2,6 +2,10 @@
 import { FlowPilotBubbleOrb } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-orb";
 import type { Lang, TranslationKey } from "../../i18n";
 import { defaultLang, translations } from "../../i18n";
+import dataStudio from "../../images/parallax/data-studio.png";
+import governance from "../../images/parallax/governance.png";
+import uiBuilder from "../../images/parallax/ui-builder.png";
+import workflowCore from "../../images/parallax/workflow-core.png";
 
 interface Props { id: string; lang?: Lang; }
 const { id, lang = defaultLang } = Astro.props;
@@ -13,24 +17,7 @@ const t = (key: TranslationKey): string => {
 const tList = (key: TranslationKey): string[] => t(key).split("|");
 
 const previewBars = [45, 59, 51, 73, 66, 89, 78];
-const marketBars = [42, 55, 48, 72, 65, 88];
-const components = tList("v5.platform.components");
 const storeApps = ["Deal Desk", "People Hub", "Incident OS", "Research", "Vendor Risk", "Field Ops"];
-
-const steps: [string, string, string][] = [
-  ["01", t("v5.platform.wf.s1"), "Schedule"],
-  ["02", t("v5.platform.wf.s2"), "Data Studio"],
-  ["03", t("v5.platform.wf.s3"), "FlowScript"],
-  ["04", t("v5.platform.wf.s4"), "Condition"],
-  ["05", t("v5.platform.wf.s5"), "Mail + Teams"],
-];
-
-const auditRows: string[][] = [
-  [t("v5.platform.gov.sys1"), t("v5.platform.owner.legal"), t("v5.platform.risk.limited"), t("v5.platform.status.compliant")],
-  [t("v5.platform.gov.sys2"), t("v5.platform.owner.revenue"), t("v5.platform.risk.minimal"), t("v5.platform.status.compliant")],
-  [t("v5.platform.gov.sys3"), t("v5.platform.owner.people"), t("v5.platform.risk.high"), t("v5.platform.status.reviewDue")],
-  [t("v5.platform.gov.sys4"), t("v5.platform.owner.finance"), t("v5.platform.risk.minimal"), t("v5.platform.status.compliant")],
-];
 
 const execSteps: [string, string, string][] = [
   ["01", "Customer 360", t("v5.platform.exec.d1")],
@@ -40,22 +27,13 @@ const execSteps: [string, string, string][] = [
 ];
 
 const builderTabs = tList("v5.platform.builder.tabs");
-const frontendTabs = tList("v5.platform.frontend.tabs");
-const records = t("v5.platform.data.records");
-const events = t("v5.platform.data.events");
-const ontologyObjects: [string, string, string, string][] = [
-  ["CO", t("v5.platform.data.obj.company"), "12.4k", records],
-  ["PE", t("v5.platform.data.obj.person"), "84.2k", records],
-  ["CT", t("v5.platform.data.obj.contract"), "31.8k", records],
-  ["PR", t("v5.platform.data.obj.product"), "4.2k", records],
-  ["EV", t("v5.platform.data.obj.interaction"), "2.8B", events],
-];
-const govMetrics: [string, string, string][] = [
-  [t("v5.platform.gov.m1.label"), "84", t("v5.platform.gov.m1.sub")],
-  [t("v5.platform.gov.m2.label"), "98.7%", t("v5.platform.gov.m2.sub")],
-  [t("v5.platform.gov.m3.label"), "1.2M", t("v5.platform.gov.m3.sub")],
-];
-const auditCols = [t("v5.platform.gov.col.system"), t("v5.platform.gov.col.owner"), t("v5.platform.gov.col.risk"), t("v5.platform.gov.col.status")];
+const parallaxWidths = [640, 960, 1150, 1440, 1725, 1920];
+const parallaxSrcset = (name: string) =>
+	parallaxWidths
+		.map((width) => `/parallax/optimized/${name}-${width}.webp ${width}w`)
+		.join(", ");
+const parallaxMask = (name: string) =>
+	`image-set(url("/parallax/optimized/${name}-1150.webp") 1x, url("/parallax/optimized/${name}-1920.webp") 2x)`;
 ---
 
 {id === "builder" && (
@@ -65,28 +43,78 @@ const auditCols = [t("v5.platform.gov.col.system"), t("v5.platform.gov.col.owner
   </div>
 )}
 {id === "workflow" && (
-  <div class="mock workflow">
-    <header><b>{t("v5.platform.workflow.title")}</b><span>LIVE</span></header>
-    <div class="workflow-canvas">{steps.map((s, i) => (<div class={`flow-step fs${i + 1}`}><i>{s[0]}</i><span><b>{s[1]}</b><small>{s[2]}</small></span></div>))}<div class="wires" data-connect data-links="fs1-fs2,fs1-fs3,fs2-fs4,fs4-fs5"></div></div>
-    <div class="code"><header><span>score_risk.flow</span><em>FlowScript</em></header><pre><span class="fn">onSchedule</span>() &#123;
-  <span class="k">const</span> signals = <span class="fn">ontologySignals</span>(&#123; <span class="pr">supplier</span> &#125;)
-  <span class="k">const</span> score = <span class="fn">modelPredict</span>(&#123; <span class="pr">model</span>: <span class="st">"risk-v3"</span>, <span class="pr">signals</span> &#125;)
-  <span class="fn">log</span>(&#123; <span class="pr">text</span>: score.risk &#125;)
-&#125;</pre></div>
+  <div
+    class="workflow-visual"
+    data-workflow-visual
+    style={`--workflow-mask: ${parallaxMask("workflow-core")}`}
+  >
+    <div class="workflow-art">
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("workflow-core")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/workflow-core-1920.webp"
+          alt={`${t("v5.platform.f.workflow.title")} — Flow-Like visual workflow and FlowScript editor`}
+          width={workflowCore.width}
+          height={workflowCore.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
+    </div>
   </div>
 )}
 {id === "frontend" && (
-  <div class="mock frontend">
-    <aside><label>{t("v5.platform.frontend.componentsLabel")}</label>{components.map((x) => (<span><i></i>{x}<b>＋</b></span>))}</aside>
-    <section class="light-screen"><header><b>Northstar</b><span>{frontendTabs[0]} &nbsp; {frontendTabs[1]} &nbsp; {frontendTabs[2]}</span><i>NS</i></header><main><label>{t("v5.platform.frontend.portfolioValue")}</label><div><h4>€84.2M</h4><em>↗ 12.4%</em></div><section><i class="donut"></i><div class="market-bars">{marketBars.map((x) => (<i style={`height:${x}%`}></i>))}</div></section></main></section>
-    <footer><span>{t("v5.platform.frontend.visual")}</span><b>React</b><b>Next.js</b><b>Angular</b></footer>
+  <div
+    class="workflow-visual"
+    data-workflow-visual
+    style={`--workflow-mask: ${parallaxMask("ui-builder")}`}
+  >
+    <div class="workflow-art">
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("ui-builder")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/ui-builder-1920.webp"
+          alt={`${t("v5.platform.f.frontend.title")} — Flow-Like visual page builder and interaction editor`}
+          width={uiBuilder.width}
+          height={uiBuilder.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
+    </div>
   </div>
 )}
 {id === "data" && (
-  <div class="mock data">
-    <header><b>{t("v5.platform.data.title")}</b><span>42 {t("v5.platform.data.objects")} · 128 {t("v5.platform.data.relations")}</span><em>{t("v5.platform.data.query")}</em></header>
-    <div class="ontology">{ontologyObjects.map((o, i) => (<div class={`object o${i + 1}`}><i>{o[0]}</i><span><b>{o[1]}</b><small>{o[2]} {o[3]}</small></span></div>))}<div class="rels" data-connect data-links="o1-o2,o1-o3,o1-o4,o1-o5"></div></div>
-    <footer><label>{t("v5.platform.data.askLabel")}</label><p>{t("v5.platform.data.askQuestion")}</p><b>⌘ ↵</b></footer>
+  <div
+    class="workflow-visual"
+    data-workflow-visual
+    style={`--workflow-mask: ${parallaxMask("data-studio")}`}
+  >
+    <div class="workflow-art">
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("data-studio")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/data-studio-1920.webp"
+          alt={`${t("v5.platform.f.data.title")} — Flow-Like ontology and knowledge graph workspace`}
+          width={dataStudio.width}
+          height={dataStudio.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
+    </div>
   </div>
 )}
 {id === "store" && (
@@ -96,10 +124,28 @@ const auditCols = [t("v5.platform.gov.col.system"), t("v5.platform.gov.col.owner
   </div>
 )}
 {id === "governance" && (
-  <div class="mock governance light-screen">
-    <header><span><label>{t("v5.platform.gov.label")}</label><b>{t("v5.platform.gov.title")}</b></span><em>{t("v5.platform.gov.status")}</em></header>
-    <div class="gov-metrics">{govMetrics.map((m) => (<span><small>{m[0]}</small><b>{m[1]}</b><i>{m[2]}</i></span>))}</div>
-    <div class="audit"><header>{auditCols.map((col) => (<span>{col}</span>))}</header>{auditRows.map((r) => (<div>{r.map((x) => (<span>{x}</span>))}</div>))}</div>
+  <div
+    class="workflow-visual"
+    data-workflow-visual
+    style={`--workflow-mask: ${parallaxMask("governance")}`}
+  >
+    <div class="workflow-art">
+      <picture>
+        <source
+          media="(max-width: 959px)"
+          srcset={parallaxSrcset("governance")}
+          sizes="calc(100vw - 36px)"
+        />
+        <img
+          src="/parallax/optimized/governance-1920.webp"
+          alt={`${t("v5.platform.f.governance.title")} — Flow-Like AI inventory, security, audit, and usage governance dashboards`}
+          width={governance.width}
+          height={governance.height}
+          loading="lazy"
+          decoding="async"
+        />
+      </picture>
+    </div>
   </div>
 )}
 {id === "pilot" && (
@@ -110,11 +156,7 @@ const auditCols = [t("v5.platform.gov.col.system"), t("v5.platform.gov.col.owner
   </div>
 )}
 
-<!--
-  Mock styles live here, colocated with the markup, so Astro's scope hash lands on
-  these elements. The JS-drawn connector bars (.wires/.rels > i) stay global in the
-  parent section, since createElement() output never carries a scope hash.
--->
+<!-- Mock styles stay colocated with their markup so Astro applies the scope hash. -->
 <style>
   .mock { --mono: ui-monospace, SFMono-Regular, Menlo, monospace; position: relative; width: min(100%, 900px); height: min(68vh, 650px); overflow: hidden; border: 1px solid var(--border); border-radius: 16px; background: var(--card); box-shadow: 0 40px 120px rgba(0, 0, 0, .5); }
   .mock label { font: 8px var(--mono); letter-spacing: .12em; }
@@ -156,73 +198,95 @@ const auditCols = [t("v5.platform.gov.col.system"), t("v5.platform.gov.col.owner
   .preview-bars { height: 190px; display: flex; align-items: end; gap: 8px; margin-top: 11px; padding: 22px; border-radius: 8px; background: var(--foreground); }
   .preview-bars i { flex: 1; border-radius: 3px 3px 0 0; background: linear-gradient(var(--accent), var(--primary)); }
 
-  .workflow { background-color: var(--background); background-image: radial-gradient(color-mix(in oklab, var(--foreground) 12%, transparent) 1px, transparent 1px); background-size: 18px 18px; }
-  .workflow > header { height: 48px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--card); font-size: 10px; }
-  .workflow > header span { padding: 5px 8px; border: 1px solid color-mix(in oklab, var(--accent) 25%, transparent); border-radius: 20px; color: var(--accent); font: 7px var(--mono); }
-  .workflow-canvas { position: relative; height: 60%; }
-  .flow-step { position: absolute; z-index: 2; width: 145px; display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); box-shadow: 0 8px 30px rgba(0, 0, 0, .25); }
-  .flow-step > i { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 7px; background: color-mix(in oklab, var(--card) 85%, var(--foreground)); color: var(--accent); font: 7px var(--mono); font-style: normal; }
-  .flow-step span { display: grid; }
-  .flow-step b { font-size: 9px; }
-  .flow-step small { margin-top: 3px; color: var(--muted-foreground); font-size: 7px; }
-  .fs1 { left: 5%; top: 38%; }
-  .fs2 { left: 29%; top: 17%; }
-  .fs3 { left: 29%; top: 59%; }
-  .fs4 { right: 26%; top: 38%; }
-  .fs5 { right: 3%; top: 38%; border-color: color-mix(in oklab, var(--accent) 35%, transparent); }
-  .wires { position: absolute; inset: 0; pointer-events: none; }
-  .code { position: absolute; right: 0; bottom: 0; left: 0; height: 30%; padding: 12px 16px; border-top: 1px solid var(--border); background: color-mix(in oklab, var(--background) 68%, black); }
-  .code > header { display: flex; justify-content: space-between; color: var(--muted-foreground); font: 7px var(--mono); }
-  .code header em { font-style: normal; }
-  .code pre { color: #e5e7eb; font: 9px/1.6 var(--mono); }
-  .code pre .k { color: #60a5fa; }
-  .code pre .fn { color: #22d3ee; }
-  .code pre .pr { color: #93c5fd; }
-  .code pre .st { color: #86efac; }
-
-  .frontend { display: grid; grid-template-columns: 17% 1fr; background: var(--background); }
-  .frontend > aside { display: grid; align-content: start; gap: 7px; padding: 15px 10px; border-right: 1px solid var(--border); }
-  .frontend > aside > label { margin-bottom: 8px; color: var(--muted-foreground); font-size: 7px; }
-  .frontend > aside > span { display: grid; grid-template-columns: 14px 1fr auto; gap: 7px; align-items: center; padding: 8px 6px; border-radius: 6px; background: var(--card); color: var(--muted-foreground); font-size: 7px; }
-  .frontend > aside span i { width: 11px; height: 11px; border: 1px solid var(--border); border-radius: 2px; }
-  .frontend > aside span b { font-weight: 400; }
-  .frontend > section { margin: 30px 28px 48px; overflow: hidden; border-radius: 10px; background: var(--muted); color: var(--foreground); box-shadow: 0 20px 60px rgba(0, 0, 0, .3); }
-  .frontend > section > main { padding: 28px; }
-  .frontend > section > main > label { color: var(--muted-foreground); }
-  .frontend > section > main > div { display: flex; align-items: end; justify-content: space-between; }
-  .frontend > section h4 { margin: 7px 0; font-size: 38px; letter-spacing: -.05em; }
-  .frontend > section main em { padding-bottom: 7px; color: oklch(0.62 0.13 150); font-size: 10px; font-style: normal; }
-  .frontend > section > main > section { display: grid; grid-template-columns: .7fr 1.3fr; gap: 10px; }
-  .donut { position: relative; height: 160px; border-radius: 8px; background: conic-gradient(var(--primary) 0 42%, var(--accent) 42% 68%, color-mix(in oklab, var(--accent) 60%, var(--card)) 68% 82%, var(--border) 82%); }
-  .donut:after { content: "ALLOCATION"; position: absolute; inset: 34px; display: grid; place-items: center; border-radius: 50%; background: var(--card); font: 7px var(--mono); }
-  .market-bars { height: 160px; display: flex; align-items: end; gap: 8px; padding: 20px; border-radius: 8px; background: var(--foreground); }
-  .market-bars i { flex: 1; border-radius: 3px 3px 0 0; background: var(--primary); }
-  .frontend > footer { position: absolute; right: 3%; bottom: 12px; left: 20%; display: flex; align-items: center; gap: 6px; font: 7px var(--mono); }
-  .frontend > footer span { margin-right: auto; color: var(--accent); }
-  .frontend > footer b { padding: 6px 9px; border: 1px solid var(--border); border-radius: 5px; color: var(--muted-foreground); font-weight: 400; }
-
-  .data { background-color: var(--background); background-image: radial-gradient(color-mix(in oklab, var(--foreground) 10%, transparent) 1px, transparent 1px); background-size: 18px 18px; }
-  .data > header { height: 52px; display: flex; align-items: center; gap: 14px; padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--card); }
-  .data > header b { font-size: 10px; }
-  .data > header span { color: var(--muted-foreground); font-size: 8px; }
-  .data > header em { margin-left: auto; color: var(--accent); font: 7px var(--mono); font-style: normal; }
-  .ontology { position: relative; height: 73%; }
-  .object { position: absolute; z-index: 2; width: 132px; display: grid; grid-template-columns: auto 1fr; column-gap: 9px; padding: 11px; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
-  .object > i { grid-row: span 2; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: color-mix(in oklab, var(--primary) 18%, transparent); color: var(--accent); font: 7px var(--mono); font-style: normal; }
-  .object span { display: grid; }
-  .object b { font-size: 9px; }
-  .object small { color: var(--muted-foreground); font-size: 7px; }
-  .o1 { top: 36%; left: 40%; border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
-  .o1 > i { background: color-mix(in oklab, var(--accent) 12%, transparent); color: var(--accent); }
-  .o2 { top: 16%; left: 9%; }
-  .o3 { top: 13%; right: 8%; }
-  .o4 { bottom: 12%; left: 15%; }
-  .o5 { right: 15%; bottom: 10%; }
-  .rels { position: absolute; inset: 0; pointer-events: none; }
-  .data > footer { position: absolute; right: 13px; bottom: 13px; left: 13px; display: grid; grid-template-columns: 120px 1fr auto; align-items: center; padding: 11px 14px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklab, var(--background) 68%, black); }
-  .data > footer label { color: var(--accent); font-size: 7px; }
-  .data > footer p { margin: 0; color: var(--muted-foreground); font-size: 9px; }
-  .data > footer b { color: var(--muted-foreground); font: 8px var(--mono); }
+  .workflow-visual {
+    --workflow-rx: 0deg;
+    --workflow-ry: 0deg;
+    --workflow-mx: 50%;
+    --workflow-my: 50%;
+    position: relative;
+    width: min(128%, 1150px);
+    aspect-ratio: 16 / 9;
+    margin: 0;
+    margin-inline-start: calc((100% - min(128%, 1150px)) / 2);
+    overflow: visible;
+    isolation: isolate;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+  .workflow-visual:before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 18% 10% 2%;
+    border-radius: 50%;
+    background:
+      radial-gradient(ellipse at 55% 70%, color-mix(in oklab, var(--accent) 21%, transparent), transparent 62%),
+      radial-gradient(ellipse at 28% 55%, color-mix(in oklab, var(--primary) 12%, transparent), transparent 58%);
+    filter: blur(34px);
+    opacity: .5;
+    transform: translateY(10px) scale(.92);
+    transition: opacity .5s ease, transform .65s cubic-bezier(.2, .8, .2, 1);
+  }
+  .workflow-art {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transform: none;
+    transition: transform .22s cubic-bezier(.2, .8, .2, 1);
+  }
+  .workflow-art:after {
+    content: "";
+    position: absolute;
+    z-index: 2;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(
+      420px circle at var(--workflow-mx) var(--workflow-my),
+      rgba(255, 241, 232, .15),
+      rgba(255, 103, 70, .045) 24%,
+      transparent 57%
+    );
+    -webkit-mask-image: var(--workflow-mask);
+    mask-image: var(--workflow-mask);
+    -webkit-mask-position: center;
+    mask-position: center;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-size: contain;
+    mask-size: contain;
+    mask-mode: alpha;
+    mix-blend-mode: screen;
+    opacity: 0;
+    transition: opacity .35s ease;
+  }
+  .workflow-art :global(img) {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    image-rendering: auto;
+  }
+  .workflow-art :global(picture) {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+  .workflow-visual:hover:before {
+    opacity: .8;
+    transform: translateY(15px) scale(1.02);
+  }
+  .workflow-visual:hover .workflow-art {
+    transform:
+      perspective(1200px)
+      rotateX(var(--workflow-rx))
+      rotateY(var(--workflow-ry))
+      translateY(-7px)
+      scale(1.01);
+    will-change: transform;
+  }
+  .workflow-visual:hover .workflow-art:after { opacity: 1; }
 
   .store { padding-bottom: 15px; background: var(--muted); color: var(--foreground); }
   .store > header { height: 52px; display: grid; grid-template-columns: 1fr 1.2fr 1fr; align-items: center; padding: 0 17px; border-bottom: 1px solid var(--border); background: var(--card); }
@@ -245,24 +309,6 @@ const auditCols = [t("v5.platform.gov.col.system"), t("v5.platform.gov.col.owner
   .store-grid article small { color: var(--muted-foreground); font-size: 7px; }
   .store-grid article em { margin-left: auto; font-size: 8px; font-style: normal; }
 
-  .governance { padding: 22px; background: var(--muted); color: var(--foreground); }
-  .governance > header { display: flex; align-items: center; justify-content: space-between; }
-  .governance > header > span { display: grid; }
-  .governance > header label { color: var(--muted-foreground); font-size: 7px; }
-  .governance > header b { margin-top: 5px; font-size: 17px; }
-  .governance > header em { color: oklch(0.62 0.13 150); font-size: 8px; font-style: normal; }
-  .gov-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin: 22px 0; }
-  .gov-metrics > span { display: grid; padding: 15px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); }
-  .gov-metrics small { color: var(--muted-foreground); font-size: 8px; }
-  .gov-metrics b { margin: 6px 0; font-size: 28px; letter-spacing: -.04em; }
-  .gov-metrics i { color: oklch(0.62 0.13 150); font-size: 7px; font-style: normal; }
-  .audit { overflow: hidden; border: 1px solid var(--border); border-radius: 9px; background: var(--card); }
-  .audit > header, .audit > div { min-height: 46px; display: grid; grid-template-columns: 1.4fr 1fr .8fr .8fr; align-items: center; padding: 0 14px; border-bottom: 1px solid var(--border); }
-  .audit > header { min-height: 34px; background: color-mix(in oklab, var(--muted) 70%, var(--background)); color: var(--muted-foreground); }
-  .audit > div:last-child { border: 0; }
-  .audit span { font-size: 8px; }
-  .audit > div span:last-child { color: oklch(0.62 0.13 150); }
-
   .pilot { padding: 20px; background: radial-gradient(circle at 13% 16%, color-mix(in oklab, var(--primary) 20%, transparent), transparent 25%), var(--background); }
   .pilot-command { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 15px 17px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); }
   .pilot-command p { margin: 2px 0; font-size: 12px; line-height: 1.4; }
@@ -284,35 +330,58 @@ const auditCols = [t("v5.platform.gov.col.system"), t("v5.platform.gov.col.owner
     .mock { height: 58vh; }
   }
 
+  @media (max-width: 959px), (max-height: 679px) {
+    .workflow-visual { width: 100%; margin-inline-start: 0; }
+  }
+
   @media (max-width: 800px) {
     .mock { height: 500px; }
     .builder { grid-template-columns: 1fr; }
     .builder > aside { display: none; }
-    .workflow .flow-step { transform: scale(.75); }
-    .fs1 { left: 0; }
-    .fs2, .fs3 { left: 30%; }
-    .fs4 { right: 18%; }
-    .fs5 { right: -5%; }
-    .frontend { grid-template-columns: 1fr; }
-    .frontend > aside { display: none; }
-    .frontend > section { margin: 18px; }
-    .frontend > footer { right: 6%; left: 6%; }
-    .object { transform: scale(.78); }
-    .o2 { left: 0; }
-    .o3 { right: 0; }
-    .o4 { left: 3%; }
-    .o5 { right: 3%; }
-    .data > footer { grid-template-columns: 1fr auto; }
-    .data > footer label { display: none; }
     .store-grid { grid-template-columns: repeat(2, 1fr); }
-    .gov-metrics { grid-template-columns: 1fr; }
-    .gov-metrics > span { grid-template-columns: 1fr auto auto; align-items: center; }
-    .gov-metrics b { font-size: 18px; }
-    .audit > header, .audit > div { grid-template-columns: 1.5fr .7fr .8fr; }
-    .audit span:nth-child(2) { display: none; }
   }
 
   @media (prefers-reduced-motion: reduce) {
     .building > i { animation: none; }
+    .workflow-art { transition: none; }
   }
 </style>
+
+<script>
+  function initWorkflowVisuals() {
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const precisePointer = window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    const visuals = document.querySelectorAll<HTMLElement>(
+      "[data-workflow-visual]:not([data-workflow-ready])",
+    );
+
+    visuals.forEach((visual) => {
+      visual.dataset.workflowReady = "true";
+      if (reduced || !precisePointer) return;
+
+      let pointerFrame = 0;
+      visual.addEventListener("pointermove", (event) => {
+        window.cancelAnimationFrame(pointerFrame);
+        pointerFrame = window.requestAnimationFrame(() => {
+          const rect = visual.getBoundingClientRect();
+          const x = Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width));
+          const y = Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height));
+          visual.style.setProperty("--workflow-rx", `${(0.5 - y) * 5}deg`);
+          visual.style.setProperty("--workflow-ry", `${(x - 0.5) * 7}deg`);
+          visual.style.setProperty("--workflow-mx", `${x * 100}%`);
+          visual.style.setProperty("--workflow-my", `${y * 100}%`);
+        });
+      });
+      visual.addEventListener("pointerleave", () => {
+        window.cancelAnimationFrame(pointerFrame);
+        visual.style.setProperty("--workflow-rx", "0deg");
+        visual.style.setProperty("--workflow-ry", "0deg");
+        visual.style.setProperty("--workflow-mx", "50%");
+        visual.style.setProperty("--workflow-my", "50%");
+      });
+    });
+  }
+
+  initWorkflowVisuals();
+  document.addEventListener("astro:page-load", initWorkflowVisuals);
+</script>

@@ -2,7 +2,7 @@ use flow_like::flow::{
     board::Board,
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
-    variable::{Variable, VariableType},
+    variable::VariableType,
 };
 use flow_like_types::{Value, async_trait};
 use std::{collections::HashMap, sync::Arc};
@@ -54,19 +54,20 @@ impl NodeLogic for GetVariable {
 
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         let var_ref: String = context.evaluate_pin("var_ref").await?;
-        let variable: Variable = context.get_variable(&var_ref).await?;
+        let (value, secret) = context.get_variable_value_ref(&var_ref).await?;
 
         let value_pin = context.get_pin_by_name("value_ref").await?;
-        let value = variable.get_value();
         let value_cloned = value.lock().await.clone();
 
-        if variable.secret {
-            context.log_message("Accessed secret variable value", LogLevel::Debug);
-        } else {
-            context.log_message(
-                &format!("Accessed variable value: {:?}", value_cloned),
-                LogLevel::Debug,
-            );
+        if context.log_level <= LogLevel::Debug {
+            if secret {
+                context.log_message("Accessed secret variable value", LogLevel::Debug);
+            } else {
+                context.log_message(
+                    &format!("Accessed variable value: {:?}", value_cloned),
+                    LogLevel::Debug,
+                );
+            }
         }
 
         value_pin.set_value(value_cloned).await;

@@ -7,9 +7,12 @@ import {
 	test,
 } from "bun:test";
 import {
+	type GlobalChatTurnSelection,
 	beginGlobalChatTurnSelection,
-	endGlobalChatTurnSelection,
 	getGlobalChatTurnSelection,
+	isGlobalChatAtRunCapacity,
+	selectGlobalChatQueue,
+	selectGlobalChatRuns,
 	useGlobalChatStore,
 } from "./global-chat-store";
 import {
@@ -59,10 +62,25 @@ describe("global chat overlay dismissal", () => {
 			provider: "bits",
 			selectedModelId: "",
 			reasoningEffort: "",
-			activeTurnSelection: null,
+			activeConversationId: "conversation-1",
+			messages: [],
+			runs: {},
+			queue: [],
 			isStreaming: false,
+			streamingMessages: [],
 		});
 	});
+
+	/** Register a run the way the stream engine does, so per-run state has somewhere to live. */
+	const startRun = (runId: string, selection: GlobalChatTurnSelection) => {
+		useGlobalChatStore.getState().startRun({
+			runId,
+			conversationId: selection.runId === runId ? "conversation-1" : "other",
+			selection,
+			label: runId,
+			message: null,
+		});
+	};
 
 	test("keeps neutral closes eligible for a later automatic open", () => {
 		const state = useGlobalChatStore.getState();
@@ -152,6 +170,7 @@ describe("global chat overlay dismissal", () => {
 			reasoningEffort: "high",
 		});
 		const captured = beginGlobalChatTurnSelection("run-1");
+		startRun("run-1", captured);
 
 		expect(Object.isFrozen(captured)).toBe(true);
 		expect(captured).toEqual({
@@ -168,7 +187,7 @@ describe("global chat overlay dismissal", () => {
 			selectedModelId: "claude-opus",
 			reasoningEffort: "max",
 		});
-		expect(getGlobalChatTurnSelection()).toBe(captured);
+		expect(getGlobalChatTurnSelection("run-1")).toBe(captured);
 		expect(
 			beginGlobalChatTurnSelection("run-1", {
 				provider: "github-copilot",
@@ -178,38 +197,114 @@ describe("global chat overlay dismissal", () => {
 		).toBe(captured);
 	});
 
-	test("only the owning run can release a pinned turn selection", () => {
+	test("ending a run releases only its own pinned selection", () => {
 		const captured = beginGlobalChatTurnSelection("run-1", {
 			provider: "codex",
 			selectedModelId: "gpt-5.6-terra",
 			reasoningEffort: "high",
 		});
-		endGlobalChatTurnSelection("stale-run");
-		expect(getGlobalChatTurnSelection()).toBe(captured);
+		startRun("run-1", captured);
 
-		endGlobalChatTurnSelection("run-1");
-		expect(useGlobalChatStore.getState().activeTurnSelection).toBeNull();
-		expect(getGlobalChatTurnSelection()).toEqual({
+		useGlobalChatStore.getState().endRun("stale-run");
+		expect(getGlobalChatTurnSelection("run-1")).toBe(captured);
+
+		useGlobalChatStore.getState().endRun("run-1");
+		expect(useGlobalChatStore.getState().runs["run-1"]).toBeUndefined();
+		expect(getGlobalChatTurnSelection("run-1")).toEqual({
 			provider: "bits",
 			selectedModelId: "",
 			reasoningEffort: "",
 		});
 	});
 
-	test("rejects a second run that tries to replace an active turn selection", () => {
-		beginGlobalChatTurnSelection("run-1", {
+	test("concurrent runs each pin their own selection", () => {
+		const first = beginGlobalChatTurnSelection("run-1", {
 			provider: "codex",
 			selectedModelId: "gpt-5.6-terra",
 			reasoningEffort: "high",
 		});
+		startRun("run-1", first);
+		const second = beginGlobalChatTurnSelection("run-2", {
+			provider: "claude-code",
+			selectedModelId: "claude-opus",
+			reasoningEffort: "max",
+		});
+		startRun("run-2", second);
 
-		expect(() =>
-			beginGlobalChatTurnSelection("run-2", {
-				provider: "claude-code",
-				selectedModelId: "claude-opus",
-				reasoningEffort: "max",
-			}),
-		).toThrow("run 'run-1' still owns the model selection");
+		expect(getGlobalChatTurnSelection("run-1")).toBe(first);
+		expect(getGlobalChatTurnSelection("run-2")).toBe(second);
+		expect(selectGlobalChatRuns(useGlobalChatStore.getState())).toHaveLength(2);
+		expect(useGlobalChatStore.getState().isStreaming).toBe(true);
+	});
+
+	test("keeps other conversations' runs alive across a conversation switch", () => {
+		const selection = beginGlobalChatTurnSelection("run-1");
+		startRun("run-1", selection);
+		expect(useGlobalChatStore.getState().isStreaming).toBe(true);
+
+		useGlobalChatStore.getState().loadConversation("conversation-2", []);
+		expect(useGlobalChatStore.getState().runs["run-1"]).toBeDefined();
+		expect(useGlobalChatStore.getState().isStreaming).toBe(false);
+
+		useGlobalChatStore.getState().loadConversation("conversation-1", []);
+		expect(useGlobalChatStore.getState().isStreaming).toBe(true);
+	});
+
+	test("queues per conversation and drains in send order", () => {
+		const store = useGlobalChatStore.getState();
+		store.enqueueMessage({
+			conversationId: "conversation-1",
+			content: "first",
+		});
+		store.enqueueMessage({
+			conversationId: "conversation-1",
+			content: "second",
+		});
+		store.enqueueMessage({ conversationId: "other", content: "elsewhere" });
+
+		expect(
+			selectGlobalChatQueue(useGlobalChatStore.getState()).map(
+				(entry) => entry.content,
+			),
+		).toEqual(["first", "second"]);
+		expect(
+			useGlobalChatStore.getState().takeNextQueuedMessage("conversation-1")
+				?.content,
+		).toBe("first");
+		expect(
+			useGlobalChatStore.getState().takeNextQueuedMessage("conversation-1")
+				?.content,
+		).toBe("second");
+		expect(
+			useGlobalChatStore.getState().takeNextQueuedMessage("conversation-1"),
+		).toBeUndefined();
+		expect(useGlobalChatStore.getState().queue).toHaveLength(1);
+	});
+
+	test("reports capacity once the concurrency cap is reached", () => {
+		for (let index = 0; index < 4; index++) {
+			const runId = `run-${index}`;
+			startRun(runId, beginGlobalChatTurnSelection(runId));
+		}
+		expect(isGlobalChatAtRunCapacity(useGlobalChatStore.getState())).toBe(true);
+		useGlobalChatStore.getState().endRun("run-0");
+		expect(isGlobalChatAtRunCapacity(useGlobalChatStore.getState())).toBe(
+			false,
+		);
+	});
+
+	test("a finished run only commits into the conversation it belongs to", () => {
+		useGlobalChatStore.getState().appendMessage({
+			id: "m1",
+			appId: "global",
+			sessionId: "other-conversation",
+			inner: { role: "user" as never, content: "stale" },
+			files: [],
+			tools: [],
+			actions: [],
+			timestamp: Date.now(),
+		});
+		expect(useGlobalChatStore.getState().messages).toHaveLength(0);
 	});
 
 	test("persists the turn selection alongside the resumable run pointer", () => {

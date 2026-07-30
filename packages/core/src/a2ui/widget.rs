@@ -725,6 +725,24 @@ mod tests {
     }
 
     #[test]
+    fn test_page_layout_type_uses_camel_case_wire_values() {
+        let cases = [
+            (PageLayoutType::Freeform, "freeform"),
+            (PageLayoutType::Stack, "stack"),
+            (PageLayoutType::Grid, "grid"),
+            (PageLayoutType::Sidebar, "sidebar"),
+            (PageLayoutType::HolyGrail, "holyGrail"),
+        ];
+
+        for (layout, expected) in cases {
+            assert_eq!(
+                flow_like_types::json::to_value(layout).expect("layout should serialize"),
+                Value::String(expected.to_string()),
+            );
+        }
+    }
+
+    #[test]
     fn test_page_content_variants() {
         let widget_content = PageContent::Widget(WidgetInstance::new("w1", "i1"));
         let ref_content = PageContent::ComponentRef("comp-1".to_string());

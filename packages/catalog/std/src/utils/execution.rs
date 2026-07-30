@@ -94,7 +94,7 @@ async fn execution_info(
             .execution_cache
             .as_ref()
             .map(|cache| cache.board_id.clone()),
-        node_id: context.id.clone(),
+        node_id: context.id.to_string(),
         user_id: user_id.clone(),
         user_sub: user_id,
         event_id: context.event_id().await,

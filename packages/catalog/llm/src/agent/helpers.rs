@@ -1197,20 +1197,22 @@ pub async fn execute_agent_streaming(
         let mut cursor: Option<PaginatedRequestParams> = None;
 
         loop {
-            let list_result =
-                match tokio::time::timeout(MCP_LIST_TOOLS_TIMEOUT, client.list_tools(cursor.clone()))
-                    .await
-                {
-                    Ok(result) => result,
-                    Err(_) => {
-                        let error = format!(
-                            "Timed out fetching tools from MCP server {} after {:?}",
-                            mcp_config.uri, MCP_LIST_TOOLS_TIMEOUT
-                        );
-                        context.log_message(&error, LogLevel::Error);
-                        break;
-                    }
-                };
+            let list_result = match tokio::time::timeout(
+                MCP_LIST_TOOLS_TIMEOUT,
+                client.list_tools(cursor.clone()),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    let error = format!(
+                        "Timed out fetching tools from MCP server {} after {:?}",
+                        mcp_config.uri, MCP_LIST_TOOLS_TIMEOUT
+                    );
+                    context.log_message(&error, LogLevel::Error);
+                    break;
+                }
+            };
 
             let response = match list_result {
                 Ok(r) => r,
@@ -1937,8 +1939,7 @@ pub async fn execute_agent_streaming(
                             );
                             let value = json::to_value(result)
                                 .unwrap_or_else(|_| json::json!({"message": "Tool executed"}));
-                            let byte_len =
-                                json::to_string(&value).map(|s| s.len()).unwrap_or(0);
+                            let byte_len = json::to_string(&value).map(|s| s.len()).unwrap_or(0);
                             if byte_len > MCP_MAX_RESULT_BYTES {
                                 context.log_message(
                                     &format!(

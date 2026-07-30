@@ -3,6 +3,7 @@
 import {
 	AudioLines,
 	AudioWaveform,
+	CornerDownRight,
 	FileIcon,
 	ImageIcon,
 	MicIcon,
@@ -52,6 +53,16 @@ interface ChatBoxProps {
 	voiceMode?: VoiceMode;
 	voiceInvoke?: VoiceInvokeMode;
 	sendDisabled?: boolean;
+	/** Tooltip/aria override for the send button when a plain "Send" would be misleading —
+	 * e.g. "Queue this message" once every response slot is busy. */
+	sendHint?: string;
+	/**
+	 * Push the composer's text into the turn that is already running instead of starting a new
+	 * one. Present only while something is generating; renders the extra "add to running response"
+	 * button next to Send. Resolves false when the backend refused it, in which case the text is
+	 * restored so nothing is silently lost.
+	 */
+	onSteer?: (content: string) => Promise<boolean>;
 	onVoiceModeToggle?: () => void;
 	/** Called when the user starts speaking/recording, to interrupt answer playback. */
 	onInterrupt?: () => void;
@@ -85,6 +96,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			availableTools = ["Reason"],
 			defaultActiveTools = ["Reason"],
 			sendDisabled = false,
+			sendHint,
+			onSteer,
 			onVoiceModeToggle,
 			onInterrupt,
 		}: Readonly<ChatBoxProps>,
@@ -100,6 +113,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		const [recordedAudio, setRecordedAudio] = useState<File | null>(null);
 		const [recordingTime, setRecordingTime] = useState(0);
 		const [isTranscribing, setIsTranscribing] = useState(false);
+		const [isSteering, setIsSteering] = useState(false);
 
 		const chatboxRef = useRef<HTMLTextAreaElement | null>(null);
 		const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -164,6 +178,25 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			}),
 			[],
 		);
+
+		/**
+		 * Send the composer's text into the turn already running. Clears optimistically like a normal
+		 * send; restores the text if the run refused it, so a rejected instruction is never lost.
+		 */
+		const handleSteer = async () => {
+			const message = input.trim();
+			if (!onSteer || !message || isSteering) return;
+			setIsSteering(true);
+			setInput("");
+			try {
+				const delivered = await onSteer(message);
+				if (!delivered) setInput(message);
+			} catch {
+				setInput(message);
+			} finally {
+				setIsSteering(false);
+			}
+		};
 
 		const handleSubmit = async (e: React.FormEvent) => {
 			e.preventDefault();
@@ -914,8 +947,24 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									</Button>
 								)}
 
+								{onSteer && (
+									<Button
+										aria-label="Add to the running response"
+										title="Add to the running response — FlowPilot picks it up without restarting"
+										type="button"
+										size="sm"
+										disabled={sendDisabled || !input.trim() || isSteering}
+										variant="secondary"
+										onClick={handleSteer}
+										className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
+									>
+										<CornerDownRight className="w-4 h-4" />
+									</Button>
+								)}
+
 								<Button
-									aria-label="Send message"
+									aria-label={sendHint ?? "Send message"}
+									title={sendHint}
 									type="submit"
 									size="sm"
 									disabled={sendDisabled || (!input.trim() && !recordedAudio)}

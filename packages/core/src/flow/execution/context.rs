@@ -16,7 +16,7 @@ use crate::{
     profile::Profile,
     state::{FlowLikeState, FlowLikeStores, ProgressEvent, ToastEvent, ToastLevel},
 };
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::Value;
@@ -30,7 +30,10 @@ use flow_like_types::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{
     collections::BTreeMap,
-    sync::{Arc, Weak},
+    sync::{
+        Arc, Weak,
+        atomic::{AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -72,7 +75,7 @@ pub struct ExecutionContextCache {
     pub model_usage_app_id: Option<String>,
     pub board_dir: Path,
     pub board_id: String,
-    pub node_id: String,
+    pub node_id: Arc<str>,
     pub sub: String,
 }
 
@@ -80,7 +83,7 @@ impl ExecutionContextCache {
     pub async fn new(
         run: &Weak<Mutex<Run>>,
         state: &Arc<FlowLikeState>,
-        node_id: &str,
+        node_id: Arc<str>,
     ) -> Option<Self> {
         let (app_id, model_usage_app_id, board_dir, board_id, sub) = match run.upgrade() {
             Some(run) => {
@@ -108,7 +111,7 @@ impl ExecutionContextCache {
             model_usage_app_id,
             board_dir,
             board_id,
-            node_id: node_id.to_string(),
+            node_id,
             sub,
         })
     }
@@ -117,7 +120,7 @@ impl ExecutionContextCache {
     pub async fn from_meta(
         meta: &super::RunMeta,
         state: &Arc<FlowLikeState>,
-        node_id: &str,
+        node_id: Arc<str>,
     ) -> Self {
         let stores = state.config.read().await.stores.clone();
 
@@ -127,9 +130,15 @@ impl ExecutionContextCache {
             model_usage_app_id: meta.model_usage_app_id.clone(),
             board_dir: meta.board_dir.clone(),
             board_id: meta.board_id.clone(),
-            node_id: node_id.to_string(),
+            node_id,
             sub: meta.sub.clone(),
         }
+    }
+
+    fn for_node(&self, node_id: Arc<str>) -> Self {
+        let mut cache = self.clone();
+        cache.node_id = node_id;
+        cache
     }
 
     pub fn get_user_dir(&self, node: bool) -> flow_like_types::Result<Path> {
@@ -141,7 +150,7 @@ impl ExecutionContextCache {
             return Ok(base);
         }
 
-        Ok(base.child(self.node_id.clone()))
+        Ok(base.child(self.node_id.as_ref()))
     }
 
     pub fn get_cache(&self, node: bool, user: bool) -> flow_like_types::Result<Path> {
@@ -159,7 +168,7 @@ impl ExecutionContextCache {
             return Ok(base);
         }
 
-        Ok(base.child(self.node_id.clone()))
+        Ok(base.child(self.node_id.as_ref()))
     }
 
     pub fn get_storage(&self, node: bool) -> flow_like_types::Result<Path> {
@@ -169,7 +178,7 @@ impl ExecutionContextCache {
             return Ok(base);
         }
 
-        Ok(base.child(self.node_id.clone()))
+        Ok(base.child(self.node_id.as_ref()))
     }
 
     pub fn get_upload_dir(&self) -> flow_like_types::Result<Path> {
@@ -196,7 +205,7 @@ struct RunUpdateEvent {
 
 #[derive(Clone)]
 pub struct ExecutionContext {
-    pub id: String,
+    pub id: Arc<str>,
     pub run: Weak<Mutex<Run>>,
     pub nodes: Arc<AHashMap<String, Arc<InternalNode>>>,
     pub profile: Arc<Profile>,
@@ -223,6 +232,9 @@ pub struct ExecutionContext {
     pub oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     /// User context containing information about who triggered the execution
     pub user_context: Option<super::UserExecutionContext>,
+    nodes_executed: Arc<AtomicU64>,
+    represented_trace_nodes: AHashSet<Arc<str>>,
+    trace_taken: bool,
     log_spill_threshold: usize,
     log_flush_interval: Duration,
     last_log_spill: Instant,
@@ -252,32 +264,34 @@ impl ExecutionContext {
         oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     ) -> Self {
         // Use cached node_id instead of locking
-        let id = node.node_id().to_string();
-        let execution_cache = ExecutionContextCache::new(run, state, &id).await;
+        let id = node.shared_node_id();
+        let execution_cache = ExecutionContextCache::new(run, state, id.clone()).await;
 
-        let mut trace = Trace::new(&id);
+        let mut trace = Trace::new_shared(id.clone());
         if log_level == LogLevel::Debug {
             trace.snapshot_variables(variables).await;
         }
 
-        let (run_id, stream_state, log_spill_threshold, log_flush_interval) = match run.upgrade() {
-            Some(run) => {
-                let run = run.lock().await;
-                (
-                    run.id.clone(),
-                    run.stream_state,
-                    run.log_spill_threshold,
+        let (run_id, stream_state, log_spill_threshold, log_flush_interval, nodes_executed) =
+            match run.upgrade() {
+                Some(run) => {
+                    let run = run.lock().await;
+                    (
+                        run.id.clone(),
+                        run.stream_state,
+                        run.log_spill_threshold,
+                        super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
+                        run.nodes_executed.clone(),
+                    )
+                }
+                None => (
+                    "".to_string(),
+                    false,
+                    super::DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
                     super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
-                )
-            }
-            None => (
-                "".to_string(),
-                false,
-                super::DEFAULT_CONTEXT_LOG_SPILL_THRESHOLD,
-                super::DEFAULT_RUN_LOG_FLUSH_INTERVAL,
-            ),
-        };
-
+                    Arc::new(AtomicU64::new(0)),
+                ),
+            };
         ExecutionContext {
             id,
             run_id,
@@ -310,6 +324,9 @@ impl ExecutionContext {
             oauth_tokens,
             cancellation_token: None,
             user_context: None,
+            nodes_executed,
+            represented_trace_nodes: AHashSet::new(),
+            trace_taken: false,
             log_spill_threshold,
             log_flush_interval,
             last_log_spill: Instant::now(),
@@ -317,6 +334,10 @@ impl ExecutionContext {
     }
     pub fn run_id(&self) -> &str {
         &self.run_id
+    }
+
+    pub(crate) fn increment_nodes_executed(&self) {
+        self.nodes_executed.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn execution_environment(&self) -> ExecutionEnvironment {
@@ -364,15 +385,14 @@ impl ExecutionContext {
         oauth_tokens: Arc<AHashMap<String, OAuthToken>>,
     ) -> Self {
         // Use cached node_id instead of locking
-        let id = node.node_id().to_string();
+        let id = node.shared_node_id();
         // Use RunMeta directly instead of locking Run
-        let execution_cache = ExecutionContextCache::from_meta(run_meta, state, &id).await;
+        let execution_cache = ExecutionContextCache::from_meta(run_meta, state, id.clone()).await;
 
-        let mut trace = Trace::new(&id);
+        let mut trace = Trace::new_shared(id.clone());
         if log_level == LogLevel::Debug {
             trace.snapshot_variables(variables).await;
         }
-
         ExecutionContext {
             id,
             run_id: run_meta.run_id.clone(),
@@ -405,6 +425,9 @@ impl ExecutionContext {
             oauth_tokens,
             cancellation_token: None,
             user_context: None,
+            nodes_executed: run_meta.nodes_executed.clone(),
+            represented_trace_nodes: AHashSet::new(),
+            trace_taken: false,
             log_spill_threshold: run_meta.log_spill_threshold,
             log_flush_interval: run_meta.log_flush_interval,
             last_log_spill: Instant::now(),
@@ -518,33 +541,54 @@ impl ExecutionContext {
     }
 
     pub async fn create_sub_context(&self, node: &Arc<InternalNode>) -> ExecutionContext {
-        let mut context = ExecutionContext::new(
-            self.nodes.clone(),
-            &self.run,
-            &self.app_state,
-            node,
-            &self.variables,
-            &self.cache,
-            self.log_level,
-            self.stage.clone(),
-            self.profile.clone(),
-            self.callback.clone(),
-            self.completion_callbacks.clone(),
-            self.credentials.clone(),
-            self.token.clone(),
-            self.oauth_tokens.clone(),
-        )
-        .await;
-
-        context.context_pin_overrides = self.context_pin_overrides.clone();
-        context.cancellation_token = self.cancellation_token.clone();
-        context.user_context = self.user_context.clone();
-        context.local_variables = self.local_variables.clone();
-        context.log_flush_interval = self.log_flush_interval;
-        context.execution_environment = self.execution_environment;
-        context.execution_mode = self.execution_mode;
-
-        context
+        let id = node.shared_node_id();
+        let execution_cache = self
+            .execution_cache
+            .as_ref()
+            .map(|cache| cache.for_node(id.clone()));
+        let mut trace = Trace::new_shared(id.clone());
+        if self.log_level == LogLevel::Debug {
+            trace.snapshot_variables(&self.variables).await;
+        }
+        ExecutionContext {
+            id,
+            run: self.run.clone(),
+            nodes: self.nodes.clone(),
+            profile: self.profile.clone(),
+            node: node.clone(),
+            sub_traces: Vec::new(),
+            app_state: self.app_state.clone(),
+            variables: self.variables.clone(),
+            local_variables: self.local_variables.clone(),
+            started_by: None,
+            cache: self.cache.clone(),
+            stage: self.stage.clone(),
+            log_level: self.log_level,
+            trace,
+            execution_cache,
+            completion_callbacks: self.completion_callbacks.clone(),
+            stream_state: self.stream_state,
+            token: self.token.clone(),
+            credentials: self.credentials.clone(),
+            delegated: false,
+            context_state: BTreeMap::new(),
+            context_pin_overrides: self.context_pin_overrides.clone(),
+            result: None,
+            oauth_tokens: self.oauth_tokens.clone(),
+            user_context: self.user_context.clone(),
+            nodes_executed: self.nodes_executed.clone(),
+            represented_trace_nodes: AHashSet::new(),
+            trace_taken: false,
+            log_spill_threshold: self.log_spill_threshold,
+            log_flush_interval: self.log_flush_interval,
+            last_log_spill: Instant::now(),
+            cancellation_token: self.cancellation_token.clone(),
+            run_id: self.run_id.clone(),
+            execution_environment: self.execution_environment,
+            execution_mode: self.execution_mode,
+            state: NodeState::Idle,
+            callback: self.callback.clone(),
+        }
     }
 
     /// Create a sub-context for function execution with isolated local variables.
@@ -592,6 +636,27 @@ impl ExecutionContext {
         Err(flow_like_types::anyhow!("Variable not found"))
     }
 
+    /// Resolve only the runtime fields needed to read a variable value.
+    ///
+    /// This avoids cloning the variable's descriptive metadata on hot read paths.
+    pub async fn get_variable_value_ref(
+        &self,
+        variable_id: &str,
+    ) -> flow_like_types::Result<(Arc<Mutex<Value>>, bool)> {
+        if let Some(local) = &self.local_variables {
+            let local = local.lock().await;
+            if let Some(variable) = local.get(variable_id) {
+                return Ok((variable.value.clone(), variable.secret));
+            }
+        }
+
+        let variables = self.variables.lock().await;
+        let variable = variables
+            .get(variable_id)
+            .ok_or_else(|| flow_like_types::anyhow!("Variable not found"))?;
+        Ok((variable.value.clone(), variable.secret))
+    }
+
     pub async fn get_payload(&self) -> flow_like_types::Result<Arc<RunPayload>> {
         let payload = self
             .run
@@ -602,7 +667,7 @@ impl ExecutionContext {
             .payload
             .clone();
 
-        if payload.id == self.id {
+        if payload.id.as_str() == self.id.as_ref() {
             return Ok(payload);
         }
         Err(flow_like_types::anyhow!("Payload not found"))
@@ -725,7 +790,7 @@ impl ExecutionContext {
             .lock()
             .await
             .get(variable_id)
-            .ok_or(flow_like_types::anyhow!("Variable not found"))?
+            .ok_or_else(|| flow_like_types::anyhow!("Variable not found"))?
             .value
             .clone();
         let mut guard = value_ref.lock().await;
@@ -778,8 +843,9 @@ impl ExecutionContext {
         }
 
         let mut log = log;
-        log.node_id = Some(self.trace.node_id.clone());
+        log.node_id = Some(self.trace.node_id.to_string());
         self.trace.logs.push(log);
+        self.trace_taken = false;
         self.spill_trace_if_needed();
     }
 
@@ -789,8 +855,9 @@ impl ExecutionContext {
         }
 
         let mut log = LogMessage::new(message, log_level, None);
-        log.node_id = Some(self.trace.node_id.clone());
+        log.node_id = Some(self.trace.node_id.to_string());
         self.trace.logs.push(log);
+        self.trace_taken = false;
         self.spill_trace_if_needed();
     }
 
@@ -807,26 +874,19 @@ impl ExecutionContext {
         }
 
         let Some(run) = self.run.upgrade() else {
-            trim_trace_logs_for_backpressure(
-                &mut self.trace.logs,
-                spill_threshold,
-                &self.trace.node_id,
-            );
             return;
         };
 
+        // A busy run lock is transient backpressure, not permission to discard
+        // diagnostics. Keep the trace local and retry on the next log or merge.
         let Ok(mut run) = run.try_lock() else {
-            trim_trace_logs_for_backpressure(
-                &mut self.trace.logs,
-                spill_threshold,
-                &self.trace.node_id,
-            );
             return;
         };
 
-        let mut trace = std::mem::replace(&mut self.trace, Trace::new(&self.id));
+        let mut trace = std::mem::replace(&mut self.trace, Trace::new_shared(self.id.clone()));
         trace.finish();
-        run.traces.push(trace);
+        run.push_trace(trace);
+        self.trace_taken = false;
         self.last_log_spill = Instant::now();
     }
 
@@ -839,28 +899,16 @@ impl ExecutionContext {
         };
 
         if !self.stream_state {
-            tracing::info!(
-                node_id = %self.id,
-                stream_state = self.stream_state,
-                "Skipping run event - stream_state is false"
-            );
             return;
         }
 
         let update_event = RunUpdateEvent {
             run_id: self.run_id.clone(),
-            node_ids: vec![self.id.clone()],
+            node_ids: vec![self.id.to_string()],
             method,
         };
 
         let event = InterComEvent::with_type(format!("run:{}", self.run_id), update_event);
-
-        tracing::info!(
-            node_id = %self.id,
-            run_id = %self.run_id,
-            has_callback = self.callback.is_some(),
-            "Sending run update event"
-        );
 
         if let Err(err) = event.call(&self.callback).await {
             self.log_message(
@@ -999,7 +1047,13 @@ impl ExecutionContext {
 
     pub fn push_sub_context(&mut self, context: &mut ExecutionContext) {
         let sub_traces = context.take_traces();
-        self.sub_traces.extend(sub_traces);
+        for trace in sub_traces {
+            append_trace_deduplicating_empty(
+                &mut self.sub_traces,
+                &mut self.represented_trace_nodes,
+                trace,
+            );
+        }
         if let Some(result) = &context.result {
             self.result = Some(result.clone());
         }
@@ -1020,8 +1074,19 @@ impl ExecutionContext {
     }
 
     pub fn take_traces(&mut self) -> Vec<Trace> {
-        let mut traces = self.sub_traces.clone();
-        traces.push(self.trace.clone());
+        let mut traces = std::mem::take(&mut self.sub_traces);
+        let mut represented = std::mem::take(&mut self.represented_trace_nodes);
+        if !self.trace_taken {
+            let trace = self.trace.take();
+            if traces.is_empty() && represented.is_empty() {
+                // The overwhelmingly common leaf-context path needs no
+                // allocation or hash just to return its sole trace.
+                traces.push(trace);
+            } else {
+                append_trace_deduplicating_empty(&mut traces, &mut represented, trace);
+            }
+            self.trace_taken = true;
+        }
         traces.sort_by(|a, b| a.start.cmp(&b.start));
         traces
     }
@@ -1043,18 +1108,12 @@ impl ExecutionContext {
         let prepared: Option<super::PreparedFlush> = {
             let mut run = super::lock_with_timeout(run.as_ref(), "execution_context_run").await?;
 
-            // Push current trace logs to run
-            if !self.trace.logs.is_empty() {
-                let mut trace_copy = self.trace.clone();
-                trace_copy.finish();
-                run.traces.push(trace_copy);
-                self.trace.logs.clear();
-            }
-
-            // Also push any sub-traces
-            for trace in self.sub_traces.drain(..) {
-                run.traces.push(trace);
-            }
+            // Move all buffered traces into the run. This includes the current
+            // tail trace, even when it never reached the spill threshold.
+            self.trace.finish();
+            let traces = self.take_traces();
+            run.extend_traces(traces);
+            self.last_log_spill = Instant::now();
 
             run.prepare_flush(false)?
         };
@@ -1401,104 +1460,62 @@ impl ExecutionContext {
     }
 }
 
-fn trim_trace_logs_for_backpressure(
-    logs: &mut Vec<LogMessage>,
-    spill_threshold: usize,
-    node_id: &str,
-) -> usize {
-    let target = spill_threshold.max(1);
-    let max_backlog = target.saturating_mul(2).max(target + 1);
-    if logs.len() <= max_backlog {
-        return 0;
+fn append_trace_deduplicating_empty(
+    traces: &mut Vec<Trace>,
+    represented_nodes: &mut AHashSet<Arc<str>>,
+    trace: Trace,
+) {
+    let first_for_node = !represented_nodes.contains(trace.node_id.as_ref());
+    if first_for_node {
+        represented_nodes.insert(trace.node_id.clone());
     }
-
-    let mut dropped_low_priority = 0usize;
-    for level in [LogLevel::Debug, LogLevel::Info] {
-        while logs.len() > target {
-            let Some(index) = logs.iter().position(|log| log.log_level == level) else {
-                break;
-            };
-            logs.remove(index);
-            dropped_low_priority += 1;
-        }
+    if !trace.logs.is_empty() || first_for_node {
+        traces.push(trace);
     }
-
-    let mut dropped_high_priority = 0usize;
-    while logs.len() > max_backlog {
-        logs.remove(0);
-        dropped_high_priority += 1;
-    }
-
-    let dropped = dropped_low_priority + dropped_high_priority;
-    if dropped == 0 {
-        return 0;
-    }
-
-    let message = if dropped_high_priority == 0 {
-        format!("Dropped {dropped_low_priority} low-priority logs after log buffer saturation")
-    } else {
-        format!(
-            "Dropped {dropped_low_priority} low-priority logs and {dropped_high_priority} older high-priority logs after log buffer saturation"
-        )
-    };
-
-    let mut warning = LogMessage::new(&message, LogLevel::Warn, None);
-    warning.node_id = Some(node_id.to_string());
-    logs.push(warning);
-
-    dropped
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn test_log(message: &str, level: LogLevel) -> LogMessage {
-        LogMessage::new(message, level, None)
-    }
-
     #[test]
-    fn log_backpressure_drops_low_priority_logs_first() {
-        let mut logs = vec![
-            test_log("debug-1", LogLevel::Debug),
-            test_log("info-1", LogLevel::Info),
-            test_log("warn-1", LogLevel::Warn),
-            test_log("error-1", LogLevel::Error),
-            test_log("info-2", LogLevel::Info),
-            test_log("fatal-1", LogLevel::Fatal),
-            test_log("debug-2", LogLevel::Debug),
-        ];
+    fn empty_traces_are_retained_once_per_node() {
+        let mut traces = Vec::new();
+        let mut represented_nodes = AHashSet::new();
 
-        let dropped = trim_trace_logs_for_backpressure(&mut logs, 2, "node");
+        append_trace_deduplicating_empty(&mut traces, &mut represented_nodes, Trace::new("node-a"));
+        append_trace_deduplicating_empty(&mut traces, &mut represented_nodes, Trace::new("node-a"));
+        append_trace_deduplicating_empty(&mut traces, &mut represented_nodes, Trace::new("node-b"));
 
-        assert_eq!(dropped, 4);
-        assert!(logs.iter().any(|log| log.message == "warn-1"));
-        assert!(logs.iter().any(|log| log.message == "error-1"));
-        assert!(logs.iter().any(|log| log.message == "fatal-1"));
+        assert_eq!(traces.len(), 2);
         assert!(
-            logs.iter()
-                .any(|log| log.message.contains("low-priority logs"))
+            traces
+                .iter()
+                .any(|trace| trace.node_id.as_ref() == "node-a")
+        );
+        assert!(
+            traces
+                .iter()
+                .any(|trace| trace.node_id.as_ref() == "node-b")
         );
     }
 
     #[test]
-    fn log_backpressure_bounds_high_priority_bursts() {
-        let mut logs = vec![
-            test_log("warn-1", LogLevel::Warn),
-            test_log("error-1", LogLevel::Error),
-            test_log("fatal-1", LogLevel::Fatal),
-            test_log("warn-2", LogLevel::Warn),
-            test_log("error-2", LogLevel::Error),
-        ];
+    fn non_empty_traces_are_never_deduplicated() {
+        let mut traces = Vec::new();
+        let mut represented_nodes = AHashSet::new();
+        let mut first = Trace::new("node");
+        first
+            .logs
+            .push(LogMessage::new("first", LogLevel::Info, None));
+        let mut second = Trace::new("node");
+        second
+            .logs
+            .push(LogMessage::new("second", LogLevel::Info, None));
 
-        let dropped = trim_trace_logs_for_backpressure(&mut logs, 2, "node");
+        append_trace_deduplicating_empty(&mut traces, &mut represented_nodes, first);
+        append_trace_deduplicating_empty(&mut traces, &mut represented_nodes, second);
 
-        assert_eq!(dropped, 1);
-        assert_eq!(logs.len(), 5);
-        assert!(!logs.iter().any(|log| log.message == "warn-1"));
-        assert!(
-            logs.iter()
-                .any(|log| log.message.contains("older high-priority logs"))
-        );
+        assert_eq!(traces.len(), 2);
     }
 }

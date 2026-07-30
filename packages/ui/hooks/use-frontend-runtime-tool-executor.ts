@@ -34,6 +34,59 @@ import type { IPage } from "../state/backend-state/page-state";
 import type { IWidget } from "../state/backend-state/widget-state";
 import { useExecutionServiceOptional } from "../state/execution-service-context";
 
+type UiInspectWidgetMetadata = {
+	name?: unknown;
+	title?: unknown;
+	description?: unknown;
+};
+
+type UiInspectWidgetListEntry = readonly [
+	appId: string,
+	widgetId: string,
+	metadata?: UiInspectWidgetMetadata,
+];
+
+type UiInspectWidgetEntry = {
+	widgetId: string;
+	selector: string;
+	description?: string;
+};
+
+function nonEmptyMetadataText(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/** @internal Exported only so tuple normalization and lookup stay regression-tested. */
+export function resolveUiInspectWidgetEntries(
+	list: readonly UiInspectWidgetListEntry[],
+	selector?: string,
+): {
+	entries: readonly UiInspectWidgetEntry[];
+	match: UiInspectWidgetEntry | undefined;
+} {
+	const entries = list.map(([, widgetId, metadata]) => ({
+		widgetId,
+		selector:
+			nonEmptyMetadataText(metadata?.name) ??
+			nonEmptyMetadataText(metadata?.title) ??
+			widgetId,
+		description: nonEmptyMetadataText(metadata?.description),
+	}));
+	const normalizedSelector = selector?.trim();
+	return {
+		entries,
+		match: normalizedSelector
+			? entries.find(
+					(entry) =>
+						entry.widgetId === normalizedSelector ||
+						entry.selector === normalizedSelector,
+				)
+			: undefined,
+	};
+}
+
 export const FRONTEND_RUNTIME_TOOL_NAMES = [
 	"database_tool",
 	"storage_tool",
@@ -324,9 +377,12 @@ function summarizeWidget(widget: IWidget) {
 				property_path: prop.propertyPath,
 			})),
 		],
+		// Actions are persisted with `id` — that is also the string an events_widget_action node
+		// matches on. Reading `name` here returned an empty list for every widget, leaving the
+		// board specialist with no way to discover action ids except the instruction text.
 		actions: (widget.actions ?? [])
-			.map((action) => (action as { name?: string }).name)
-			.filter((name): name is string => typeof name === "string"),
+			.map((action) => (action as { id?: string }).id)
+			.filter((id): id is string => typeof id === "string" && id.length > 0),
 	};
 }
 
@@ -1502,28 +1558,31 @@ export function useFrontendRuntimeToolExecutor(
 								);
 							}
 							const list = await backend.widgetState.getWidgets(toolAppId);
-							const match = list.find(
-								([id, name]) => id === selector || name === selector,
-							);
+							const { match } = resolveUiInspectWidgetEntries(list, selector);
 							if (!match) throw new Error(`Widget '${selector}' not found.`);
 							const widget = await backend.widgetState.getWidget(
 								toolAppId,
-								match[0],
+								match.widgetId,
 							);
 							return { status: "ok", widget: summarizeWidget(widget) };
 						}
 						case "widgets": {
 							const list = await backend.widgetState.getWidgets(toolAppId);
+							const { entries } = resolveUiInspectWidgetEntries(list);
 							const widgets = await Promise.all(
-								list.map(async ([id, name]) => {
+								entries.map(async ({ widgetId, selector }) => {
 									try {
 										const widget = await backend.widgetState.getWidget(
 											toolAppId,
-											id,
+											widgetId,
 										);
 										return summarizeWidget(widget);
 									} catch {
-										return { widget_id: id, name, error: "failed to load" };
+										return {
+											widget_id: widgetId,
+											name: selector,
+											error: "failed to load",
+										};
 									}
 								}),
 							);
@@ -1557,11 +1616,13 @@ export function useFrontendRuntimeToolExecutor(
 								app_id: toolAppId,
 								board_id: boardId,
 								pages,
-								widgets: widgetList.map(([id, name, meta]) => ({
-									selector: name,
-									widget_id: id,
-									description: meta?.description,
-								})),
+								widgets: resolveUiInspectWidgetEntries(widgetList).entries.map(
+									({ widgetId, selector, description }) => ({
+										selector,
+										widget_id: widgetId,
+										description,
+									}),
+								),
 							};
 						}
 					}

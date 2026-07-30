@@ -1,4 +1,5 @@
-use flow_like_types::{Value, json::from_value, sync::RwLock};
+use flow_like_types::{Value, json::from_value};
+use parking_lot::RwLock;
 use serde::de::DeserializeOwned;
 use std::{
     collections::HashSet,
@@ -112,7 +113,7 @@ impl InternalPin {
 
     /// Reset value for re-execution
     pub async fn reset(&self) {
-        *self.value.write().await = None;
+        *self.value.write() = None;
     }
 
     // === Value access (the only operations needing synchronization) ===
@@ -120,12 +121,12 @@ impl InternalPin {
     /// Set the runtime value
     #[inline]
     pub async fn set_value(&self, value: Value) {
-        *self.value.write().await = Some(value);
+        *self.value.write() = Some(value);
     }
 
     /// Get value deserialized to type T
     pub async fn get_value<T: DeserializeOwned>(&self) -> Option<T> {
-        let guard = self.value.read().await;
+        let guard = self.value.read();
         let value = guard.as_ref()?;
         from_value::<T>(value.clone()).ok()
     }
@@ -133,13 +134,13 @@ impl InternalPin {
     /// Get raw value clone
     #[inline]
     pub async fn get_raw_value(&self) -> Option<Value> {
-        self.value.read().await.clone()
+        self.value.read().clone()
     }
 
     /// Check if value is set
     #[inline]
     pub async fn has_value(&self) -> bool {
-        self.value.read().await.is_some()
+        self.value.read().is_some()
     }
 
     // === Graph traversal (lock-free since graph is immutable) ===

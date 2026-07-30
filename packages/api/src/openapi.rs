@@ -244,6 +244,8 @@ impl Modify for SecurityAddon {
         // Template routes
         crate::routes::app::template::get_templates::get_templates,
         crate::routes::app::template::get_template::get_template,
+        crate::routes::app::template::get_template_preview::get_template_preview,
+        crate::routes::app::internal::search_templates::search_templates,
         crate::routes::app::template::upsert_template::upsert_template,
         crate::routes::app::template::delete_template::delete_template,
         // Meta routes
@@ -683,6 +685,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::widget::upsert_widget::WidgetUpsert,
         // Templates
         crate::routes::app::template::get_template::VersionQuery,
+        crate::routes::app::template::get_template_preview::TemplatePreview,
+        crate::routes::app::internal::search_templates::TemplateSearchHit,
         crate::routes::app::template::upsert_template::TemplateUpsert,
         // Meta
         crate::routes::app::meta::MetaQuery,

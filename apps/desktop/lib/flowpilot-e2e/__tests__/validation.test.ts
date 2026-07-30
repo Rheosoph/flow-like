@@ -49,6 +49,7 @@ function caseDefinition(
 			requireSuccessfulCompilerReceipt: true,
 			validateReferenceIntegrity: true,
 			requiredSemanticTableAliases: ["expense_requests", "expense_audit"],
+			requiredLazyDatabaseAliases: [],
 			requiredIdReferences: [
 				{
 					entity: "table",
@@ -65,6 +66,7 @@ function caseDefinition(
 					anyOf: ["insert_local_db", "upsert_local_db"],
 				},
 			],
+			requiredPageBoardBindings: [],
 			...overrides,
 		},
 	};
@@ -263,6 +265,36 @@ describe("FlowPilot app-creation artifact validation", () => {
 		expect(report.failures.map(({ code }) => code)).toContain("app.name");
 	});
 
+	test("evaluates a run against the benchmark model it requested", () => {
+		const artifacts = snapshot();
+		const sol = {
+			provider: "codex",
+			model: "gpt-5.6-sol",
+			reasoningEffort: "high",
+		} as const;
+
+		const wrongModel = evaluateAppCreationCase(
+			caseDefinition(),
+			artifacts,
+			sol,
+		);
+		expect(wrongModel.failures.map(({ code }) => code)).toContain("model.id");
+		expect(wrongModel.failures.map(({ code }) => code)).toContain(
+			"flowscript.compiler_receipt.nested_model",
+		);
+
+		const solRun = snapshot();
+		solRun.model = { ...sol };
+		const run = solRun.flowScriptGenerationRuns?.[0];
+		if (!run) throw new Error("expected fixture compiler run");
+		solRun.flowScriptGenerationRuns = [
+			{ ...run, modelId: "codex:gpt-5.6-sol" },
+		];
+		expect(evaluateAppCreationCase(caseDefinition(), solRun, sol).passed).toBe(
+			true,
+		);
+	});
+
 	test("requires a successful exact-revision compiler receipt", () => {
 		const missing = snapshot();
 		missing.flowScriptGenerationRuns = [];
@@ -338,6 +370,21 @@ describe("FlowPilot app-creation artifact validation", () => {
 		expect(codes).toContain("flowscript.authored.lint_errors");
 	});
 
+	test("reports an authored source truncated by the stream capture cap", () => {
+		const artifacts = snapshot();
+		artifacts.authoredFlowScript = `${source}${"x".repeat(16_384 - source.length)}...`;
+		const report = evaluateAppCreationCase(caseDefinition(), artifacts);
+
+		expect(report.failures.map(({ code }) => code)).toContain(
+			"flowscript.authored.capture_complete",
+		);
+		expect(
+			evaluateAppCreationCase(caseDefinition(), snapshot()).failures.map(
+				({ code }) => code,
+			),
+		).not.toContain("flowscript.authored.capture_complete");
+	});
+
 	test("rejects Markdown wrappers and prose padding in authored FlowScript", () => {
 		const artifacts = snapshot();
 		artifacts.authoredFlowScript = `${source}\n// padding\n\`\`\`flowscript`;
@@ -394,6 +441,40 @@ describe("FlowPilot app-creation artifact validation", () => {
 		expect(codes).toContain("tables.count");
 		expect(codes).toContain("tables.semantic_alias.expense_audit");
 		expect(codes).toContain("flowscript.id_reference.widget.expense_row");
+	});
+
+	test("requires an exact canonical database call for lazy aliases", () => {
+		const definition = caseDefinition({
+			requiredLazyDatabaseAliases: ["adventure_memory"],
+		});
+		const exact = snapshot();
+		exact.boards = [
+			{
+				...exact.boards[0],
+				flowScript: `${source}
+function memory() { return database({ name: "adventure_memory" }) }`,
+			},
+		];
+		expect(
+			evaluateAppCreationCase(definition, exact).failures.map(
+				({ code }) => code,
+			),
+		).not.toContain("flowscript.lazy_database_alias.adventure_memory");
+
+		const unrelatedLiteral = snapshot();
+		unrelatedLiteral.boards = [
+			{
+				...unrelatedLiteral.boards[0],
+				flowScript: `${source}
+const memoryName = "adventure_memory"
+function memory() { return database({ name: "prefix-adventure_memory" }) }`,
+			},
+		];
+		expect(
+			evaluateAppCreationCase(definition, unrelatedLiteral).failures.map(
+				({ code }) => code,
+			),
+		).toContain("flowscript.lazy_database_alias.adventure_memory");
 	});
 
 	test("requires scenario capabilities in the persisted workflow graph", () => {
@@ -516,6 +597,63 @@ describe("FlowPilot app-creation artifact validation", () => {
 		expect(codes).toContain("flowscript.lint.available.board-empty");
 		expect(codes).toContain("flowscript.reconcile.available.board-empty");
 		expect(codes).toContain("boards.nonempty.board-empty");
+	});
+
+	test("requires exact page-to-board ownership and lifecycle-node affinity", () => {
+		const definition = caseDefinition({
+			requiredPageBoardBindings: [
+				{
+					page: "Expense Queue",
+					board: "Expense Workflow",
+					requireOnLoadEvent: true,
+				},
+			],
+		});
+		const exact = evaluateAppCreationCase(definition, snapshot());
+		expect(exact.failures.map(({ code }) => code)).not.toContain(
+			"pages.board_binding.expense_queue.expense_workflow",
+		);
+		expect(exact.failures.map(({ code }) => code)).not.toContain(
+			"pages.board_load_binding.expense_queue.expense_workflow",
+		);
+
+		const wrongBoard = snapshot();
+		wrongBoard.pages = [{ ...wrongBoard.pages[0], boardId: "board-other" }];
+		wrongBoard.boards = [
+			...wrongBoard.boards,
+			{
+				id: "board-other",
+				name: "Other Workflow",
+				nodeCount: 1,
+				nodeIds: ["other-load"],
+				flowScript: 'eventsSimple() { logInfo({ message: "other" }) }',
+				lintDiagnostics: [],
+				reconcile: {
+					parseValid: true,
+					reconcileValid: true,
+					idempotent: true,
+					commandCount: 0,
+				},
+			},
+		];
+		const report = evaluateAppCreationCase(definition, wrongBoard);
+		const codes = report.failures.map(({ code }) => code);
+		expect(codes).toContain(
+			"pages.board_binding.expense_queue.expense_workflow",
+		);
+		expect(codes).not.toContain(
+			"pages.board_load_binding.expense_queue.expense_workflow",
+		);
+
+		const wrongLoad = snapshot();
+		wrongLoad.pages = [
+			{ ...wrongLoad.pages[0], onLoadEventId: "node-from-another-board" },
+		];
+		expect(
+			evaluateAppCreationCase(definition, wrongLoad).failures.map(
+				({ code }) => code,
+			),
+		).toContain("pages.board_load_binding.expense_queue.expense_workflow");
 	});
 
 	test("formats compact reports and stable failure fingerprints", () => {

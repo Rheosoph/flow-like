@@ -16,6 +16,8 @@ use utoipa::{IntoParams, ToSchema};
 pub struct VersionQuery {
     /// expected format: "MAJOR_MINOR_PATCH", e.g. "1_0_3"
     pub version: Option<String>,
+    /// Exact owning board. When supplied, lookup never falls through to another board.
+    pub board_id: Option<String>,
 }
 
 #[utoipa::path(
@@ -42,6 +44,7 @@ pub async fn get_page(
 ) -> Result<Json<Page>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
 
+    let requested_board_id = params.board_id.filter(|id| !id.trim().is_empty());
     let version_opt = if let Some(ver_str) = params.version {
         let parts = ver_str
             .split('_')
@@ -69,7 +72,9 @@ pub async fn get_page(
         .filter(page::Column::AppId.eq(&app_id))
         .one(&state.db)
         .await?;
-    let board_hint = row.and_then(|r| r.board_id);
+    let board_hint = requested_board_id
+        .clone()
+        .or_else(|| row.and_then(|r| r.board_id));
 
     let app = state.master_app(&user.sub()?, &app_id, &state).await?;
 
@@ -90,6 +95,9 @@ pub async fn get_page(
         && let Some(page) = try_board(board_id).await
     {
         return Ok(Json(page));
+    }
+    if requested_board_id.is_some() {
+        return Err(ApiError::NOT_FOUND);
     }
 
     for board_id in app.boards.iter() {

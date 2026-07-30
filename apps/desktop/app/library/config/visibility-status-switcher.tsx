@@ -8,6 +8,7 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { AllowForkingCard } from "@flow-like/flow-like-ui/components/settings/forking/allow-forking-card";
 import { AppAiActWizard } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-ai-act-wizard";
 import {
 	type AppPublicationRequestItem,
@@ -18,45 +19,55 @@ import {
 import { VisibilityStatusSwitcher as SharedVisibilityStatusSwitcher } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-status-switcher";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
+import { ForkAppButton } from "./fork-app-button";
 
-interface VisibilityStatusSwitcherProps {
+interface SectionProps {
 	localApp: IApp;
+	appName: string;
 	refreshApp: () => void;
 	canEdit: boolean;
 }
 
-export function VisibilityStatusSwitcher({
-	localApp,
-	refreshApp,
-	canEdit,
-}: Readonly<VisibilityStatusSwitcherProps>) {
+function usePublicationRequests(appId: string, enabled: boolean) {
 	const backend = useBackend();
-	const invalidate = useInvalidateInvoke();
-	const queryClient = useQueryClient();
-	const features = useFeatures();
-	const isOffline = localApp.visibility === IAppVisibility.Offline;
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
 		[],
 	);
 
-	const publicationRequests = useQuery<
+	return useQuery<
 		RawAppPublicationRequestItem[],
 		Error,
 		AppPublicationRequestItem[]
 	>({
-		queryKey: ["app-publication-requests", localApp.id],
+		queryKey: ["app-publication-requests", appId],
 		queryFn: async () => {
 			if (!profile.data) throw new Error("Profile not loaded");
 			return backend.apiState.get<RawAppPublicationRequestItem[]>(
 				profile.data.hub_profile,
-				`apps/${localApp.id}/publication`,
+				`apps/${appId}/publication`,
 			);
 		},
-		enabled: !!profile.data && canEdit && !isOffline,
+		enabled: !!profile.data && enabled,
 		select: normalizeAppPublicationRequests,
 	});
+}
+
+/**
+ * Everything that decides who can reach the app: visibility, forking and the
+ * fork entry point. Mounted inside the dashboard's Access inspector panel.
+ */
+export function AppAccessSection({
+	localApp,
+	appName,
+	refreshApp,
+	canEdit,
+}: Readonly<SectionProps>) {
+	const backend = useBackend();
+	const invalidate = useInvalidateInvoke();
+	const queryClient = useQueryClient();
+	const isOffline = localApp.visibility === IAppVisibility.Offline;
 
 	const handleVisibilityChange = useCallback(
 		async (appId: string, newVisibility: IAppVisibility) => {
@@ -78,21 +89,57 @@ export function VisibilityStatusSwitcher({
 				canEdit={canEdit}
 				onVisibilityChange={handleVisibilityChange}
 			/>
-			{!isOffline && features.data?.ai_act && canEdit && (
-				<AppAiActWizard appId={localApp.id} />
-			)}
 			{!isOffline && (
-				<AppPublicationReviewCard
-					requests={publicationRequests.data ?? []}
-					isLoading={publicationRequests.isLoading}
-					error={
-						publicationRequests.isError
-							? (publicationRequests.error?.message ??
-								"Failed to load publication review history")
-							: null
-					}
+				<AllowForkingCard
+					localApp={localApp}
+					canEdit={canEdit}
+					onChanged={refreshApp}
 				/>
 			)}
+			<ForkAppButton localApp={localApp} appName={appName} />
+		</>
+	);
+}
+
+/**
+ * Conformity assessment and publication review history. Mounted inside the
+ * dashboard's Compliance inspector panel.
+ */
+export function AppComplianceSection({
+	localApp,
+	canEdit,
+}: Readonly<Omit<SectionProps, "refreshApp" | "appName">>) {
+	const features = useFeatures();
+	const isOffline = localApp.visibility === IAppVisibility.Offline;
+	const publicationRequests = usePublicationRequests(
+		localApp.id,
+		canEdit && !isOffline,
+	);
+
+	if (isOffline) {
+		return (
+			<p className="text-sm text-muted-foreground">
+				Offline projects are never listed, so no conformity assessment or
+				publication review is required. Bring the project online to start.
+			</p>
+		);
+	}
+
+	const reviewError = publicationRequests.isError
+		? (publicationRequests.error?.message ??
+			"Failed to load publication review history")
+		: null;
+
+	return (
+		<>
+			{features.data?.ai_act && canEdit && (
+				<AppAiActWizard appId={localApp.id} />
+			)}
+			<AppPublicationReviewCard
+				requests={publicationRequests.data ?? []}
+				isLoading={publicationRequests.isLoading}
+				error={reviewError}
+			/>
 		</>
 	);
 }

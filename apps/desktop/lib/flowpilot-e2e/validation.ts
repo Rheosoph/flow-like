@@ -11,6 +11,7 @@ import type {
 	FlowPilotE2ECaseDefinition,
 	FlowPilotE2ECheck,
 	FlowPilotE2EEntityKind,
+	FlowPilotE2EModelConfig,
 	FlowPilotE2ERunReport,
 	FlowPilotEventSnapshot,
 	FlowPilotPageSnapshot,
@@ -107,6 +108,17 @@ export function flowScriptSizeMetrics(source: string): FlowScriptSizeMetrics {
 
 function definedSource(source: string | undefined): string | undefined {
 	return source && source.trim().length > 0 ? source : undefined;
+}
+
+/**
+ * The debug/stream capture bounds individual strings and appends an ellipsis. A truncated authored
+ * source silently invalidates every check that reads it — size bounds, lint, and id references all
+ * measure a partial program — so it is reported as its own failure rather than absorbed.
+ */
+const CAPTURE_STRING_CAP = 16_384;
+
+function isTruncatedCapture(source: string): boolean {
+	return source.length >= CAPTURE_STRING_CAP && source.endsWith("...");
 }
 
 function authoredSource(
@@ -239,6 +251,31 @@ function resolveEntity(
 	};
 }
 
+function resolveBoardEntity(
+	alias: string,
+	boards: readonly FlowPilotBoardSnapshot[],
+): { entity?: ResolvableEntity; ambiguous: boolean } {
+	const normalizedAlias = normalizeSemanticAlias(alias);
+	const matches = boards
+		.map((board, index) => ({
+			id: board.id,
+			aliases: [board.semanticAlias ?? "", board.name, board.id],
+			path: `boards[${index}]`,
+		}))
+		.filter((entity) =>
+			entity.aliases.some(
+				(candidate) => normalizeSemanticAlias(candidate) === normalizedAlias,
+			),
+		);
+	const uniqueMatches = [
+		...new Map(matches.map((entity) => [entity.id, entity])).values(),
+	];
+	return {
+		entity: uniqueMatches.length === 1 ? uniqueMatches[0] : undefined,
+		ambiguous: uniqueMatches.length > 1,
+	};
+}
+
 function flowScriptStringValues(source: string | undefined): readonly string[] {
 	if (!source) return [];
 	const values: string[] = [];
@@ -251,6 +288,26 @@ function flowScriptStringValues(source: string | undefined): readonly string[] {
 		}
 	}
 	return values;
+}
+
+function flowScriptDatabaseLiteralAliases(source: string): ReadonlySet<string> {
+	const aliases = new Set<string>();
+	const databaseCall = /\b(?:database|openLocalDb)\s*\(\s*\{([\s\S]*?)\}\s*\)/g;
+	for (const call of source.matchAll(databaseCall)) {
+		const argumentsSource = call[1];
+		if (!argumentsSource) continue;
+		const nameLiteral = argumentsSource.match(
+			/\bname\s*:\s*("(?:\\.|[^"\\])*")/,
+		)?.[1];
+		if (!nameLiteral) continue;
+		try {
+			const value = JSON.parse(nameLiteral);
+			if (typeof value === "string") aliases.add(value);
+		} catch {
+			// Native lint reports malformed literals; alias matching stays conservative.
+		}
+	}
+	return aliases;
 }
 
 function sourceContainsReference(
@@ -494,6 +551,8 @@ function expectedAppName(
 export function evaluateAppCreationCase(
 	caseDefinition: FlowPilotE2ECaseDefinition | ResolvedFlowPilotE2ECase,
 	snapshot: FlowPilotAppCreationSnapshot,
+	/** The pinned benchmark model this run requested; every model check is relative to it. */
+	expectedModel: FlowPilotE2EModelConfig = FLOWPILOT_E2E_DEFAULT_MODEL,
 ): FlowPilotE2ERunReport {
 	const requirements = caseDefinition.requirements;
 	const expectedName = expectedAppName(caseDefinition);
@@ -549,29 +608,28 @@ export function evaluateAppCreationCase(
 		),
 		check(
 			"model.provider",
-			snapshot.model?.provider === FLOWPILOT_E2E_DEFAULT_MODEL.provider,
-			`Generation provider must be ${FLOWPILOT_E2E_DEFAULT_MODEL.provider}.`,
+			snapshot.model?.provider === expectedModel.provider,
+			`Generation provider must be ${expectedModel.provider}.`,
 			{
-				expected: FLOWPILOT_E2E_DEFAULT_MODEL.provider,
+				expected: expectedModel.provider,
 				actual: snapshot.model?.provider ?? "missing",
 			},
 		),
 		check(
 			"model.id",
-			snapshot.model?.model === FLOWPILOT_E2E_DEFAULT_MODEL.model,
-			`Generation model must be ${FLOWPILOT_E2E_DEFAULT_MODEL.model}.`,
+			snapshot.model?.model === expectedModel.model,
+			`Generation model must be ${expectedModel.model}.`,
 			{
-				expected: FLOWPILOT_E2E_DEFAULT_MODEL.model,
+				expected: expectedModel.model,
 				actual: snapshot.model?.model ?? "missing",
 			},
 		),
 		check(
 			"model.reasoning_effort",
-			snapshot.model?.reasoningEffort ===
-				FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort,
-			`Generation reasoning effort must be ${FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort}.`,
+			snapshot.model?.reasoningEffort === expectedModel.reasoningEffort,
+			`Generation reasoning effort must be ${expectedModel.reasoningEffort}.`,
 			{
-				expected: FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort,
+				expected: expectedModel.reasoningEffort,
 				actual: snapshot.model?.reasoningEffort ?? "missing",
 			},
 		),
@@ -587,12 +645,12 @@ export function evaluateAppCreationCase(
 		const scopedRuns = generationRuns.filter(
 			(run) => run.appId === snapshot.appId && boardIds.has(run.boardId),
 		);
-		const expectedNestedModelId = `${FLOWPILOT_E2E_DEFAULT_MODEL.provider}:${FLOWPILOT_E2E_DEFAULT_MODEL.model}`;
+		const expectedNestedModelId = `${expectedModel.provider}:${expectedModel.model}`;
 		const modelMatchedRuns = scopedRuns.filter(
 			(run) =>
-				run.provider === FLOWPILOT_E2E_DEFAULT_MODEL.provider &&
+				run.provider === expectedModel.provider &&
 				run.modelId === expectedNestedModelId &&
-				run.reasoningEffort === FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort,
+				run.reasoningEffort === expectedModel.reasoningEffort,
 		);
 		const successfulChecks = generationRuns.flatMap((run) =>
 			run.compilerReceipts.filter(isSuccessfulFlowScriptCheckReceipt),
@@ -638,8 +696,8 @@ export function evaluateAppCreationCase(
 				"flowscript.compiler_receipt.nested_model",
 				scopedRuns.length > 0 && modelMatchedRuns.length === scopedRuns.length,
 				scopedRuns.length > 0 && modelMatchedRuns.length === scopedRuns.length
-					? `Every scoped compiler run used ${FLOWPILOT_E2E_DEFAULT_MODEL.provider}/${expectedNestedModelId}/${FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort}.`
-					: `${scopedRuns.length - modelMatchedRuns.length} scoped compiler run(s) did not use ${FLOWPILOT_E2E_DEFAULT_MODEL.provider}/${expectedNestedModelId}/${FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort}.`,
+					? `Every scoped compiler run used ${expectedModel.provider}/${expectedNestedModelId}/${expectedModel.reasoningEffort}.`
+					: `${scopedRuns.length - modelMatchedRuns.length} scoped compiler run(s) did not use ${expectedModel.provider}/${expectedNestedModelId}/${expectedModel.reasoningEffort}.`,
 				{
 					expected: scopedRuns.length,
 					actual: modelMatchedRuns.length,
@@ -766,6 +824,20 @@ export function evaluateAppCreationCase(
 	}
 	if (authored) {
 		const metrics = flowScriptSizeMetrics(authored);
+		checks.push(
+			check(
+				"flowscript.authored.capture_complete",
+				!isTruncatedCapture(authored),
+				isTruncatedCapture(authored)
+					? `Authored FlowScript was captured truncated at the ${CAPTURE_STRING_CAP}-character stream cap; its checks measure a partial program.`
+					: "Authored FlowScript was captured in full.",
+				{
+					path: "authoredFlowScript",
+					expected: false,
+					actual: isTruncatedCapture(authored),
+				},
+			),
+		);
 		const compactnessNoise = authored.split(/\r\n|\r|\n/).filter((line) => {
 			const trimmed = line.trim();
 			return (
@@ -1019,6 +1091,26 @@ export function evaluateAppCreationCase(
 		);
 	}
 
+	const canonicalDatabaseAliases =
+		flowScriptDatabaseLiteralAliases(canonicalSource);
+	for (const alias of requirements.requiredLazyDatabaseAliases) {
+		const opened = canonicalDatabaseAliases.has(alias);
+		checks.push(
+			check(
+				`flowscript.lazy_database_alias.${normalizeSemanticAlias(alias)}`,
+				opened,
+				opened
+					? `Canonical FlowScript opens lazy database alias ${JSON.stringify(alias)}.`
+					: `Canonical FlowScript does not open exact lazy database alias ${JSON.stringify(alias)} via database(...) or openLocalDb(...).`,
+				{
+					path: "boards[].flowScript",
+					expected: alias,
+					actual: opened ? alias : "missing",
+				},
+			),
+		);
+	}
+
 	const persistedNodeTypes = new Set(
 		boards
 			.flatMap((board) => board.nodeTypes ?? [])
@@ -1045,6 +1137,71 @@ export function evaluateAppCreationCase(
 				},
 			),
 		);
+	}
+
+	for (const binding of requirements.requiredPageBoardBindings) {
+		const pageResolution = resolveEntity("page", binding.page, snapshot);
+		const boardResolution = resolveBoardEntity(binding.board, boards);
+		const codeAlias = `${normalizeSemanticAlias(binding.page)}.${normalizeSemanticAlias(binding.board)}`;
+		if (
+			!pageResolution.entity ||
+			pageResolution.ambiguous ||
+			!boardResolution.entity ||
+			boardResolution.ambiguous
+		) {
+			checks.push(
+				check(
+					`pages.board_binding.${codeAlias}`,
+					false,
+					`Could not uniquely resolve page ${JSON.stringify(binding.page)} and board ${JSON.stringify(binding.board)}.`,
+					{
+						expected: `${binding.page} -> ${binding.board}`,
+						actual: "unresolved",
+					},
+				),
+			);
+			continue;
+		}
+		const page = pages.find(
+			(candidate) => candidate.id === pageResolution.entity?.id,
+		);
+		const board = boards.find(
+			(candidate) => candidate.id === boardResolution.entity?.id,
+		);
+		const ownsExactBoard = page?.boardId === board?.id;
+		checks.push(
+			check(
+				`pages.board_binding.${codeAlias}`,
+				ownsExactBoard,
+				ownsExactBoard
+					? `Page ${page?.id} is owned by exact board ${board?.id}.`
+					: `Page ${page?.id ?? binding.page} belongs to ${page?.boardId ?? "no board"}, expected ${board?.id ?? binding.board}.`,
+				{
+					path: pageResolution.entity.path,
+					expected: board?.id ?? binding.board,
+					actual: page?.boardId ?? "missing",
+				},
+			),
+		);
+		if (binding.requireOnLoadEvent) {
+			const onLoadBelongsToBoard = Boolean(
+				page?.onLoadEventId && board?.nodeIds?.includes(page.onLoadEventId),
+			);
+			checks.push(
+				check(
+					`pages.board_load_binding.${codeAlias}`,
+					onLoadBelongsToBoard,
+					onLoadBelongsToBoard
+						? `Page ${page?.id} onLoad node belongs to board ${board?.id}.`
+						: `Page ${page?.id ?? binding.page} has no onLoad node on board ${board?.id ?? binding.board}.`,
+					{
+						path: `${pageResolution.entity.path}.onLoadEventId`,
+						expected: true,
+						actual: onLoadBelongsToBoard,
+					},
+				),
+			);
+		}
 	}
 
 	for (const reference of requirements.requiredIdReferences) {
@@ -1104,7 +1261,7 @@ export function evaluateAppCreationCase(
 		appId: snapshot.appId,
 		appName: snapshot.appName,
 		expectedAppName: expectedName,
-		model: snapshot.model ?? FLOWPILOT_E2E_DEFAULT_MODEL,
+		model: snapshot.model ?? expectedModel,
 		passed: failures.length === 0,
 		summary: {
 			checks: checks.length,

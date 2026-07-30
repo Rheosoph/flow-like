@@ -84,6 +84,20 @@ async fn catalog_state() -> Arc<FlowLikeState> {
 /// a mutable local and a literal return, an approval-style branch in the event,
 /// and a `string_format` call whose `{sender}` placeholder exercises dynamic
 /// on_update pins end to end.
+/// Segment 1 of the staged plan whose full shape is [`GOLDEN_SCRIPT`]. Every node it adds is fully
+/// wired, which is what makes a segment committable on its own rather than a stub.
+const STAGED_SEGMENT_ONE: &str = r#"function buildReply(subject: string): (reply: string) {
+    let reply = stringTrim({ string: subject })
+    return reply
+}
+
+eventsSimple() {
+    const summary = stringFormat({ formatString: "Support mail from {sender}", sender: "customer@example.com" })
+    const replyResult = buildReply({ subject: summary.formattedString })
+    logInfo({ message: replyResult.reply })
+}
+"#;
+
 const GOLDEN_SCRIPT: &str = r#"function buildReply(subject: string): (reply: string) {
     let reply = stringTrim({ string: subject })
     if (stringContains({ string: subject, substring: "URGENT" }).contains) {
@@ -122,6 +136,11 @@ fn simple_log_script(first: &str, second: &str) -> String {
 /// revisions for failure scenarios.
 enum Step {
     Write {
+        source: String,
+    },
+    /// Grow the SAME retained draft with the next planned segment appended. This is the staged
+    /// scope-plan lifecycle: one draft id, one commit, several segments.
+    GrowWith {
         source: String,
     },
     Patch {
@@ -201,9 +220,13 @@ impl<'a> ScriptedAgent<'a> {
     }
 
     fn write(&mut self, source: String) {
+        self.write_with_replace(source, false);
+    }
+
+    fn write_with_replace(&mut self, source: String, replace_existing: bool) {
         let args = WriteFlowScriptArgs {
             draft_id: self.draft_id.clone(),
-            replace_existing: false,
+            replace_existing,
             mode: FlowIrDraftMode::Additive,
             source,
             allow_scope_reduction: false,
@@ -311,6 +334,7 @@ impl<'a> ScriptedAgent<'a> {
         for step in steps {
             match step {
                 Step::Write { source } => self.write(source),
+                Step::GrowWith { source } => self.write_with_replace(source, true),
                 Step::Patch { old, new } => self.patch_at(self.revision, old, new),
                 Step::PatchAt { revision, old, new } => self.patch_at(revision, old, new),
                 Step::Check => self.check(),
@@ -1234,6 +1258,94 @@ async fn idempotent_reapply() {
         reapplied.board_commands
     );
     assert!(reapplied.commands.is_empty());
+}
+
+/// The staged scope-plan lifecycle end to end: one draft id grows segment by segment and commits
+/// once. This is what makes the FIRST source write small enough to land inside the host's pre-draft
+/// checkpoint, without giving up the atomicity of a single apply.
+///
+/// Two properties matter and neither had end-to-end coverage before: each segment must validate on
+/// its own (so the run is never holding an uncommittable document), and growing a retained draft
+/// must never be mistaken for a scope regression.
+#[tokio::test]
+async fn staged_segments_grow_one_draft_into_a_single_commit() {
+    let fixture = &*FIXTURE;
+    let store = FlowIrDraftStore::new();
+    let mut agent = ScriptedAgent::new(
+        &store,
+        empty_board("sim-staged"),
+        &fixture.metadata,
+        "staged-draft",
+    );
+    agent.bind("Trim the incoming support mail subject, then log the reply and the reviewer approval notice.");
+
+    agent.run(vec![
+        Step::Write {
+            source: STAGED_SEGMENT_ONE.to_string(),
+        },
+        Step::ExpectStatus {
+            status: "draft_started",
+            code: None,
+        },
+        Step::Check,
+        Step::ExpectStatus {
+            status: "valid",
+            code: None,
+        },
+    ]);
+    let first_revision = agent.revision;
+
+    agent.run(vec![
+        Step::GrowWith {
+            source: GOLDEN_SCRIPT.to_string(),
+        },
+        Step::Check,
+        Step::ExpectStatus {
+            status: "valid",
+            code: None,
+        },
+    ]);
+    assert!(
+        agent.revision > first_revision,
+        "growing the draft advances the same revision chain instead of starting a new one"
+    );
+
+    agent.run(vec![
+        Step::Commit,
+        Step::ExpectStatus {
+            status: "queued",
+            code: None,
+        },
+    ]);
+    let queued = agent.last();
+    assert!(
+        queued.diagnostics.is_empty(),
+        "the staged commit must carry no blocking diagnostics: {queued:#?}"
+    );
+    let commands: Vec<BoardCommand> = queued.commands.clone();
+    assert!(!commands.is_empty(), "the staged commit queues real work");
+
+    let state = catalog_state().await;
+    let mut board = agent.board.clone();
+    apply_board_commands_to_board(&mut board, commands, &fixture.nodes, state, None)
+        .await
+        .expect("the staged batch applies");
+
+    let applied = board_to_flowscript(
+        &board,
+        &RenderOptions {
+            anchors: true,
+            ..RenderOptions::default()
+        },
+    );
+    assert!(
+        applied.contains("approvalNotice"),
+        "the final segment's helper reached the board: {applied}"
+    );
+    assert!(
+        applied.contains("buildReply"),
+        "the first segment survived the growth: {applied}"
+    );
 }
 
 // ── Real-agent skeleton (opt-in only, never wired up implicitly) ───────

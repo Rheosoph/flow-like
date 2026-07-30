@@ -92,28 +92,68 @@ pub async fn get_page(
 ) -> Result<Page, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
-    if let Some(page) = flow_like_state.page_registry.get(&page_id) {
-        return Ok(page.value().clone());
-    }
-
+    // The legacy open-page registry is keyed only by bare page id, so consulting it here can
+    // return a page from another app/board before either requested scope is validated. Nothing
+    // currently inserts into that registry; always resolve through the authoritative app/board
+    // storage until the cache key carries (app_id, board_id, page_id).
     let app = App::load(app_id, flow_like_state.clone()).await?;
 
     if let Some(bid) = board_id {
-        let board = app.open_board(bid, None, None).await?;
+        let board = app
+            .open_board(bid.clone(), None, None)
+            .await
+            .map_err(|error| {
+                TauriFunctionError::new(&format!(
+                    "Failed to open board '{}' while looking up page '{}': {}",
+                    bid, page_id, error
+                ))
+            })?;
         let board_guard = board.lock().await;
-        if let Ok(page) = board_guard.load_page(&page_id, None).await {
-            return Ok(page);
+        if !board_guard
+            .get_page_ids()
+            .iter()
+            .any(|candidate| candidate == &page_id)
+        {
+            return Err(TauriFunctionError::new("Page not found in specified board"));
         }
-        return Err(TauriFunctionError::new("Page not found in specified board"));
+        return board_guard
+            .load_page(&page_id, None)
+            .await
+            .map_err(|error| {
+                TauriFunctionError::new(&format!(
+                    "Failed to load page '{}' from board '{}': {}",
+                    page_id, bid, error
+                ))
+            });
     }
 
     for bid in app.boards.iter() {
-        if let Ok(board) = app.open_board(bid.clone(), None, None).await {
-            let board_guard = board.lock().await;
-            if let Ok(page) = board_guard.load_page(&page_id, None).await {
-                return Ok(page);
-            }
+        let board = app
+            .open_board(bid.clone(), None, None)
+            .await
+            .map_err(|error| {
+                TauriFunctionError::new(&format!(
+                    "Failed to open board '{}' while looking up page '{}': {}",
+                    bid, page_id, error
+                ))
+            })?;
+        let board_guard = board.lock().await;
+        if !board_guard
+            .get_page_ids()
+            .iter()
+            .any(|candidate| candidate == &page_id)
+        {
+            continue;
         }
+        return board_guard
+            .load_page(&page_id, None)
+            .await
+            .map_err(|error| {
+                TauriFunctionError::new(&format!(
+                    "Failed to load page '{}' from board '{}': {}",
+                    page_id, bid, error
+                ))
+            });
     }
 
     Err(TauriFunctionError::new("Page not found"))

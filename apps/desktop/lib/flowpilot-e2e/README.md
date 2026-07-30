@@ -8,7 +8,13 @@ writes a complete JSON artifact, and exits nonzero when generation or validation
 bun run flowpilot:e2e -- --case simple-agent
 bun run flowpilot:e2e -- --suite smoke --min-chars 1200 --json
 bun run flowpilot:e2e -- --case forum --case ops-dashboard --repeat 3 --fail-fast
+bun run flowpilot:e2e -- --case ai-adventure --model sol
 ```
+
+`--model` pins the generation model for the parent turn and every nested specialist. It accepts a
+benchmark alias or the model id itself: `terra` / `gpt-5.6-terra` (default) and `sol` /
+`gpt-5.6-sol`. Model comparisons only vary that pin — cases, thresholds, and acceptance evidence are
+identical, and the controller rejects a callback whose runs used a different model than requested.
 
 Useful inspection modes do not start Tauri or spend model budget:
 
@@ -33,11 +39,11 @@ pass bit.
 
 This is intentionally a thin controller, not a second FlowPilot implementation. Codex, GitHub
 Copilot, Claude Code, and Bits still execute through the shared desktop global-chat and
-`GlobalToolBridge` path; the benchmark policy pins Codex Terra/high.
+`GlobalToolBridge` path; the benchmark policy pins one Codex model at `high` reasoning.
 
 The live benchmark is available in a **development** desktop build at
-`/developer/flowpilot-e2e`. It drives the real global-chat and frontend-tool bridge, pins Codex to
-`gpt-5.6-terra` with `high` reasoning for the parent turn and every nested specialist, and keeps
+`/developer/flowpilot-e2e`. It drives the real global-chat and frontend-tool bridge, pins the
+selected Codex model with `high` reasoning for the parent turn and every nested specialist, and keeps
 every generated app for inspection. Production builds fail the runner preflight before spending
 model budget because detailed compiler evidence is intentionally disabled there.
 
@@ -45,14 +51,22 @@ Quick entry points:
 
 - One case: `/developer/flowpilot-e2e?case=simple-agent&run=1`
 - Default three-case smoke suite: `/developer/flowpilot-e2e?suite=smoke&run=1`
-- All six cases: `/developer/flowpilot-e2e?suite=full&run=1`
+- Every case: `/developer/flowpilot-e2e?suite=full&run=1`
+- Benchmark the other model: append `&model=sol` (the header toggle does the same for manual runs)
 - Override the per-case non-whitespace character floor: append `&minChars=1200`
+
+The heaviest case is `ai-adventure`: an offline AI text-adventure with a three-screen custom game
+UI, two repeated widgets, six exactly named tables including a vector-embedded per-adventure memory
+store, a savepoint/restore system, and a story agent that plans the campaign up front and then
+generates scenes toward the persisted global goal. It exercises far more of the surface than the
+single-purpose cases, so expect it to be the slowest and the strictest.
 
 The same runner is callable from the desktop webview console:
 
 ```js
 await window.flowPilotE2E.run({
   caseId: "forum",
+  modelKey: "sol",
   minFlowScriptNonWhitespaceChars: 900,
 });
 ```

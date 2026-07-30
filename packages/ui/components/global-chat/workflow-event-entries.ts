@@ -37,6 +37,65 @@ export interface RunnableWorkflowEventEntry {
 	created_this_run: boolean;
 }
 
+interface WorkflowBoardResultEnvelopeInput {
+	specialistMessage: string | undefined;
+	appliedCommands: number;
+	persistedReadbackVerified: boolean;
+	eventNodes: readonly RunnableWorkflowEventEntry[];
+}
+
+interface WorkflowBoardResultEnvelope {
+	message: string | undefined;
+	specialist_message?: string;
+	applied_commands: number;
+	board_persisted?: true;
+	persisted_readback_verified?: true;
+	event_nodes?: readonly RunnableWorkflowEventEntry[];
+	event_registration_required?: true;
+	event_nodes_note?: string;
+}
+
+const EVENT_REGISTRATION_NOTE =
+	"These entry nodes exist on the board but are NOT app Events yet, so nothing triggers them. In a LATER assistant turn (never the same tool batch as flowpilot_board), call upsert_event once per entry the user asked for, and set_page_load_event for a page's load entry. The build is incomplete until every requested entry is registered.";
+
+/**
+ * Build the host-owned portion of a successful board result. Nested specialists report their
+ * compiler workspace as "queued" before the host applies it, so their prose cannot be the
+ * authoritative persistence status after the host has applied and read the board back.
+ */
+export function buildWorkflowBoardResultEnvelope({
+	specialistMessage,
+	appliedCommands,
+	persistedReadbackVerified,
+	eventNodes,
+}: WorkflowBoardResultEnvelopeInput): WorkflowBoardResultEnvelope {
+	const eventRegistration =
+		eventNodes.length > 0
+			? {
+					event_nodes: eventNodes,
+					event_registration_required: true as const,
+					event_nodes_note: EVENT_REGISTRATION_NOTE,
+				}
+			: {};
+
+	if (appliedCommands <= 0 || !persistedReadbackVerified) {
+		return {
+			message: specialistMessage,
+			applied_commands: appliedCommands,
+			...eventRegistration,
+		};
+	}
+
+	return {
+		message: `Applied and persisted ${appliedCommands} checked board change${appliedCommands === 1 ? "" : "s"}; canonical FlowScript readback from the persisted board succeeded.${eventNodes.length > 0 ? " Workflow entry nodes are ready, but their required app Event registration is still outstanding." : ""}`,
+		specialist_message: specialistMessage,
+		applied_commands: appliedCommands,
+		board_persisted: true as const,
+		persisted_readback_verified: true as const,
+		...eventRegistration,
+	};
+}
+
 /** A submitted/preview/no-change workspace must never enter the apply path. */
 export function shouldApplyFlowScriptWorkspace(status: string | undefined) {
 	return status === "queued";

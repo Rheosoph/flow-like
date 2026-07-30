@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { IMessage } from "../../state/global-chat/global-chat-db";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 
 /**
@@ -125,6 +126,18 @@ export function classifyOrbTool(
 	return "thinking";
 }
 
+/** The newest live message belongs to the run the shared composer and orb currently follow. */
+export function selectActiveOrbTool(
+	streamingMessages: readonly Pick<IMessage, "plan_steps">[],
+): string | undefined {
+	const steps = streamingMessages.at(-1)?.plan_steps;
+	if (!steps?.length) return undefined;
+	for (let i = steps.length - 1; i >= 0; i--) {
+		if (steps[i].status === "progress") return steps[i].toolName;
+	}
+	return undefined;
+}
+
 /**
  * Derives the orb's state from live assistant activity.
  *
@@ -137,14 +150,9 @@ export function useFlowPilotOrbState(): FlowPilotOrbState {
 	const workspaceStatus = useGlobalChatStore(
 		(s) => s.flowscriptWorkspace?.status,
 	);
-	const activeTool = useGlobalChatStore((s) => {
-		const steps = s.streamingMessage?.plan_steps;
-		if (!steps?.length) return undefined;
-		for (let i = steps.length - 1; i >= 0; i--) {
-			if (steps[i].status === "progress") return steps[i].toolName;
-		}
-		return undefined;
-	});
+	const activeTool = useGlobalChatStore((s) =>
+		selectActiveOrbTool(s.streamingMessages),
+	);
 
 	if (toolPrompt) return "ready";
 	if (!isStreaming) return "idle";

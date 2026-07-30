@@ -214,6 +214,16 @@ fn reconcile_inner(
                         value: new_value,
                         summary: Some(format!("Set {} on {}", arg.name, node.friendly_name)),
                     });
+                } else if is_widget_dynamic_binding_arg(&arg.name) {
+                    // These pins are minted by the node's `on_update` from the PERSISTED widget, so
+                    // a missing one almost always means the widget itself is not there yet (wrong
+                    // selector, or a page/widget build that has not landed). Saying only "no pin
+                    // named X; skipped" reads like a typo and silently drops the data binding.
+                    result.diagnostics.push(format!(
+                        "node {anchor} has no input pin named {:?} (occurrence {}); skipped. This is a widget data binding, and those pins only exist once the widget is persisted — check that the widget selector names an existing widget and that its page/widget build has completed, then re-check.",
+                        arg.name,
+                        occurrence + 1
+                    ));
                 } else {
                     result.diagnostics.push(format!(
                         "node {anchor} has no input pin named {:?} (occurrence {}); skipped",
@@ -464,6 +474,71 @@ fn duplicate_ast_declaration_diagnostics(ast: &BoardAst) -> Vec<String> {
         "at the top level",
         &mut diagnostics,
     );
+    // Named events and functions are both registered as same-batch aliases by the apply planner.
+    // Two named events (even of different catalog types), or a function and named event sharing a
+    // name, therefore make `SetNodeFunctionRefs` resolution ambiguous. Reject that document here
+    // so `check_flowscript` can return an actionable diagnostic instead of allowing commit to
+    // queue a batch that apply must roll back atomically.
+    // Existing anchored declarations may already share a friendly name: the apply planner records
+    // that alias as ambiguous, but an unchanged round-trip remains valid because no command needs
+    // to resolve it. Grandfather that persisted state; reject a collision only when this document
+    // introduces at least one unanchored callable into the shared alias namespace.
+    let mut callable_declarations = BTreeMap::<&str, (usize, usize, Vec<(&str, bool)>)>::new();
+    for function in &ast.functions {
+        let entry = callable_declarations
+            .entry(function.name.as_str())
+            .or_default();
+        entry.0 += 1;
+        if function.anchor.is_none() {
+            entry.1 += 1;
+        }
+    }
+    for event in &ast.events {
+        let Some(event_name) = event
+            .event_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+        else {
+            continue;
+        };
+        callable_declarations
+            .entry(event_name)
+            .or_default()
+            .2
+            .push((event.name.as_str(), event.anchor.is_none()));
+    }
+    for (name, (function_count, unanchored_function_count, mut events)) in callable_declarations {
+        let introduces_callable =
+            unanchored_function_count > 0 || events.iter().any(|(_, unanchored)| *unanchored);
+        if events.is_empty() || function_count + events.len() < 2 || !introduces_callable {
+            continue;
+        }
+        let mut event_types = events
+            .drain(..)
+            .map(|(event_type, _)| event_type)
+            .collect::<Vec<_>>();
+        event_types.sort_unstable();
+        let function_origin = match function_count {
+            0 => String::new(),
+            1 => "a function and ".to_string(),
+            count => format!("{count} functions and "),
+        };
+        let event_count = event_types.len();
+        let event_noun = if event_count == 1 {
+            "named event"
+        } else {
+            "named events"
+        };
+        diagnostics.push(format!(
+            "top-level FlowScript callable name `{name}` is ambiguous across {function_origin}{event_count} {event_noun} ({}); named events and functions share the apply resolver namespace, so give each callable a unique name; no commands were derived",
+            event_types
+                .into_iter()
+                .map(|event_type| format!("`{event_type}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
     register_duplicates(
         ast.interfaces
             .iter()
@@ -2294,6 +2369,17 @@ pub(crate) fn synthesize_dynamic_input_pin_from_template(
         .then(|| generic_input_pin_metadata(requested_pin))
 }
 
+/// Whether an arg name refers to a widget's dynamic data-binding pin (`dyn_path_*` / `dyn_prop_*` /
+/// `dyn_cust_*`, in either snake_case or the camelCase form the UI surfaces use). These pins exist
+/// only after the widget is persisted, so a miss here has a specific, fixable cause worth naming.
+fn is_widget_dynamic_binding_arg(name: &str) -> bool {
+    const KINDS: [&str; 3] = ["path", "prop", "cust"];
+    KINDS.iter().any(|kind| {
+        name.starts_with(&format!("dyn_{kind}_"))
+            || name.starts_with(&to_camel_case(&format!("dyn_{kind}_")))
+    })
+}
+
 /// Whether `arg` targets a dynamic input pin the node's `on_update` will mint (one not yet live on
 /// the board node). Used by the config-edit path to DEFER a literal to apply — which creates the pin
 /// via `on_update`, then applies the write — instead of reporting a missing pin. Prefers the
@@ -2447,10 +2533,18 @@ fn schema_constraints_are_compatible(
         && input_data_type != "Generic"
         && output_data_type != "Generic"
     {
-        return matches!(
-            (input_schema.as_deref(), output_schema.as_deref()),
-            (Some(input), Some(output)) if input == output
-        );
+        return match (input_schema.as_deref(), output_schema.as_deref()) {
+            // Two declared contracts: they must be the same one. This is what catches a genuinely
+            // wrong struct, e.g. a `Bit` from findModel wired into embedDocument's
+            // `CachedEmbeddingModel` input without loading the model first.
+            (Some(input), Some(output)) => input == output,
+            // Only one side declares a contract, so there is nothing to contradict. An untyped
+            // `Struct` boundary pin — a FlowScript `function db(): (database: Struct)` parameter or
+            // return — adopts the connected schema, exactly like the struct_make/break/set boundary
+            // pins above. Rejecting these made factoring a shared handle into a helper impossible,
+            // which is precisely the decomposition BOARD_ORGANIZATION_GUIDANCE asks for.
+            _ => true,
+        };
     }
 
     true
@@ -2650,9 +2744,38 @@ fn default_exec_output_by_policy(
             {
                 return selector(many);
             }
-            select_exec_done(many)
+            select_sole_forward_exec_pin(many).or_else(|| select_exec_done(many))
         }
     }
+}
+
+fn is_error_exec_pin_name(name: &str) -> bool {
+    matches!(
+        name,
+        "error" | "exec_error" | "on_error" | "failure" | "failed"
+    )
+}
+
+/// `exec_out` + `error` is the catalog's dominant multi-output shape (527 `exec_out` against 169
+/// `error` pins), and hand-listing every one of those node types in [`EXEC_OUTPUT_POLICIES`] does
+/// not scale — so every DB write and UI update demanded a hand-written arm block just to continue
+/// sequentially. When the canonical `exec_out` is the ONLY non-error output, it is the only way
+/// forward, and continuation follows it exactly as the hand-written `batch_upsert_local_db` policy
+/// does; an unhandled error still terminates its own path.
+///
+/// Deliberately narrow: this recognizes the catalog's own `exec_out` convention only. A node with
+/// a second genuine outcome (`exec_out` + `empty`) and a custom/package node naming its outputs
+/// anything else (`success`/`exec_success`) stay ambiguous and keep demanding explicit arms rather
+/// than being guessed at.
+fn select_sole_forward_exec_pin(candidates: &[ExecPinCandidate]) -> Option<String> {
+    let mut forward = candidates
+        .iter()
+        .filter(|pin| !is_error_exec_pin_name(&pin.name));
+    let sole = forward.next()?;
+    if forward.next().is_some() || sole.name != "exec_out" {
+        return None;
+    }
+    Some(sole.name.clone())
 }
 
 fn select_exec_success(candidates: &[ExecPinCandidate]) -> Option<String> {
@@ -2741,6 +2864,10 @@ struct PlannedStmt {
     entity: NodeEntity,
     next_exec_pin: Option<String>,
     input_sources: Vec<ValueSource>,
+    /// This statement reuses an entity that the preceding statement already placed in the
+    /// execution chain. Bound arm blocks (`const r = call(); r { ... }`) only refine that
+    /// entity's outgoing branches; reconnecting its input would create a self-edge.
+    skip_exec_input_connection: bool,
     /// Additional execution tails the NEXT statement must also wire from — the final cursors of
     /// branch arms. Execution inputs are legal fan-in points, so `if (x) { a() } b()` wires `b`
     /// from BOTH the untaken `false` pin and `a`'s exec output.
@@ -2756,6 +2883,7 @@ impl PlannedStmt {
             entity,
             next_exec_pin: None,
             input_sources: Vec::new(),
+            skip_exec_input_connection: false,
             extra_exec_tails: Vec::new(),
             suppress_self_continuation: false,
         }
@@ -4649,7 +4777,7 @@ impl<'a> StructuralPlanner<'a> {
             let continues_exec = current.next_exec_pin.is_some()
                 || (accepts_exec && !self.entity_exec_output_pins(&current.entity).is_empty());
 
-            if accepts_exec {
+            if accepts_exec && !current.skip_exec_input_connection {
                 if previous_execs.is_empty() {
                     // No execution predecessor to wire from (e.g. a function body's first node):
                     // exempt it from the dangling-execution warning.
@@ -5052,34 +5180,32 @@ impl<'a> StructuralPlanner<'a> {
                 }
                 stashed_splices.append(&mut self.pending_exec_splices);
                 self.pending_exec_splices = stashed_splices;
-                if bind.is_some() && is_placeholder_call(call) {
-                    None
-                } else {
-                    entity.map(|entity| {
-                        // The statement AFTER a branch continues from the arm tails plus the one
-                        // exec output no arm claimed (e.g. `false` for a lone `if`). When every
-                        // output is claimed, only the arm tails carry execution forward.
-                        let arm_pins: HashSet<String> = arms
-                            .iter()
-                            .filter_map(|arm| self.resolve_arm_exec_pin(&entity, &arm.label))
-                            .collect();
-                        let remaining: Vec<String> = self
-                            .entity_exec_output_pin_refs(&entity)
-                            .into_iter()
-                            .filter(|pin| !arm_pins.contains(pin))
-                            .collect();
-                        let mut planned = PlannedStmt::new(entity);
-                        planned.extra_exec_tails = arm_tails;
-                        match remaining.as_slice() {
-                            [single] => planned.next_exec_pin = Some(single.clone()),
-                            [] => planned.suppress_self_continuation = true,
-                            // Several unclaimed outputs (a bare multi-output call with one
-                            // labelled arm): leave the default policy machinery to decide.
-                            _ => {}
-                        }
-                        planned
-                    })
-                }
+                entity.map(|entity| {
+                    // The statement AFTER a branch continues from the arm tails plus the one
+                    // exec output no arm claimed (e.g. `false` for a lone `if`). When every
+                    // output is claimed, only the arm tails carry execution forward.
+                    let arm_pins: HashSet<String> = arms
+                        .iter()
+                        .filter_map(|arm| self.resolve_arm_exec_pin(&entity, &arm.label))
+                        .collect();
+                    let remaining: Vec<String> = self
+                        .entity_exec_output_pin_refs(&entity)
+                        .into_iter()
+                        .filter(|pin| !arm_pins.contains(pin))
+                        .collect();
+                    let mut planned = PlannedStmt::new(entity);
+                    planned.extra_exec_tails = arm_tails;
+                    planned.skip_exec_input_connection =
+                        bind.is_some() && is_placeholder_call(call);
+                    match remaining.as_slice() {
+                        [single] => planned.next_exec_pin = Some(single.clone()),
+                        [] => planned.suppress_self_continuation = true,
+                        // Several unclaimed outputs (a bare multi-output call with one
+                        // labelled arm): leave the default policy machinery to decide.
+                        _ => {}
+                    }
+                    planned
+                })
             }
             Stmt::Loop {
                 bind,
@@ -5199,6 +5325,26 @@ impl<'a> StructuralPlanner<'a> {
                 return None;
             }
             return Some(NodeEntity::Existing(anchor.clone()));
+        }
+
+        // An unanchored declaration still has a stable identity: its name. FlowScript forbids two
+        // top-level functions sharing one name, so a same-named Function layer IS this function.
+        // Without this, a fresh full-document draft (a repair, or any run that did not carry the
+        // `//@n` anchors) re-creates every layer, and the board's own canonical readback then holds
+        // duplicate declarations that no longer reconcile — the board stops round-tripping.
+        let normalized_name = to_camel_case(&func.name);
+        let existing_by_name: Vec<String> = self
+            .existing
+            .layers
+            .iter()
+            .filter(|(_, layer)| {
+                matches!(layer.r#type, LayerType::Function)
+                    && to_camel_case(&layer.name) == normalized_name
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if let [only] = existing_by_name.as_slice() {
+            return Some(NodeEntity::Existing(only.clone()));
         }
 
         let ref_id = format!("${}", self.next_ref);
@@ -9507,6 +9653,144 @@ pub fn reconcile_text_with_catalog_enriched(
 mod tests {
     use super::*;
     use crate::flow::board::{Board, ExecutionMode, ExecutionStage, Layer, LayerType};
+
+    fn exec_pin(name: &str, index: u16) -> ExecPinCandidate {
+        ExecPinCandidate {
+            name: name.to_string(),
+            friendly_name: name.to_string(),
+            index,
+        }
+    }
+
+    #[test]
+    fn exec_out_plus_error_continues_from_exec_out_without_a_hand_listed_policy() {
+        // The catalog's dominant multi-output shape. Requiring an arm block for every one of these
+        // made plain sequential persistence uncompilable unless the author hand-wired each call.
+        let candidates = [exec_pin("exec_out", 0), exec_pin("error", 1)];
+        for node_type in ["insert_local_db", "upsert_local_db", "a2ui_update_table"] {
+            assert_eq!(
+                default_exec_output_by_policy(node_type, &candidates),
+                Some("exec_out".to_string()),
+                "{node_type} should continue from its only forward output"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unanchored_function_updates_the_same_named_layer_instead_of_duplicating_it() {
+        let mut board = empty_board();
+        let layer = Layer::new(
+            "layer-render".to_string(),
+            "renderThreads".to_string(),
+            LayerType::Function,
+        );
+        board.layers.insert(layer.id.clone(), layer);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            "function renderThreads() {\n    logInfo({ message: \"threads\" })\n}\n",
+            &[catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            )],
+        );
+
+        assert!(
+            !result
+                .commands
+                .iter()
+                .any(|command| matches!(command, BoardCommand::CreateLayer { name, .. } if name == "renderThreads")),
+            "a second layer named renderThreads would make the board's own readback invalid: {:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn an_undeclared_boundary_schema_adopts_the_connected_contract() {
+        // `function adventureDb(): (database: Struct)` — an untyped boundary pin carries no schema,
+        // so an enforcing consumer has nothing to contradict and the handle may flow through.
+        assert!(schema_constraints_are_compatible(
+            "database",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"LocalDatabase\"}"),
+            true,
+            "database",
+            "Struct",
+            "Normal",
+            None,
+            false,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn two_declared_schemas_must_still_match() {
+        // findModel returns a `Bit`; embedDocument wants a loaded `CachedEmbeddingModel`. Both
+        // sides declare a contract, so this stays a real error the author has to fix.
+        assert!(!schema_constraints_are_compatible(
+            "model",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"CachedEmbeddingModel\"}"),
+            true,
+            "model",
+            "Struct",
+            "Normal",
+            Some("{\"title\":\"Bit\"}"),
+            false,
+            &HashMap::new(),
+        ));
+    }
+
+    #[test]
+    fn non_canonical_forward_pins_are_still_never_guessed() {
+        // Custom/package nodes keep the "do not guess" stance: only the catalog's own `exec_out`
+        // convention is recognized, everything else needs an explicit policy or explicit arms.
+        for forward in ["success", "exec_success", "next"] {
+            assert_eq!(
+                default_exec_output_by_policy(
+                    "custom_split",
+                    &[exec_pin(forward, 0), exec_pin("error", 1)]
+                ),
+                None,
+                "{forward} must not be auto-wired"
+            );
+        }
+    }
+
+    #[test]
+    fn two_real_outcomes_still_demand_explicit_arms() {
+        let candidates = [
+            exec_pin("exec_out", 0),
+            exec_pin("empty", 1),
+            exec_pin("error", 2),
+        ];
+        assert_eq!(
+            default_exec_output_by_policy("vector_search_local_db", &candidates),
+            None,
+            "a genuine second outcome must not be auto-wired away"
+        );
+    }
+
+    #[test]
+    fn hand_listed_policies_still_win_over_the_general_rule() {
+        let candidates = [
+            exec_pin("exec_success", 0),
+            exec_pin("exec_error", 1),
+            exec_pin("exec_out", 2),
+        ];
+        assert_eq!(
+            default_exec_output_by_policy("http_fetch", &candidates),
+            Some("exec_success".to_string())
+        );
+    }
+
     use crate::flow::execution::LogLevel;
     use crate::flow::node::Node;
     use crate::flow::pin::{PinOptions, ValueType};
@@ -10610,6 +10894,115 @@ function helper() {
     }
 
     #[test]
+    fn duplicate_named_events_fail_closed_before_function_refs_become_ambiguous() {
+        let ast = flow_like_ast::parse(
+            r#"const untouched: string = "value"
+
+eventsGeneric deleteAdventure(payload: Struct, adventureId: string) {
+}
+
+eventsWidgetAction deleteAdventure(widgetInstanceId: string, eventName: string, actionContext: Struct, inputValues: Struct) {
+}
+
+eventsSimple menuPageLoad() {
+    a2uiInstantiateWidget({ widgetSelector: "adventure-card", instanceId: "card", fnRefs: [deleteAdventure] })
+}
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog(&empty_board(), &ast, &[]);
+
+        assert!(
+            result.commands.is_empty(),
+            "an ambiguous callable name must reject the whole document before command derivation: {:?}",
+            result.commands
+        );
+        let diagnostic = result
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.contains("callable name `deleteAdventure` is ambiguous"))
+            .expect("duplicate named-event diagnostic");
+        assert!(diagnostic.contains("`eventsGeneric`"), "{diagnostic}");
+        assert!(diagnostic.contains("`eventsWidgetAction`"), "{diagnostic}");
+        assert!(
+            diagnostic.contains("give each callable a unique name"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn duplicate_anchored_event_aliases_remain_valid_for_persisted_round_trips() {
+        let ast = flow_like_ast::parse(
+            r#"eventStart event() {   //@n:event_a
+}
+
+eventTimer event() {   //@n:event_b
+}
+"#,
+        )
+        .expect("parse");
+
+        let diagnostics = duplicate_ast_declaration_diagnostics(&ast);
+        assert!(
+            diagnostics.is_empty(),
+            "persisted entries may share a friendly alias when no new callable must resolve it: {diagnostics:?}"
+        );
+    }
+
+    #[test]
+    fn function_and_named_event_collision_fail_closed_in_the_shared_resolver_namespace() {
+        let ast = flow_like_ast::parse(
+            r#"function deleteAdventure() {
+}
+
+eventsGeneric deleteAdventure(payload: Struct) {
+}
+"#,
+        )
+        .expect("parse");
+
+        let result = reconcile_with_catalog(&empty_board(), &ast, &[]);
+
+        assert!(result.commands.is_empty());
+        let diagnostic = result
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.contains("callable name `deleteAdventure` is ambiguous"))
+            .expect("cross-category callable diagnostic");
+        assert!(
+            diagnostic.contains("a function and 1 named event"),
+            "{diagnostic}"
+        );
+        assert!(
+            diagnostic.contains("share the apply resolver namespace"),
+            "{diagnostic}"
+        );
+    }
+
+    #[test]
+    fn unique_function_and_named_event_callables_pass_declaration_preflight() {
+        let ast = flow_like_ast::parse(
+            r#"function eraseAdventure() {
+}
+
+eventsGeneric deleteAdventure(payload: Struct) {
+}
+
+eventsWidgetAction deleteAdventureCard(widgetInstanceId: string) {
+}
+"#,
+        )
+        .expect("parse");
+
+        let diagnostics = duplicate_ast_declaration_diagnostics(&ast);
+        assert!(
+            diagnostics.is_empty(),
+            "unique callable names must remain valid: {diagnostics:?}"
+        );
+    }
+
+    #[test]
     fn duplicate_interface_fields_and_parameters_are_rejected() {
         let ast = flow_like_ast::parse(
             r#"interface Ticket {
@@ -11182,6 +11575,41 @@ simpleEvent() {   //@n:event
         assert!(
             result.commands.is_empty(),
             "no-op member-chain round-trip must be empty; got {:?} from text:\n{text}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn unchanged_bracketed_struct_member_roundtrip_reuses_accessor() {
+        // Non-identifier struct keys render with bracketed string syntax. Parsing that canonical
+        // text must preserve `Member`, otherwise reconcile mistakes the struct for an array and
+        // replaces this accessor with `array_get`.
+        let mut board = board_with_struct_member_chain();
+        let field_pin = board
+            .nodes
+            .get_mut("getter")
+            .and_then(|node| {
+                node.pins
+                    .values_mut()
+                    .find(|pin| pin.pin_type == PinType::Input && pin.name == "field")
+            })
+            .expect("struct_get field pin");
+        field_pin.default_value = Some(b"\"row-rejection-reason\"".to_vec());
+
+        let text = anchored_text(&board);
+        assert!(
+            text.contains("[\"row-rejection-reason\"]"),
+            "canonical FlowScript should use bracketed member syntax:\n{text}"
+        );
+        let result = reconcile_text_with_catalog(&board, &text, &member_chain_catalog());
+        assert!(
+            result.diagnostics.is_empty(),
+            "bracketed member round-trip must stay valid: {:?}",
+            result.diagnostics
+        );
+        assert!(
+            result.commands.is_empty(),
+            "bracketed member round-trip must be a no-op; got {:?} from text:\n{text}",
             result.commands
         );
     }
@@ -19882,6 +20310,113 @@ eventsSimple() {
                 result.commands
             );
         }
+    }
+
+    #[test]
+    fn bound_multi_exec_arm_tails_feed_the_following_statement() {
+        // A lowered arm block refers back to the preceding bound call with a placeholder:
+        //
+        //   const split = customSplit()
+        //   split { ... }
+        //
+        // The arm statement must replace the stale `split` cursor with its arm tails without
+        // reconnecting `split` to itself. Otherwise the following statement steals the default
+        // `exec_success` edge and leaves the success body disconnected.
+        let board = empty_board();
+        let catalog = vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "custom_split",
+                "Custom Split",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_error", "Execution", PinType::Output),
+                    pin_meta("exec_success", "Execution", PinType::Output),
+                ],
+            ),
+            catalog_meta(
+                "log_info",
+                "Log Info",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("message", "String", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ];
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"eventsSimple() {
+    const split = customSplit()
+    split {
+        exec_success: {
+            logInfo({ message: "success" })
+        }
+        exec_error: {
+            logInfo({ message: "error" })
+        }
+    }
+    logInfo({ message: "after" })
+}
+"#,
+            &catalog,
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        for (from_node, from_pin, to_node) in [
+            ("$1", "exec_success", "$2"),
+            ("$1", "exec_error", "$3"),
+            ("$2", "exec_out", "$4"),
+            ("$3", "exec_out", "$4"),
+        ] {
+            assert!(
+                result.commands.iter().any(|command| matches!(
+                    command,
+                    BoardCommand::ConnectPins {
+                        from_node: actual_from_node,
+                        from_pin: actual_from_pin,
+                        to_node: actual_to_node,
+                        to_pin,
+                        ..
+                    } if actual_from_node == from_node
+                        && actual_from_pin == from_pin
+                        && actual_to_node == to_node
+                        && to_pin == "exec_in"
+                )),
+                "missing exec edge {from_node}.{from_pin} -> {to_node}.exec_in: {:?}",
+                result.commands
+            );
+        }
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins {
+                    from_node,
+                    to_node,
+                    ..
+                } if from_node == "$1" && to_node == "$4"
+            )),
+            "the following statement must fan in from the arm tails, not bypass them: {:?}",
+            result.commands
+        );
+        assert!(
+            !result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins {
+                    from_node,
+                    to_node,
+                    ..
+                } if from_node == "$1" && to_node == "$1"
+            )),
+            "the bound arm block must not reconnect the split node to itself: {:?}",
+            result.commands
+        );
     }
 
     #[test]

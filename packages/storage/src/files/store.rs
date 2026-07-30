@@ -108,6 +108,52 @@ fn signature_cache_put(key: String, url: Url, lifetime: Duration) {
     );
 }
 
+const VOLATILE_SIGNATURE_PARAMS: &[&str] = &[
+    "x-amz-date",
+    "x-amz-expires",
+    "x-amz-signature",
+    "x-goog-date",
+    "x-goog-expires",
+    "x-goog-signature",
+    "expires",
+    "signature",
+    "se",
+    "sig",
+    "st",
+];
+
+/// Derive the cache identity from the URL the signer actually produced.
+///
+/// A store's `Display` implementation is not a sufficient scope: S3 only
+/// includes the bucket name, so two S3-compatible endpoints with the same
+/// bucket/path can collide. Keep every query parameter except the values that
+/// necessarily rotate on each signature. This retains endpoint, object
+/// version, transforms, response overrides and credential/session identity.
+fn signed_url_cache_key(method: &str, url: &Url, lifetime: Duration) -> String {
+    let mut stable_params = url
+        .query_pairs()
+        .filter(|(name, _)| {
+            let lower = name.to_ascii_lowercase();
+            !VOLATILE_SIGNATURE_PARAMS.contains(&lower.as_str())
+        })
+        .map(|(name, value)| (name.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    stable_params.sort();
+
+    let mut resource = url.clone();
+    resource.set_query(None);
+    if !stable_params.is_empty() {
+        resource.query_pairs_mut().extend_pairs(stable_params);
+    }
+
+    format!(
+        "{}|{}|{}",
+        method.to_uppercase(),
+        resource,
+        lifetime.as_secs()
+    )
+}
+
 #[derive(Clone, Debug)]
 pub enum FlowLikeStore {
     Local(Arc<LocalObjectStore>),
@@ -223,19 +269,6 @@ impl FlowLikeStore {
         Ok(url)
     }
 
-    /// Stable identity of the *bucket* this store points at, used to keep
-    /// signature cache entries from bleeding between buckets/containers.
-    /// Only cloud stores qualify: local and in-memory stores already produce a
-    /// deterministic URL for a given object, so they never need caching.
-    fn signature_scope(&self) -> Option<String> {
-        match self {
-            FlowLikeStore::AWS(store) => Some(store.to_string()),
-            FlowLikeStore::Azure(store) => Some(store.to_string()),
-            FlowLikeStore::Google(store) => Some(store.to_string()),
-            _ => None,
-        }
-    }
-
     /// Like [`FlowLikeStore::sign`], but reuses a previously minted signature
     /// while a comfortable share of its lifetime remains.
     ///
@@ -245,31 +278,30 @@ impl FlowLikeStore {
     /// already hold, and cached API payloads compare unequal and churn. Handing
     /// back the same string keeps both caches warm.
     ///
-    /// The cache is keyed by bucket, method, path and requested lifetime — but
-    /// *not* by credentials, so a URL signed for one caller can be handed to
-    /// another caller reading the same object from the same bucket. Use this
-    /// only for assets the caller has already been authorized to read.
+    /// The signer runs first so the cache key can use the actual endpoint and
+    /// all identity-bearing query parameters. This prevents URLs from bleeding
+    /// between S3-compatible endpoints, object versions or credential sessions.
+    ///
+    /// Azure account-key SAS and GCS signatures do not expose a signing-key id,
+    /// so a cached URL could survive a key rotation and become invalid. Those
+    /// providers deliberately return a freshly signed URL instead.
     pub async fn sign_cached(
         &self,
         method: &str,
         path: &Path,
         expires_after: Duration,
     ) -> Result<Url> {
-        let Some(scope) = self.signature_scope() else {
+        if !matches!(self, FlowLikeStore::AWS(_)) {
             return self.sign(method, path, expires_after).await;
-        };
-
-        let key = format!(
-            "{scope}|{}|{path}|{}",
-            method.to_uppercase(),
-            expires_after.as_secs()
-        );
-
-        if let Some(url) = signature_cache_get(&key) {
-            return Ok(url);
         }
 
         let url = self.sign(method, path, expires_after).await?;
+        let key = signed_url_cache_key(method, &url, expires_after);
+
+        if let Some(cached) = signature_cache_get(&key) {
+            return Ok(cached);
+        }
+
         signature_cache_put(key, url.clone(), expires_after);
         Ok(url)
     }
@@ -312,5 +344,57 @@ impl FlowLikeStore {
             "data" => helper::put_data_url(url, store).await,
             scheme => Err(anyhow!("Unsupported scheme: {scheme}")),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const TTL: Duration = Duration::from_secs(86_400);
+
+    #[test]
+    fn signed_url_key_ignores_only_rotating_signature_fields() {
+        let first = Url::parse(
+            "https://bucket.example.test/icon.webp?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=key-a%2F20260729%2Feu%2Fs3%2Faws4_request&X-Amz-Date=20260729T100000Z&X-Amz-Expires=86400&X-Amz-Signature=aaa&versionId=v1",
+        )
+        .unwrap();
+        let refreshed = Url::parse(
+            "https://bucket.example.test/icon.webp?versionId=v1&X-Amz-Signature=bbb&X-Amz-Expires=86400&X-Amz-Date=20260729T100100Z&X-Amz-Credential=key-a%2F20260729%2Feu%2Fs3%2Faws4_request&X-Amz-Algorithm=AWS4-HMAC-SHA256",
+        )
+        .unwrap();
+
+        assert_eq!(
+            signed_url_cache_key("GET", &first, TTL),
+            signed_url_cache_key("get", &refreshed, TTL)
+        );
+    }
+
+    #[test]
+    fn signed_url_key_separates_endpoints_versions_and_credentials() {
+        let base = Url::parse(
+            "https://one.example.test/icon.webp?X-Amz-Credential=key-a&X-Amz-Date=20260729T100000Z&X-Amz-Expires=86400&X-Amz-Signature=aaa&versionId=v1",
+        )
+        .unwrap();
+        let other_endpoint = Url::parse(
+            "https://two.example.test/icon.webp?X-Amz-Credential=key-a&X-Amz-Date=20260729T100100Z&X-Amz-Expires=86400&X-Amz-Signature=bbb&versionId=v1",
+        )
+        .unwrap();
+        let other_version = Url::parse(
+            "https://one.example.test/icon.webp?X-Amz-Credential=key-a&X-Amz-Date=20260729T100100Z&X-Amz-Expires=86400&X-Amz-Signature=bbb&versionId=v2",
+        )
+        .unwrap();
+        let other_credential = Url::parse(
+            "https://one.example.test/icon.webp?X-Amz-Credential=key-b&X-Amz-Date=20260729T100100Z&X-Amz-Expires=86400&X-Amz-Signature=bbb&versionId=v1",
+        )
+        .unwrap();
+        let base_key = signed_url_cache_key("GET", &base, TTL);
+
+        assert_ne!(base_key, signed_url_cache_key("GET", &other_endpoint, TTL));
+        assert_ne!(base_key, signed_url_cache_key("GET", &other_version, TTL));
+        assert_ne!(
+            base_key,
+            signed_url_cache_key("GET", &other_credential, TTL)
+        );
     }
 }

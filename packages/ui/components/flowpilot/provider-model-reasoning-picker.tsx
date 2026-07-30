@@ -10,10 +10,12 @@ import {
 	LayersIcon,
 	LogOutIcon,
 	type LucideIcon,
+	RefreshCwIcon,
 	TriangleAlertIcon,
 } from "lucide-react";
 import { useState } from "react";
 
+import type { AgentBackendDiagnostic } from "../../lib/flowpilot/agent-backend-diagnostics";
 import { cn } from "../../lib/utils";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import type {
@@ -50,6 +52,8 @@ export interface ProviderModelReasoningPickerProps {
 	disabled?: boolean;
 	connecting?: boolean;
 	connected?: boolean;
+	diagnostic?: AgentBackendDiagnostic | null;
+	onRetry?: () => void | Promise<void>;
 	onDisconnect?: () => void | Promise<void>;
 	statusText?: string;
 	showProviderSection?: boolean;
@@ -129,6 +133,8 @@ export function ProviderModelReasoningPicker({
 	disabled = false,
 	connecting = false,
 	connected = false,
+	diagnostic,
+	onRetry,
 	onDisconnect,
 	statusText,
 	showProviderSection = true,
@@ -148,6 +154,7 @@ export function ProviderModelReasoningPicker({
 	const selectedModel = models.find((model) => model.id === selectedModelId);
 	const showFreeModelNotice =
 		normalizedProvider === "bits" && selectedModel?.isFree === true;
+	const healthyConnected = connected && !diagnostic;
 	const agentBackendsAvailable = providers.some(
 		(option) =>
 			normalizeAIProvider(option.id) !== "bits" && option.disabled !== true,
@@ -163,6 +170,7 @@ export function ProviderModelReasoningPicker({
 		showFreeModelNotice
 			? "Free model may be too limited for complete app creation"
 			: undefined,
+		diagnostic?.title,
 	]
 		.filter(Boolean)
 		.join(" · ");
@@ -173,17 +181,31 @@ export function ProviderModelReasoningPicker({
 				<button
 					type="button"
 					disabled={disabled}
+					aria-invalid={diagnostic ? true : undefined}
 					aria-label={`Provider and model: ${title}`}
 					title={title}
 					className={cn(
 						"inline-flex h-8 min-w-0 items-center gap-1.5 rounded-lg border border-border/40 bg-background/60 px-2.5 text-xs outline-none transition-colors hover:border-primary/30 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-primary/40 disabled:pointer-events-none disabled:opacity-50",
+						diagnostic &&
+							"border-destructive/60 bg-destructive/5 hover:border-destructive/70 hover:bg-destructive/10 focus-visible:ring-destructive/40",
 						triggerClassName,
 					)}
 				>
 					<span className="relative shrink-0">
-						<ProviderIcon className="size-3.5 text-primary" />
-						{connected && (
+						<ProviderIcon
+							className={cn(
+								"size-3.5 text-primary",
+								diagnostic && "text-destructive",
+							)}
+						/>
+						{healthyConnected && (
 							<span className="absolute -bottom-0.5 -right-0.5 size-1.5 rounded-full border border-background bg-emerald-500" />
+						)}
+						{diagnostic && (
+							<span
+								aria-label="Provider error"
+								className="absolute -bottom-0.5 -right-0.5 size-2 rounded-full border border-background bg-destructive"
+							/>
 						)}
 					</span>
 					<span className="min-w-0 max-w-40 truncate font-medium">
@@ -214,6 +236,47 @@ export function ProviderModelReasoningPicker({
 				sideOffset={sideOffset}
 				className={cn("w-72 p-2", contentClassName)}
 			>
+				{diagnostic && (
+					<div
+						role="alert"
+						className="mb-2 rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-destructive"
+					>
+						<div className="flex items-start gap-2">
+							<TriangleAlertIcon
+								aria-hidden="true"
+								className="mt-0.5 size-4 shrink-0"
+							/>
+							<div className="min-w-0 flex-1">
+								<p className="text-xs font-semibold">{diagnostic.title}</p>
+								<p className="mt-1 text-[11px] leading-relaxed text-foreground">
+									{diagnostic.message}
+								</p>
+								{diagnostic.command && (
+									<code className="mt-2 block overflow-x-auto whitespace-pre-wrap break-all rounded border border-destructive/20 bg-background/70 px-2 py-1.5 text-[10px] text-foreground">
+										{diagnostic.command}
+									</code>
+								)}
+								{onRetry && (
+									<button
+										type="button"
+										disabled={disabled || connecting}
+										onClick={() => {
+											void Promise.resolve()
+												.then(() => onRetry())
+												.catch(() => undefined);
+										}}
+										className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-destructive/30 bg-background/70 px-2 py-1 text-[11px] font-medium text-destructive outline-none transition-colors hover:bg-destructive/10 focus-visible:ring-2 focus-visible:ring-destructive/40 disabled:opacity-50"
+									>
+										<RefreshCwIcon
+											className={cn("size-3", connecting && "animate-spin")}
+										/>
+										Retry
+									</button>
+								)}
+							</div>
+						</div>
+					</div>
+				)}
 				{showProviderSection && providers.length > 0 && (
 					<>
 						<p className="px-1 pb-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -338,7 +401,7 @@ export function ProviderModelReasoningPicker({
 					</>
 				)}
 
-				{statusText && (
+				{statusText && !diagnostic && (
 					<p className="mt-2 border-t border-border/40 px-1 pt-2 text-[11px] text-muted-foreground">
 						{statusText}
 					</p>
