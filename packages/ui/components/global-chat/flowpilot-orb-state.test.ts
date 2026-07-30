@@ -3,6 +3,7 @@ import {
 	type FlowPilotOrbState,
 	ORB_STATE_PARAMS,
 	classifyOrbTool,
+	selectActiveOrbTool,
 } from "./flowpilot-orb-state";
 
 describe("classifyOrbTool", () => {
@@ -60,6 +61,59 @@ describe("classifyOrbTool", () => {
 	it("is case-insensitive", () => {
 		expect(classifyOrbTool("EMIT_COMMANDS")).toBe("working");
 		expect(classifyOrbTool("Ask_User")).toBe("ready");
+	});
+});
+
+describe("selectActiveOrbTool", () => {
+	it("follows the newest live message and its latest in-progress step", () => {
+		expect(
+			selectActiveOrbTool([
+				{
+					plan_steps: [
+						{
+							id: "older-working",
+							title: "Editing",
+							status: "progress",
+							toolName: "edit_flowscript",
+						},
+					],
+				},
+				{
+					plan_steps: [
+						{
+							id: "newer-finished",
+							title: "Searching",
+							status: "completed",
+							toolName: "catalog_search",
+						},
+						{
+							id: "newer-current",
+							title: "Reading",
+							status: "progress",
+							toolName: "open_url",
+						},
+					],
+				},
+			]),
+		).toBe("open_url");
+	});
+
+	it("does not leak an older run's tool into a newer composing run", () => {
+		expect(
+			selectActiveOrbTool([
+				{
+					plan_steps: [
+						{
+							id: "older-working",
+							title: "Editing",
+							status: "progress",
+							toolName: "edit_flowscript",
+						},
+					],
+				},
+				{ plan_steps: [] },
+			]),
+		).toBeUndefined();
 	});
 });
 
