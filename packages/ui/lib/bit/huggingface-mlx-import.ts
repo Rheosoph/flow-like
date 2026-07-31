@@ -181,6 +181,13 @@ function portablePathKey(path: string): string {
 	return path.normalize("NFC").toLowerCase();
 }
 
+/** Linear-time equivalent of `/\/+$/`, which backtracks quadratically on long slash runs. */
+function stripTrailingSlashes(value: string): string {
+	let end = value.length;
+	while (end > 0 && value.charCodeAt(end - 1) === 47) end -= 1;
+	return value.slice(0, end);
+}
+
 /**
  * Accept a canonical Hub model URL or `owner/repository`. Subpaths such as
  * `/tree/main` and `/blob/main/config.json` are intentionally reduced to the
@@ -223,7 +230,7 @@ export function parseHuggingFaceModelReference(reference: string): string {
 				}
 			});
 	} else {
-		components = input.replace(/\/+$/, "").split("/");
+		components = stripTrailingSlashes(input).split("/");
 	}
 
 	if (components.length !== 2) {

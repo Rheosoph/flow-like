@@ -830,7 +830,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 												cell.includes("![") || cell.includes("](");
 											const isLongText =
 												cell.length > 100 && !hasMarkdownContent;
-											const cellKey = `${colIdx} ${cell}`;
+											const cellKey = `${colIdx}\u0000${cell}`;
 											// Cells that already show everything need no toggle
 											const isToggleable =
 												!hasMarkdownContent && !isLongText && !wrapCells;
@@ -851,9 +851,13 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 															<CellContent content={cell} />
 														</div>
 													) : isToggleable ? (
+														// Every data cell is a toggle, so keep them out of
+														// the tab sequence; the Wrap control expands all
+														// cells for keyboard users.
 														<button
 															type="button"
 															tabIndex={-1}
+															aria-expanded={showsFullText}
 															onClick={() => toggleCellExpanded(cellKey)}
 															title={
 																showsFullText
