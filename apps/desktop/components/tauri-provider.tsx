@@ -144,6 +144,7 @@ export class TauriBackend implements IBackendState {
 		public queryClient?: QueryClient,
 		public auth?: AuthContextProps,
 		public profile?: IProfile,
+		private readonly canHostMLX = false,
 	) {
 		this._apiState = new TauriApiState();
 		this.apiState = this._apiState;
@@ -178,6 +179,7 @@ export class TauriBackend implements IBackendState {
 		return {
 			needsSignIn: isIos,
 			canHostLlamaCPP: !isIos,
+			canHostMLX: this.canHostMLX,
 			canHostEmbeddings: true,
 			canExecuteLocally: true,
 		};
@@ -624,29 +626,55 @@ export function TauriProvider({
 	}, [backend, queryClient]);
 
 	useEffect(() => {
-		console.time("TauriProvider Initialization");
-		const backend = new TauriBackend((promise) => {
-			promise
-				.then((result) => {
-					console.log("Background task completed:", result);
-				})
-				.catch((error) => {
-					console.error("Background task failed:", error);
-				});
-		}, queryClient);
-		console.timeEnd("TauriProvider Initialization");
+		let cancelled = false;
 
-		console.time("Setting Backend");
-		setBackend(backend);
-		console.timeEnd("Setting Backend");
+		const initializeBackend = async () => {
+			let canHostMLX = false;
+			try {
+				canHostMLX = await invoke<boolean>("can_host_mlx");
+			} catch (error) {
+				console.warn("Failed to detect MLX support:", error);
+			}
 
-		console.time("Setting Download Backend");
-		setDownloadBackend(backend);
-		console.timeEnd("Setting Download Backend");
+			// Publish the backend only after capability detection. Consumers never
+			// observe a stale backend object whose synchronous capabilities changed
+			// without a React store update.
+			if (cancelled || !mountedRef.current) return;
 
-		scheduleIDBCleanup();
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, []);
+			console.time("TauriProvider Initialization");
+			const backend = new TauriBackend(
+				(promise) => {
+					promise
+						.then((result) => {
+							console.log("Background task completed:", result);
+						})
+						.catch((error) => {
+							console.error("Background task failed:", error);
+						});
+				},
+				queryClient,
+				undefined,
+				undefined,
+				canHostMLX,
+			);
+			console.timeEnd("TauriProvider Initialization");
+
+			console.time("Setting Backend");
+			setBackend(backend);
+			console.timeEnd("Setting Backend");
+
+			console.time("Setting Download Backend");
+			setDownloadBackend(backend);
+			console.timeEnd("Setting Download Backend");
+
+			scheduleIDBCleanup();
+		};
+
+		void initializeBackend();
+		return () => {
+			cancelled = true;
+		};
+	}, [queryClient, setBackend, setDownloadBackend]);
 
 	if (!backend) {
 		return <LoadingScreen progress={50} />;

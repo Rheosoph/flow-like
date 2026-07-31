@@ -1,4 +1,5 @@
 #if canImport(UIKit)
+import FlowLikeMLX
 import UIKit
 import UserNotifications
 import ObjectiveC
@@ -26,6 +27,9 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
     /// Registers a one-shot observer that fires once the app has launched and
     /// Tao's AppDelegate class exists.
     @objc static func prepareForLaunch() {
+        // Touch the static Swift package product so its C ABI symbols are
+        // retained for Rust, and install MLX's iOS memory policy early.
+        FlowLikeMLXRuntime.prepareForAppLifecycle()
         NotificationCenter.default.addObserver(
             forName: UIApplication.didFinishLaunchingNotification,
             object: nil,

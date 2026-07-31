@@ -1,8 +1,11 @@
 use std::sync::Arc;
 
 use crate::{
-    entity::bit, error::ApiError, middleware::jwt::AppUser,
-    permission::global_permission::GlobalPermission, state::AppState,
+    entity::{bit, bit_tree_cache},
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::global_permission::GlobalPermission,
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -19,7 +22,9 @@ use flow_like_types::{create_id, reqwest};
 use futures_util::StreamExt;
 use futures_util::stream::{self, Stream};
 use hyper::header::{ACCEPT_RANGES, CONTENT_LENGTH, ETAG};
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveEnum, ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter,
+};
 use serde::Serialize;
 use serde_json::json;
 use std::convert::Infallible;
@@ -39,6 +44,149 @@ enum StreamMsg {
     Progress(Progress),
     Done(Bit),
     Error(String),
+}
+
+const ARTIFACT_IDENTITY_DOMAIN: &[u8] = b"flow-like-bit-artifact-v2";
+const DEPENDENCY_TREE_IDENTITY_DOMAIN: &[u8] = b"flow-like-bit-tree-v2";
+
+fn update_hash_field(hasher: &mut blake3::Hasher, value: &str) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value.as_bytes());
+}
+
+/// Content hashes alone are insufficient for artifacts that must be materialized
+/// at distinct paths or interpreted as different Bit types. Keep intentional
+/// deduplication for an exact content/path/type match while preserving either
+/// identity distinction.
+fn artifact_dependency_tree_hash(
+    content_hash: &str,
+    file_name: Option<&str>,
+    bit_type: &str,
+) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(ARTIFACT_IDENTITY_DOMAIN);
+    update_hash_field(&mut hasher, content_hash);
+    update_hash_field(&mut hasher, bit_type);
+    match file_name {
+        Some(file_name) => {
+            hasher.update(&[1]);
+            update_hash_field(&mut hasher, file_name);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    hasher.finalize().to_hex().to_string().to_lowercase()
+}
+
+fn standalone_dependency_tree_hash(bit: &bit::Model) -> String {
+    let content_hash = bit
+        .hash
+        .as_deref()
+        .filter(|hash| !hash.is_empty())
+        .unwrap_or(&bit.id);
+
+    artifact_dependency_tree_hash(
+        content_hash,
+        bit.file_name.as_deref(),
+        &bit.r#type.to_value(),
+    )
+}
+
+/// Build a deterministic tree identity from the exact dependency references and
+/// their resolved identities. Length-prefixing prevents ambiguous concatenation,
+/// and sorting makes dependency order irrelevant while preserving duplicates.
+fn resolved_dependency_tree_hash(
+    root_type: &str,
+    root_file_name: Option<&str>,
+    own_artifact_identity: Option<&str>,
+    dependencies: &[(String, String)],
+) -> String {
+    let mut dependencies = dependencies.to_vec();
+    dependencies.sort();
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(DEPENDENCY_TREE_IDENTITY_DOMAIN);
+    update_hash_field(&mut hasher, root_type);
+    match root_file_name {
+        Some(file_name) => {
+            hasher.update(&[1]);
+            update_hash_field(&mut hasher, file_name);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    match own_artifact_identity {
+        Some(identity) => {
+            hasher.update(&[1]);
+            update_hash_field(&mut hasher, identity);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    hasher.update(&(dependencies.len() as u64).to_le_bytes());
+    for (dependency_ref, dependency_identity) in dependencies {
+        update_hash_field(&mut hasher, &dependency_ref);
+        update_hash_field(&mut hasher, &dependency_identity);
+    }
+    hasher.finalize().to_hex().to_string().to_lowercase()
+}
+
+fn validate_upstream_status(
+    status: reqwest::StatusCode,
+    operation: &str,
+) -> flow_like_types::Result<()> {
+    if status.is_success() {
+        return Ok(());
+    }
+
+    Err(flow_like_types::Error::msg(format!(
+        "Upstream {operation} request failed with HTTP status {status}"
+    )))
+}
+
+fn successful_upstream_response(
+    response: reqwest::Response,
+    operation: &str,
+) -> flow_like_types::Result<reqwest::Response> {
+    validate_upstream_status(response.status(), operation)?;
+    Ok(response)
+}
+
+fn validate_range_status(status: reqwest::StatusCode) -> flow_like_types::Result<()> {
+    validate_upstream_status(status, "range GET")?;
+    if status != reqwest::StatusCode::PARTIAL_CONTENT {
+        return Err(flow_like_types::Error::msg(format!(
+            "Upstream range GET request returned {status}; expected 206 Partial Content"
+        )));
+    }
+    Ok(())
+}
+
+fn successful_range_response(
+    response: reqwest::Response,
+) -> flow_like_types::Result<reqwest::Response> {
+    validate_range_status(response.status())?;
+    Ok(response)
+}
+
+fn validate_range_body_length(received: usize, expected: u64) -> flow_like_types::Result<()> {
+    if received as u64 == expected {
+        return Ok(());
+    }
+
+    Err(flow_like_types::Error::msg(format!(
+        "Upstream range GET returned {received} bytes; expected {expected}"
+    )))
+}
+
+fn bit_identity_changed(existing: &bit::Model, incoming: &bit::Model) -> bool {
+    existing.download_link != incoming.download_link
+        || existing.file_name != incoming.file_name
+        || existing.r#type != incoming.r#type
+        || existing.dependencies != incoming.dependencies
 }
 
 #[tracing::instrument(name = "PUT /admin/bit/{bit_id}", skip(state, user, bit))]
@@ -69,8 +217,19 @@ pub async fn upsert_bit(
             .await
         {
             Ok(Some(existing_bit)) => {
+                let should_download = existing_bit.download_link != model.download_link;
+                let identity_changed = bit_identity_changed(&existing_bit, &model);
+
+                if !should_download {
+                    // The registry's content identity and measured size remain
+                    // authoritative when only the stored path/tree changes.
+                    model.hash = existing_bit.hash.clone();
+                    model.size = existing_bit.size;
+                }
+
+                let previous_tree_hash = existing_bit.dependency_tree_hash.clone();
                 let mut updated_bit: bit::ActiveModel = existing_bit.into();
-                if updated_bit.download_link != Set(model.download_link.clone()) {
+                if should_download {
                     let _ = tx
                         .send(StreamMsg::Progress(Progress {
                             stage: "start",
@@ -87,6 +246,8 @@ pub async fn upsert_bit(
                         let _ = tx.send(StreamMsg::Error(e.to_string())).await;
                         return;
                     }
+                }
+                if identity_changed {
                     if let Err(e) =
                         build_dependency_hash(&mut model, state_cloned.clone(), Some(tx.clone()))
                             .await
@@ -111,8 +272,25 @@ pub async fn upsert_bit(
                 updated_bit.r#type = Set(model.r#type);
                 updated_bit.version = Set(model.version);
                 updated_bit.model_slug = Set(model.model_slug);
+                if identity_changed
+                    && let Some(tree_hash) = &previous_tree_hash
+                    && let Err(error) = bit_tree_cache::Entity::delete_by_id(tree_hash)
+                        .exec(&state_cloned.db)
+                        .await
+                {
+                    tracing::warn!(
+                        bit_id = %bit_id_cloned,
+                        dependency_tree_hash = %tree_hash,
+                        %error,
+                        "Failed to invalidate persisted Bit dependency cache"
+                    );
+                }
                 match updated_bit.update(&state_cloned.db).await {
                     Ok(updated) => {
+                        if identity_changed {
+                            state_cloned
+                                .invalidate_cache(&format!("get_with_dependencies:{}", updated.id));
+                        }
                         let _ = tx.send(StreamMsg::Done(Bit::from(updated))).await;
                     }
                     Err(e) => {
@@ -218,13 +396,7 @@ async fn download_and_hash(
         if bit.hash.as_ref().is_none_or(|h| h.is_empty()) {
             bit.hash = Some(bit.id.clone());
         }
-        if bit
-            .dependency_tree_hash
-            .as_ref()
-            .is_none_or(|h| h.is_empty())
-        {
-            bit.dependency_tree_hash = Some(bit.id.clone());
-        }
+        bit.dependency_tree_hash = Some(standalone_dependency_tree_hash(bit));
         return Ok(());
     }
 
@@ -248,7 +420,15 @@ async fn download_and_hash(
         .http2_keep_alive_timeout(std::time::Duration::from_secs(60))
         .build()?;
 
-    let response = client.head(url).send().await?;
+    let response =
+        successful_upstream_response(client.head(url).send().await?, "HEAD").map_err(|error| {
+            tracing::warn!(
+                "Rejected upstream HEAD response for bit {}: {}",
+                bit.id,
+                error
+            );
+            error
+        })?;
     let content_length = response
         .headers()
         .get(CONTENT_LENGTH)
@@ -295,7 +475,7 @@ async fn download_and_hash(
 
     // Fast path: small files -> single put (avoid multipart altogether)
     if content_length.is_some() && content_length.unwrap() <= SINGLE_PUT_THRESHOLD {
-        let resp = client.get(url).send().await?;
+        let resp = successful_upstream_response(client.get(url).send().await?, "GET")?;
         let bytes = resp.bytes().await?;
         hasher.update(&bytes);
         total_downloaded = bytes.len() as u64;
@@ -334,7 +514,10 @@ async fn download_and_hash(
             loop {
                 match client.get(url).header("Range", &range_header).send().await {
                     Ok(chunk_response) => {
+                        let chunk_response = successful_range_response(chunk_response)?;
                         let chunk_bytes = chunk_response.bytes().await?;
+                        let expected_chunk_length = end - start + 1;
+                        validate_range_body_length(chunk_bytes.len(), expected_chunk_length)?;
                         hasher.update(&chunk_bytes);
                         let payload = PutPayload::from_bytes(chunk_bytes);
 
@@ -345,7 +528,7 @@ async fn download_and_hash(
                         let upload_fut = upload_request.put_part(payload);
                         pending_upload = Some(flow_like_types::tokio::spawn(upload_fut));
 
-                        total_downloaded += end - start + 1;
+                        total_downloaded += expected_chunk_length;
 
                         if let Some(tx) = &tx {
                             let percent = (total_downloaded as f32 / file_size as f32) * 100.0;
@@ -391,7 +574,8 @@ async fn download_and_hash(
         upload_request.complete().await?;
     } else {
         // Streaming download without range support: buffer to meet multipart minimum part size
-        let mut download_stream = client.get(url).send().await?.bytes_stream();
+        let response = successful_upstream_response(client.get(url).send().await?, "GET")?;
+        let mut download_stream = response.bytes_stream();
         let mut upload_request = store.as_generic().put_multipart(&path).await?;
         let mut buffer: Vec<u8> = Vec::with_capacity(MIN_MULTIPART_PART_SIZE * 2);
 
@@ -449,13 +633,11 @@ async fn download_and_hash(
 
     let file_hash = hasher.finalize().to_hex().to_string().to_lowercase();
     bit.hash = Some(file_hash.clone());
-    if bit
-        .dependency_tree_hash
-        .as_ref()
-        .is_none_or(|h| h.is_empty())
-    {
-        bit.dependency_tree_hash = Some(file_hash.clone());
-    }
+    bit.dependency_tree_hash = Some(artifact_dependency_tree_hash(
+        &file_hash,
+        bit.file_name.as_deref(),
+        &bit.r#type.to_value(),
+    ));
 
     bit.size = Some(total_downloaded as i64);
 
@@ -490,34 +672,16 @@ async fn build_dependency_hash(
     state: AppState,
     tx: Option<mpsc::Sender<StreamMsg>>,
 ) -> flow_like_types::Result<()> {
-    let mut dependencies = match &bit.dependencies {
-        Some(deps) => deps.clone(),
-        None => {
-            tracing::info!("No dependencies provided for bit {}", bit.id);
-            if bit
-                .dependency_tree_hash
-                .as_ref()
-                .is_none_or(|h| h.is_empty())
-            {
-                bit.dependency_tree_hash = Some(bit.hash.clone().unwrap_or_else(|| bit.id.clone()));
-            }
-            return Ok(());
-        }
-    };
+    let mut dependencies = bit.dependencies.clone().unwrap_or_default();
 
     if dependencies.is_empty() {
-        if bit
-            .dependency_tree_hash
-            .as_ref()
-            .is_none_or(|h| h.is_empty())
-        {
-            bit.dependency_tree_hash = Some(bit.hash.clone().unwrap_or_else(|| bit.id.clone()));
-        }
+        tracing::info!("No dependencies provided for bit {}", bit.id);
+        bit.dependency_tree_hash = Some(standalone_dependency_tree_hash(bit));
         return Ok(());
     }
 
     dependencies.sort();
-    let mut hasher = blake3::Hasher::new();
+    let mut resolved_dependencies = Vec::with_capacity(dependencies.len());
     let http_client = HTTPClient::new_without_refetch();
     let http_client = Arc::new(http_client);
 
@@ -551,13 +715,18 @@ async fn build_dependency_hash(
             let dep_hash = local_bit
                 .dependency_tree_hash
                 .unwrap_or_else(|| local_bit.id.clone());
-            hasher.update(dep_hash.as_bytes());
+            resolved_dependencies.push((dependency.clone(), dep_hash));
         } else {
             let hub = flow_like::hub::Hub::new(hub, http_client.clone()).await?;
             let remote_bit = hub.get_bit(id).await.map_err(|e| {
                 flow_like_types::Error::msg(format!("Failed to fetch remote bit {}: {}", id, e))
             })?;
-            hasher.update(remote_bit.dependency_tree_hash.as_bytes());
+            let dependency_identity = if remote_bit.dependency_tree_hash.is_empty() {
+                remote_bit.id
+            } else {
+                remote_bit.dependency_tree_hash
+            };
+            resolved_dependencies.push((dependency.clone(), dependency_identity));
         }
 
         idx += 1.0;
@@ -575,7 +744,16 @@ async fn build_dependency_hash(
         }
     }
 
-    let dependency_hash = hasher.finalize().to_hex().to_string().to_lowercase();
+    let own_artifact_identity = bit
+        .download_link
+        .as_ref()
+        .map(|_| standalone_dependency_tree_hash(bit));
+    let dependency_hash = resolved_dependency_tree_hash(
+        &bit.r#type.to_value(),
+        bit.file_name.as_deref(),
+        own_artifact_identity.as_deref(),
+        &resolved_dependencies,
+    );
     bit.dependency_tree_hash = Some(dependency_hash.clone());
     tracing::info!(
         "Built dependency hash for bit {}: {}",
@@ -597,4 +775,165 @@ async fn build_dependency_hash(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FILE_TYPE: &str = "FILE";
+
+    fn artifact_identity(content_hash: &str, file_name: Option<&str>) -> String {
+        artifact_dependency_tree_hash(content_hash, file_name, FILE_TYPE)
+    }
+
+    fn tree_identity(
+        own_artifact_identity: Option<&str>,
+        dependencies: &[(String, String)],
+    ) -> String {
+        resolved_dependency_tree_hash("LLM", None, own_artifact_identity, dependencies)
+    }
+
+    fn existing_downloadable_model() -> bit::Model {
+        Bit {
+            bit_type: flow_like::bit::BitTypes::File,
+            download_link: Some("https://cdn.example.test/bits/artifact".to_string()),
+            file_name: Some("config.json".to_string()),
+            hash: "content-hash".to_string(),
+            dependencies: vec!["hub:dependency".to_string()],
+            ..Bit::default()
+        }
+        .into()
+    }
+
+    #[test]
+    fn update_identity_detects_layout_type_and_dependency_changes_without_a_new_url() {
+        let existing = existing_downloadable_model();
+        assert!(!bit_identity_changed(&existing, &existing.clone()));
+
+        let mut renamed = existing.clone();
+        renamed.file_name = Some("nested/config.json".to_string());
+        assert!(bit_identity_changed(&existing, &renamed));
+
+        let mut retyped = existing.clone();
+        retyped.r#type = flow_like::bit::BitTypes::Config.into();
+        assert!(bit_identity_changed(&existing, &retyped));
+
+        let mut rewired = existing.clone();
+        rewired.dependencies = Some(vec!["hub:other-dependency".to_string()]);
+        assert!(bit_identity_changed(&existing, &rewired));
+    }
+
+    #[test]
+    fn artifact_identity_deduplicates_only_matching_content_path_and_type() {
+        let first = artifact_identity("same-content", Some("config.json"));
+        let duplicate = artifact_identity("same-content", Some("config.json"));
+        let nested = artifact_identity("same-content", Some("nested/config.json"));
+        let unnamed = artifact_identity("same-content", None);
+        let other_content = artifact_identity("other-content", Some("config.json"));
+        let other_type =
+            artifact_dependency_tree_hash("same-content", Some("config.json"), "CONFIG");
+
+        assert_eq!(first, duplicate);
+        assert_ne!(first, nested);
+        assert_ne!(first, unnamed);
+        assert_ne!(first, other_content);
+        assert_ne!(first, other_type);
+    }
+
+    #[test]
+    fn dependency_tree_identity_is_order_independent_but_ref_sensitive() {
+        let config = artifact_identity("config-bytes", Some("config.json"));
+        let weights = artifact_identity("weight-bytes", Some("model.safetensors"));
+        let dependencies = vec![
+            ("hub:config".to_string(), config.clone()),
+            ("hub:weights".to_string(), weights.clone()),
+        ];
+        let mut reversed = dependencies.clone();
+        reversed.reverse();
+
+        let expected = tree_identity(None, &dependencies);
+        assert_eq!(expected, tree_identity(None, &reversed));
+
+        let aliased = vec![
+            ("hub:other-config-ref".to_string(), config.clone()),
+            ("hub:weights".to_string(), weights.clone()),
+        ];
+        assert_ne!(expected, tree_identity(None, &aliased));
+
+        let duplicate_ref = vec![
+            ("hub:config".to_string(), config),
+            ("hub:weights".to_string(), weights.clone()),
+            ("hub:weights".to_string(), weights),
+        ];
+        assert_ne!(expected, tree_identity(None, &duplicate_ref));
+    }
+
+    #[test]
+    fn dependency_tree_identity_includes_type_layout_and_own_artifact() {
+        let root_config = artifact_identity("same", Some("config.json"));
+        let nested_config = artifact_identity("same", Some("nested/config.json"));
+
+        let root_layout = tree_identity(None, &[("hub:config".into(), root_config)]);
+        let nested_layout = tree_identity(None, &[("hub:config".into(), nested_config)]);
+        assert_ne!(root_layout, nested_layout);
+
+        let own_artifact = artifact_identity("root-content", Some("model.bundle"));
+        assert_ne!(
+            root_layout,
+            tree_identity(
+                Some(&own_artifact),
+                &[(
+                    "hub:config".into(),
+                    artifact_identity("same", Some("config.json"))
+                )]
+            )
+        );
+
+        let dependencies = &[(
+            "hub:config".into(),
+            artifact_identity("same", Some("config.json")),
+        )];
+        assert_ne!(
+            resolved_dependency_tree_hash("LLM", None, None, dependencies),
+            resolved_dependency_tree_hash("VLM", None, None, dependencies)
+        );
+        assert_ne!(
+            resolved_dependency_tree_hash("LLM", None, None, dependencies),
+            resolved_dependency_tree_hash("LLM", Some("root.bundle"), None, dependencies)
+        );
+    }
+
+    #[test]
+    fn upstream_status_validation_rejects_error_responses() {
+        for status in [
+            reqwest::StatusCode::MULTIPLE_CHOICES,
+            reqwest::StatusCode::UNAUTHORIZED,
+            reqwest::StatusCode::FORBIDDEN,
+            reqwest::StatusCode::NOT_FOUND,
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+        ] {
+            assert!(validate_upstream_status(status, "GET").is_err(), "{status}");
+        }
+
+        for status in [
+            reqwest::StatusCode::OK,
+            reqwest::StatusCode::PARTIAL_CONTENT,
+        ] {
+            assert!(validate_upstream_status(status, "GET").is_ok(), "{status}");
+        }
+    }
+
+    #[test]
+    fn range_validation_requires_partial_content_and_exact_length() {
+        assert!(validate_range_status(reqwest::StatusCode::PARTIAL_CONTENT).is_ok());
+        assert!(validate_range_status(reqwest::StatusCode::OK).is_err());
+        assert!(validate_range_status(reqwest::StatusCode::NO_CONTENT).is_err());
+        assert!(validate_range_status(reqwest::StatusCode::NOT_FOUND).is_err());
+
+        assert!(validate_range_body_length(1_024, 1_024).is_ok());
+        assert!(validate_range_body_length(1_023, 1_024).is_err());
+        assert!(validate_range_body_length(2_048, 1_024).is_err());
+    }
 }

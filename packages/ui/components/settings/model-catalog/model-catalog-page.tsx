@@ -33,6 +33,7 @@ import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/index";
 import { useIsMobile } from "../../../hooks/use-mobile";
 import { Bit } from "../../../lib/bit/bit";
+import { filterHostableLlmModels } from "../../../lib/bit/local-model-filter";
 import type { IBit } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/bit/bit";
 import type { ILlmParameters } from "../../../lib/schema/bit/bit/llm-parameters";
@@ -242,6 +243,15 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		for (const bit of customBits.data ?? []) merged.set(bit.id, bit);
 		return Array.from(merged.values());
 	}, [foundBits.data, customBits.data]);
+	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
+	const hostableBits = useMemo(
+		() =>
+			filterHostableLlmModels(allBits, {
+				canHostLlamaCPP,
+				canHostMLX,
+			}),
+		[allBits, canHostLlamaCPP, canHostMLX],
+	);
 
 	const imageBlacklist = useCallback(async () => {
 		if (!foundBits.data) return;
@@ -291,52 +301,52 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	}, [foundBits.data, imageBlacklist]);
 
 	useEffect(() => {
-		if (allBits.length === 0 || !profile.data || !checkInstalled) return;
+		if (hostableBits.length === 0 || !profile.data || !checkInstalled) return;
 		const checkInstalledAll = async () => {
 			const installedSet = new Set<string>();
-			for (const bit of allBits) {
+			for (const bit of hostableBits) {
 				const isInstalled = await checkInstalled(bit);
 				if (isInstalled) installedSet.add(bit.id);
 			}
 			setInstalledBits(installedSet);
 		};
 		checkInstalledAll();
-	}, [allBits, profile.data, checkInstalled]);
+	}, [hostableBits, profile.data, checkInstalled]);
 
 	useEffect(() => {
-		if (allBits.length === 0) return;
 		removeAll();
+		if (hostableBits.length === 0) return;
 		addAllAsync(
-			allBits.map((item) => ({
+			hostableBits.map((item) => ({
 				...item,
 				name: item.meta?.en?.name,
 				long_description: item.meta?.en?.long_description,
 				description: item.meta?.en?.description,
 			})),
 		);
-	}, [allBits, addAllAsync, removeAll]);
+	}, [hostableBits, addAllAsync, removeAll]);
 
 	const providers = useMemo(() => {
 		const providerSet = new Set<string>();
-		for (const model of allBits) {
+		for (const model of hostableBits) {
 			const params = model.parameters as ILlmParameters | undefined;
 			if (params?.provider?.provider_name) {
 				providerSet.add(params.provider.provider_name);
 			}
 		}
 		return Array.from(providerSet).sort();
-	}, [allBits]);
+	}, [hostableBits]);
 
 	const maxContextLength = useMemo(() => {
-		if (allBits.length === 0) return 2000000;
+		if (hostableBits.length === 0) return 2000000;
 		return Math.max(
-			...allBits.map(
+			...hostableBits.map(
 				(m) =>
 					(m.parameters as ILlmParameters | undefined)?.context_length ?? 0,
 			),
 			128000,
 		);
-	}, [allBits]);
+	}, [hostableBits]);
 
 	const profileBitIds = useMemo(() => {
 		return new Set(profile.data?.bits?.map((id) => id.split(":").pop()) ?? []);
@@ -354,8 +364,11 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 	const filteredModels = useMemo(() => {
 		let models = searchTerm.trim()
-			? ((searchResults as IBit[]) ?? [])
-			: allBits;
+			? filterHostableLlmModels((searchResults as IBit[]) ?? [], {
+					canHostLlamaCPP,
+					canHostMLX,
+				})
+			: hostableBits;
 		models = models.filter((bit) => !blacklist.has(bit.id));
 		models = models.filter((bit) => bit.meta?.en !== undefined);
 
@@ -457,9 +470,11 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 		return models;
 	}, [
-		allBits,
+		hostableBits,
 		searchResults,
 		searchTerm,
+		canHostLlamaCPP,
+		canHostMLX,
 		inputModalities,
 		outputModalities,
 		providerFilter,
@@ -546,8 +561,8 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	);
 
 	const profileGlyphModels = useMemo(
-		() => allBits.filter(isMine),
-		[allBits, isMine],
+		() => hostableBits.filter(isMine),
+		[hostableBits, isMine],
 	);
 
 	const [activeRail, setActiveRail] = useState<string>("rail-profile");
@@ -586,7 +601,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 	const modalityCounts = useMemo(() => {
 		const counts = { text: 0, image: 0, embedding: 0, speech: 0, total: 0 };
-		const validBits = allBits.filter((bit) => !blacklist.has(bit.id));
+		const validBits = hostableBits.filter((bit) => !blacklist.has(bit.id));
 		counts.total = validBits.length;
 		for (const bit of validBits) {
 			const modality = getBitModality(bit.type);
@@ -597,7 +612,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			if (modality.output === "speech") counts.speech++;
 		}
 		return counts;
-	}, [allBits, blacklist]);
+	}, [hostableBits, blacklist]);
 
 	const activeFilterCount = useMemo(() => {
 		let count = 0;
@@ -840,8 +855,8 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 								Models
 							</span>
 							<span className="text-[11.5px] text-muted-foreground">
-								{allBits.length} available &middot; {profileGlyphModels.length}{" "}
-								in your profile
+								{hostableBits.length} available &middot;{" "}
+								{profileGlyphModels.length} in your profile
 							</span>
 						</span>
 					</div>
@@ -1133,7 +1148,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 						<footer className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-border/60 pt-4 text-xs text-muted-foreground">
 							<span className="font-mono tabular-nums">
-								{filteredModels.length} of {allBits.length}
+								{filteredModels.length} of {hostableBits.length}
 							</span>
 							<span>models shown</span>
 						</footer>

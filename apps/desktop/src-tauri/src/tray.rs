@@ -4,7 +4,7 @@ use std::time::Duration;
 use flow_like_types::tokio::time::sleep;
 use tauri::menu::{IsMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri::{AppHandle, Manager, Wry};
 use tauri_plugin_opener::OpenerExt;
 
 use crate::functions::TauriFunctionError;
@@ -271,7 +271,7 @@ async fn stop_recording_from_tray(app: &AppHandle) {
             c.set_active(false);
         }
     }
-    let _ = app.emit("recording:stop-from-tray", ());
+    crate::utils::emit_to_ui(app, "recording:stop-from-tray", ());
     restore_tray_icon(app).await;
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.show();
@@ -721,18 +721,18 @@ fn handle_menu_event(app_handle: &AppHandle, id: &str) {
             open_route(app_handle, "/notifications");
         }
         MENU_NEW_FLOW => {
-            let _ = app_handle.emit("tray:open-quick-create", "new-flow");
+            crate::utils::emit_to_ui(app_handle, "tray:open-quick-create", "new-flow");
             open_main_window(app_handle);
         }
         MENU_OPEN_RECENT => {
             open_route(app_handle, "/library/config/flows");
         }
         MENU_SEARCH_FLOWS => {
-            let _ = app_handle.emit("tray:open-spotlight", "search-flows");
+            crate::utils::emit_to_ui(app_handle, "tray:open-spotlight", "search-flows");
             open_main_window(app_handle);
         }
         MENU_RESTART_UPDATE => {
-            let _ = app_handle.emit("tray:restart-update", ());
+            crate::utils::emit_to_ui(app_handle, "tray:restart-update", ());
         }
         MENU_VIEW_FAILURES | MENU_OPEN_LOGS => {
             let app_handle = app_handle.clone();
@@ -801,5 +801,5 @@ fn open_main_window(app_handle: &AppHandle) {
 
 fn open_route(app_handle: &AppHandle, route: &str) {
     open_main_window(app_handle);
-    let _ = app_handle.emit("tray:navigate", route);
+    crate::utils::emit_to_ui(app_handle, "tray:navigate", route.to_string());
 }

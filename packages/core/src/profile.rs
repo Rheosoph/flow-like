@@ -194,6 +194,7 @@ impl Profile {
                 | "custom:ollama"
                 | "lmstudio"
                 | "custom:lmstudio"
+                | "mlx"
         )
     }
 

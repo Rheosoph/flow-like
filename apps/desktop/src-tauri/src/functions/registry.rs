@@ -9,7 +9,7 @@ use flow_like_wasm::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 /// Get the registry client with the auth token refreshed on the stored instance.
 /// This ensures every API-calling command uses a fresh token and the stored
@@ -32,8 +32,9 @@ async fn get_client_with_token(
     Ok(client.clone())
 }
 
-fn emit_package_status(app_handle: &AppHandle, package_id: &str, status: &str) {
-    let _ = app_handle.emit(
+pub(crate) fn emit_package_status(app_handle: &AppHandle, package_id: &str, status: &str) {
+    crate::utils::emit_to_ui(
+        app_handle,
         "package-status",
         serde_json::json!({ "packageId": package_id, "status": status }),
     );
@@ -111,7 +112,7 @@ async fn rebuild_node_registry(
     }
 
     if emit_catalog_updated {
-        super::developer::emit_catalog_updated_on_main(app_handle);
+        super::developer::emit_catalog_updated(app_handle);
     }
 
     Ok(())
@@ -146,7 +147,7 @@ async fn load_installed_package_nodes(
     }
 
     if emit_catalog_updated {
-        super::developer::emit_catalog_updated_on_main(app_handle);
+        super::developer::emit_catalog_updated(app_handle);
     }
 
     Ok(())

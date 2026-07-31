@@ -84,3 +84,6 @@ nohup.out
 
 # Tauri generated schemas
 apps/desktop/src-tauri/gen/schemas/
+apps/desktop/src-tauri/binaries/mac/arm/flow-like-mlx-service-*
+apps/desktop/src-tauri/binaries/mac/arm/mlx-resources/
+apps/desktop/src-tauri/apple/FlowLikeMLX/.build/

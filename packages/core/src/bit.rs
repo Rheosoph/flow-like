@@ -16,13 +16,449 @@ use flow_like_types::intercom::InterComCallback;
 use rig::agent::AgentBuilder;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
+use url::Url;
 
 const NAME_HINT_WEIGHT: f32 = 0.2; // weight of name similarity for best model preference
 const NAME_HINT_SIMILARITY_THRESHOLD: f32 = 0.5; // minimum required similarity score to model name
+pub const MLX_PROVIDER_NAME: &str = "MLX";
+const INLINE_MLX_ASSET_IDENTITY_DOMAIN: &[u8] = b"flow-like-inline-mlx-asset-v1";
+const MLX_RUNTIME_MODEL_IDENTITY_DOMAIN: &[u8] = b"flow-like-mlx-runtime-model-v1";
+const USER_SOURCE_ARTIFACT_IDENTITY_DOMAIN: &[u8] = b"flow-like-user-source-artifact-v1";
+const USER_SOURCE_PACK_IDENTITY_DOMAIN: &[u8] = b"flow-like-user-source-pack-v1";
+const MLX_RUNTIME_MODEL_ID_PREFIX: &str = "mlx-source-";
+const USER_SOURCE_ARTIFACT_ID_PREFIX: &str = "user-source-";
+const USER_SOURCE_PACK_ID_PREFIX: &str = "user-source-pack-";
+const MAX_INLINE_MLX_ASSETS: usize = 512;
+const MAX_MLX_ASSET_PATH_BYTES: usize = 1_024;
+const MAX_MLX_ASSET_PATH_COMPONENTS: usize = 64;
+const MAX_MLX_ASSET_COMPONENT_BYTES: usize = 255;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InlineHuggingFaceMlxManifest {
+    schema: u32,
+    repo_id: String,
+    revision: String,
+    format: String,
+    files: Vec<InlineHuggingFaceMlxFile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InlineHuggingFaceMlxFile {
+    path: String,
+    size: u64,
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    oid: Option<String>,
+    #[serde(default)]
+    lfs_oid: Option<String>,
+}
+
+struct ResolvedInlineMlxAsset {
+    download_link: String,
+    file_name: String,
+    size: u64,
+}
+
+/// MLX Swift is only supported by the application on physical Apple-silicon
+/// devices. Keep this check in core so downloads and runtime construction
+/// cannot be enabled accidentally by a frontend-only capability flag.
+pub const fn can_host_mlx() -> bool {
+    cfg!(all(
+        target_arch = "aarch64",
+        any(
+            target_os = "macos",
+            all(
+                target_os = "ios",
+                not(any(target_abi = "sim", target_abi = "macabi"))
+            )
+        )
+    ))
+}
+
+fn valid_huggingface_repo_component(component: &str) -> bool {
+    let bytes = component.as_bytes();
+    if bytes.is_empty() || bytes.len() > 96 {
+        return false;
+    }
+    if !bytes
+        .first()
+        .is_some_and(|value| value.is_ascii_alphanumeric())
+        || !bytes
+            .last()
+            .is_some_and(|value| value.is_ascii_alphanumeric())
+    {
+        return false;
+    }
+    bytes
+        .iter()
+        .all(|value| value.is_ascii_alphanumeric() || matches!(value, b'.' | b'_' | b'-'))
+}
+
+fn validate_huggingface_repo_id(repo_id: &str) -> flow_like_types::Result<()> {
+    if repo_id.trim() != repo_id {
+        return Err(flow_like_types::anyhow!(
+            "Hugging Face repo_id must not contain surrounding whitespace"
+        ));
+    }
+    let mut components = repo_id.split('/');
+    let owner = components.next().unwrap_or_default();
+    let repository = components.next().unwrap_or_default();
+    if components.next().is_some()
+        || !valid_huggingface_repo_component(owner)
+        || !valid_huggingface_repo_component(repository)
+    {
+        return Err(flow_like_types::anyhow!(
+            "Hugging Face repo_id must have the form owner/repository"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_huggingface_revision(revision: &str) -> flow_like_types::Result<()> {
+    if !(40..=64).contains(&revision.len())
+        || !revision.bytes().all(|value| value.is_ascii_hexdigit())
+    {
+        return Err(flow_like_types::anyhow!(
+            "Hugging Face revision must be a full hexadecimal commit SHA"
+        ));
+    }
+    Ok(())
+}
+
+fn huggingface_pinned_download_url(
+    repo_id: &str,
+    revision: &str,
+    file_name: &str,
+) -> flow_like_types::Result<String> {
+    let mut url = Url::parse("https://huggingface.co").map_err(|error| {
+        flow_like_types::anyhow!("Failed to construct Hugging Face download URL: {}", error)
+    })?;
+    {
+        let mut segments = url.path_segments_mut().map_err(|_| {
+            flow_like_types::anyhow!("Failed to construct Hugging Face download path")
+        })?;
+        for component in repo_id.split('/') {
+            segments.push(component);
+        }
+        segments.push("resolve");
+        segments.push(revision);
+        for component in file_name.split('/') {
+            segments.push(component);
+        }
+    }
+    url.set_query(Some("download=true"));
+    Ok(url.to_string())
+}
+
+fn update_source_identity_field(hasher: &mut blake3::Hasher, value: &[u8]) {
+    hasher.update(&(value.len() as u64).to_le_bytes());
+    hasher.update(value);
+}
+
+fn inline_mlx_asset_id(asset: &ResolvedInlineMlxAsset) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(INLINE_MLX_ASSET_IDENTITY_DOMAIN);
+    update_source_identity_field(&mut hasher, asset.download_link.as_bytes());
+    update_source_identity_field(&mut hasher, asset.file_name.as_bytes());
+    update_source_identity_field(&mut hasher, &asset.size.to_le_bytes());
+    format!("mlx-inline-{}", hasher.finalize().to_hex())
+}
+
+fn user_source_artifact_identity(
+    bit_type: &BitTypes,
+    download_link: Option<&str>,
+    file_name: Option<&str>,
+    size: Option<u64>,
+) -> Option<String> {
+    let artifact_kind = match bit_type {
+        BitTypes::Llm => b"llm".as_slice(),
+        BitTypes::Vlm => b"vlm".as_slice(),
+        BitTypes::Projection => b"projection".as_slice(),
+        _ => return None,
+    };
+    let download_link = download_link?.trim();
+    let file_name = file_name?.trim();
+    if download_link.is_empty() || file_name.is_empty() {
+        return None;
+    }
+
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(USER_SOURCE_ARTIFACT_IDENTITY_DOMAIN);
+    update_source_identity_field(&mut hasher, artifact_kind);
+    update_source_identity_field(&mut hasher, download_link.as_bytes());
+    update_source_identity_field(&mut hasher, file_name.as_bytes());
+    match size {
+        Some(size) => {
+            update_source_identity_field(&mut hasher, b"size");
+            update_source_identity_field(&mut hasher, &size.to_le_bytes());
+        }
+        None => update_source_identity_field(&mut hasher, b"unknown-size"),
+    }
+    Some(format!(
+        "{}{}",
+        USER_SOURCE_ARTIFACT_ID_PREFIX,
+        hasher.finalize().to_hex()
+    ))
+}
+
+fn is_prefixed_blake3_identity(value: &str, prefix: &str) -> bool {
+    value.strip_prefix(prefix).is_some_and(|digest| {
+        digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
+}
+
+pub(crate) fn safe_mlx_asset_path(file_name: &str) -> flow_like_types::Result<(PathBuf, String)> {
+    if file_name.is_empty() {
+        return Err(flow_like_types::anyhow!("path is empty"));
+    }
+    if file_name.len() > MAX_MLX_ASSET_PATH_BYTES {
+        return Err(flow_like_types::anyhow!(
+            "path exceeds the {} byte limit",
+            MAX_MLX_ASSET_PATH_BYTES
+        ));
+    }
+    if file_name.contains('\\') {
+        return Err(flow_like_types::anyhow!(
+            "backslash path separators are not portable"
+        ));
+    }
+    if file_name.starts_with('/') {
+        return Err(flow_like_types::anyhow!("absolute paths are not allowed"));
+    }
+
+    let mut path = PathBuf::new();
+    let mut key_parts = Vec::new();
+    for (index, component) in file_name.split('/').enumerate() {
+        if index >= MAX_MLX_ASSET_PATH_COMPONENTS {
+            return Err(flow_like_types::anyhow!(
+                "path exceeds the {} component limit",
+                MAX_MLX_ASSET_PATH_COMPONENTS
+            ));
+        }
+        if component.is_empty() {
+            return Err(flow_like_types::anyhow!(
+                "empty path components are not allowed"
+            ));
+        }
+        if component.len() > MAX_MLX_ASSET_COMPONENT_BYTES {
+            return Err(flow_like_types::anyhow!(
+                "path component exceeds the {} byte limit",
+                MAX_MLX_ASSET_COMPONENT_BYTES
+            ));
+        }
+        if component == "." || component == ".." {
+            return Err(flow_like_types::anyhow!(
+                "current or parent traversal is not allowed"
+            ));
+        }
+        if component.contains('\0') {
+            return Err(flow_like_types::anyhow!("NUL bytes are not allowed"));
+        }
+        if component.contains(':') {
+            return Err(flow_like_types::anyhow!(
+                "colon characters are not portable in file names"
+            ));
+        }
+        path.push(component);
+        key_parts.push(component.to_ascii_lowercase());
+    }
+
+    Ok((path, key_parts.join("/")))
+}
+
+fn inline_mlx_asset_bit_type(file_name: &str) -> BitTypes {
+    let base_name = file_name
+        .rsplit('/')
+        .next()
+        .unwrap_or(file_name)
+        .to_ascii_lowercase();
+    match base_name.as_str() {
+        "config.json" => BitTypes::Config,
+        "tokenizer.json"
+        | "tokenizer.model"
+        | "sentencepiece.bpe.model"
+        | "spiece.model"
+        | "vocab.json"
+        | "vocab.txt"
+        | "merges.txt" => BitTypes::Tokenizer,
+        "tokenizer_config.json" => BitTypes::TokenizerConfig,
+        "special_tokens_map.json" => BitTypes::SpecialTokensMap,
+        "processor_config.json" | "preprocessor_config.json" => BitTypes::PreprocessorConfig,
+        _ => BitTypes::File,
+    }
+}
+
+fn resolve_inline_huggingface_mlx_manifest(
+    value: Value,
+) -> flow_like_types::Result<Vec<ResolvedInlineMlxAsset>> {
+    let manifest: InlineHuggingFaceMlxManifest =
+        flow_like_types::json::from_value(value).map_err(|error| {
+            flow_like_types::anyhow!("Invalid Hugging Face MLX manifest: {}", error)
+        })?;
+    if manifest.schema != 1 {
+        return Err(flow_like_types::anyhow!(
+            "Unsupported Hugging Face MLX manifest schema {}; expected 1",
+            manifest.schema
+        ));
+    }
+    if manifest.format != "mlx" {
+        return Err(flow_like_types::anyhow!(
+            "Hugging Face manifest format must be \"mlx\""
+        ));
+    }
+    validate_huggingface_repo_id(&manifest.repo_id)?;
+    validate_huggingface_revision(&manifest.revision)?;
+    if manifest.files.is_empty() {
+        return Err(flow_like_types::anyhow!(
+            "Hugging Face MLX manifest must contain at least one file"
+        ));
+    }
+    if manifest.files.len() > MAX_INLINE_MLX_ASSETS {
+        return Err(flow_like_types::anyhow!(
+            "Hugging Face MLX manifest contains {} files; the limit is {}",
+            manifest.files.len(),
+            MAX_INLINE_MLX_ASSETS
+        ));
+    }
+
+    manifest
+        .files
+        .into_iter()
+        .map(|file| {
+            if file.path.trim() != file.path {
+                return Err(flow_like_types::anyhow!(
+                    "Hugging Face MLX file paths must not contain surrounding whitespace"
+                ));
+            }
+            safe_mlx_asset_path(&file.path)?;
+            if file.size == 0 {
+                return Err(flow_like_types::anyhow!(
+                    "Hugging Face MLX file {} has a zero size",
+                    file.path
+                ));
+            }
+
+            // These optional source-integrity hints are deliberately retained in
+            // the public manifest but are not used as local content hashes. Hub
+            // OID formats may evolve independently of the pinned commit URL.
+            let _source_hints = (file.role, file.oid, file.lfs_oid);
+            let download_link = huggingface_pinned_download_url(
+                &manifest.repo_id,
+                &manifest.revision.to_ascii_lowercase(),
+                &file.path,
+            )?;
+            Ok(ResolvedInlineMlxAsset {
+                download_link,
+                file_name: file.path,
+                size: file.size,
+            })
+        })
+        .collect()
+}
+
+fn validate_inline_mlx_assets(
+    assets: &[ResolvedInlineMlxAsset],
+    kind: &BitTypes,
+) -> flow_like_types::Result<()> {
+    if assets.is_empty() {
+        return Err(flow_like_types::anyhow!(
+            "MLX models require a Hugging Face file manifest"
+        ));
+    }
+
+    let mut paths = HashMap::<String, String>::new();
+    let mut total_size = 0u64;
+    for asset in assets {
+        let parsed_url = Url::parse(&asset.download_link).map_err(|_| {
+            flow_like_types::anyhow!("MLX asset {} has an invalid download URL", asset.file_name)
+        })?;
+        if !matches!(parsed_url.scheme(), "http" | "https")
+            || parsed_url.host_str().is_none()
+            || !parsed_url.username().is_empty()
+            || parsed_url.password().is_some()
+        {
+            return Err(flow_like_types::anyhow!(
+                "MLX asset {} must use an absolute HTTP(S) URL without credentials",
+                asset.file_name
+            ));
+        }
+        if asset.size == 0 {
+            return Err(flow_like_types::anyhow!(
+                "MLX asset {} has a zero size",
+                asset.file_name
+            ));
+        }
+        total_size = total_size.checked_add(asset.size).ok_or_else(|| {
+            flow_like_types::anyhow!("MLX asset manifest total size overflowed u64")
+        })?;
+
+        let (_, portable_key) = safe_mlx_asset_path(&asset.file_name)?;
+        if let Some(existing) = paths.insert(portable_key, asset.file_name.clone()) {
+            return Err(flow_like_types::anyhow!(
+                "Duplicate MLX asset paths {:?} and {:?}",
+                existing,
+                asset.file_name
+            ));
+        }
+    }
+
+    for (portable_key, original_path) in &paths {
+        let components = portable_key.split('/').collect::<Vec<_>>();
+        for depth in 1..components.len() {
+            let parent = components[..depth].join("/");
+            if let Some(parent_path) = paths.get(&parent) {
+                return Err(flow_like_types::anyhow!(
+                    "MLX asset paths {:?} and {:?} conflict because one is a file parent of the other",
+                    parent_path,
+                    original_path
+                ));
+            }
+        }
+    }
+
+    let has_exact_root_file = |file_name: &str| {
+        paths
+            .get(file_name)
+            .is_some_and(|original| original == file_name)
+    };
+    if !has_exact_root_file("config.json") {
+        return Err(flow_like_types::anyhow!(
+            "MLX model is missing required config.json"
+        ));
+    }
+    if !paths.keys().any(|path| path.ends_with(".safetensors")) {
+        return Err(flow_like_types::anyhow!(
+            "MLX model must contain at least one .safetensors weight file"
+        ));
+    }
+    if !has_exact_root_file("tokenizer.json") {
+        return Err(flow_like_types::anyhow!(
+            "MLX model is missing required tokenizer.json"
+        ));
+    }
+    if !has_exact_root_file("tokenizer_config.json") {
+        return Err(flow_like_types::anyhow!(
+            "MLX model is missing required tokenizer_config.json"
+        ));
+    }
+    if *kind == BitTypes::Vlm
+        && !has_exact_root_file("processor_config.json")
+        && !has_exact_root_file("preprocessor_config.json")
+    {
+        return Err(flow_like_types::anyhow!(
+            "MLX VLM is missing processor_config.json or preprocessor_config.json"
+        ));
+    }
+
+    Ok(())
+}
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -612,6 +1048,12 @@ impl BitPack {
         state: Arc<FlowLikeState>,
         callback: InterComCallback,
     ) -> flow_like_types::Result<Vec<Bit>> {
+        if self.bits.iter().any(Bit::is_mlx_model) && !can_host_mlx() {
+            return Err(flow_like_types::anyhow!(
+                "MLX models can only be downloaded on supported Apple-silicon macOS or iOS devices"
+            ));
+        }
+
         let mut deduplicated_bits = vec![];
         let mut deduplication_helper = HashSet::new();
         self.bits.iter().for_each(|bit| {
@@ -621,11 +1063,6 @@ impl BitPack {
             if Self::is_virtual_bit(bit) {
                 println!("Skipping network download for bit {}: no download link (proxied or empty model)", bit.id);
                 // Do not attempt any download but keep it in the final success vector
-                return;
-            }
-
-            if deduplication_helper.contains(&bit.hash) {
-                println!("Skipping bit {}: duplicate hash already queued", bit.id);
                 return;
             }
 
@@ -639,8 +1076,21 @@ impl BitPack {
                 return;
             }
 
+            let artifact_key = (
+                bit.hash.clone(),
+                bit.file_name
+                    .clone()
+                    .expect("file_name was checked immediately above"),
+            );
+            if !deduplication_helper.insert(artifact_key) {
+                println!(
+                    "Skipping bit {}: duplicate hash/file_name artifact already queued",
+                    bit.id
+                );
+                return;
+            }
+
             deduplicated_bits.push(bit.clone());
-            deduplication_helper.insert(bit.hash.clone());
         });
 
         // If there is nothing to actually download we still return success with the original bits
@@ -697,10 +1147,10 @@ impl BitPack {
         let mut size = 0;
         let mut bits_considered = HashSet::new();
         for bit in self.bits.iter() {
-            if bits_considered.contains(&bit.hash) {
+            let artifact_key = (bit.hash.clone(), bit.file_name.clone());
+            if !bits_considered.insert(artifact_key) {
                 continue;
             }
-            bits_considered.insert(bit.hash.clone());
             if bit.size.is_some() {
                 size += bit.size.unwrap();
             }
@@ -741,6 +1191,218 @@ impl BitPack {
 }
 
 impl Bit {
+    /// Returns the deterministic cache identity for a user-referenced local
+    /// artifact. The source URL is part of the identity, so changing a pinned
+    /// Hugging Face revision cannot reuse an older same-name, same-size file.
+    pub fn user_source_artifact_identity(&self) -> Option<String> {
+        user_source_artifact_identity(
+            &self.bit_type,
+            self.download_link.as_deref(),
+            self.file_name.as_deref(),
+            self.size,
+        )
+    }
+
+    /// Source-derived identities deliberately are not content checksums. Verify
+    /// that an identity matches this Bit's current source fields before using
+    /// the trust-on-first-use download contract.
+    pub fn has_matching_user_source_artifact_identity(&self) -> bool {
+        self.user_source_artifact_identity()
+            .is_some_and(|identity| identity == self.hash)
+    }
+
+    /// Refresh cache identities for a user-owned llama.cpp root.
+    ///
+    /// Legacy roots use `hash == id`; newer UI saves may carry an older
+    /// source-derived hash while being edited. Both are safe to replace. A
+    /// caller-supplied content hash is retained and continues to be verified.
+    pub fn normalize_user_local_artifact_identity(&mut self) {
+        if !matches!(self.bit_type, BitTypes::Llm | BitTypes::Vlm)
+            || self
+                .try_to_provider()
+                .is_none_or(|provider| provider.provider_name != "Local")
+        {
+            return;
+        }
+
+        let Some(source_identity) = self.user_source_artifact_identity() else {
+            return;
+        };
+        if self.hash.is_empty()
+            || self.hash == self.id
+            || self.hash.starts_with(USER_SOURCE_ARTIFACT_ID_PREFIX)
+        {
+            self.hash = source_identity.clone();
+        }
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(USER_SOURCE_PACK_IDENTITY_DOMAIN);
+        update_source_identity_field(&mut hasher, self.id.as_bytes());
+        update_source_identity_field(&mut hasher, source_identity.as_bytes());
+        update_source_identity_field(&mut hasher, self.hash.as_bytes());
+        if let Some(projection) = self.projection_bit() {
+            update_source_identity_field(&mut hasher, b"projection");
+            update_source_identity_field(&mut hasher, projection.hash.as_bytes());
+        } else {
+            update_source_identity_field(&mut hasher, b"no-projection");
+        }
+        self.dependency_tree_hash = format!(
+            "{}{}",
+            USER_SOURCE_PACK_ID_PREFIX,
+            hasher.finalize().to_hex()
+        );
+    }
+
+    /// Normalize an edited local user Bit while distinguishing an intentional
+    /// new checksum from a checksum merely carried over by an edit form.
+    pub fn normalize_edited_user_local_artifact_identity(&mut self, previous: Option<&Bit>) {
+        if let Some(previous) = previous {
+            let source_changed =
+                previous.user_source_artifact_identity() != self.user_source_artifact_identity();
+            if source_changed && self.hash == previous.hash {
+                self.hash.clear();
+            }
+        }
+        self.normalize_user_local_artifact_identity();
+    }
+
+    /// Local user models include their source-pack identity in the runtime
+    /// cache key. Curated and remote models retain the historical stable id.
+    pub fn runtime_model_cache_key(&self) -> String {
+        if is_prefixed_blake3_identity(&self.dependency_tree_hash, USER_SOURCE_PACK_ID_PREFIX) {
+            return format!("{}@{}", self.id, self.dependency_tree_hash);
+        }
+        self.id.clone()
+    }
+
+    /// Returns the deterministic runtime cache key for an MLX model.
+    ///
+    /// Dependency-free user models derive their identity from the validated
+    /// inline Hugging Face artifact manifest. Curated models use the immutable
+    /// root and dependency-tree identities emitted by the registry. Display
+    /// metadata and manifest file order deliberately do not affect this key.
+    pub fn mlx_runtime_model_cache_key(&self) -> flow_like_types::Result<String> {
+        if !self.is_mlx_model() {
+            return Err(flow_like_types::anyhow!(
+                "MLX runtime cache keys require an MLX LLM or VLM bit"
+            ));
+        }
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(MLX_RUNTIME_MODEL_IDENTITY_DOMAIN);
+        update_source_identity_field(
+            &mut hasher,
+            match self.bit_type {
+                BitTypes::Llm => b"llm",
+                BitTypes::Vlm => b"vlm",
+                _ => unreachable!("is_mlx_model only accepts LLM and VLM bits"),
+            },
+        );
+
+        let has_inline_manifest =
+            self.dependencies.is_empty() && self.parameters.get("huggingface").is_some();
+        if has_inline_manifest {
+            update_source_identity_field(&mut hasher, b"inline-huggingface");
+            let mut assets = self.inline_mlx_asset_bits()?;
+            assets.sort_by(|left, right| {
+                left.file_name
+                    .cmp(&right.file_name)
+                    .then_with(|| left.hash.cmp(&right.hash))
+            });
+            for asset in assets {
+                let file_name = asset.file_name.as_deref().ok_or_else(|| {
+                    flow_like_types::anyhow!("Inline MLX asset is missing its file name")
+                })?;
+                let download_link = asset.download_link.as_deref().ok_or_else(|| {
+                    flow_like_types::anyhow!(
+                        "Inline MLX asset {file_name} is missing its source URL"
+                    )
+                })?;
+                let size = asset.size.ok_or_else(|| {
+                    flow_like_types::anyhow!("Inline MLX asset {file_name} is missing its size")
+                })?;
+                update_source_identity_field(&mut hasher, file_name.as_bytes());
+                update_source_identity_field(&mut hasher, download_link.as_bytes());
+                update_source_identity_field(&mut hasher, asset.hash.as_bytes());
+                update_source_identity_field(&mut hasher, &size.to_le_bytes());
+            }
+        } else {
+            update_source_identity_field(&mut hasher, b"registry-dependency-tree");
+            update_source_identity_field(&mut hasher, self.hub.as_bytes());
+            update_source_identity_field(&mut hasher, self.hash.as_bytes());
+            update_source_identity_field(&mut hasher, self.dependency_tree_hash.as_bytes());
+
+            let mut dependencies = self
+                .dependencies
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            dependencies.sort_unstable();
+            for dependency in dependencies {
+                update_source_identity_field(&mut hasher, dependency.as_bytes());
+            }
+        }
+
+        Ok(format!(
+            "{}@{}{}",
+            self.id,
+            MLX_RUNTIME_MODEL_ID_PREFIX,
+            hasher.finalize().to_hex()
+        ))
+    }
+
+    pub fn is_mlx_model(&self) -> bool {
+        matches!(self.bit_type, BitTypes::Llm | BitTypes::Vlm)
+            && self.try_to_provider().is_some_and(|provider| {
+                provider
+                    .provider_name
+                    .eq_ignore_ascii_case(MLX_PROVIDER_NAME)
+            })
+    }
+
+    /// Materialize a user-owned MLX source manifest as ordinary downloadable
+    /// artifact Bits. Curated/store MLX roots use registry dependencies instead;
+    /// this helper is for dependency-free roots whose immutable Hugging Face
+    /// manifest is embedded at `parameters.huggingface`.
+    ///
+    /// Artifact IDs are derived from the pinned URL, exact repository-relative
+    /// path, and expected size. Editing any of those fields therefore selects a
+    /// fresh local cache target while identical artifacts remain deduplicable.
+    pub fn inline_mlx_asset_bits(&self) -> flow_like_types::Result<Vec<Bit>> {
+        if !self.is_mlx_model() {
+            return Ok(vec![]);
+        }
+        let Some(manifest) = self.parameters.get("huggingface").cloned() else {
+            return Ok(vec![]);
+        };
+        let assets = resolve_inline_huggingface_mlx_manifest(manifest)?;
+        validate_inline_mlx_assets(&assets, &self.bit_type)?;
+
+        Ok(assets
+            .into_iter()
+            .map(|asset| {
+                let id = inline_mlx_asset_id(&asset);
+                Bit {
+                    id: id.clone(),
+                    bit_type: inline_mlx_asset_bit_type(&asset.file_name),
+                    authors: self.authors.clone(),
+                    repository: self.repository.clone(),
+                    download_link: Some(asset.download_link),
+                    file_name: Some(asset.file_name),
+                    hash: id.clone(),
+                    size: Some(asset.size),
+                    hub: self.hub.clone(),
+                    version: self.version.clone(),
+                    license: self.license.clone(),
+                    dependency_tree_hash: id,
+                    created: self.created.clone(),
+                    updated: self.updated.clone(),
+                    ..Bit::default()
+                }
+            })
+            .collect())
+    }
+
     pub fn try_to_llm(&self) -> Option<LLMParameters> {
         if self.bit_type == BitTypes::Llm {
             let parameters =
@@ -930,6 +1592,9 @@ impl Bit {
         } else {
             self.dependencies(state).await?
         };
+        if self.dependencies.is_empty() && self.is_mlx_model() {
+            dependencies.bits.extend(self.inline_mlx_asset_bits()?);
+        }
         dependencies.bits.push(self.clone());
         if let Some(projection) = self.projection_bit() {
             dependencies.bits.push(projection);
@@ -966,10 +1631,16 @@ impl Bit {
             .to_string();
         let size = projection.get("size").and_then(|value| value.as_u64());
 
-        let id = format!("{}-mmproj", self.id);
+        let id = user_source_artifact_identity(
+            &BitTypes::Projection,
+            Some(&download_link),
+            Some(&file_name),
+            size,
+        )?;
         Some(Bit {
-            // `hash == id` marks an artifact whose checksum is not known upfront —
-            // the same trust-on-first-use contract the parent bit uses.
+            // `hash == id` marks an artifact whose checksum is not known upfront.
+            // The id itself is source-derived so an edited pinned URL selects a
+            // fresh cache directory even when file name and size are unchanged.
             hash: id.clone(),
             dependency_tree_hash: id.clone(),
             id,
@@ -1057,7 +1728,7 @@ mod tests {
     use flow_like_storage::files::store::FlowLikeStore;
     use flow_like_storage::files::store::local_store::LocalObjectStore;
     use flow_like_types::Value;
-    use flow_like_types::{sync::Mutex, tokio};
+    use flow_like_types::tokio;
 
     fn local_vlm_bit(projection: Value) -> Bit {
         let mut params = std::collections::HashMap::new();
@@ -1087,6 +1758,346 @@ mod tests {
         }
     }
 
+    fn inline_mlx_files(
+        weight_path: &str,
+        weight_size: u64,
+        include_processor: bool,
+    ) -> Vec<Value> {
+        let mut files = vec![
+            flow_like_types::json::json!({
+                "path": "config.json",
+                "size": 100,
+                "role": "config",
+            }),
+            flow_like_types::json::json!({
+                "path": "tokenizer.json",
+                "size": 200,
+            }),
+            flow_like_types::json::json!({
+                "path": "tokenizer_config.json",
+                "size": 300,
+            }),
+            flow_like_types::json::json!({
+                "path": weight_path,
+                "size": weight_size,
+                "oid": "0123456789abcdef",
+                "lfs_oid": "fedcba9876543210",
+            }),
+        ];
+        if include_processor {
+            files.push(flow_like_types::json::json!({
+                "path": "processor_config.json",
+                "size": 400,
+            }));
+        }
+        files
+    }
+
+    fn inline_mlx_bit(
+        bit_type: BitTypes,
+        repo_id: &str,
+        revision: &str,
+        weight_path: &str,
+        weight_size: u64,
+        include_processor: bool,
+    ) -> Bit {
+        let provider = ModelProvider {
+            provider_name: MLX_PROVIDER_NAME.to_string(),
+            model_id: Some(repo_id.to_string()),
+            version: Some(revision.to_string()),
+            params: None,
+        };
+        let mut parameters = match bit_type {
+            BitTypes::Vlm => flow_like_types::json::to_value(VLMParameters {
+                context_length: 8192,
+                provider,
+                model_classification: BitModelClassification::default(),
+            })
+            .unwrap(),
+            _ => flow_like_types::json::to_value(LLMParameters {
+                context_length: 8192,
+                provider,
+                model_classification: BitModelClassification::default(),
+            })
+            .unwrap(),
+        };
+        parameters.as_object_mut().unwrap().insert(
+            "huggingface".to_string(),
+            flow_like_types::json::json!({
+                "schema": 1,
+                "repo_id": repo_id,
+                "revision": revision,
+                "format": "mlx",
+                "files": inline_mlx_files(weight_path, weight_size, include_processor),
+            }),
+        );
+
+        Bit {
+            id: "my-inline-mlx".into(),
+            bit_type,
+            hash: "my-inline-mlx".into(),
+            dependency_tree_hash: "my-inline-mlx".into(),
+            hub: "https://api.flow-like.com".into(),
+            repository: Some(format!("https://huggingface.co/{repo_id}")),
+            download_link: None,
+            file_name: None,
+            size: Some(0),
+            parameters,
+            ..Bit::default()
+        }
+    }
+
+    fn inline_asset<'a>(assets: &'a [Bit], file_name: &str) -> &'a Bit {
+        assets
+            .iter()
+            .find(|asset| asset.file_name.as_deref() == Some(file_name))
+            .expect("inline MLX asset")
+    }
+
+    #[test]
+    fn inline_mlx_manifest_derives_pinned_typed_artifacts() {
+        let revision = "a".repeat(40);
+        let bit = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/model",
+            &revision,
+            "weights/model shard.safetensors",
+            4_000,
+            false,
+        );
+
+        let assets = bit.inline_mlx_asset_bits().unwrap();
+        assert_eq!(assets.len(), 4);
+        assert_eq!(
+            inline_asset(&assets, "config.json").bit_type,
+            BitTypes::Config
+        );
+        assert_eq!(
+            inline_asset(&assets, "tokenizer.json").bit_type,
+            BitTypes::Tokenizer
+        );
+        assert_eq!(
+            inline_asset(&assets, "tokenizer_config.json").bit_type,
+            BitTypes::TokenizerConfig
+        );
+        let weights = inline_asset(&assets, "weights/model shard.safetensors");
+        assert_eq!(weights.bit_type, BitTypes::File);
+        assert_eq!(
+            weights.download_link.as_deref(),
+            Some(
+                format!(
+                    "https://huggingface.co/owner/model/resolve/{revision}/weights/model%20shard.safetensors?download=true"
+                )
+                .as_str()
+            )
+        );
+        assert!(assets.iter().all(|asset| asset.hash == asset.id));
+    }
+
+    #[test]
+    fn inline_mlx_artifact_identity_changes_with_source_path_or_size() {
+        let revision = "a".repeat(40);
+        let base = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/model",
+            &revision,
+            "weights/model.safetensors",
+            4_000,
+            false,
+        )
+        .inline_mlx_asset_bits()
+        .unwrap();
+        let other_repo = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/other-model",
+            &revision,
+            "weights/model.safetensors",
+            4_000,
+            false,
+        )
+        .inline_mlx_asset_bits()
+        .unwrap();
+        let other_path = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/model",
+            &revision,
+            "weights/renamed.safetensors",
+            4_000,
+            false,
+        )
+        .inline_mlx_asset_bits()
+        .unwrap();
+        let other_size = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/model",
+            &revision,
+            "weights/model.safetensors",
+            4_001,
+            false,
+        )
+        .inline_mlx_asset_bits()
+        .unwrap();
+
+        let base_id = &inline_asset(&base, "weights/model.safetensors").id;
+        assert_ne!(
+            base_id,
+            &inline_asset(&other_repo, "weights/model.safetensors").id
+        );
+        assert_ne!(
+            base_id,
+            &inline_asset(&other_path, "weights/renamed.safetensors").id
+        );
+        assert_ne!(
+            base_id,
+            &inline_asset(&other_size, "weights/model.safetensors").id
+        );
+    }
+
+    #[test]
+    fn inline_mlx_runtime_cache_key_tracks_the_pinned_manifest_source() {
+        let first = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/model",
+            &"a".repeat(40),
+            "weights/model.safetensors",
+            4_000,
+            false,
+        );
+        let mut reordered = first.clone();
+        reordered.updated = "metadata-only-change".into();
+        reordered.parameters["huggingface"]["files"]
+            .as_array_mut()
+            .expect("Hugging Face files")
+            .reverse();
+        let edited_revision = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/model",
+            &"b".repeat(40),
+            "weights/model.safetensors",
+            4_000,
+            false,
+        );
+
+        let first_key = first.mlx_runtime_model_cache_key().unwrap();
+        assert!(first_key.starts_with("my-inline-mlx@mlx-source-"));
+        assert_eq!(
+            first_key,
+            reordered.mlx_runtime_model_cache_key().unwrap(),
+            "manifest order and display metadata do not change the model source"
+        );
+        assert_ne!(
+            first_key,
+            edited_revision.mlx_runtime_model_cache_key().unwrap(),
+            "a new pinned revision must not reuse the loaded MLX runtime"
+        );
+    }
+
+    #[test]
+    fn curated_mlx_runtime_cache_key_tracks_root_and_dependency_tree_identity() {
+        let mut first = inline_mlx_bit(
+            BitTypes::Vlm,
+            "owner/model",
+            &"a".repeat(40),
+            "weights/model.safetensors",
+            4_000,
+            true,
+        );
+        first
+            .parameters
+            .as_object_mut()
+            .expect("MLX parameters")
+            .remove("huggingface");
+        first.hash = "curated-root-hash".into();
+        first.dependencies = vec!["hub:weights".into(), "hub:tokenizer".into()];
+        first.dependency_tree_hash = "curated-tree-a".into();
+
+        let mut reordered = first.clone();
+        reordered.dependencies.reverse();
+        reordered.updated = "metadata-only-change".into();
+        let mut edited_tree = first.clone();
+        edited_tree.dependency_tree_hash = "curated-tree-b".into();
+        let mut edited_root = first.clone();
+        edited_root.hash = "other-curated-root-hash".into();
+
+        let first_key = first.mlx_runtime_model_cache_key().unwrap();
+        assert_eq!(
+            first_key,
+            reordered.mlx_runtime_model_cache_key().unwrap(),
+            "dependency order and display metadata do not change the model source"
+        );
+        assert_ne!(
+            first_key,
+            edited_tree.mlx_runtime_model_cache_key().unwrap(),
+            "a new dependency tree must not reuse the loaded MLX runtime"
+        );
+        assert_ne!(
+            first_key,
+            edited_root.mlx_runtime_model_cache_key().unwrap(),
+            "a new root source must not reuse the loaded MLX runtime"
+        );
+    }
+
+    #[test]
+    fn inline_mlx_manifest_rejects_unsafe_or_incomplete_layouts() {
+        let revision = "a".repeat(40);
+        let unsafe_path = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/model",
+            &revision,
+            "../model.safetensors",
+            4_000,
+            false,
+        );
+        assert!(unsafe_path.inline_mlx_asset_bits().is_err());
+
+        let missing_processor = inline_mlx_bit(
+            BitTypes::Vlm,
+            "owner/model",
+            &revision,
+            "model.safetensors",
+            4_000,
+            false,
+        );
+        assert!(missing_processor.inline_mlx_asset_bits().is_err());
+
+        let invalid_revision = inline_mlx_bit(
+            BitTypes::Llm,
+            "owner/model",
+            "main",
+            "model.safetensors",
+            4_000,
+            false,
+        );
+        assert!(invalid_revision.inline_mlx_asset_bits().is_err());
+    }
+
+    #[tokio::test]
+    async fn pack_carries_inline_mlx_assets_without_asking_a_hub() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut config: FlowLikeConfig = FlowLikeConfig::new();
+        let store = LocalObjectStore::new(temp_dir.path().to_path_buf()).unwrap();
+        config.stores.bits_store = Some(FlowLikeStore::Local(store.into()));
+        let http_client = crate::utils::http::HTTPClient::new_without_refetch();
+        let state = Arc::new(FlowLikeState::new(config, http_client));
+        let bit = inline_mlx_bit(
+            BitTypes::Vlm,
+            "owner/model",
+            &"a".repeat(40),
+            "model.safetensors",
+            4_000,
+            true,
+        );
+
+        let pack = bit.pack(state).await.unwrap();
+        assert_eq!(pack.bits.len(), 6);
+        assert!(pack.bits.iter().any(|candidate| candidate.id == bit.id));
+        assert!(
+            pack.bits
+                .iter()
+                .any(|candidate| candidate.file_name.as_deref() == Some("processor_config.json"))
+        );
+    }
+
     #[test]
     fn projection_bit_materialises_an_inline_projector() {
         let bit = local_vlm_bit(flow_like_types::json::json!({
@@ -1096,10 +2107,12 @@ mod tests {
         }));
 
         let projector = bit.projection_bit().expect("projector");
-        assert_eq!(projector.id, "my-vlm-mmproj");
+        assert!(projector.id.starts_with(USER_SOURCE_ARTIFACT_ID_PREFIX));
         assert_eq!(projector.bit_type, BitTypes::Projection);
-        // hash == id keeps the trust-on-first-use download contract
+        // hash == id keeps the trust-on-first-use download contract, while the
+        // source-derived id prevents stale same-name/same-size reuse.
         assert_eq!(projector.hash, projector.id);
+        assert!(projector.has_matching_user_source_artifact_identity());
         assert_eq!(
             projector.download_link.as_deref(),
             Some("https://example.com/mmproj-F16.gguf")
@@ -1146,11 +2159,93 @@ mod tests {
         let pack = bit.pack(state).await.unwrap();
         assert_eq!(pack.bits.len(), 2);
         assert!(pack.bits.iter().any(|b| b.id == "my-vlm"));
-        assert!(
-            pack.bits
-                .iter()
-                .any(|b| b.bit_type == BitTypes::Projection && b.id == "my-vlm-mmproj")
+        assert!(pack.bits.iter().any(|b| b.bit_type == BitTypes::Projection
+            && b.id.starts_with(USER_SOURCE_ARTIFACT_ID_PREFIX)));
+    }
+
+    #[test]
+    fn user_gguf_source_identity_changes_for_a_new_pinned_url() {
+        let revision_a = "a".repeat(40);
+        let revision_b = "b".repeat(40);
+        let mut first = local_vlm_bit(Value::Null);
+        first.download_link = Some(format!(
+            "https://huggingface.co/owner/model/resolve/{revision_a}/model.gguf"
+        ));
+        first.normalize_user_local_artifact_identity();
+
+        let mut second = local_vlm_bit(Value::Null);
+        second.download_link = Some(format!(
+            "https://huggingface.co/owner/model/resolve/{revision_b}/model.gguf"
+        ));
+        second.normalize_user_local_artifact_identity();
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.file_name, second.file_name);
+        assert_eq!(first.size, second.size);
+        assert_ne!(first.hash, second.hash);
+        assert_ne!(first.dependency_tree_hash, second.dependency_tree_hash);
+        assert_ne!(
+            first.runtime_model_cache_key(),
+            second.runtime_model_cache_key()
         );
+        assert!(first.has_matching_user_source_artifact_identity());
+        assert!(second.has_matching_user_source_artifact_identity());
+    }
+
+    #[test]
+    fn user_projector_source_identity_invalidates_the_pack_and_runtime_cache() {
+        let projection = |revision: &str| {
+            flow_like_types::json::json!({
+                "download_link": format!(
+                    "https://huggingface.co/owner/model/resolve/{revision}/mmproj.gguf"
+                ),
+                "file_name": "mmproj.gguf",
+                "size": 700,
+            })
+        };
+        let mut first = local_vlm_bit(projection(&"a".repeat(40)));
+        let mut second = local_vlm_bit(projection(&"b".repeat(40)));
+
+        let first_projection = first.projection_bit().expect("first projector");
+        let second_projection = second.projection_bit().expect("second projector");
+        assert_eq!(first_projection.file_name, second_projection.file_name);
+        assert_eq!(first_projection.size, second_projection.size);
+        assert_ne!(first_projection.hash, second_projection.hash);
+
+        first.normalize_user_local_artifact_identity();
+        second.normalize_user_local_artifact_identity();
+        assert_ne!(first.dependency_tree_hash, second.dependency_tree_hash);
+        assert_ne!(
+            first.runtime_model_cache_key(),
+            second.runtime_model_cache_key()
+        );
+    }
+
+    #[test]
+    fn explicit_content_hash_is_preserved_only_for_an_unchanged_source() {
+        let verified_hash = "c".repeat(64);
+        let mut previous = local_vlm_bit(Value::Null);
+        previous.hash = verified_hash.clone();
+        previous.download_link = Some(format!(
+            "https://huggingface.co/owner/model/resolve/{}/model.gguf",
+            "a".repeat(40)
+        ));
+        previous.normalize_user_local_artifact_identity();
+
+        let mut unchanged = previous.clone();
+        unchanged.normalize_edited_user_local_artifact_identity(Some(&previous));
+        assert_eq!(unchanged.hash, verified_hash);
+
+        let mut edited = previous.clone();
+        edited.download_link = Some(format!(
+            "https://huggingface.co/owner/model/resolve/{}/model.gguf",
+            "b".repeat(40)
+        ));
+        edited.normalize_edited_user_local_artifact_identity(Some(&previous));
+
+        assert_ne!(edited.hash, verified_hash);
+        assert!(edited.has_matching_user_source_artifact_identity());
+        assert_ne!(previous.dependency_tree_hash, edited.dependency_tree_hash);
     }
 
     #[tokio::test]
@@ -1211,5 +2306,69 @@ mod tests {
         let result = pack.download(state, None).await.unwrap();
         assert!(result.iter().any(|b| b.id == proxied_bit.id));
         assert!(!result.iter().any(|b| b.id == zero_size_bit.id));
+    }
+
+    #[test]
+    fn pack_size_uses_the_full_storage_artifact_key() {
+        let first = Bit {
+            hash: "shared-content-hash".into(),
+            file_name: Some("config.json".into()),
+            size: Some(10),
+            ..Bit::default()
+        };
+        let second = Bit {
+            id: "second".into(),
+            hash: first.hash.clone(),
+            file_name: Some("tokenizer.json".into()),
+            size: Some(10),
+            ..Bit::default()
+        };
+        let exact_duplicate = Bit {
+            id: "duplicate".into(),
+            ..first.clone()
+        };
+
+        assert_eq!(
+            BitPack {
+                bits: vec![first, second, exact_duplicate],
+            }
+            .size(),
+            20
+        );
+    }
+
+    #[test]
+    fn mlx_provider_is_recognized_only_for_language_model_bits() {
+        let parameters = LLMParameters {
+            context_length: 4096,
+            provider: ModelProvider {
+                provider_name: "mlx".to_string(),
+                model_id: Some("mlx-community/test".to_string()),
+                version: None,
+                params: None,
+            },
+            model_classification: BitModelClassification::default(),
+        };
+        let mut bit = Bit {
+            bit_type: BitTypes::Llm,
+            parameters: flow_like_types::json::to_value(parameters).unwrap(),
+            ..Bit::default()
+        };
+
+        assert!(bit.is_mlx_model());
+        bit.bit_type = BitTypes::Other;
+        assert!(!bit.is_mlx_model());
+    }
+
+    #[cfg(not(all(
+        target_arch = "aarch64",
+        any(
+            target_os = "macos",
+            all(target_os = "ios", not(any(target_abi = "sim", target_abi = "macabi")))
+        )
+    )))]
+    #[test]
+    fn mlx_capability_is_false_off_supported_apple_devices() {
+        assert!(!can_host_mlx());
     }
 }

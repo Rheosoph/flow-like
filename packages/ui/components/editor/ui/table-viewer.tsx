@@ -29,6 +29,7 @@ import {
 	FilterIcon,
 	GripVerticalIcon,
 	SearchIcon,
+	WrapTextIcon,
 	XIcon,
 } from "lucide-react";
 import * as React from "react";
@@ -304,6 +305,7 @@ function SortableHeaderCell({
 				/>
 				<span
 					className="truncate max-w-[200px] cursor-pointer"
+					title={header || `Column ${colIdx + 1}`}
 					onClick={() => onSort(colIdx)}
 				>
 					{header || `Column ${colIdx + 1}`}
@@ -333,6 +335,10 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 	const [showFilters, setShowFilters] = React.useState(false);
 	const [showColumns, setShowColumns] = React.useState(false);
 	const [isExpanded, setIsExpanded] = React.useState(false);
+	const [wrapCells, setWrapCells] = React.useState(false);
+	const [expandedCells, setExpandedCells] = React.useState<Set<string>>(
+		() => new Set(),
+	);
 
 	const hasHeader = data.length > 0;
 	const headers = hasHeader ? data[0] : [];
@@ -359,6 +365,7 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 	React.useEffect(() => {
 		setColumnOrder(headers.map((_, i) => i));
 		setHiddenColumns(new Set());
+		setExpandedCells(new Set());
 	}, [headers.length]);
 
 	// Visible columns in order
@@ -478,6 +485,19 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 		},
 		[],
 	);
+
+	// Keyed by content, not row index, so expansion survives sorting/filtering
+	const toggleCellExpanded = React.useCallback((cellKey: string) => {
+		setExpandedCells((prev) => {
+			const next = new Set(prev);
+			if (next.has(cellKey)) {
+				next.delete(cellKey);
+			} else {
+				next.add(cellKey);
+			}
+			return next;
+		});
+	}, []);
 
 	const toggleColumnVisibility = React.useCallback(
 		(columnIndex: number) => {
@@ -675,6 +695,24 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 					</PopoverContent>
 				</Popover>
 
+				{/* Wrap every cell instead of truncating */}
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							variant={wrapCells ? "secondary" : "ghost"}
+							size="sm"
+							className="h-7 px-2 text-xs"
+							onClick={() => setWrapCells((prev) => !prev)}
+						>
+							<WrapTextIcon className="h-3 w-3 mr-1" />
+							Wrap
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent side="top">
+						{wrapCells ? "Truncate long cells" : "Show full text in every cell"}
+					</TooltipContent>
+				</Tooltip>
+
 				{/* Clear filters */}
 				{hasActiveFilters && (
 					<Button
@@ -792,36 +830,54 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 												cell.includes("![") || cell.includes("](");
 											const isLongText =
 												cell.length > 100 && !hasMarkdownContent;
+											const cellKey = `${colIdx}\u0000${cell}`;
+											// Cells that already show everything need no toggle
+											const isToggleable =
+												!hasMarkdownContent && !isLongText && !wrapCells;
+											const showsFullText =
+												!isToggleable || expandedCells.has(cellKey);
 											return (
 												<td
 													key={colIdx}
 													className={cn(
 														"px-2 py-1.5 align-top",
-														isLongText
+														showsFullText && !hasMarkdownContent
 															? "min-w-[200px] max-w-[400px]"
 															: "max-w-[300px]",
 													)}
 												>
-													<div
-														className={cn(
-															hasMarkdownContent
-																? "flex flex-wrap items-center gap-1"
-																: isLongText
+													{hasMarkdownContent ? (
+														<div className="flex flex-wrap items-center gap-1">
+															<CellContent content={cell} />
+														</div>
+													) : isToggleable ? (
+														// Every data cell is a toggle, so keep them out of
+														// the tab sequence; the Wrap control expands all
+														// cells for keyboard users.
+														<button
+															type="button"
+															tabIndex={-1}
+															aria-expanded={showsFullText}
+															onClick={() => toggleCellExpanded(cellKey)}
+															title={
+																showsFullText
+																	? "Click to collapse"
+																	: `${cell}\n\nClick to expand`
+															}
+															className={cn(
+																"block w-full cursor-pointer text-left",
+																showsFullText
 																	? "whitespace-pre-wrap wrap-break-word text-sm leading-relaxed"
 																	: "truncate",
-														)}
-														title={
-															isLongText || hasMarkdownContent
-																? undefined
-																: cell
-														}
-													>
-														{hasMarkdownContent ? (
-															<CellContent content={cell} />
-														) : (
-															cell
-														)}
-													</div>
+															)}
+														>
+															{cell}
+														</button>
+													) : (
+														<div className="whitespace-pre-wrap wrap-break-word text-sm leading-relaxed">
+															{cell}
+														</div>
+													)}
 												</td>
 											);
 										})}
@@ -844,8 +900,10 @@ export function TableViewer({ data, children, className }: TableViewerProps) {
 				</button>
 			)}
 
-			{/* Hidden children for Slate to track elements */}
-			<table className="hidden">
+			{/* Hidden children for Slate to track elements. Inline style, not a
+			    utility class: descendant rules like `[&_table]:block` outrank
+			    `.hidden` and would render this tracking table as a duplicate. */}
+			<table style={{ display: "none" }} aria-hidden="true">
 				<tbody>{children}</tbody>
 			</table>
 		</div>

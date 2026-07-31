@@ -344,7 +344,13 @@ impl Settings {
             .iter()
             .filter(|bit| wanted.contains(bit.id.as_str()))
             .cloned()
-            .map(flow_like::profile::ProfileCustomBit)
+            .map(|mut bit| {
+                // Legacy offline custom bits used their stable logical id as
+                // every cache key. Normalize clones before model resolution so
+                // old settings files get the source-aware behavior immediately.
+                bit.normalize_user_local_artifact_identity();
+                flow_like::profile::ProfileCustomBit(bit)
+            })
             .collect()
     }
 

@@ -25,6 +25,7 @@
 		"build:win:arm": "dotenv -- bun ./scripts/prepare-windows-prereqs.ts --arch arm64 && dotenv -- bun run tauri build --config src-tauri/configs/tauri.win.arm.conf.json",
 		"dev:linux:x64": "dotenv -- bun run tauri dev --config src-tauri/configs/tauri.linux.x64.conf.json & bun run --watch ./scripts/translation-server.ts",
 		"prepare:windows-prereqs": "bun ./scripts/prepare-windows-prereqs.ts",
+		"prepare:mlx": "bun ./scripts/prepare-mlx.ts",
 		"postinstall": "bun run ./scripts/sync-version.ts",
 		"build": "NODE_OPTIONS=--max-old-space-size=8192 bun ../../scripts/sync-node-icons.ts && NODE_OPTIONS=--max-old-space-size=8192 next build --turbopack",
 		"upload-sourcemaps": "bun ../../scripts/upload-sourcemaps.ts --source=desktop --dir=out",

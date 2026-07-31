@@ -2,7 +2,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { IHub, UseQueryResult } from "@flow-like/flow-like-ui";
-import { Bit, Button, useBackend } from "@flow-like/flow-like-ui";
+import {
+	Bit,
+	Button,
+	isHostableLlmModel,
+	isLocalLlmModel,
+	useBackend,
+} from "@flow-like/flow-like-ui";
 import {
 	Alert,
 	AlertDescription,
@@ -37,32 +43,19 @@ type ProfileEntry = {
 	profile: ISettingsProfile;
 	bits: IBit[];
 	hasLocalModels: boolean;
+	hasUnsupportedModels: boolean;
 	requiresSignIn: boolean;
 };
 
 const LLM_TYPES = new Set<IBitTypes>([IBitTypes.Llm, IBitTypes.Vlm]);
-const LOCAL_PROVIDERS = new Set(["local", "llama.cpp", "llamacpp"]);
 
-const usesLocalWeights = (bit: IBit): boolean => (bit.size ?? 0) > 0;
-
-const getProviderName = (bit: IBit): string => {
-	const parameters =
-		typeof bit.parameters === "object" && bit.parameters !== null
-			? (bit.parameters as {
-					provider?: {
-						provider_name?: string | null;
-					};
-				})
-			: undefined;
-	const providerName = parameters?.provider?.provider_name;
-	return typeof providerName === "string" ? providerName.toLowerCase() : "";
-};
+const usesLocalArtifacts = (bit: IBit): boolean =>
+	(bit.size ?? 0) > 0 ||
+	Boolean(bit.download_link) ||
+	(bit.dependencies?.length ?? 0) > 0;
 
 const requiresHostedSignIn = (bit: IBit): boolean => {
-	if (usesLocalWeights(bit)) return false;
-	const providerName = getProviderName(bit);
-	if (!providerName) return true;
-	return !LOCAL_PROVIDERS.has(providerName);
+	return !isLocalLlmModel(bit) && !usesLocalArtifacts(bit);
 };
 
 // Module-level flag — survives component remounts within the same SPA session,
@@ -74,7 +67,7 @@ export default function Onboarding() {
 	const auth = useAuth();
 	const router = useRouter();
 	const invalidate = useInvalidateTauriInvoke();
-	const canHostModels = backend.capabilities().canHostLlamaCPP;
+	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
 	const isAuthenticated = Boolean(auth?.isAuthenticated);
 	const [profiles, setProfiles] = useState<[ISettingsProfile, IBit[]][]>([]);
 	const [route, setRoute] = useState("");
@@ -88,7 +81,12 @@ export default function Onboarding() {
 		() =>
 			profiles.map(([profile, bits]) => {
 				const llmLikeBits = bits.filter((bit) => LLM_TYPES.has(bit.type));
-				const hasLocalModels = llmLikeBits.some(usesLocalWeights);
+				const hasLocalModels = llmLikeBits.some(
+					(bit) => isLocalLlmModel(bit) || usesLocalArtifacts(bit),
+				);
+				const hasUnsupportedModels = llmLikeBits.some(
+					(bit) => !isHostableLlmModel(bit, { canHostLlamaCPP, canHostMLX }),
+				);
 				const requiresSignIn =
 					llmLikeBits.length > 0 && llmLikeBits.every(requiresHostedSignIn);
 
@@ -96,18 +94,16 @@ export default function Onboarding() {
 					profile,
 					bits,
 					hasLocalModels,
+					hasUnsupportedModels,
 					requiresSignIn,
 				};
 			}),
-		[profiles],
+		[profiles, canHostLlamaCPP, canHostMLX],
 	);
 
 	const availableProfiles = useMemo<ProfileEntry[]>(
-		() =>
-			canHostModels
-				? processedProfiles
-				: processedProfiles.filter((entry) => !entry.hasLocalModels),
-		[processedProfiles, canHostModels],
+		() => processedProfiles.filter((entry) => !entry.hasUnsupportedModels),
+		[processedProfiles],
 	);
 
 	const filteredOutCount = processedProfiles.length - availableProfiles.length;
@@ -135,7 +131,7 @@ export default function Onboarding() {
 	);
 	const downloadHref =
 		route.length > 0 ? `/onboarding/download?${route}` : null;
-	const showLocalModelAlert = !canHostModels && filteredOutCount > 0;
+	const showLocalModelAlert = filteredOutCount > 0;
 
 	const handleSignIn = useCallback(async () => {
 		if (!auth?.signinRedirect) return;

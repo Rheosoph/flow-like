@@ -468,7 +468,7 @@ function TextEditorStatic({
 					handleStaticInteraction(e);
 				}
 			}}
-			className="overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word [&_table]:block [&_table]:overflow-x-auto [&_p]:[overflow-wrap:anywhere] [&_li]:[overflow-wrap:anywhere]"
+			className="overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word [&_p]:[overflow-wrap:anywhere] [&_li]:[overflow-wrap:anywhere]"
 		>
 			<PlateStatic
 				editor={editor}

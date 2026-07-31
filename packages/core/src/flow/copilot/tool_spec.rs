@@ -1011,7 +1011,7 @@ don't blindly forward everything — but when unsure whether a file is relevant,
         },
         PlatformToolSpec {
             name: "upsert_event",
-            description: r#"Create or update an app-level EVENT — the interface/sink setup attached to a board entry node. A board entry node and an Event type are separate layers:
+            description: r#"Create or update an app-level EVENT — either a page route or the interface/sink setup attached to a board entry node. A board entry node and an Event type are separate layers:
 - events_simple entry: quick_action (default), api, cron, daemon, deeplink, rest, mcp. Cron is configured HERE on an events_simple node; it is not a catalog node.
 - events_generic entry: generic_form (default), api, deeplink. Its payload and typed output pins carry request/form values; a new FlowScript `eventsGeneric(payload: Struct, field: type, ...)` entry materializes those field pins.
 - events_chat entry: simple_chat (default), advanced_chat, discord, telegram.
@@ -1019,7 +1019,7 @@ don't blindly forward everything — but when unsure whether a file is relevant,
 `flowpilot_board` returns compatible entries under `event_nodes`. For a WORKFLOW event, this tool must run in a separate, later assistant turn: first wait for `flowpilot_board` to succeed and persist the board, then pass the exact returned board_id and node id here. Never call `flowpilot_board` and workflow `upsert_event` in the same response/tool batch, and do not call this tool when the board result failed or contained no compatible `event_nodes`. This tool checks node/Event compatibility and fills the Event type's default config. Pass `config` for sink/interface-specific overrides. For cron pass `cron_expression` (recurring) OR `scheduled_for` (one-time), plus an explicit IANA `timezone` when known.
 
 Two target forms:
-- PAGE event (shows a page at a URL): pass page_id (the page to render) and route (e.g. "/weather"). board_id/node_id are not needed.
+- PAGE event (shows a page at a URL): pass page_id (the page to render) and route (e.g. "/weather"). This forces event_type to `page`; do not pass node_id or a workflow event_type. board_id is optional page-owner metadata. Register workflow entries separately.
 - WORKFLOW event: pass board_id and node_id (an events_simple/events_generic/events_chat entry node), plus a compatible event_type and optional route.
 Omit event_id to create; pass it to update. Side-effecting; asks for approval."#,
             schema: || {
@@ -1029,11 +1029,11 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
                         "app_id": { "type": "string", "description": "App id." },
                         "event_id": { "type": "string", "description": "Existing event id to UPDATE. Omit to create a new event." },
                         "name": { "type": "string", "description": "Event name." },
-                        "event_type": { "type": "string", "description": "Interface/sink type compatible with the referenced entry node: simple -> quick_action/api/cron/daemon/deeplink/rest/mcp; generic -> generic_form/api/deeplink; chat -> simple_chat/advanced_chat/discord/telegram. Omit to use that node kind's default." },
-                        "page_id": { "type": "string", "description": "PAGE event: the page id to render (sets default_page_id)." },
+                        "event_type": { "type": "string", "description": "WORKFLOW event only. Interface/sink type compatible with the referenced entry node: simple -> quick_action/api/cron/daemon/deeplink/rest/mcp; generic -> generic_form/api/deeplink; chat -> simple_chat/advanced_chat/discord/telegram. Omit to use that node kind's default. PAGE events force the dedicated page type." },
+                        "page_id": { "type": "string", "description": "PAGE event: the page id to render (sets default_page_id and forces event_type to page). Mutually exclusive with node_id." },
                         "route": { "type": "string", "description": "URL path the event/page is reachable at, e.g. \"/weather\". Optional." },
-                        "board_id": { "type": "string", "description": "NORMAL event: the board holding the entry node." },
-                        "node_id": { "type": "string", "description": "WORKFLOW event: an events_simple/events_generic/events_chat entry-node id, normally from flowpilot_board.event_nodes." },
+                        "board_id": { "type": "string", "description": "WORKFLOW event: the board holding the entry node. PAGE event: optional owner-board metadata; it does not bind a workflow entry." },
+                        "node_id": { "type": "string", "description": "WORKFLOW event: an events_simple/events_generic/events_chat entry-node id, normally from flowpilot_board.event_nodes. Mutually exclusive with page_id." },
                         "config": { "type": "object", "description": "Optional sink/interface config overrides merged over the selected Event type's defaults." },
                         "cron_expression": { "type": "string", "description": "Recurring cron setup for an events_simple entry, using a 5- or 6-field expression. Mutually exclusive with scheduled_for." },
                         "scheduled_for": {
@@ -1849,6 +1849,22 @@ mod tests {
         assert!(spec.description.contains("events_chat"));
         assert!(spec.description.contains("not a catalog node"));
         assert!(spec.description.contains("separate, later assistant turn"));
+        assert!(spec.description.contains("forces event_type to `page`"));
+        assert!(
+            properties["page_id"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("Mutually exclusive with node_id"))
+        );
+        assert!(
+            properties["node_id"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("Mutually exclusive with page_id"))
+        );
+        assert!(
+            properties["board_id"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("owner-board metadata"))
+        );
         assert!(
             spec.description
                 .contains("Never call `flowpilot_board` and workflow `upsert_event`")

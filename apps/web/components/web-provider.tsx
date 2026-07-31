@@ -133,6 +133,7 @@ export class WebBackend implements IBackendState {
 		return {
 			needsSignIn: true,
 			canHostLlamaCPP: false,
+			canHostMLX: false,
 			canHostEmbeddings: false,
 			canExecuteLocally: false,
 		};

@@ -19,6 +19,22 @@ use std::{
 
 use super::get_bit::temporary_bit;
 
+type ArtifactResolutionKey = (String, Option<String>, String, Option<String>);
+
+fn artifact_resolution_key(bit: &Bit) -> ArtifactResolutionKey {
+    let tree_identity = (!bit.dependencies.is_empty()).then(|| bit.dependency_tree_hash.clone());
+    (
+        bit.hash.clone(),
+        bit.file_name.clone(),
+        format!("{:?}", bit.bit_type),
+        tree_identity,
+    )
+}
+
+fn is_dependency_leaf(dependencies: Option<&[String]>) -> bool {
+    dependencies.is_none_or(|dependencies| dependencies.is_empty())
+}
+
 #[utoipa::path(
     get,
     path = "/bit/{bit_id}/dependencies",
@@ -51,8 +67,9 @@ pub async fn get_with_dependencies(
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
-    if bit_model.dependency_tree_hash == bit_model.hash {
-        // If the dependency tree hash is the same as the bit hash, it means there are no dependencies.
+    // Use the declared graph, not a hash equality heuristic. Legacy downloadable
+    // leaves use `dependency_tree_hash == hash`, while path-aware identities do not.
+    if is_dependency_leaf(bit_model.dependencies.as_deref()) {
         let mut bit: Bit = bit_model.into();
         if !state.platform_config.features.unauthorized_read {
             bit = temporary_bit(bit, &state.cdn_bucket).await?;
@@ -128,9 +145,9 @@ async fn fetch_dependencies(bit: &Bit, state: &AppState) -> flow_like_types::Res
     let http_client = Arc::new(http_client);
     let mut hubs: HashMap<String, flow_like::hub::Hub> = HashMap::new();
 
-    let mut seen_hashes = HashSet::from([bit.hash.clone()]);
+    let mut seen_artifacts = HashSet::from([artifact_resolution_key(bit)]);
 
-    let mut recursion_guard = HashSet::from([bit.id.clone()]);
+    let mut recursion_guard = HashSet::from([format!("{}:{}", bit.hub, bit.id)]);
     let mut new_dependencies = bit.dependencies.clone();
 
     while !new_dependencies.is_empty() {
@@ -140,18 +157,16 @@ async fn fetch_dependencies(bit: &Bit, state: &AppState) -> flow_like_types::Res
                 flow_like_types::Error::msg(format!("Invalid dependency format: {}", dependency))
             })?;
 
-            if recursion_guard.contains(id) {
+            if !recursion_guard.insert(dependency.clone()) {
                 continue;
             }
 
-            recursion_guard.insert(id.to_string());
-
             if hub == self_domain {
                 let own_bit = fetch_own_bit(id, state).await?;
-                if own_bit.dependency_tree_hash != own_bit.hash {
+                if !own_bit.dependencies.is_empty() {
                     next_dependencies.extend(own_bit.dependencies.clone());
                 }
-                if seen_hashes.insert(own_bit.hash.clone()) {
+                if seen_artifacts.insert(artifact_resolution_key(&own_bit)) {
                     bits.push(own_bit);
                 }
                 continue;
@@ -180,11 +195,11 @@ async fn fetch_dependencies(bit: &Bit, state: &AppState) -> flow_like_types::Res
                 }
             };
 
-            if bit.dependency_tree_hash != bit.hash {
+            if !bit.dependencies.is_empty() {
                 next_dependencies.extend(bit.dependencies.clone());
             }
 
-            if seen_hashes.insert(bit.hash.clone()) {
+            if seen_artifacts.insert(artifact_resolution_key(&bit)) {
                 bits.push(bit)
             }
         }
@@ -243,4 +258,76 @@ async fn insert_bit_cache(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn artifact(hash: &str, file_name: &str) -> Bit {
+        Bit {
+            hash: hash.to_string(),
+            file_name: Some(file_name.to_string()),
+            ..Bit::default()
+        }
+    }
+
+    #[test]
+    fn dependency_resolution_preserves_equal_content_at_distinct_paths() {
+        let root_config = artifact("same-content", "config.json");
+        let nested_config = artifact("same-content", "nested/config.json");
+        let mut seen = HashSet::new();
+
+        assert!(seen.insert(artifact_resolution_key(&root_config)));
+        assert!(seen.insert(artifact_resolution_key(&nested_config)));
+    }
+
+    #[test]
+    fn dependency_resolution_still_deduplicates_the_same_artifact() {
+        let first = artifact("same-content", "config.json");
+        let duplicate = artifact("same-content", "config.json");
+        let mut seen = HashSet::new();
+
+        assert!(seen.insert(artifact_resolution_key(&first)));
+        assert!(!seen.insert(artifact_resolution_key(&duplicate)));
+    }
+
+    #[test]
+    fn dependency_resolution_preserves_distinct_composite_trees() {
+        let mut first = artifact("same-content", "bundle.bin");
+        first.dependencies = vec!["hub:first".to_string()];
+        first.dependency_tree_hash = "first-tree".to_string();
+
+        let mut second = artifact("same-content", "bundle.bin");
+        second.dependencies = vec!["hub:second".to_string()];
+        second.dependency_tree_hash = "second-tree".to_string();
+
+        assert_ne!(
+            artifact_resolution_key(&first),
+            artifact_resolution_key(&second)
+        );
+    }
+
+    #[test]
+    fn dependency_resolution_preserves_distinct_bit_types() {
+        let file = artifact("same-content", "config.json");
+        let mut config = file.clone();
+        config.bit_type = flow_like::bit::BitTypes::Config;
+
+        assert_ne!(
+            artifact_resolution_key(&file),
+            artifact_resolution_key(&config)
+        );
+    }
+
+    #[test]
+    fn legacy_content_hash_leaves_remain_directly_resolvable() {
+        let mut legacy = artifact("legacy-content-hash", "model.bin");
+        legacy.dependency_tree_hash = legacy.hash.clone();
+
+        assert!(is_dependency_leaf(Some(&legacy.dependencies)));
+
+        legacy.dependency_tree_hash = "path-aware-v2-identity".to_string();
+        assert!(is_dependency_leaf(Some(&legacy.dependencies)));
+    }
 }

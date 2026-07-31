@@ -13,9 +13,18 @@ import {
 	ScanSearch,
 	SlidersHorizontal,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvalidateInvoke } from "../../../hooks";
+import {
+	type HuggingFaceGgufRepositoryImport,
+	type HuggingFaceModelImport,
+	applyHuggingFaceMlxImportToUserBit,
+	createHuggingFaceUserMlxManifest,
+	inspectHuggingFaceModelRepository,
+	resolveHuggingFaceGgufSelection,
+	validateHuggingFacePinnedGgufDownloadUrl,
+} from "../../../lib/bit/huggingface-model-import";
 import type { IBit, IMetadata } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/bit/bit";
 import type { ILlmParameters } from "../../../lib/schema/bit/bit/llm-parameters";
@@ -45,6 +54,7 @@ import {
 } from "../../ui";
 
 const LOCAL_PROVIDER_NAME = "Local";
+const MLX_PROVIDER_NAME = "MLX";
 const DEFAULT_CONTEXT_LENGTH = "128000";
 
 interface IProviderField {
@@ -511,6 +521,45 @@ const defaultClassification = (): Record<string, number> =>
 
 type WizardSource = "provider" | "huggingface";
 type WizardStep = "pick" | "form";
+type LocalModelFormat = "gguf" | "mlx";
+
+function hasHuggingFaceMlxManifest(parameters: unknown): boolean {
+	if (
+		!parameters ||
+		typeof parameters !== "object" ||
+		Array.isArray(parameters)
+	) {
+		return false;
+	}
+	const manifest = (parameters as Record<string, unknown>).huggingface;
+	if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+		return false;
+	}
+	const value = manifest as Record<string, unknown>;
+	if (
+		value.schema !== 1 ||
+		value.format !== "mlx" ||
+		typeof value.repo_id !== "string" ||
+		!value.repo_id.trim() ||
+		typeof value.revision !== "string" ||
+		!value.revision.trim() ||
+		!Array.isArray(value.files) ||
+		value.files.length === 0
+	) {
+		return false;
+	}
+	return value.files.every(
+		(file) =>
+			!!file &&
+			typeof file === "object" &&
+			!Array.isArray(file) &&
+			typeof (file as Record<string, unknown>).path === "string" &&
+			!!String((file as Record<string, unknown>).path).trim() &&
+			typeof (file as Record<string, unknown>).size === "number" &&
+			Number.isSafeInteger((file as Record<string, unknown>).size) &&
+			Number((file as Record<string, unknown>).size) >= 0,
+	);
+}
 
 function providerDefForBit(bit: IBit): IProviderDef | null {
 	const params = bit.parameters as ILlmParameters | undefined;
@@ -556,10 +605,14 @@ export function AddCustomModelDialog({
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
 	const isEdit = !!existingBit;
-	const canHostLocal = !webMode && backend.capabilities().canHostLlamaCPP;
+	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
+	const canHostLocal = !webMode && (canHostLlamaCPP || canHostMLX);
 
 	const [step, setStep] = useState<WizardStep>("pick");
 	const [source, setSource] = useState<WizardSource>("provider");
+	const [localFormat, setLocalFormat] = useState<LocalModelFormat>(
+		canHostLlamaCPP ? "gguf" : "mlx",
+	);
 	const [providerKey, setProviderKey] = useState<string | null>(null);
 	const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
 	const [contextLength, setContextLength] = useState(DEFAULT_CONTEXT_LENGTH);
@@ -571,6 +624,12 @@ export function AddCustomModelDialog({
 	const [classification, setClassification] = useState<Record<string, number>>(
 		defaultClassification,
 	);
+	const [hfReference, setHfReference] = useState("");
+	const [hfImport, setHfImport] = useState<HuggingFaceModelImport | null>(null);
+	const [hfImportError, setHfImportError] = useState<string | null>(null);
+	const [inspectingHf, setInspectingHf] = useState(false);
+	const [ggufVariantId, setGgufVariantId] = useState("");
+	const [ggufProjectorPath, setGgufProjectorPath] = useState("");
 	const [hfDownload, setHfDownload] = useState("");
 	const [hfFileName, setHfFileName] = useState("");
 	const [hfRepo, setHfRepo] = useState("");
@@ -581,6 +640,7 @@ export function AddCustomModelDialog({
 	const [detectingSize, setDetectingSize] = useState(false);
 	const [detectingMmprojSize, setDetectingMmprojSize] = useState(false);
 	const [saving, setSaving] = useState(false);
+	const hfInspectionSequence = useRef(0);
 
 	const providerDef = useMemo(
 		() => PROVIDERS.find((p) => p.key === providerKey) ?? null,
@@ -589,11 +649,13 @@ export function AddCustomModelDialog({
 
 	useEffect(() => {
 		if (!open) return;
+		hfInspectionSequence.current += 1;
 		setSaving(false);
 		setDetectingSize(false);
 		if (!existingBit) {
 			setStep("pick");
 			setSource("provider");
+			setLocalFormat(canHostLlamaCPP ? "gguf" : "mlx");
 			setProviderKey(null);
 			setFieldValues({});
 			setContextLength(DEFAULT_CONTEXT_LENGTH);
@@ -603,6 +665,12 @@ export function AddCustomModelDialog({
 			setIcon("");
 			setTags("");
 			setClassification(defaultClassification());
+			setHfReference("");
+			setHfImport(null);
+			setHfImportError(null);
+			setInspectingHf(false);
+			setGgufVariantId("");
+			setGgufProjectorPath("");
 			setHfDownload("");
 			setHfFileName("");
 			setHfRepo("");
@@ -614,7 +682,10 @@ export function AddCustomModelDialog({
 		}
 
 		const params = existingBit.parameters as ILlmParameters | undefined;
-		const isLocal = params?.provider?.provider_name === LOCAL_PROVIDER_NAME;
+		const localProviderName = params?.provider?.provider_name;
+		const isLocal =
+			localProviderName === LOCAL_PROVIDER_NAME ||
+			localProviderName === MLX_PROVIDER_NAME;
 		const def = isLocal ? null : providerDefForBit(existingBit);
 		const providerParams = (params?.provider?.params ?? {}) as Record<
 			string,
@@ -623,6 +694,7 @@ export function AddCustomModelDialog({
 
 		setStep("form");
 		setSource(isLocal ? "huggingface" : "provider");
+		setLocalFormat(localProviderName === MLX_PROVIDER_NAME ? "mlx" : "gguf");
 		setProviderKey(def?.key ?? null);
 		const values: Record<string, string> = {};
 		for (const field of def?.fields ?? []) {
@@ -644,6 +716,12 @@ export function AddCustomModelDialog({
 			...defaultClassification(),
 			...(params?.model_classification ?? {}),
 		});
+		setHfReference(existingBit.repository ?? "");
+		setHfImport(null);
+		setHfImportError(null);
+		setInspectingHf(false);
+		setGgufVariantId("");
+		setGgufProjectorPath("");
 		setHfDownload(existingBit.download_link ?? "");
 		setHfFileName(existingBit.file_name ?? "");
 		setHfRepo(existingBit.repository ?? "");
@@ -656,7 +734,7 @@ export function AddCustomModelDialog({
 		setMmprojDownload(String(projection.download_link ?? ""));
 		setMmprojFileName(String(projection.file_name ?? ""));
 		setMmprojSize(projection.size ? String(projection.size) : "");
-	}, [open, existingBit]);
+	}, [open, existingBit, canHostLlamaCPP]);
 
 	const setFieldValue = useCallback((key: string, value: string) => {
 		setFieldValues((prev) => ({ ...prev, [key]: value }));
@@ -676,9 +754,192 @@ export function AddCustomModelDialog({
 
 	const pickHuggingFace = useCallback(() => {
 		setSource("huggingface");
+		setLocalFormat(canHostLlamaCPP ? "gguf" : "mlx");
 		setProviderKey(null);
 		setStep("form");
-	}, []);
+	}, [canHostLlamaCPP]);
+
+	const applyImportedMetadata = useCallback(
+		(imported: HuggingFaceModelImport, kind: "llm" | "vlm") => {
+			setDisplayName(imported.modelName);
+			setDescription(
+				(current) =>
+					current.trim() ||
+					`${imported.modelName} — ${imported.format.toUpperCase()} ${kind.toUpperCase()} imported from Hugging Face`,
+			);
+			setTags(imported.tags.join(", "));
+			setContextLength(String(imported.contextLength));
+			setIsVision(kind === "vlm");
+			setHfRepo(imported.repositoryUrl);
+		},
+		[],
+	);
+
+	const applyGgufSelection = useCallback(
+		(
+			imported: HuggingFaceGgufRepositoryImport,
+			variantId: string,
+			projectorPath: string,
+			kind: "llm" | "vlm",
+		) => {
+			const selection = resolveHuggingFaceGgufSelection(imported, {
+				variantId,
+				projectorPath: projectorPath || undefined,
+				kind,
+			});
+			const model = selection.variant.files[0];
+			setGgufVariantId(selection.variant.id);
+			setGgufProjectorPath(selection.projector?.path ?? "");
+			setHfDownload(model.downloadUrl);
+			setHfFileName(model.path);
+			setHfSize(String(model.size));
+			setMmprojDownload(selection.projector?.downloadUrl ?? "");
+			setMmprojFileName(selection.projector?.path ?? "");
+			setMmprojSize(
+				selection.projector ? String(selection.projector.size) : "",
+			);
+			setIsVision(selection.kind === "vlm");
+			setHfImportError(null);
+		},
+		[],
+	);
+
+	const inspectHuggingFaceRepository = useCallback(
+		async (reference = hfReference) => {
+			const trimmed = reference.trim();
+			if (!trimmed) {
+				setHfImportError(
+					"Enter a Hugging Face repository or direct GGUF file URL",
+				);
+				return;
+			}
+			const sequence = ++hfInspectionSequence.current;
+			setInspectingHf(true);
+			setHfImportError(null);
+			try {
+				const imported = await inspectHuggingFaceModelRepository(trimmed);
+				if (sequence !== hfInspectionSequence.current) return;
+				if (imported.access.private || imported.access.gated !== false) {
+					throw new Error(
+						"Private and gated repositories need Hugging Face authentication, which this direct-reference flow does not store",
+					);
+				}
+				if (imported.format === "mlx" && !canHostMLX) {
+					throw new Error(
+						"That is an MLX repository, but MLX is only available on supported Apple devices",
+					);
+				}
+				if (imported.format === "gguf" && !canHostLlamaCPP) {
+					throw new Error(
+						"That is a GGUF repository, but llama.cpp is unavailable on this device",
+					);
+				}
+
+				setHfImport(imported);
+				setLocalFormat(imported.format);
+				setHfReference(trimmed);
+
+				if (imported.format === "mlx") {
+					applyImportedMetadata(imported, imported.kind);
+					setGgufVariantId("");
+					setGgufProjectorPath("");
+					setHfDownload("");
+					setHfFileName("");
+					setHfSize("");
+					setMmprojDownload("");
+					setMmprojFileName("");
+					setMmprojSize("");
+					return;
+				}
+
+				const kind = imported.kind === "vlm" ? "vlm" : "llm";
+				const requestedVariantId = imported.variants.find(
+					(variant) => variant.requested,
+				)?.id;
+				const variantId =
+					requestedVariantId ??
+					imported.recommendedVariantId ??
+					imported.variants.find(
+						(variant) => variant.complete && !variant.split,
+					)?.id ??
+					"";
+				const projectorPath =
+					kind === "vlm" ? (imported.recommendedProjectorPath ?? "") : "";
+				applyImportedMetadata(imported, kind);
+				try {
+					applyGgufSelection(imported, variantId, projectorPath, kind);
+				} catch (error) {
+					setGgufVariantId(variantId);
+					setGgufProjectorPath(projectorPath);
+					setHfImportError(
+						error instanceof Error
+							? error.message
+							: "Choose a supported GGUF variant",
+					);
+				}
+			} catch (error) {
+				if (sequence !== hfInspectionSequence.current) return;
+				setHfImport(null);
+				setHfImportError(
+					error instanceof Error
+						? error.message
+						: "Failed to inspect the Hugging Face repository",
+				);
+			} finally {
+				if (sequence === hfInspectionSequence.current) {
+					setInspectingHf(false);
+				}
+			}
+		},
+		[
+			hfReference,
+			canHostLlamaCPP,
+			canHostMLX,
+			applyImportedMetadata,
+			applyGgufSelection,
+		],
+	);
+
+	const changeLocalFormat = useCallback(
+		(format: LocalModelFormat) => {
+			if (
+				(format === "gguf" && !canHostLlamaCPP) ||
+				(format === "mlx" && !canHostMLX)
+			) {
+				return;
+			}
+			setLocalFormat(format);
+			setHfImport((current) => (current?.format === format ? current : null));
+			setHfImportError(null);
+		},
+		[canHostLlamaCPP, canHostMLX],
+	);
+
+	const changeVisionModel = useCallback(
+		(vision: boolean) => {
+			setIsVision(vision);
+			if (hfImport?.format !== "gguf") return;
+			const projectorPath = vision
+				? ggufProjectorPath || hfImport.recommendedProjectorPath || ""
+				: "";
+			try {
+				applyGgufSelection(
+					hfImport,
+					ggufVariantId,
+					projectorPath,
+					vision ? "vlm" : "llm",
+				);
+			} catch (error) {
+				setGgufProjectorPath(projectorPath);
+				setHfImportError(
+					error instanceof Error
+						? error.message
+						: "Choose a compatible GGUF model and projector",
+				);
+			}
+		},
+		[hfImport, ggufProjectorPath, ggufVariantId, applyGgufSelection],
+	);
 
 	const applyHfUrl = useCallback((url: string) => {
 		const trimmed = url.trim();
@@ -769,8 +1030,51 @@ export function AddCustomModelDialog({
 		if (!Number.isFinite(ctx) || ctx <= 0)
 			return "Context length must be a positive number";
 		if (source === "huggingface") {
+			if (localFormat === "mlx") {
+				if (!canHostMLX) return "MLX is unavailable on this device";
+				if (
+					hfImport?.format !== "mlx" &&
+					!hasHuggingFaceMlxManifest(existingBit?.parameters)
+				) {
+					return "Paste and inspect a public MLX repository";
+				}
+				if (
+					hfImport?.format === "mlx" &&
+					(hfImport.kind === "vlm") !== isVision
+				) {
+					return hfImport.kind === "vlm"
+						? "This MLX repository is a VLM; keep Vision model enabled"
+						: "This MLX repository is an LLM and cannot be saved as a vision model";
+				}
+				return null;
+			}
+			if (!canHostLlamaCPP) {
+				return "GGUF models are unavailable on this device";
+			}
+			if (hfImport?.format === "gguf") {
+				try {
+					resolveHuggingFaceGgufSelection(hfImport, {
+						variantId: ggufVariantId,
+						projectorPath: ggufProjectorPath || undefined,
+						kind: isVision ? "vlm" : "llm",
+					});
+				} catch (error) {
+					return error instanceof Error
+						? error.message
+						: "Choose a supported GGUF variant";
+				}
+			}
 			if (!hfDownload.trim())
 				return "A direct download link to the GGUF file is required";
+			try {
+				validateHuggingFacePinnedGgufDownloadUrl(hfDownload);
+			} catch (error) {
+				return `Model link: ${
+					error instanceof Error
+						? error.message
+						: "Use an immutable Hugging Face URL"
+				}`;
+			}
 			if (!hfFileName.trim()) return "File name is required";
 			const size = Number.parseInt(hfSize, 10);
 			if (!Number.isFinite(size) || size <= 0)
@@ -778,7 +1082,19 @@ export function AddCustomModelDialog({
 			if (isVision) {
 				if (!mmprojDownload.trim())
 					return "Vision needs a projector: add the mmproj download link";
+				try {
+					validateHuggingFacePinnedGgufDownloadUrl(mmprojDownload);
+				} catch (error) {
+					return `Projector link: ${
+						error instanceof Error
+							? error.message
+							: "Use an immutable Hugging Face URL"
+					}`;
+				}
 				if (!mmprojFileName.trim()) return "Projector file name is required";
+				const projectorSize = Number.parseInt(mmprojSize, 10);
+				if (!Number.isFinite(projectorSize) || projectorSize <= 0)
+					return "Projector size is required — use Detect or enter it in bytes";
 			}
 			return null;
 		}
@@ -794,15 +1110,23 @@ export function AddCustomModelDialog({
 		displayName,
 		contextLength,
 		source,
+		localFormat,
+		canHostLlamaCPP,
+		canHostMLX,
+		hfImport,
+		ggufVariantId,
+		ggufProjectorPath,
 		hfDownload,
 		hfFileName,
 		hfSize,
 		isVision,
 		mmprojDownload,
 		mmprojFileName,
+		mmprojSize,
 		providerDef,
 		fieldValues,
 		isEdit,
+		existingBit?.parameters,
 	]);
 
 	const handleSave = useCallback(async () => {
@@ -812,6 +1136,10 @@ export function AddCustomModelDialog({
 			const now = new Date().toISOString();
 			const secs = Math.floor(Date.now() / 1000);
 			const existingEn = existingBit?.meta?.en;
+			const selectedImport =
+				source === "huggingface" && hfImport?.format === localFormat
+					? hfImport
+					: null;
 			const meta: IMetadata = {
 				name: displayName.trim(),
 				description: description.trim(),
@@ -821,11 +1149,13 @@ export function AddCustomModelDialog({
 				tags: parsedTags,
 				preview_media: existingEn?.preview_media ?? [],
 				age_rating: existingEn?.age_rating ?? null,
-				docs_url: existingEn?.docs_url ?? null,
+				docs_url: existingEn?.docs_url ?? selectedImport?.repositoryUrl ?? null,
 				release_notes: existingEn?.release_notes ?? null,
 				support_url: existingEn?.support_url ?? null,
-				use_case: existingEn?.use_case ?? null,
-				website: existingEn?.website ?? null,
+				use_case:
+					existingEn?.use_case ??
+					(selectedImport ? (isVision ? "Vision and chat" : "Chat") : null),
+				website: existingEn?.website ?? selectedImport?.repositoryUrl ?? null,
 				organization_specific_values:
 					existingEn?.organization_specific_values ?? null,
 				created_at: existingEn?.created_at ?? {
@@ -836,8 +1166,22 @@ export function AddCustomModelDialog({
 			};
 
 			const isHf = source === "huggingface";
+			const isMlx = isHf && localFormat === "mlx";
 			const secrets: Record<string, unknown> = {};
-			const params: Record<string, unknown> = {};
+			const existingParameters = (existingBit?.parameters ?? {}) as Record<
+				string,
+				unknown
+			>;
+			const existingProvider = (existingParameters.provider ?? {}) as Record<
+				string,
+				unknown
+			>;
+			const existingMlxParams = Object.fromEntries(
+				Object.entries(
+					(existingProvider.params ?? {}) as Record<string, unknown>,
+				).filter(([key]) => key !== "projection" && key !== "huggingface"),
+			);
+			const params: Record<string, unknown> = isMlx ? existingMlxParams : {};
 			let modelId: string | null = null;
 			let version: string | null = null;
 
@@ -859,7 +1203,7 @@ export function AddCustomModelDialog({
 
 			// llama.cpp needs the projector as its own artifact; it rides along in
 			// the provider params and is materialised as a Projection bit at load.
-			if (isHf && isVision && mmprojDownload.trim()) {
+			if (isHf && !isMlx && isVision && mmprojDownload.trim()) {
 				const projectorSize = Number.parseInt(mmprojSize, 10);
 				params.projection = {
 					download_link: mmprojDownload.trim(),
@@ -871,7 +1215,25 @@ export function AddCustomModelDialog({
 				};
 			}
 
-			const bit: IBit = {
+			const importedMlx =
+				isMlx && selectedImport?.format === "mlx" ? selectedImport : null;
+			const mlxManifest = isMlx
+				? importedMlx
+					? createHuggingFaceUserMlxManifest(importedMlx)
+					: (existingParameters.huggingface as
+							| Record<string, unknown>
+							| undefined)
+				: undefined;
+			if (mlxManifest) {
+				modelId = String(mlxManifest.repo_id ?? "") || null;
+				version = String(mlxManifest.revision ?? "") || null;
+			}
+			if (selectedImport) {
+				modelId = selectedImport.repoId;
+				version = selectedImport.revision;
+			}
+
+			let bit: IBit = {
 				id: existingBit?.id ?? createId(),
 				type: isVision ? IBitTypes.Vlm : IBitTypes.Llm,
 				meta: { ...(existingBit?.meta ?? {}), en: meta },
@@ -879,28 +1241,62 @@ export function AddCustomModelDialog({
 					context_length: Number.parseInt(contextLength, 10),
 					provider: {
 						provider_name: isHf
-							? LOCAL_PROVIDER_NAME
+							? isMlx
+								? MLX_PROVIDER_NAME
+								: LOCAL_PROVIDER_NAME
 							: (providerDef?.providerName ?? ""),
 						model_id: modelId,
 						version,
 						params,
 					},
 					model_classification: { ...classification },
+					...(mlxManifest ? { huggingface: mlxManifest } : {}),
 				},
-				download_link: isHf ? hfDownload.trim() : null,
-				file_name: isHf ? hfFileName.trim() : null,
-				size: isHf ? Number.parseInt(hfSize, 10) : null,
+				download_link: isHf && !isMlx ? hfDownload.trim() : null,
+				file_name: isHf && !isMlx ? hfFileName.trim() : null,
+				size: isHf ? (isMlx ? 0 : Number.parseInt(hfSize, 10)) : null,
 				repository: isHf ? hfRepo.trim() || null : null,
 				dependencies: [],
 				hash: existingBit?.hash ?? "",
 				dependency_tree_hash: existingBit?.dependency_tree_hash ?? "",
-				authors: existingBit?.authors ?? [],
+				authors: selectedImport
+					? [selectedImport.authorUrl]
+					: (existingBit?.authors ?? []),
 				hub: existingBit?.hub ?? "",
 				version: null,
-				license: existingBit?.license ?? null,
+				license: selectedImport?.license ?? existingBit?.license ?? null,
 				created: existingBit?.created ?? now,
 				updated: now,
 			};
+
+			if (importedMlx) {
+				const mapped = applyHuggingFaceMlxImportToUserBit(bit, importedMlx);
+				const mappedParameters = mapped.parameters as ILlmParameters;
+				bit = {
+					...mapped,
+					// Discovery supplies strong defaults; these fields deliberately
+					// remain the user's final choices in this dialog.
+					name: displayName.trim(),
+					type: isVision ? IBitTypes.Vlm : IBitTypes.Llm,
+					meta: { ...mapped.meta, en: meta },
+					authors: [importedMlx.authorUrl],
+					license: importedMlx.license,
+					repository: importedMlx.repositoryUrl,
+					parameters: {
+						...mappedParameters,
+						context_length: Number.parseInt(contextLength, 10),
+						model_classification: { ...classification },
+						huggingface: mlxManifest,
+						provider: {
+							...mappedParameters.provider,
+							provider_name: MLX_PROVIDER_NAME,
+							model_id: importedMlx.repoId,
+							version: importedMlx.revision,
+							params,
+						},
+					},
+				};
+			}
 
 			const saved = await backend.bitState.upsertCustomBit(
 				bit,
@@ -947,6 +1343,8 @@ export function AddCustomModelDialog({
 		icon,
 		parsedTags,
 		source,
+		localFormat,
+		hfImport,
 		providerDef,
 		fieldValues,
 		isVision,
@@ -979,9 +1377,11 @@ export function AddCustomModelDialog({
 		if (step === "pick")
 			return "Bring your own API key or run a model locally. Private to you.";
 		return source === "huggingface"
-			? "Download GGUF weights and run them locally on this device."
+			? localFormat === "mlx"
+				? "Reference an MLX repository and run it locally on this Apple device."
+				: "Reference GGUF weights and run them locally with llama.cpp."
 			: (providerDef?.description ?? "");
-	}, [isEdit, step, source, providerDef]);
+	}, [isEdit, step, source, localFormat, providerDef]);
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -1007,6 +1407,8 @@ export function AddCustomModelDialog({
 				{step === "pick" ? (
 					<SourcePickStep
 						canHostLocal={canHostLocal}
+						canHostLlamaCPP={canHostLlamaCPP}
+						canHostMLX={canHostMLX}
 						onPickProvider={pickProvider}
 						onPickHuggingFace={pickHuggingFace}
 					/>
@@ -1021,6 +1423,78 @@ export function AddCustomModelDialog({
 							/>
 						)}
 						{source === "huggingface" && (
+							<LocalFormatSelector
+								format={localFormat}
+								canHostLlamaCPP={canHostLlamaCPP}
+								canHostMLX={canHostMLX}
+								onChange={changeLocalFormat}
+							/>
+						)}
+
+						{source === "huggingface" && (
+							<HuggingFaceRepositorySection
+								reference={hfReference}
+								imported={hfImport}
+								error={hfImportError}
+								inspecting={inspectingHf}
+								disabled={saving}
+								onReferenceChange={(value) => {
+									setHfReference(value);
+									setHfImport(null);
+									setHfImportError(null);
+								}}
+								onInspect={(reference) =>
+									void inspectHuggingFaceRepository(reference)
+								}
+							/>
+						)}
+
+						{source === "huggingface" &&
+							localFormat === "gguf" &&
+							hfImport?.format === "gguf" && (
+								<GgufSelectionSection
+									imported={hfImport}
+									variantId={ggufVariantId}
+									projectorPath={ggufProjectorPath}
+									isVision={isVision}
+									onVariantChange={(variantId) => {
+										try {
+											applyGgufSelection(
+												hfImport,
+												variantId,
+												ggufProjectorPath,
+												isVision ? "vlm" : "llm",
+											);
+										} catch (error) {
+											setGgufVariantId(variantId);
+											setHfImportError(
+												error instanceof Error
+													? error.message
+													: "Choose a supported GGUF variant",
+											);
+										}
+									}}
+									onProjectorChange={(projectorPath) => {
+										try {
+											applyGgufSelection(
+												hfImport,
+												ggufVariantId,
+												projectorPath,
+												"vlm",
+											);
+										} catch (error) {
+											setGgufProjectorPath(projectorPath);
+											setHfImportError(
+												error instanceof Error
+													? error.message
+													: "Choose a supported GGUF projector",
+											);
+										}
+									}}
+								/>
+							)}
+
+						{source === "huggingface" && localFormat === "gguf" && (
 							<HuggingFaceSection
 								download={hfDownload}
 								fileName={hfFileName}
@@ -1039,7 +1513,7 @@ export function AddCustomModelDialog({
 							/>
 						)}
 
-						{source === "huggingface" && isVision && (
+						{source === "huggingface" && localFormat === "gguf" && isVision && (
 							<ProjectorSection
 								download={mmprojDownload}
 								fileName={mmprojFileName}
@@ -1060,7 +1534,7 @@ export function AddCustomModelDialog({
 							contextLength={contextLength}
 							onContextLengthChange={setContextLength}
 							isVision={isVision}
-							onVisionChange={setIsVision}
+							onVisionChange={changeVisionModel}
 						/>
 
 						<MetadataSection
@@ -1168,10 +1642,14 @@ function ProviderTile({
 
 function SourcePickStep({
 	canHostLocal,
+	canHostLlamaCPP,
+	canHostMLX,
 	onPickProvider,
 	onPickHuggingFace,
 }: Readonly<{
 	canHostLocal: boolean;
+	canHostLlamaCPP: boolean;
+	canHostMLX: boolean;
 	onPickProvider: (key: string) => void;
 	onPickHuggingFace: () => void;
 }>) {
@@ -1232,12 +1710,274 @@ function SourcePickStep({
 						<div className="min-w-0 flex-1">
 							<p className="text-sm font-medium">HuggingFace model</p>
 							<p className="text-xs text-muted-foreground">
-								Download a GGUF file from HuggingFace and run it offline
+								{canHostLlamaCPP && canHostMLX
+									? "Reference a GGUF or MLX repository and run it offline"
+									: canHostMLX
+										? "Reference an MLX repository and run it offline"
+										: "Reference a GGUF model and run it offline"}
 							</p>
 						</div>
 					</button>
 				</div>
 			)}
+		</div>
+	);
+}
+
+function LocalFormatSelector({
+	format,
+	canHostLlamaCPP,
+	canHostMLX,
+	onChange,
+}: Readonly<{
+	format: LocalModelFormat;
+	canHostLlamaCPP: boolean;
+	canHostMLX: boolean;
+	onChange: (format: LocalModelFormat) => void;
+}>) {
+	return (
+		<div className="space-y-3">
+			<SectionHeading
+				icon={HardDriveDownload}
+				label="Local runtime"
+				hint="The model stays private to your account. Its files are downloaded directly from Hugging Face to this device."
+			/>
+			<div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+				<button
+					type="button"
+					disabled={!canHostLlamaCPP}
+					onClick={() => onChange("gguf")}
+					className={`rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+						format === "gguf"
+							? "border-primary bg-primary/5"
+							: "bg-card hover:border-primary/40"
+					}`}
+				>
+					<div className="flex items-center justify-between gap-2">
+						<p className="text-sm font-medium">GGUF</p>
+						<Badge variant="outline">llama.cpp</Badge>
+					</div>
+					<p className="mt-1 text-xs text-muted-foreground">
+						One model file, with an optional vision projector.
+					</p>
+					{!canHostLlamaCPP && (
+						<p className="mt-1 text-xs text-muted-foreground">
+							Unavailable on this device
+						</p>
+					)}
+				</button>
+				<button
+					type="button"
+					disabled={!canHostMLX}
+					onClick={() => onChange("mlx")}
+					className={`rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+						format === "mlx"
+							? "border-primary bg-primary/5"
+							: "bg-card hover:border-primary/40"
+					}`}
+				>
+					<div className="flex items-center justify-between gap-2">
+						<p className="text-sm font-medium">MLX</p>
+						<Badge variant="outline">Apple only</Badge>
+					</div>
+					<p className="mt-1 text-xs text-muted-foreground">
+						A complete multi-file repository for Apple silicon.
+					</p>
+					{!canHostMLX && (
+						<p className="mt-1 text-xs text-muted-foreground">
+							Unavailable on this device
+						</p>
+					)}
+				</button>
+			</div>
+		</div>
+	);
+}
+
+function HuggingFaceRepositorySection({
+	reference,
+	imported,
+	error,
+	inspecting,
+	disabled,
+	onReferenceChange,
+	onInspect,
+}: Readonly<{
+	reference: string;
+	imported: HuggingFaceModelImport | null;
+	error: string | null;
+	inspecting: boolean;
+	disabled: boolean;
+	onReferenceChange: (value: string) => void;
+	onInspect: (reference?: string) => void;
+}>) {
+	const fileCount =
+		imported?.format === "mlx"
+			? imported.assets.length
+			: imported?.variants.length;
+	const selectedSize =
+		imported?.format === "mlx"
+			? imported.totalSize
+			: imported?.variants.find(
+					(variant) => variant.id === imported.recommendedVariantId,
+				)?.totalSize;
+
+	return (
+		<div className="space-y-3">
+			<SectionHeading
+				icon={ScanSearch}
+				label="Hugging Face repository"
+				hint="Paste a repository or direct GGUF file URL. Flow-Like pins the current commit and fills the model details."
+			/>
+			<div className="flex flex-col gap-2 sm:flex-row">
+				<Input
+					id="custom-model-hf-reference"
+					value={reference}
+					disabled={disabled || inspecting}
+					onChange={(event) => onReferenceChange(event.target.value)}
+					onPaste={(event) => {
+						const pasted = event.clipboardData.getData("text").trim();
+						if (!pasted || disabled || inspecting) return;
+						event.preventDefault();
+						onReferenceChange(pasted);
+						onInspect(pasted);
+					}}
+					onKeyDown={(event) => {
+						if (event.key !== "Enter") return;
+						event.preventDefault();
+						onInspect();
+					}}
+					placeholder="https://huggingface.co/owner/model"
+					autoComplete="off"
+					spellCheck={false}
+				/>
+				<Button
+					type="button"
+					variant="outline"
+					className="shrink-0"
+					disabled={disabled || inspecting || !reference.trim()}
+					onClick={() => onInspect()}
+				>
+					{inspecting ? (
+						<Loader2 className="h-3.5 w-3.5 animate-spin" />
+					) : (
+						<ScanSearch className="h-3.5 w-3.5" />
+					)}
+					Inspect &amp; fill
+				</Button>
+			</div>
+
+			{error && <p className="text-xs text-destructive">{error}</p>}
+
+			{imported && (
+				<div className="space-y-2 rounded-lg border bg-muted/25 p-3">
+					<div className="flex flex-wrap items-center gap-2">
+						<span className="text-sm font-medium">{imported.repoId}</span>
+						<Badge variant="secondary">{imported.format.toUpperCase()}</Badge>
+						<Badge variant="outline">{imported.revision.slice(0, 10)}</Badge>
+						{fileCount !== undefined && (
+							<Badge variant="outline">
+								{fileCount}{" "}
+								{imported.format === "mlx" ? "runtime files" : "variants"}
+							</Badge>
+						)}
+						{selectedSize !== undefined && (
+							<Badge variant="outline">{humanFileSize(selectedSize)}</Badge>
+						)}
+						<Badge variant="outline">{imported.license}</Badge>
+					</div>
+					<p className="text-xs text-muted-foreground">
+						This user-only model keeps immutable Hugging Face references. Files
+						download directly to the device when needed and are not copied into
+						the shared store or CDN.
+					</p>
+					{imported.warnings.map((warning) => (
+						<p key={warning} className="text-xs text-amber-600">
+							{warning}
+						</p>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+function GgufSelectionSection({
+	imported,
+	variantId,
+	projectorPath,
+	isVision,
+	onVariantChange,
+	onProjectorChange,
+}: Readonly<{
+	imported: HuggingFaceGgufRepositoryImport;
+	variantId: string;
+	projectorPath: string;
+	isVision: boolean;
+	onVariantChange: (variantId: string) => void;
+	onProjectorChange: (projectorPath: string) => void;
+}>) {
+	return (
+		<div className="space-y-3">
+			<SectionHeading
+				icon={SlidersHorizontal}
+				label="GGUF selection"
+				hint="Choose one complete, single-file quantization. Split GGUF variants are listed but not supported yet."
+			/>
+			<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+				<div className="space-y-1.5">
+					<Label htmlFor="custom-model-gguf-variant" className="text-xs">
+						Quantization<span className="text-destructive"> *</span>
+					</Label>
+					<select
+						id="custom-model-gguf-variant"
+						value={variantId}
+						onChange={(event) => onVariantChange(event.target.value)}
+						className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+					>
+						<option value="" disabled>
+							Choose a GGUF variant
+						</option>
+						{imported.variants.map((variant) => (
+							<option
+								key={variant.id}
+								value={variant.id}
+								disabled={!variant.complete || variant.split}
+							>
+								{variant.label} · {humanFileSize(variant.totalSize)}
+								{variant.split
+									? " · split (unsupported)"
+									: !variant.complete
+										? " · incomplete"
+										: ""}
+							</option>
+						))}
+					</select>
+				</div>
+
+				{isVision && (
+					<div className="space-y-1.5">
+						<Label htmlFor="custom-model-gguf-projector" className="text-xs">
+							Vision projector<span className="text-destructive"> *</span>
+						</Label>
+						<select
+							id="custom-model-gguf-projector"
+							value={projectorPath}
+							onChange={(event) => onProjectorChange(event.target.value)}
+							className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+						>
+							<option value="" disabled>
+								Choose an mmproj file
+							</option>
+							{imported.projectors.map((projector) => (
+								<option key={projector.path} value={projector.path}>
+									{projector.path} · {humanFileSize(projector.size)}
+								</option>
+							))}
+						</select>
+					</div>
+				)}
+			</div>
 		</div>
 	);
 }
@@ -1409,7 +2149,7 @@ function HuggingFaceSection({
 					value={download}
 					onChange={(e) => onDownloadChange(e.target.value)}
 					onBlur={(e) => onDownloadBlur(e.target.value)}
-					placeholder="https://huggingface.co/<owner>/<repo>/resolve/main/model-Q4_K_M.gguf"
+					placeholder="https://huggingface.co/<owner>/<repo>/resolve/<commit-sha>/model-Q4_K_M.gguf"
 					autoComplete="off"
 					spellCheck={false}
 				/>
@@ -1522,7 +2262,7 @@ function ProjectorSection({
 					value={download}
 					onChange={(e) => onDownloadChange(e.target.value)}
 					onBlur={(e) => onDownloadBlur(e.target.value)}
-					placeholder="https://huggingface.co/<owner>/<repo>/resolve/main/mmproj-F16.gguf"
+					placeholder="https://huggingface.co/<owner>/<repo>/resolve/<commit-sha>/mmproj-F16.gguf"
 					autoComplete="off"
 					spellCheck={false}
 				/>
@@ -1543,7 +2283,7 @@ function ProjectorSection({
 				</div>
 				<div className="space-y-1.5">
 					<Label htmlFor="custom-model-mmproj-size" className="text-xs">
-						File size (bytes)
+						File size (bytes)<span className="text-destructive"> *</span>
 					</Label>
 					<div className="flex items-center gap-2">
 						<Input

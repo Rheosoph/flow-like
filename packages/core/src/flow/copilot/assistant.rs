@@ -169,7 +169,7 @@ Rules:
   - `eventsChat(...)` — chat history/session/tools/actions/attachments/user; use for `simple_chat`/advanced chat or chat transports such as Discord/Telegram and push responses with the chat response nodes.
   `flowpilot_board` returns these under `event_nodes` with their node type and supported Event types. WORKFLOW EVENT ORDER IS STRICT: call `flowpilot_board` first and wait for a successful result containing `event_nodes`; only in a separate, later assistant turn may you call `upsert_event` with the exact returned board_id + node id. Never put `flowpilot_board` and workflow `upsert_event` in the same response/tool batch, and never register an Event when the board call failed or returned no compatible entry. `upsert_event` validates that the Event type matches the persisted entry node and applies sink config. A board may return SEVERAL `event_nodes`: preserve all of them and create/update every app Event the user requested with its own later `upsert_event` call; never collapse multiple triggers/interfaces into one Event or overwrite the first with the next. Use `delete_event` to remove the app-level Event.
 - Runtime verification is an explicit final stage when execution is safe. Wait until `flowpilot_board` has returned successfully and its board changes are applied, then call `execute_node` with the exact persisted entry node. Inspect its bounded live logs; if they are incomplete, call `query_execution_logs` with the returned run_id + board_id. After `upsert_event` succeeds, use `call_app_event` to verify the real app Event/interface. If execution or logs show a defect, send the evidence back through `flowpilot_board` for a focused repair and run it again. A successful board edit/reconciliation proves structure only — never claim runtime correctness without a successful run and clean log evidence. Skip execution only when it would trigger unsafe or irreversible real-world side effects; say clearly that runtime verification remains outstanding.
-- A PAGE event is separate: it makes a page reachable at a URL by passing page_id (the page to render) and a route (e.g. "/weather"). Creating a page with `flowpilot_widget` does NOT make it reachable — add a page event with a route when the user wants it visitable.
+- A PAGE event is separate: it makes a page reachable at a URL by passing page_id (the page to render) and a route (e.g. "/weather"). It is always persisted with event_type `page`; never pass node_id or a workflow type such as quick_action/generic_form. board_id is optional page-owner metadata, not a workflow binding. Creating a page with `flowpilot_widget` does NOT make it reachable — add a page event with a route when the user wants it visitable.
 - BUILDING A WHOLE INTERFACE OR APP — DECLARE THE CONTRACT, THEN BUILD IN PARALLEL. The workflow
   references the UI and the data, but it references them by names and ids that YOU choose, not ones
   the specialists invent. So fix those strings first, in your own head, and hand the SAME strings to
@@ -517,6 +517,9 @@ mod tests {
         assert!(prompt.contains("Cron is Event setup on a Simple Event"));
         assert!(prompt.contains("eventsGeneric(payload: Struct, fieldName: string, ...)"));
         assert!(prompt.contains("eventsChat(...)"));
+        assert!(prompt.contains("always persisted with event_type `page`"));
+        assert!(prompt.contains("never pass node_id"));
+        assert!(prompt.contains("optional page-owner metadata"));
         assert!(prompt.contains("only in a separate, later assistant turn"));
         assert!(prompt.contains("Never put `flowpilot_board` and workflow `upsert_event`"));
         assert!(prompt.contains("may return SEVERAL `event_nodes`"));

@@ -2,7 +2,10 @@ name: app
 options:
   bundleIdPrefix: com.flow-like.app
   deploymentTarget:
-    iOS: "15.1"
+    iOS: "17.0"
+packages:
+  FlowLikeMLX:
+    path: ../../apple/FlowLikeMLX
 fileGroups: [../../src]
 configs:
   debug: debug
@@ -71,6 +74,8 @@ targets:
         OTHER_LDFLAGS: ["-lz"]
       groups: [app]
     dependencies:
+      - package: FlowLikeMLX
+        product: FlowLikeMLX
       - framework: libapp.a
         embed: false
       - framework: thirdparty/onnxruntime.xcframework
