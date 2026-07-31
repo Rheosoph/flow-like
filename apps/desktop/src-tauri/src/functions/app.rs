@@ -22,7 +22,7 @@ use futures::{StreamExt, TryStreamExt};
 use image::ImageReader;
 use serde::Deserialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 pub mod fork;
 pub mod graph;
 pub mod saved_queries;
@@ -728,7 +728,7 @@ pub async fn app_add_package(
     let mut app = App::load(app_id, flow_like_state).await?;
     app.packages.insert(package_id, version);
     app.save().await?;
-    let _ = app_handle.emit("catalog-updated", ());
+    super::developer::emit_catalog_updated(&app_handle);
     Ok(())
 }
 
@@ -742,7 +742,7 @@ pub async fn app_remove_package(
     let mut app = App::load(app_id, flow_like_state).await?;
     app.packages.remove(&package_id);
     app.save().await?;
-    let _ = app_handle.emit("catalog-updated", ());
+    super::developer::emit_catalog_updated(&app_handle);
     Ok(())
 }
 

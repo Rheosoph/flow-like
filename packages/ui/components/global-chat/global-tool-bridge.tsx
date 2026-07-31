@@ -118,6 +118,11 @@ import {
 import type { IAttachment, IMessage } from "../interfaces/chat-default/chat-db";
 import { processChatEvents } from "../interfaces/chat-default/event-processor";
 import {
+	pageEventPersistenceReset,
+	resolveAppEventTarget,
+	resolveAppEventType,
+} from "./app-event-target";
+import {
 	type RunnableWorkflowEventEntry,
 	WORKFLOW_EVENT_ENTRY_NODE_NAMES,
 	collectRunnableWorkflowEventEntries,
@@ -1999,29 +2004,27 @@ export function GlobalToolBridge() {
 						}
 					}
 
-					const pageId =
-						argString(args, "page_id") ||
-						argString(args, "pageId") ||
-						existingEvent?.default_page_id ||
-						"";
-					const eventBoardId =
-						argString(args, "board_id") ||
-						argString(args, "boardId") ||
-						existingEvent?.board_id ||
-						"";
-					const eventNodeId =
-						argString(args, "node_id") ||
-						argString(args, "nodeId") ||
-						existingEvent?.node_id ||
-						"";
-					// A page event binds default_page_id (board/node optional); a workflow Event
-					// needs a compatible entry node in a board.
-					if (!pageId && (!eventBoardId || !eventNodeId))
+					const target = resolveAppEventTarget({
+						requestedPageId:
+							argString(args, "page_id") || argString(args, "pageId"),
+						requestedBoardId:
+							argString(args, "board_id") || argString(args, "boardId"),
+						requestedNodeId:
+							argString(args, "node_id") || argString(args, "nodeId"),
+						existingPageId: existingEvent?.default_page_id,
+						existingBoardId: existingEvent?.board_id,
+						existingNodeId: existingEvent?.node_id,
+					});
+					if (!target.ok) {
 						return {
 							status: "error",
-							message:
-								"Provide page_id for a page event, OR board_id + node_id for an events_simple/events_generic/events_chat entry node returned by flowpilot_board.",
+							message: target.message,
 						};
+					}
+					const { pageId, boardId: eventBoardId, nodeId: eventNodeId } = target;
+					// A page Event may retain its owning board as metadata, but never a workflow
+					// entry node. Clearing a stale node also repairs previously misclassified page
+					// Events the next time FlowPilot updates them.
 
 					let entryNodeName: string | undefined;
 					let entryConfig: (typeof EVENT_CONFIG)[string] | undefined;
@@ -2064,14 +2067,13 @@ export function GlobalToolBridge() {
 					}
 
 					const requestedEventType = argString(args, "event_type").trim();
-					const eventType = pageId
-						? requestedEventType || existingEvent?.event_type || "quick_action"
-						: requestedEventType ||
-							(existingEvent &&
-							entryConfig?.eventTypes.includes(existingEvent.event_type)
-								? existingEvent.event_type
-								: entryConfig?.defaultEventType) ||
-							"quick_action";
+					const eventType = resolveAppEventType({
+						pageId,
+						requestedEventType,
+						existingEventType: existingEvent?.event_type,
+						supportedWorkflowEventTypes: entryConfig?.eventTypes,
+						defaultWorkflowEventType: entryConfig?.defaultEventType,
+					});
 					if (entryConfig && !entryConfig.eventTypes.includes(eventType)) {
 						return {
 							status: "error",
@@ -2095,19 +2097,23 @@ export function GlobalToolBridge() {
 					if (boardExecutionMode === "Remote")
 						executionMode = IEventExecutionMode.Remote;
 
-					const existingConfig = parseUint8ArrayToJson(existingEvent?.config);
+					const existingConfig = pageId
+						? undefined
+						: parseUint8ArrayToJson(existingEvent?.config);
 					const defaultConfig = entryConfig?.configs[eventType] ?? {};
 					const keepExistingConfig =
 						existingEvent?.event_type === eventType &&
 						existingConfig &&
 						typeof existingConfig === "object";
-					let eventConfig: Record<string, unknown> = {
-						...(keepExistingConfig
-							? (existingConfig as Record<string, unknown>)
-							: (defaultConfig as Record<string, unknown>)),
-						...(argObject(args, "config") ?? {}),
-					};
-					if (eventType === "cron") {
+					let eventConfig: Record<string, unknown> = pageId
+						? {}
+						: {
+								...(keepExistingConfig
+									? (existingConfig as Record<string, unknown>)
+									: (defaultConfig as Record<string, unknown>)),
+								...(argObject(args, "config") ?? {}),
+							};
+					if (!pageId && eventType === "cron") {
 						const expression =
 							argString(args, "cron_expression") ||
 							argString(args, "cronExpression") ||
@@ -2164,6 +2170,7 @@ export function GlobalToolBridge() {
 					}
 
 					const now = nowSystemTime();
+					const pagePersistenceReset = pageEventPersistenceReset(pageId);
 					const event: IEvent = {
 						...(existingEvent ?? {}),
 						id: eventId || createId(),
@@ -2173,8 +2180,17 @@ export function GlobalToolBridge() {
 							existingEvent?.description ||
 							"",
 						board_id: eventBoardId,
-						node_id: eventNodeId,
-						config: convertJsonToUint8Array(eventConfig) ?? [],
+						node_id: pagePersistenceReset?.nodeId ?? eventNodeId,
+						config:
+							pagePersistenceReset?.config ??
+							convertJsonToUint8Array(eventConfig) ??
+							[],
+						inputs: pagePersistenceReset?.inputs ?? existingEvent?.inputs,
+						canary: pagePersistenceReset ? null : existingEvent?.canary,
+						board_version:
+							target.kind === "page" && !target.preserveExistingPageMetadata
+								? undefined
+								: existingEvent?.board_version,
 						active: argBool(args, "active") ?? existingEvent?.active ?? true,
 						event_type: eventType,
 						event_version: existingEvent?.event_version ?? [0, 0, 0],

@@ -1,5 +1,5 @@
 use crate::{
-    functions::TauriFunctionError,
+    functions::{TauriFunctionError, registry::emit_package_status},
     state::{TauriFlowLikeState, TauriRegistryState, TauriSettingsState, TauriWasmEngineState},
 };
 use dashmap::DashMap;
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, LazyLock};
 use std::time::SystemTime;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 static INSPECTION_CACHE: LazyLock<DashMap<String, (SystemTime, PackageInspection)>> =
     LazyLock::new(DashMap::new);
@@ -1453,19 +1453,14 @@ pub async fn developer_load_into_catalog(
     app_handle: AppHandle,
     project_path: String,
 ) -> Result<usize, TauriFunctionError> {
-    let _ = app_handle.emit(
-        "package-status",
-        serde_json::json!({ "packageId": format!("dev:{}", project_path), "status": "compiling" }),
-    );
+    let package_id = format!("dev:{project_path}");
+    emit_package_status(&app_handle, &package_id, "compiling");
 
     let engine = TauriWasmEngineState::construct(&app_handle)
         .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
     let project = PathBuf::from(&project_path);
     let wasm_path = find_wasm_file(&project).inspect_err(|_e| {
-        let _ = app_handle.emit(
-            "package-status",
-            serde_json::json!({ "packageId": format!("dev:{}", project_path), "status": "error" }),
-        );
+        emit_package_status(&app_handle, &package_id, "error");
     })?;
 
     let manifest = load_manifest_for_registration(&project, &wasm_path);
@@ -1474,10 +1469,7 @@ pub async fn developer_load_into_catalog(
     let node_pairs = match load_wasm_nodes_from_path(&wasm_path, engine, manifest_id).await {
         Ok(pairs) => pairs,
         Err(e) => {
-            let _ = app_handle.emit(
-                "package-status",
-                serde_json::json!({ "packageId": format!("dev:{}", project_path), "status": "error" }),
-            );
+            emit_package_status(&app_handle, &package_id, "error");
             return Err(e);
         }
     };
@@ -1497,17 +1489,14 @@ pub async fn developer_load_into_catalog(
         }
         registry.node_registry = Arc::new(inner);
         drop(registry);
-        emit_catalog_updated_on_main(&app_handle);
+        emit_catalog_updated(&app_handle);
     }
 
     if let Some(manifest) = manifest {
         register_developer_package(&app_handle, &wasm_path, manifest).await;
     }
 
-    let _ = app_handle.emit(
-        "package-status",
-        serde_json::json!({ "packageId": format!("dev:{}", project_path), "status": "ready" }),
-    );
+    emit_package_status(&app_handle, &package_id, "ready");
 
     Ok(count)
 }
@@ -1562,21 +1551,13 @@ pub async fn developer_check_staleness(
         })
         .collect();
 
-    if !stale_entries.is_empty() {
-        for (id, _, _) in &stale_entries {
-            let _ = app_handle.emit(
-                "package-status",
-                serde_json::json!({ "packageId": id, "status": "stale" }),
-            );
-        }
+    for (id, _, _) in &stale_entries {
+        emit_package_status(&app_handle, id, "stale");
     }
 
     for info in &result {
         if let Some(ref path) = info.project_path {
-            let _ = app_handle.emit(
-                "package-status",
-                serde_json::json!({ "packageId": format!("dev:{}", path), "status": "stale" }),
-            );
+            emit_package_status(&app_handle, &format!("dev:{path}"), "stale");
         }
     }
 
@@ -1654,23 +1635,11 @@ pub async fn collect_developer_node_pairs(
     all_node_pairs
 }
 
-/// Emit `catalog-updated` on the main thread to avoid a startup deadlock:
-/// calling `emit` from a tokio worker grabs Tauri's internal `webviews_lock`
-/// while iterating webviews and synchronously waits on the main loop for
-/// `Webview::eval`. If the main thread is concurrently servicing a URL-scheme
-/// task that also needs `webviews_lock` (likely during early startup) the two
-/// deadlock. Running the emit on the main thread keeps it serialized with
-/// URL-scheme handlers.
-pub fn emit_catalog_updated_on_main(app_handle: &AppHandle) {
-    let emit_handle = app_handle.clone();
-    if let Err(e) = app_handle.run_on_main_thread(move || {
-        let _ = emit_handle.emit("catalog-updated", ());
-    }) {
-        tracing::warn!(
-            "Failed to schedule catalog-updated emit on main thread: {:?}",
-            e
-        );
-    }
+/// Tell the frontend the node catalog changed. Always goes through
+/// [`crate::utils::emit_to_ui`], which keeps the emission on the main thread — emitting from a
+/// tokio worker deadlocks the process against Tauri's `webviews_lock`.
+pub fn emit_catalog_updated(app_handle: &AppHandle) {
+    crate::utils::emit_to_ui(app_handle, "catalog-updated", ());
 }
 
 pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
@@ -1699,7 +1668,7 @@ pub async fn load_all_developer_nodes(app_handle: &AppHandle) {
         registry.node_registry = Arc::new(inner);
     }
 
-    emit_catalog_updated_on_main(app_handle);
+    emit_catalog_updated(app_handle);
     tracing::info!("Developer nodes loaded into catalog");
 
     register_all_developer_packages(app_handle).await;

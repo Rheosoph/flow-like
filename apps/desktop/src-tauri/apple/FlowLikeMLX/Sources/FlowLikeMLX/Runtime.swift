@@ -386,6 +386,9 @@ private actor FlowLikeMLXEngine {
         try Task.checkCancellation()
 
         let prepared = try await container.prepare(input: userInput)
+        // Read before `prepared` is consumed by generate(); a stop sequence ends
+        // the loop before the terminal info event carries these counts.
+        let promptTokenCount = prepared.text.tokens.size
         let generations = try await container.generate(
             input: prepared,
             parameters: parameters
@@ -416,6 +419,7 @@ private actor FlowLikeMLXEngine {
 
         var filter = StopSequenceFilter(stops: mapped.stopSequences)
         var content = ""
+        var generatedText = ""
         var toolCalls: [OpenAIResponseToolCall] = []
         var completionInfo: GenerateCompletionInfo?
         var stoppedBySequence = false
@@ -424,6 +428,7 @@ private actor FlowLikeMLXEngine {
             try Task.checkCancellation()
             switch generation {
             case .chunk(let text):
+                generatedText += text
                 let filtered = filter.consume(text)
                 if !filtered.isEmpty {
                     content += filtered
@@ -514,13 +519,32 @@ private actor FlowLikeMLXEngine {
             hasToolCalls: !toolCalls.isEmpty,
             stoppedBySequence: stoppedBySequence
         )
-        let usage = OpenAIUsage(
-            promptTokens: completionInfo?.promptTokenCount ?? 0,
-            completionTokens: completionInfo?.generationTokenCount ?? 0,
-            totalTokens:
-                (completionInfo?.promptTokenCount ?? 0)
-                + (completionInfo?.generationTokenCount ?? 0)
+        // Stopping on a stop sequence leaves the generation stream without its
+        // terminal info event, so fall back to counting locally rather than
+        // reporting an empty usage block.
+        var fallbackCompletionTokens = 0
+        if completionInfo == nil, !generatedText.isEmpty {
+            fallbackCompletionTokens = await container.tokenizer
+                .encode(text: generatedText, addSpecialTokens: false)
+                .count
+        }
+        let usage = FlowLikeMLXUsageAccounting.make(
+            info: completionInfo,
+            fallbackPromptTokens: promptTokenCount,
+            fallbackCompletionTokens: fallbackCompletionTokens
         )
+
+        if FlowLikeMLXOutputGuard.droppedEveryToken(
+            content: content,
+            toolCallCount: toolCalls.count,
+            completionTokens: usage.completionTokens
+        ) {
+            throw FlowLikeMLXError.unparsableToolCall(
+                "the model generated \(usage.completionTokens) tokens that produced "
+                    + "neither text nor a usable tool call; the output was most likely a "
+                    + "malformed tool call and was discarded by the parser"
+            )
+        }
 
         if streaming {
             job.emitter.chunk(
@@ -737,5 +761,39 @@ private actor FlowLikeMLXEngine {
         for waiter in waiters {
             waiter.resume()
         }
+    }
+}
+
+/// Detects generations whose entire output disappeared. The tool-call parser
+/// buffers anything that looks like a call and discards the buffer when it does
+/// not parse, so a malformed call otherwise reaches the caller as a successful
+/// but completely empty answer.
+enum FlowLikeMLXOutputGuard {
+    static func droppedEveryToken(
+        content: String,
+        toolCallCount: Int,
+        completionTokens: Int
+    ) -> Bool {
+        content.isEmpty && toolCallCount == 0 && completionTokens > 0
+    }
+}
+
+/// Token accounting for a finished generation. The runtime only reports counts
+/// through a terminal info event, which never arrives when a stop sequence ends
+/// the loop early; the fallback keeps usage reporting truthful in that case.
+enum FlowLikeMLXUsageAccounting {
+    static func make(
+        info: GenerateCompletionInfo?,
+        fallbackPromptTokens: Int,
+        fallbackCompletionTokens: Int
+    ) -> OpenAIUsage {
+        let promptTokens = info?.promptTokenCount ?? max(0, fallbackPromptTokens)
+        let completionTokens =
+            info?.generationTokenCount ?? max(0, fallbackCompletionTokens)
+        return OpenAIUsage(
+            promptTokens: promptTokens,
+            completionTokens: completionTokens,
+            totalTokens: promptTokens + completionTokens
+        )
     }
 }

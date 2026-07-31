@@ -3,7 +3,6 @@ use std::sync::Arc;
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
 use flow_like_types::tokio::sync::{RwLock, mpsc};
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
 
 use super::fingerprint::extract_fingerprint_at;
 use super::screenshot::capture_region;
@@ -11,6 +10,14 @@ use super::state::{
     ActionMetadata, ActionType, KeyModifier, MouseButton, RecordedAction, RecordingStateInner,
     RecordingStatus, ScrollDirection,
 };
+
+/// Push a recorded action to the frontend. The capture loop runs on a tokio worker and fires per
+/// input event, so it must never emit directly: `Emitter::emit` would hold Tauri's `webviews_lock`
+/// while waiting on the main run loop, and here it would do so while holding the recording state
+/// write guard.
+fn emit_recorded_action(app_handle: &tauri::AppHandle, action: &RecordedAction) {
+    crate::utils::emit_to_ui(app_handle, "recording:action", action.clone());
+}
 
 /// Track the currently focused window
 #[derive(Clone, Debug, Default)]
@@ -816,7 +823,7 @@ impl EventCapture {
                     {
                         let mut state_guard = state.write().await;
                         if let Some(typed_action) = state_guard.flush_keystroke_buffer() {
-                            let _ = app_handle.emit("recording:action", &typed_action);
+                            emit_recorded_action(&app_handle, &typed_action);
                         }
                     }
 
@@ -833,7 +840,7 @@ impl EventCapture {
                         let mut state_guard = state.write().await;
                         state_guard.add_action(action.clone());
                     }
-                    let _ = app_handle.emit("recording:action", &action);
+                    emit_recorded_action(&app_handle, &action);
 
                     last_focused_window = Some(current_window);
                 }
@@ -871,7 +878,7 @@ impl EventCapture {
                     {
                         let mut state_guard = state.write().await;
                         if let Some(typed_action) = state_guard.flush_keystroke_buffer() {
-                            let _ = app_handle.emit("recording:action", &typed_action);
+                            emit_recorded_action(&app_handle, &typed_action);
                         }
                     }
 
@@ -902,7 +909,7 @@ impl EventCapture {
                             x,
                             y
                         );
-                        let _ = app_handle.emit("recording:action", &action);
+                        emit_recorded_action(&app_handle, &action);
                     } else {
                         // This is a click (not a drag)
                         let click_time = std::time::Instant::now();
@@ -1001,7 +1008,7 @@ impl EventCapture {
                             let mut state_guard = state.write().await;
                             state_guard.add_action(action.clone());
                             action_count += 1;
-                            let _ = app_handle.emit("recording:action", &action);
+                            emit_recorded_action(&app_handle, &action);
 
                             // Clear to prevent triple-click
                             last_completed_click = None;
@@ -1031,7 +1038,7 @@ impl EventCapture {
                             let mut state_guard = state.write().await;
                             state_guard.add_action(action.clone());
                             action_count += 1;
-                            let _ = app_handle.emit("recording:action", &action);
+                            emit_recorded_action(&app_handle, &action);
 
                             // Record for double-click detection
                             last_completed_click = Some((x, y, button.clone(), click_time));
@@ -1079,7 +1086,7 @@ impl EventCapture {
                     .with_coordinates(x, y);
 
                     state_guard.add_action(action.clone());
-                    let _ = app_handle.emit("recording:action", &action);
+                    emit_recorded_action(&app_handle, &action);
                 }
                 CapturedEvent::KeyDown { key, modifiers } => {
                     tracing::debug!(" KeyDown: key='{}', modifiers={:?}", key, modifiers);
@@ -1156,7 +1163,7 @@ impl EventCapture {
                         let mut state_guard = state.write().await;
                         // Flush any buffered keystrokes before adding the special key
                         if let Some(typed_action) = state_guard.flush_keystroke_buffer() {
-                            let _ = app_handle.emit("recording:action", &typed_action);
+                            emit_recorded_action(&app_handle, &typed_action);
                         }
 
                         let action = if is_paste {
@@ -1197,7 +1204,7 @@ impl EventCapture {
                             action_count,
                             action.action_type
                         );
-                        let _ = app_handle.emit("recording:action", &action);
+                        emit_recorded_action(&app_handle, &action);
                     }
                 }
                 CapturedEvent::KeyUp { key } => {
@@ -1238,7 +1245,7 @@ impl EventCapture {
 
                         let mut state_guard = state.write().await;
                         if let Some(typed_action) = state_guard.flush_keystroke_buffer() {
-                            let _ = app_handle.emit("recording:action", &typed_action);
+                            emit_recorded_action(&app_handle, &typed_action);
                         }
 
                         let action = RecordedAction::new(
@@ -1249,7 +1256,7 @@ impl EventCapture {
                         state_guard.add_action(action.clone());
                         action_count += 1;
                         tracing::debug!(" Copy action #{} added", action_count);
-                        let _ = app_handle.emit("recording:action", &action);
+                        emit_recorded_action(&app_handle, &action);
                     }
                 }
                 CapturedEvent::Character { ch } => {
@@ -1275,7 +1282,7 @@ impl EventCapture {
                 if state_guard.should_flush_keystrokes()
                     && let Some(typed_action) = state_guard.flush_keystroke_buffer()
                 {
-                    let _ = app_handle.emit("recording:action", &typed_action);
+                    emit_recorded_action(&app_handle, &typed_action);
                 }
             }
         }

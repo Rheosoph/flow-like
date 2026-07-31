@@ -55,6 +55,11 @@ final class RequestMappingTests: XCTestCase {
         XCTAssertEqual(messages.count, 3)
         XCTAssertEqual(messages[2]["tool_call_id"] as? String, "call_1")
 
+        // Null assistant content has to survive as an empty string: the Jinja
+        // bridge rejects NSNull and would fail every tool-loop turn.
+        XCTAssertFalse(messages[1]["content"] is NSNull)
+        XCTAssertEqual(messages[1]["content"] as? String, "")
+
         let calls = try XCTUnwrap(messages[1]["tool_calls"] as? [any Sendable])
         let call = try XCTUnwrap(calls.first as? [String: any Sendable])
         XCTAssertEqual(call["id"] as? String, "call_1")

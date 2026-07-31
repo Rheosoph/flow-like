@@ -5,6 +5,7 @@ public enum FlowLikeMLXError: LocalizedError, Sendable {
     case unsupported(String)
     case invalidModelDirectory(String)
     case invalidImage(String)
+    case unparsableToolCall(String)
 
     public var errorDescription: String? {
         switch self {
@@ -16,6 +17,8 @@ public enum FlowLikeMLXError: LocalizedError, Sendable {
             "Invalid model directory: \(message)"
         case .invalidImage(let message):
             "Invalid image: \(message)"
+        case .unparsableToolCall(let message):
+            "Unparsable tool call: \(message)"
         }
     }
 }

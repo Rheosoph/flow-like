@@ -38,10 +38,14 @@ function configurationFromArgs(): Configuration {
 
 function findNamedFile(root: string, name: string): string | undefined {
 	if (!fs.existsSync(root)) return undefined;
+	const direct = path.join(root, name);
+	if (fs.existsSync(direct) && fs.statSync(direct).isFile()) return direct;
 	for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
 		const candidate = path.join(root, entry.name);
 		if (entry.isFile() && entry.name === name) return candidate;
-		if (entry.isDirectory()) {
+		// Debug symbol bundles contain a same-named DWARF companion that must
+		// never be mistaken for the executable.
+		if (entry.isDirectory() && !entry.name.endsWith(".dSYM")) {
 			const nested = findNamedFile(candidate, name);
 			if (nested) return nested;
 		}
@@ -82,7 +86,7 @@ function main(): void {
 		"xcodebuild",
 		[
 			"-scheme",
-			"FlowLikeMLXServer",
+			"flow-like-mlx",
 			"-configuration",
 			configuration,
 			"-destination",

@@ -352,7 +352,9 @@ public enum FlowLikeMLXRequestMapper {
             switch message.content {
             case .none:
                 // Tool-calling assistant messages are allowed to have null content.
-                raw["content"] = NSNull()
+                // It has to reach the chat template as an empty string: the Jinja
+                // bridge cannot convert NSNull and would fail the whole request.
+                raw["content"] = ""
             case .text(let text):
                 raw["content"] = text
             case .parts(let parts):

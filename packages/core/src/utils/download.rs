@@ -39,7 +39,14 @@ fn global_download_semaphore() -> &'static Semaphore {
 }
 
 async fn get_remote_size(client: &Client, url: &str) -> flow_like_types::Result<u64> {
-    let res = client.head(url).send().await?;
+    // Transfer compression hides the real artifact length: a Brotli/gzip
+    // response carries no content-length, and byte ranges would refer to the
+    // encoded stream instead of the stored file.
+    let res = client
+        .head(url)
+        .header(reqwest::header::ACCEPT_ENCODING, "identity")
+        .send()
+        .await?;
     if res.status().is_server_error() {
         bail!(
             "Server responded with {} to HEAD request for {}",
@@ -274,6 +281,9 @@ async fn process_download_bit(
 
     // now use range header to resume download
     let mut headers = reqwest::header::HeaderMap::new();
+    // Keep the response identical to the stored artifact so byte offsets,
+    // resume ranges and the size check all describe the same stream.
+    headers.insert(reqwest::header::ACCEPT_ENCODING, "identity".parse()?);
 
     if resume {
         headers.insert("Range", format!("bytes={}-", downloaded).parse()?);

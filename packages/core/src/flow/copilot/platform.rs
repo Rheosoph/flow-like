@@ -156,6 +156,9 @@ fn is_editing_flowpilot_board_call(name: &str, arguments: &Value) -> bool {
 
 fn is_workflow_event_upsert_call(name: &str, arguments: &Value) -> bool {
     name == "upsert_event"
+        && spec_arg_str(arguments, "page_id", "pageId")
+            .trim()
+            .is_empty()
         && !spec_arg_str(arguments, "board_id", "boardId")
             .trim()
             .is_empty()
@@ -1604,6 +1607,27 @@ mod tests {
 
         assert!(
             same_round_workflow_event_guard_result("upsert_event", &page_event_args, true,)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn mixed_page_and_workflow_target_is_not_deferred_as_a_workflow_event() {
+        let invalid_mixed_args = json!({
+            "app_id": "app",
+            "name": "Dashboard",
+            "page_id": "page",
+            "board_id": "board",
+            "node_id": "entry",
+            "route": "/dashboard",
+        });
+
+        assert!(!is_workflow_event_upsert_call(
+            "upsert_event",
+            &invalid_mixed_args,
+        ));
+        assert!(
+            same_round_workflow_event_guard_result("upsert_event", &invalid_mixed_args, true,)
                 .is_none()
         );
     }
