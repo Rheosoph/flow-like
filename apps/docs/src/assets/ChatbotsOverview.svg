@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like chatbot architecture</title>
+  <desc id="desc">Messages from web chat and messaging channels enter a Chat Event, combine with history, retrieval, tools, and session state, pass through an AI model, and return as a response.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff8a68"/><stop offset="1" stop-color="#ff5d3d"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1440" height="720"><feGaussianBlur stdDeviation="11" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.section{fill:#f7f8fa;font-size:22px;font-weight:720}.item{fill:#d8dbe1;font-size:16px;font-weight:620}.tiny{fill:#89919e;font-size:13px;font-weight:700;letter-spacing:1.1px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/><rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="236" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="kicker">CHATBOT RUNTIME</text>
+  <text x="64" y="136" class="heading">One conversation, composable intelligence</text>
+  <text x="64" y="169" class="sub">Receive a message, assemble useful context, generate an answer, and respond on the same channel.</text>
+
+  <path d="M300 390H360" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <path d="M570 390H628" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <path d="M938 390H996" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)" filter="url(#glow)"/>
+  <path d="M1180 390H1236" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)" filter="url(#glow)"/>
+
+  <g>
+    <rect x="64" y="228" width="236" height="326" rx="24" fill="#191c22" stroke="#373d48" stroke-width="2"/>
+    <text x="92" y="270" class="tiny">RECEIVE</text><text x="92" y="305" class="section">Channels</text>
+    <rect x="92" y="332" width="180" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="182" y="359" text-anchor="middle" class="item">Web chat</text>
+    <rect x="92" y="386" width="180" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="182" y="413" text-anchor="middle" class="item">Discord</text>
+    <rect x="92" y="440" width="180" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="182" y="467" text-anchor="middle" class="item">Telegram</text>
+    <rect x="92" y="494" width="180" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="182" y="521" text-anchor="middle" class="item">Slack / API</text>
+  </g>
+
+  <g>
+    <rect x="360" y="292" width="210" height="196" rx="26" fill="#1d1d21" stroke="#ff7656" stroke-width="2"/>
+    <circle cx="465" cy="348" r="30" fill="url(#coral)" filter="url(#glow)"/>
+    <path d="M449 340h32v20h-19l-9 8v-8h-4z" fill="none" stroke="#15171b" stroke-width="4" stroke-linejoin="round"/>
+    <text x="465" y="417" text-anchor="middle" class="section">Chat Event</text>
+    <text x="465" y="447" text-anchor="middle" class="sub">Typed entry point</text>
+  </g>
+
+  <g>
+    <rect x="628" y="228" width="310" height="326" rx="26" fill="#1d1c24" stroke="#514b6c" stroke-width="2"/>
+    <text x="660" y="270" class="tiny">AUGMENT</text><text x="660" y="305" class="section">Context &amp; capabilities</text>
+    <rect x="660" y="332" width="114" height="70" rx="15" fill="#282534" stroke="#5a5275"/><circle cx="684" cy="354" r="7" fill="#a78bfa"/><text x="708" y="359" class="item">History</text><text x="708" y="385" class="sub" style="font-size:16px">Memory</text>
+    <rect x="790" y="332" width="116" height="70" rx="15" fill="#282534" stroke="#5a5275"/><circle cx="814" cy="354" r="7" fill="#34d399"/><text x="836" y="359" class="item">RAG</text><text x="836" y="385" class="sub" style="font-size:16px">Sources</text>
+    <rect x="660" y="418" width="114" height="70" rx="15" fill="#282534" stroke="#5a5275"/><circle cx="684" cy="440" r="7" fill="#ff7656"/><text x="708" y="445" class="item">Tools</text><text x="708" y="471" class="sub" style="font-size:16px">Actions</text>
+    <rect x="790" y="418" width="116" height="70" rx="15" fill="#282534" stroke="#5a5275"/><circle cx="814" cy="440" r="7" fill="#62a7ff"/><text x="836" y="445" class="item">Session</text><text x="836" y="471" class="sub" style="font-size:16px">State</text>
+    <text x="783" y="526" text-anchor="middle" class="tiny">USE ONLY WHAT THE TURN NEEDS</text>
+  </g>
+
+  <g>
+    <rect x="996" y="292" width="184" height="196" rx="26" fill="#1d1c24" stroke="#8b6ee8" stroke-width="2"/>
+    <circle cx="1088" cy="348" r="30" fill="#a78bfa" opacity=".92" filter="url(#glow)"/>
+    <path d="M1072 353c9-22 24-22 32 0m-25-13 9 19 9-19" fill="none" stroke="#17181d" stroke-width="4" stroke-linecap="round"/>
+    <text x="1088" y="417" text-anchor="middle" class="section">Model</text>
+    <text x="1088" y="447" text-anchor="middle" class="sub">Generate</text>
+  </g>
+
+  <g>
+    <rect x="1236" y="292" width="140" height="196" rx="26" fill="#1b2422" stroke="#34d399" stroke-width="2"/>
+    <circle cx="1306" cy="348" r="30" fill="#34d399" opacity=".92" filter="url(#glow)"/>
+    <path d="M1289 345h34v21h-21l-9 8v-8h-4z" fill="none" stroke="#13201c" stroke-width="4" stroke-linejoin="round"/>
+    <text x="1306" y="417" text-anchor="middle" class="section">Reply</text>
+    <text x="1306" y="447" text-anchor="middle" class="sub">Push</text>
+  </g>
+  <text x="720" y="630" text-anchor="middle" class="sub">The same flow can serve multiple channels while keeping tools, memory, and retrieval explicit.</text>
+</svg>

@@ -1,104 +1,90 @@
 ---
 title: Docker Compose
-description: Deploy the Flow-Like backend using Docker Compose.
+description: Run the complete Flow-Like stack on one Docker host
 sidebar:
   order: 20
 ---
 
-This deployment lives in `apps/backend/docker-compose/` and provides a simple way to run Flow-Like on a single machine.
+The Compose deployment in `apps/backend/docker-compose/` runs Flow-Like on one
+Docker host. It includes the web app, API, execution runtime, persistence,
+realtime collaboration, custom-node compilation, and server-side event
+services.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          Docker Compose Network                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  Core Services:                                                             │
-│  ┌─────────────┐     ┌─────────────────────────────────────────────────┐   │
-│  │   API       │────▶│           Execution Runtime                      │   │
-│  │  Container  │     │   (Server Mode - handles multiple jobs)          │   │
-│  │  :8080      │◀────│   :9000                                          │   │
-│  └─────────────┘     └─────────────────────────────────────────────────┘   │
-│        │                                                                    │
-│        ▼                                                                    │
-│  ┌─────────────┐                                                            │
-│  │ PostgreSQL  │                                                            │
-│  │    :5432    │                                                            │
-│  └─────────────┘                                                            │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  Monitoring (optional):                                                     │
-│  ┌─────────────┐  ┌─────────────┐                                          │
-│  │ Prometheus  │  │   Grafana   │                                          │
-│  │   :9091     │  │    :3002    │                                          │
-│  └─────────────┘  └─────────────┘                                          │
-│                                                                             │
-└─────────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-                        ┌─────────────────────┐
-                        │  External Storage   │
-                        │  (S3/Azure/GCP/R2)  │
-                        └─────────────────────┘
-```
+![Flow-Like Docker Compose architecture, from web and desktop clients through the API to persistence, execution, collaboration, and optional monitoring](../../../../assets/DockerComposeArchitecture.svg)
+
+The published web port serves the application. The published API port belongs
+to an Nginx gateway, which load-balances the internal API replicas. Runtime
+replicas are internal services reached over HTTP for interactive runs and
+through Redis for queued runs.
+
+Object storage is not created by the Compose file. The stock API includes
+Azure, GCP, and R2 runtime credentials. AWS and generic S3 appear in the
+configuration, but the checked-in Compose API target must be rebuilt with its
+AWS feature before those providers can initialize end to end.
 
 ## Services
 
-| Service | Description | Port |
-|---------|-------------|------|
-| `api` | Main Flow-Like API service | 8080 |
-| `runtime` | Shared execution environment | 9000 |
-| `postgres` | PostgreSQL database | 5432 |
-| `db-init` | One-time migration job | — |
-| `prometheus` | Metrics collection (optional) | 9091 |
-| `grafana` | Dashboards (optional) | 3002 |
+| Service | Published port | Responsibility |
+| --- | --- | --- |
+| `web` | `3001` | Flow-Like web application |
+| `api-gateway` | `8080` | Stable API entrypoint and load balancer |
+| `api` | Internal `8080` | API replicas, authentication, app state, and dispatch |
+| `runtime` | Internal `9000` | Shared execution workers and Redis queue consumers |
+| `compiler` | `8081` | WASM compilation for custom nodes |
+| `signaling` | `4444` | Realtime collaboration signaling |
+| `sink-services` | — | Cron and configured bot/event adapters |
+| `postgres` | `5432` | Relational application metadata |
+| `redis` | `6379` | Execution state, queues, and signaling coordination |
+| `db-init` | — | One-time database initialization job |
 
-## Quick Start
+The optional `monitoring` profile adds Prometheus, Tempo, Grafana, and Redis
+and PostgreSQL exporters.
+
+## Quick start
 
 ```bash
 cd apps/backend/docker-compose
 cp .env.example .env
-# Edit .env with your storage credentials
 
-# Generate JWT keypair for execution trust
-../../tools/gen-execution-keys.sh
-
-# Start core services
+# Configure storage and trust keys in .env, then start the stack.
+../../../tools/gen-execution-keys.sh --export
 docker compose up -d
-
-# Or include monitoring
-docker compose --profile monitoring up -d
 ```
 
-## Monitoring
-
-Enable optional Prometheus + Grafana monitoring:
+Start the same stack with observability:
 
 ```bash
 docker compose --profile monitoring up -d
 ```
 
-Access Grafana at http://localhost:3002 (default: admin/admin).
+Continue with the [installation guide](/self-hosting/docker-compose/installation/)
+before exposing any service outside a development network.
 
-→ [Monitoring Guide](/self-hosting/docker-compose/monitoring/)
+## Execution model
 
-## Execution Model
+Compose uses long-running runtime replicas. A replica can process multiple runs
+over its lifetime, so this is a shared-worker model rather than a fresh
+container per invocation.
 
-This Docker Compose setup uses **shared execution** where a single runtime container handles multiple jobs concurrently. This is suitable for:
+This model is a good fit for:
 
-- Development and testing
-- Trusted workloads
-- High-throughput scenarios with controlled input
+- Development and evaluation
+- A private team on a controlled host
+- Workloads where simple operations and low startup overhead matter
 
-For stronger isolation (one container per execution), consider:
-- [Kubernetes deployment](/self-hosting/kubernetes/overview/) with Kata containers
-- AWS Lambda (per-invocation isolation)
+The current Kubernetes Job dispatcher can create a Job, but its executor
+entrypoint is still pending. For the implemented and incomplete dispatch
+choices, see
+[Execution Backends](/self-hosting/execution-backends/).
 
-## Documentation
+## Next steps
 
 - [Prerequisites](/self-hosting/docker-compose/prerequisites/)
 - [Installation](/self-hosting/docker-compose/installation/)
 - [Configuration](/self-hosting/docker-compose/configuration/)
-- [Storage Providers](/self-hosting/docker-compose/storage/)
+- [Storage providers](/self-hosting/docker-compose/storage/)
 - [Monitoring](/self-hosting/docker-compose/monitoring/)
 - [Scaling](/self-hosting/docker-compose/scaling/)
 - [Troubleshooting](/self-hosting/docker-compose/troubleshooting/)

@@ -1,0 +1,1145 @@
+import { readFile } from "node:fs/promises";
+import { extname, isAbsolute, relative, resolve } from "node:path";
+import {
+	DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+	DOC_SCREENSHOT_PLAN_SCHEMA,
+	DOC_SCREENSHOT_TAURI_FIXTURE_SCHEMA,
+	type DocScreenshotCaptureStep,
+	type DocScreenshotDefaults,
+	type DocScreenshotFormat,
+	type DocScreenshotHttpFixture,
+	type DocScreenshotHttpFixtureResponse,
+	type DocScreenshotKeyboardModifier,
+	type DocScreenshotPlan,
+	type DocScreenshotScenario,
+	type DocScreenshotStep,
+	type DocScreenshotTauriFixture,
+	type DocScreenshotViewport,
+	type JsonValue,
+} from "./types";
+
+const MAX_SCENARIOS = 20;
+const MAX_STEPS = 100;
+const MAX_DELAY_MS = 30_000;
+const MAX_TIMEOUT_MS = 10 * 60_000;
+const MAX_OUTPUT_PIXELS = 100_000_000;
+const MAX_DRAG_STEPS = 100;
+const MAX_CLICK_MODIFIERS = 4;
+const MAX_HTTP_FIXTURE_ROUTES = 500;
+const MAX_HTTP_FIXTURE_BLOCKED_ORIGINS = 100;
+const NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/;
+const HTTP_TOKEN_PATTERN = /^[!#$%&'*+\-.^_`|~0-9A-Z]+$/;
+const STEP_KEYS: Record<DocScreenshotStep["type"], readonly string[]> = {
+	goto: ["type", "path", "query"],
+	click: ["type", "selector", "index", "button", "clickCount", "modifiers"],
+	drag: [
+		"type",
+		"selector",
+		"index",
+		"targetSelector",
+		"targetIndex",
+		"steps",
+		"button",
+		"release",
+	],
+	fill: ["type", "selector", "index", "value", "valueEnv"],
+	type: ["type", "selector", "index", "value", "valueEnv", "delayMs"],
+	press: ["type", "key", "selector", "index"],
+	select: ["type", "selector", "index", "values"],
+	check: ["type", "selector", "index", "checked"],
+	hover: ["type", "selector", "index"],
+	scroll: ["type", "selector", "index", "x", "y"],
+	waitFor: ["type", "selector", "urlIncludes", "text", "state", "timeoutMs"],
+	delay: ["type", "ms"],
+	capture: [
+		"type",
+		"name",
+		"mode",
+		"selector",
+		"index",
+		"padding",
+		"output",
+		"format",
+		"quality",
+		"hideSelectors",
+	],
+};
+
+export const DEFAULT_DOC_SCREENSHOT_OPTIONS: DocScreenshotDefaults = {
+	viewport: {
+		width: 1624,
+		height: 1060,
+		deviceScaleFactor: 2,
+	},
+	theme: "light",
+	format: "webp",
+	timeoutMs: 120_000,
+	settleMs: 350,
+	disableAnimations: true,
+	hideScrollbars: true,
+};
+
+function record(value: unknown, label: string): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) {
+		throw new Error(`${label} must be an object.`);
+	}
+	return value as Record<string, unknown>;
+}
+
+function rejectUnknownKeys(
+	input: Record<string, unknown>,
+	label: string,
+	type: DocScreenshotStep["type"],
+): void {
+	const allowed = new Set(STEP_KEYS[type]);
+	for (const key of Object.keys(input)) {
+		if (!allowed.has(key)) {
+			throw new Error(`${label}.${key} is not supported for a ${type} step.`);
+		}
+	}
+}
+
+function rejectUnknownObjectKeys(
+	input: Record<string, unknown>,
+	label: string,
+	allowedKeys: readonly string[],
+): void {
+	const allowed = new Set(allowedKeys);
+	for (const key of Object.keys(input)) {
+		if (!allowed.has(key)) {
+			throw new Error(`${label}.${key} is not supported.`);
+		}
+	}
+}
+
+function optionalString(value: unknown, label: string): string | undefined {
+	if (value === undefined) return undefined;
+	if (typeof value !== "string" || value.length === 0) {
+		throw new Error(`${label} must be a non-empty string.`);
+	}
+	return value;
+}
+
+function finiteNumber(value: unknown, label: string): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) {
+		throw new Error(`${label} must be a finite number.`);
+	}
+	return value;
+}
+
+function integerInRange(
+	value: unknown,
+	label: string,
+	min: number,
+	max: number,
+): number {
+	const parsed = finiteNumber(value, label);
+	if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
+		throw new Error(`${label} must be an integer from ${min} to ${max}.`);
+	}
+	return parsed;
+}
+
+function booleanValue(value: unknown, label: string): boolean {
+	if (typeof value !== "boolean") throw new Error(`${label} must be boolean.`);
+	return value;
+}
+
+function enumValue<T extends string>(
+	value: unknown,
+	label: string,
+	values: readonly T[],
+): T {
+	if (typeof value !== "string" || !values.includes(value as T)) {
+		throw new Error(`${label} must be one of: ${values.join(", ")}.`);
+	}
+	return value as T;
+}
+
+function nameValue(value: unknown, label: string): string {
+	const name = optionalString(value, label);
+	if (!name || !NAME_PATTERN.test(name)) {
+		throw new Error(
+			`${label} must start with an alphanumeric character and contain only letters, numbers, dot, underscore, or dash.`,
+		);
+	}
+	return name;
+}
+
+function pathValue(value: unknown, label: string): string {
+	const path = optionalString(value, label);
+	if (!path || !path.startsWith("/") || path.startsWith("//")) {
+		throw new Error(`${label} must be a same-origin path beginning with "/".`);
+	}
+	return path;
+}
+
+function formatFromExtension(path: string): DocScreenshotFormat | undefined {
+	const extension = extname(path).toLowerCase();
+	if (extension === ".png") return "png";
+	if (extension === ".webp") return "webp";
+	if (extension === ".jpg" || extension === ".jpeg") return "jpeg";
+	return undefined;
+}
+
+function outputValue(value: unknown, label: string): string | undefined {
+	const output = optionalString(value, label);
+	if (!output) return undefined;
+	if (isAbsolute(output)) {
+		throw new Error(`${label} must be relative to outputDir.`);
+	}
+	const normalized = relative(".", resolve(".", output));
+	if (normalized.startsWith("..") || isAbsolute(normalized)) {
+		throw new Error(`${label} must stay inside outputDir.`);
+	}
+	if (!formatFromExtension(output)) {
+		throw new Error(`${label} must end in .png, .webp, .jpg, or .jpeg.`);
+	}
+	return output;
+}
+
+function queryValue(
+	value: unknown,
+	label: string,
+): DocScreenshotScenario["query"] {
+	if (value === undefined) return undefined;
+	const input = record(value, label);
+	const output: NonNullable<DocScreenshotScenario["query"]> = {};
+	for (const [key, item] of Object.entries(input)) {
+		if (!key) throw new Error(`${label} cannot contain an empty key.`);
+		const values = Array.isArray(item) ? item : [item];
+		for (const entry of values) {
+			if (
+				entry !== null &&
+				typeof entry !== "string" &&
+				typeof entry !== "number" &&
+				typeof entry !== "boolean"
+			) {
+				throw new Error(`${label}.${key} must contain only scalar values.`);
+			}
+		}
+		output[key] = Array.isArray(item)
+			? (values as NonNullable<(typeof output)[string]>)
+			: (item as NonNullable<(typeof output)[string]>);
+	}
+	return output;
+}
+
+function stringRecord(
+	value: unknown,
+	label: string,
+): Record<string, string> | undefined {
+	if (value === undefined) return undefined;
+	const input = record(value, label);
+	const output: Record<string, string> = {};
+	for (const [key, item] of Object.entries(input)) {
+		if (!key || typeof item !== "string") {
+			throw new Error(`${label} must contain string keys and values.`);
+		}
+		output[key] = item;
+	}
+	return output;
+}
+
+function viewportValue(
+	value: unknown,
+	label: string,
+	fallback: DocScreenshotViewport,
+	partial = false,
+): DocScreenshotViewport | Partial<DocScreenshotViewport> {
+	if (value === undefined) return partial ? {} : fallback;
+	const input = record(value, label);
+	const width =
+		input.width === undefined
+			? partial
+				? undefined
+				: fallback.width
+			: integerInRange(input.width, `${label}.width`, 320, 7680);
+	const height =
+		input.height === undefined
+			? partial
+				? undefined
+				: fallback.height
+			: integerInRange(input.height, `${label}.height`, 240, 7680);
+	const deviceScaleFactor =
+		input.deviceScaleFactor === undefined
+			? partial
+				? undefined
+				: fallback.deviceScaleFactor
+			: finiteNumber(input.deviceScaleFactor, `${label}.deviceScaleFactor`);
+	if (
+		deviceScaleFactor !== undefined &&
+		(deviceScaleFactor < 0.5 || deviceScaleFactor > 4)
+	) {
+		throw new Error(`${label}.deviceScaleFactor must be from 0.5 to 4.`);
+	}
+	const resolvedWidth = width ?? fallback.width;
+	const resolvedHeight = height ?? fallback.height;
+	const resolvedDpr = deviceScaleFactor ?? fallback.deviceScaleFactor;
+	if (
+		resolvedWidth * resolvedHeight * resolvedDpr * resolvedDpr >
+		MAX_OUTPUT_PIXELS
+	) {
+		throw new Error(`${label} exceeds the 100 megapixel capture limit.`);
+	}
+	return {
+		...(width === undefined ? {} : { width }),
+		...(height === undefined ? {} : { height }),
+		...(deviceScaleFactor === undefined ? {} : { deviceScaleFactor }),
+	};
+}
+
+function valueInput(
+	input: Record<string, unknown>,
+	label: string,
+): { value?: string; valueEnv?: string } {
+	const value = optionalString(input.value, `${label}.value`);
+	const valueEnv = optionalString(input.valueEnv, `${label}.valueEnv`);
+	if ((value ? 1 : 0) + (valueEnv ? 1 : 0) !== 1) {
+		throw new Error(`${label} requires exactly one of value or valueEnv.`);
+	}
+	if (valueEnv && !/^[A-Z_][A-Z0-9_]*$/.test(valueEnv)) {
+		throw new Error(`${label}.valueEnv must be an uppercase environment name.`);
+	}
+	return { value, valueEnv };
+}
+
+function targetValue(
+	input: Record<string, unknown>,
+	label: string,
+): { selector: string; index?: number } {
+	const selector = optionalString(input.selector, `${label}.selector`);
+	if (!selector) throw new Error(`${label}.selector is required.`);
+	const index =
+		input.index === undefined
+			? undefined
+			: integerInRange(input.index, `${label}.index`, 0, 999);
+	return { selector, index };
+}
+
+function clickModifiersValue(
+	value: unknown,
+	label: string,
+): DocScreenshotKeyboardModifier[] | undefined {
+	if (value === undefined) return undefined;
+	if (
+		!Array.isArray(value) ||
+		value.length === 0 ||
+		value.length > MAX_CLICK_MODIFIERS
+	) {
+		throw new Error(
+			`${label} must contain from 1 to ${MAX_CLICK_MODIFIERS} keyboard modifiers.`,
+		);
+	}
+	const modifiers = value.map((modifier, index) =>
+		enumValue(modifier, `${label}[${index}]`, [
+			"Alt",
+			"Control",
+			"Meta",
+			"Shift",
+		] as const),
+	);
+	if (new Set(modifiers).size !== modifiers.length) {
+		throw new Error(`${label} cannot contain duplicate keyboard modifiers.`);
+	}
+	return modifiers;
+}
+
+function validateCaptureStep(
+	input: Record<string, unknown>,
+	label: string,
+): DocScreenshotCaptureStep {
+	const name = nameValue(input.name, `${label}.name`);
+	const mode =
+		input.mode === undefined
+			? ("viewport" as const)
+			: enumValue(input.mode, `${label}.mode`, [
+					"viewport",
+					"fullPage",
+					"element",
+				] as const);
+	const selector = optionalString(input.selector, `${label}.selector`);
+	if (mode === "element" && !selector) {
+		throw new Error(`${label}.selector is required for element capture.`);
+	}
+	if (mode !== "element" && selector) {
+		throw new Error(`${label}.selector is only valid for element capture.`);
+	}
+	const index =
+		input.index === undefined
+			? undefined
+			: integerInRange(input.index, `${label}.index`, 0, 999);
+	const padding =
+		input.padding === undefined
+			? undefined
+			: integerInRange(input.padding, `${label}.padding`, 0, 512);
+	const output = outputValue(input.output, `${label}.output`);
+	const format =
+		input.format === undefined
+			? undefined
+			: enumValue(input.format, `${label}.format`, [
+					"png",
+					"webp",
+					"jpeg",
+				] as const);
+	const extensionFormat = output ? formatFromExtension(output) : undefined;
+	if (format && extensionFormat && format !== extensionFormat) {
+		throw new Error(`${label}.format does not match its output extension.`);
+	}
+	const quality =
+		input.quality === undefined
+			? undefined
+			: integerInRange(input.quality, `${label}.quality`, 1, 100);
+	if (quality !== undefined && (format ?? extensionFormat) !== "jpeg") {
+		throw new Error(`${label}.quality is supported only for JPEG.`);
+	}
+	let hideSelectors: string[] | undefined;
+	if (input.hideSelectors !== undefined) {
+		if (
+			!Array.isArray(input.hideSelectors) ||
+			!input.hideSelectors.every(
+				(item) => typeof item === "string" && item.length > 0,
+			)
+		) {
+			throw new Error(`${label}.hideSelectors must be an array of selectors.`);
+		}
+		hideSelectors = input.hideSelectors;
+	}
+	return {
+		type: "capture",
+		name,
+		output,
+		mode,
+		selector,
+		index,
+		padding,
+		format,
+		quality,
+		hideSelectors,
+	};
+}
+
+function validateStep(value: unknown, label: string): DocScreenshotStep {
+	const input = record(value, label);
+	const type = optionalString(input.type, `${label}.type`);
+	if (type && Object.hasOwn(STEP_KEYS, type)) {
+		rejectUnknownKeys(input, label, type as DocScreenshotStep["type"]);
+	}
+	switch (type) {
+		case "goto":
+			return {
+				type,
+				path: pathValue(input.path, `${label}.path`),
+				query: queryValue(input.query, `${label}.query`),
+			};
+		case "click": {
+			const target = targetValue(input, label);
+			return {
+				type,
+				...target,
+				button:
+					input.button === undefined
+						? undefined
+						: enumValue(input.button, `${label}.button`, [
+								"left",
+								"middle",
+								"right",
+							] as const),
+				clickCount:
+					input.clickCount === undefined
+						? undefined
+						: integerInRange(input.clickCount, `${label}.clickCount`, 1, 3),
+				modifiers: clickModifiersValue(input.modifiers, `${label}.modifiers`),
+			};
+		}
+		case "drag": {
+			const target = targetValue(input, label);
+			const targetSelector = optionalString(
+				input.targetSelector,
+				`${label}.targetSelector`,
+			);
+			if (!targetSelector) {
+				throw new Error(`${label}.targetSelector is required.`);
+			}
+			return {
+				type,
+				...target,
+				targetSelector,
+				targetIndex:
+					input.targetIndex === undefined
+						? undefined
+						: integerInRange(input.targetIndex, `${label}.targetIndex`, 0, 999),
+				steps:
+					input.steps === undefined
+						? undefined
+						: integerInRange(input.steps, `${label}.steps`, 1, MAX_DRAG_STEPS),
+				button:
+					input.button === undefined
+						? undefined
+						: enumValue(input.button, `${label}.button`, [
+								"left",
+								"middle",
+								"right",
+							] as const),
+				release:
+					input.release === undefined
+						? undefined
+						: booleanValue(input.release, `${label}.release`),
+			};
+		}
+		case "fill":
+			return {
+				type,
+				...targetValue(input, label),
+				...valueInput(input, label),
+			};
+		case "type":
+			return {
+				type,
+				...targetValue(input, label),
+				...valueInput(input, label),
+				delayMs:
+					input.delayMs === undefined
+						? undefined
+						: integerInRange(input.delayMs, `${label}.delayMs`, 0, 1000),
+			};
+		case "press":
+			return {
+				type,
+				key: optionalString(input.key, `${label}.key`) ?? "",
+				selector: optionalString(input.selector, `${label}.selector`),
+				index:
+					input.index === undefined
+						? undefined
+						: integerInRange(input.index, `${label}.index`, 0, 999),
+			};
+		case "select": {
+			const target = targetValue(input, label);
+			if (
+				!Array.isArray(input.values) ||
+				input.values.length === 0 ||
+				!input.values.every((item) => typeof item === "string")
+			) {
+				throw new Error(`${label}.values must be a non-empty string array.`);
+			}
+			return { type, ...target, values: input.values };
+		}
+		case "check":
+			return {
+				type,
+				...targetValue(input, label),
+				checked:
+					input.checked === undefined
+						? undefined
+						: booleanValue(input.checked, `${label}.checked`),
+			};
+		case "hover":
+			return { type, ...targetValue(input, label) };
+		case "scroll":
+			return {
+				type,
+				selector: optionalString(input.selector, `${label}.selector`),
+				index:
+					input.index === undefined
+						? undefined
+						: integerInRange(input.index, `${label}.index`, 0, 999),
+				x:
+					input.x === undefined
+						? undefined
+						: finiteNumber(input.x, `${label}.x`),
+				y:
+					input.y === undefined
+						? undefined
+						: finiteNumber(input.y, `${label}.y`),
+			};
+		case "waitFor": {
+			const selector = optionalString(input.selector, `${label}.selector`);
+			const urlIncludes = optionalString(
+				input.urlIncludes,
+				`${label}.urlIncludes`,
+			);
+			const text = optionalString(input.text, `${label}.text`);
+			if ([selector, urlIncludes, text].filter(Boolean).length !== 1) {
+				throw new Error(
+					`${label} requires exactly one of selector, urlIncludes, or text.`,
+				);
+			}
+			return {
+				type,
+				selector,
+				urlIncludes,
+				text,
+				state:
+					input.state === undefined
+						? undefined
+						: enumValue(input.state, `${label}.state`, [
+								"attached",
+								"visible",
+								"hidden",
+								"detached",
+							] as const),
+				timeoutMs:
+					input.timeoutMs === undefined
+						? undefined
+						: integerInRange(
+								input.timeoutMs,
+								`${label}.timeoutMs`,
+								1,
+								MAX_TIMEOUT_MS,
+							),
+			};
+		}
+		case "delay":
+			return {
+				type,
+				ms: integerInRange(input.ms, `${label}.ms`, 0, MAX_DELAY_MS),
+			};
+		case "capture":
+			return validateCaptureStep(input, label);
+		default:
+			throw new Error(`${label}.type is not supported: ${String(type)}`);
+	}
+}
+
+function defaultsValue(value: unknown): DocScreenshotDefaults {
+	if (value === undefined)
+		return structuredClone(DEFAULT_DOC_SCREENSHOT_OPTIONS);
+	const input = record(value, "plan.defaults");
+	const format =
+		input.format === undefined
+			? DEFAULT_DOC_SCREENSHOT_OPTIONS.format
+			: enumValue(input.format, "plan.defaults.format", [
+					"png",
+					"webp",
+					"jpeg",
+				] as const);
+	const quality =
+		input.quality === undefined
+			? undefined
+			: integerInRange(input.quality, "plan.defaults.quality", 1, 100);
+	if (quality !== undefined && format !== "jpeg") {
+		throw new Error("plan.defaults.quality is supported only for JPEG.");
+	}
+	return {
+		viewport: viewportValue(
+			input.viewport,
+			"plan.defaults.viewport",
+			DEFAULT_DOC_SCREENSHOT_OPTIONS.viewport,
+		) as DocScreenshotViewport,
+		theme:
+			input.theme === undefined
+				? DEFAULT_DOC_SCREENSHOT_OPTIONS.theme
+				: enumValue(input.theme, "plan.defaults.theme", [
+						"light",
+						"dark",
+					] as const),
+		format,
+		quality,
+		timeoutMs:
+			input.timeoutMs === undefined
+				? DEFAULT_DOC_SCREENSHOT_OPTIONS.timeoutMs
+				: integerInRange(
+						input.timeoutMs,
+						"plan.defaults.timeoutMs",
+						1,
+						MAX_TIMEOUT_MS,
+					),
+		settleMs:
+			input.settleMs === undefined
+				? DEFAULT_DOC_SCREENSHOT_OPTIONS.settleMs
+				: integerInRange(input.settleMs, "plan.defaults.settleMs", 0, 30_000),
+		disableAnimations:
+			input.disableAnimations === undefined
+				? DEFAULT_DOC_SCREENSHOT_OPTIONS.disableAnimations
+				: booleanValue(
+						input.disableAnimations,
+						"plan.defaults.disableAnimations",
+					),
+		hideScrollbars:
+			input.hideScrollbars === undefined
+				? DEFAULT_DOC_SCREENSHOT_OPTIONS.hideScrollbars
+				: booleanValue(input.hideScrollbars, "plan.defaults.hideScrollbars"),
+	};
+}
+
+export function validateDocScreenshotPlan(value: unknown): DocScreenshotPlan {
+	const input = record(value, "plan");
+	if (input.schema !== DOC_SCREENSHOT_PLAN_SCHEMA) {
+		throw new Error(`plan.schema must be ${DOC_SCREENSHOT_PLAN_SCHEMA}.`);
+	}
+	const defaults = defaultsValue(input.defaults);
+	const app = enumValue(input.app ?? "desktop", "plan.app", [
+		"desktop",
+		"web",
+	] as const);
+	const outputDir =
+		optionalString(input.outputDir, "plan.outputDir") ?? "tmp/doc-screenshots";
+	const baseUrl = optionalString(input.baseUrl, "plan.baseUrl");
+	const tauriFixture = optionalString(input.tauriFixture, "plan.tauriFixture");
+	const httpFixture = optionalString(input.httpFixture, "plan.httpFixture");
+	if (!Array.isArray(input.scenarios) || input.scenarios.length === 0) {
+		throw new Error("plan.scenarios must be a non-empty array.");
+	}
+	if (input.scenarios.length > MAX_SCENARIOS) {
+		throw new Error(`plan.scenarios cannot exceed ${MAX_SCENARIOS}.`);
+	}
+	const scenarioNames = new Set<string>();
+	const captureNames = new Set<string>();
+	const scenarios = input.scenarios.map((scenarioValue, scenarioIndex) => {
+		const label = `plan.scenarios[${scenarioIndex}]`;
+		const scenarioInput = record(scenarioValue, label);
+		const name = nameValue(scenarioInput.name, `${label}.name`);
+		if (scenarioNames.has(name))
+			throw new Error(`Duplicate scenario name: ${name}`);
+		scenarioNames.add(name);
+		if (
+			!Array.isArray(scenarioInput.steps) ||
+			scenarioInput.steps.length === 0
+		) {
+			throw new Error(`${label}.steps must be a non-empty array.`);
+		}
+		if (scenarioInput.steps.length > MAX_STEPS) {
+			throw new Error(`${label}.steps cannot exceed ${MAX_STEPS}.`);
+		}
+		const steps = scenarioInput.steps.map((step, stepIndex) =>
+			validateStep(step, `${label}.steps[${stepIndex}]`),
+		);
+		for (const [stepIndex, step] of steps.entries()) {
+			if (
+				step.type === "drag" &&
+				step.release === false &&
+				steps[stepIndex + 1]?.type !== "capture"
+			) {
+				throw new Error(
+					`${label}.steps[${stepIndex}] with release false must be followed immediately by a capture step.`,
+				);
+			}
+		}
+		if (!steps.some((step) => step.type === "capture")) {
+			throw new Error(`${label} must contain at least one capture step.`);
+		}
+		for (const step of steps) {
+			if (step.type !== "capture") continue;
+			if (captureNames.has(step.name)) {
+				throw new Error(`Duplicate capture name: ${step.name}`);
+			}
+			captureNames.add(step.name);
+		}
+		const viewport = viewportValue(
+			scenarioInput.viewport,
+			`${label}.viewport`,
+			defaults.viewport,
+			true,
+		) as Partial<DocScreenshotViewport>;
+		return {
+			name,
+			path: pathValue(scenarioInput.path, `${label}.path`),
+			query: queryValue(scenarioInput.query, `${label}.query`),
+			viewport: Object.keys(viewport).length === 0 ? undefined : viewport,
+			theme:
+				scenarioInput.theme === undefined
+					? undefined
+					: enumValue(scenarioInput.theme, `${label}.theme`, [
+							"light",
+							"dark",
+						] as const),
+			localStorage: stringRecord(
+				scenarioInput.localStorage,
+				`${label}.localStorage`,
+			),
+			sessionStorage: stringRecord(
+				scenarioInput.sessionStorage,
+				`${label}.sessionStorage`,
+			),
+			steps,
+		} satisfies DocScreenshotScenario;
+	});
+	return {
+		schema: DOC_SCREENSHOT_PLAN_SCHEMA,
+		app,
+		baseUrl,
+		outputDir,
+		tauriFixture,
+		httpFixture,
+		defaults,
+		scenarios,
+	};
+}
+
+export async function loadDocScreenshotPlan(
+	path: string,
+): Promise<DocScreenshotPlan> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(await readFile(path, "utf8"));
+	} catch (error) {
+		throw new Error(`Could not read screenshot plan ${path}: ${String(error)}`);
+	}
+	return validateDocScreenshotPlan(parsed);
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+	if (
+		value === null ||
+		typeof value === "string" ||
+		typeof value === "boolean" ||
+		(typeof value === "number" && Number.isFinite(value))
+	) {
+		return true;
+	}
+	if (Array.isArray(value)) return value.every(isJsonValue);
+	if (!value || typeof value !== "object") return false;
+	return Object.values(value).every(isJsonValue);
+}
+
+function httpFixtureUrl(value: unknown, label: string): string {
+	const rawUrl = optionalString(value, label);
+	if (!rawUrl) throw new Error(`${label} is required.`);
+	let url: URL;
+	try {
+		url = new URL(rawUrl);
+	} catch {
+		throw new Error(`${label} must be an absolute HTTP or HTTPS URL.`);
+	}
+	if (url.protocol !== "http:" && url.protocol !== "https:") {
+		throw new Error(`${label} must be an absolute HTTP or HTTPS URL.`);
+	}
+	if (url.username || url.password) {
+		throw new Error(`${label} cannot contain credentials.`);
+	}
+	if (url.hash) {
+		throw new Error(`${label} cannot contain a fragment.`);
+	}
+	return url.toString();
+}
+
+function httpFixtureMethod(value: unknown, label: string): string {
+	const method = optionalString(value, label);
+	if (
+		!method ||
+		method !== method.toUpperCase() ||
+		!HTTP_TOKEN_PATTERN.test(method)
+	) {
+		throw new Error(`${label} must be an uppercase HTTP method token.`);
+	}
+	return method;
+}
+
+function httpFixtureBlockedOrigins(value: unknown, label: string): string[] {
+	if (value === undefined) return [];
+	if (
+		!Array.isArray(value) ||
+		value.length > MAX_HTTP_FIXTURE_BLOCKED_ORIGINS
+	) {
+		throw new Error(
+			`${label} must be an array with at most ${MAX_HTTP_FIXTURE_BLOCKED_ORIGINS} origins.`,
+		);
+	}
+	const origins = value.map((originValue, index) => {
+		const itemLabel = `${label}[${index}]`;
+		const rawOrigin = optionalString(originValue, itemLabel);
+		if (!rawOrigin) throw new Error(`${itemLabel} is required.`);
+		let url: URL;
+		try {
+			url = new URL(rawOrigin);
+		} catch {
+			throw new Error(`${itemLabel} must be an absolute HTTP or HTTPS origin.`);
+		}
+		if (
+			(url.protocol !== "http:" && url.protocol !== "https:") ||
+			url.username ||
+			url.password ||
+			url.pathname !== "/" ||
+			url.search ||
+			url.hash
+		) {
+			throw new Error(`${itemLabel} must be an absolute HTTP or HTTPS origin.`);
+		}
+		return url.origin;
+	});
+	if (new Set(origins).size !== origins.length) {
+		throw new Error(`${label} cannot contain duplicate origins.`);
+	}
+	return origins;
+}
+
+function httpFixtureBlockedEndpoints(value: unknown, label: string): string[] {
+	if (value === undefined) return [];
+	if (
+		!Array.isArray(value) ||
+		value.length > MAX_HTTP_FIXTURE_BLOCKED_ORIGINS
+	) {
+		throw new Error(
+			`${label} must be an array with at most ${MAX_HTTP_FIXTURE_BLOCKED_ORIGINS} endpoints.`,
+		);
+	}
+	const endpoints = value.map((endpointValue, index) => {
+		const itemLabel = `${label}[${index}]`;
+		const rawEndpoint = optionalString(endpointValue, itemLabel);
+		if (!rawEndpoint) {
+			throw new Error(`${itemLabel} must be an absolute HTTP or HTTPS URL.`);
+		}
+		let url: URL;
+		try {
+			url = new URL(rawEndpoint);
+		} catch {
+			throw new Error(`${itemLabel} must be an absolute HTTP or HTTPS URL.`);
+		}
+		if (
+			(url.protocol !== "http:" && url.protocol !== "https:") ||
+			url.username ||
+			url.password ||
+			url.search ||
+			url.hash
+		) {
+			throw new Error(
+				`${itemLabel} must be an absolute HTTP or HTTPS URL without query or fragment.`,
+			);
+		}
+		return `${url.origin}${url.pathname}`;
+	});
+	if (new Set(endpoints).size !== endpoints.length) {
+		throw new Error(`${label} cannot contain duplicate endpoints.`);
+	}
+	return endpoints;
+}
+
+function httpFixtureHeaders(
+	value: unknown,
+	label: string,
+): Record<string, string> {
+	if (value === undefined) return {};
+	const input = record(value, label);
+	const output: Record<string, string> = {};
+	const normalizedNames = new Set<string>();
+	for (const [name, headerValue] of Object.entries(input)) {
+		if (!HTTP_TOKEN_PATTERN.test(name.toUpperCase())) {
+			throw new Error(`${label} contains an invalid header name: ${name}`);
+		}
+		if (typeof headerValue !== "string" || /[\r\n]/.test(headerValue)) {
+			throw new Error(`${label}.${name} must be a single-line string.`);
+		}
+		const normalizedName = name.toLowerCase();
+		if (normalizedNames.has(normalizedName)) {
+			throw new Error(`${label} contains a duplicate header: ${name}`);
+		}
+		normalizedNames.add(normalizedName);
+		output[name] = headerValue;
+	}
+	return output;
+}
+
+function httpFixtureResponse(
+	value: unknown,
+	label: string,
+): DocScreenshotHttpFixtureResponse {
+	const input = record(value, label);
+	rejectUnknownObjectKeys(input, label, ["status", "headers", "body", "json"]);
+	const status =
+		input.status === undefined
+			? 200
+			: integerInRange(input.status, `${label}.status`, 200, 599);
+	const body =
+		input.body === undefined
+			? undefined
+			: typeof input.body === "string"
+				? input.body
+				: (() => {
+						throw new Error(`${label}.body must be a string.`);
+					})();
+	if (body !== undefined && input.json !== undefined) {
+		throw new Error(`${label} cannot define both body and json.`);
+	}
+	const json =
+		input.json === undefined
+			? undefined
+			: isJsonValue(input.json)
+				? input.json
+				: (() => {
+						throw new Error(`${label}.json is not JSON-serializable.`);
+					})();
+	if (
+		(status === 204 || status === 205 || status === 304) &&
+		(body !== undefined || json !== undefined)
+	) {
+		throw new Error(`${label} cannot include a body for status ${status}.`);
+	}
+	return {
+		status,
+		headers: httpFixtureHeaders(input.headers, `${label}.headers`),
+		body,
+		json,
+	};
+}
+
+export function validateDocScreenshotHttpFixture(
+	value: unknown,
+): DocScreenshotHttpFixture {
+	const input = record(value, "fixture");
+	rejectUnknownObjectKeys(input, "fixture", [
+		"schema",
+		"strict",
+		"blockedOrigins",
+		"blockedEndpoints",
+		"routes",
+	]);
+	if (input.schema !== DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA) {
+		throw new Error(
+			`fixture.schema must be ${DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA}.`,
+		);
+	}
+	if (
+		!Array.isArray(input.routes) ||
+		input.routes.length === 0 ||
+		input.routes.length > MAX_HTTP_FIXTURE_ROUTES
+	) {
+		throw new Error(
+			`fixture.routes must contain from 1 to ${MAX_HTTP_FIXTURE_ROUTES} routes.`,
+		);
+	}
+	const routeMatches = new Map<string, Array<string | undefined>>();
+	const routes = input.routes.map((routeValue, routeIndex) => {
+		const label = `fixture.routes[${routeIndex}]`;
+		const routeInput = record(routeValue, label);
+		rejectUnknownObjectKeys(routeInput, label, ["request", "response"]);
+		const requestInput = record(routeInput.request, `${label}.request`);
+		rejectUnknownObjectKeys(requestInput, `${label}.request`, [
+			"method",
+			"url",
+			"body",
+		]);
+		const body =
+			requestInput.body === undefined
+				? undefined
+				: typeof requestInput.body === "string"
+					? requestInput.body
+					: (() => {
+							throw new Error(`${label}.request.body must be a string.`);
+						})();
+		const request = {
+			method: httpFixtureMethod(requestInput.method, `${label}.request.method`),
+			url: httpFixtureUrl(requestInput.url, `${label}.request.url`),
+			body,
+		};
+		const routeKey = JSON.stringify([request.method, request.url]);
+		const earlierBodies = routeMatches.get(routeKey) ?? [];
+		if (
+			earlierBodies.some(
+				(earlierBody) =>
+					earlierBody === undefined ||
+					request.body === undefined ||
+					earlierBody === request.body,
+			)
+		) {
+			throw new Error(
+				`${label}.request overlaps an earlier exact request match.`,
+			);
+		}
+		earlierBodies.push(request.body);
+		routeMatches.set(routeKey, earlierBodies);
+		return {
+			request,
+			response: httpFixtureResponse(routeInput.response, `${label}.response`),
+		};
+	});
+	return {
+		schema: DOC_SCREENSHOT_HTTP_FIXTURE_SCHEMA,
+		strict:
+			input.strict === undefined
+				? true
+				: booleanValue(input.strict, "fixture.strict"),
+		blockedOrigins: httpFixtureBlockedOrigins(
+			input.blockedOrigins,
+			"fixture.blockedOrigins",
+		),
+		blockedEndpoints: httpFixtureBlockedEndpoints(
+			input.blockedEndpoints,
+			"fixture.blockedEndpoints",
+		),
+		routes,
+	};
+}
+
+export async function loadDocScreenshotHttpFixture(
+	path: string,
+): Promise<DocScreenshotHttpFixture> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(await readFile(path, "utf8"));
+	} catch (error) {
+		throw new Error(`Could not read HTTP fixture ${path}: ${String(error)}`);
+	}
+	return validateDocScreenshotHttpFixture(parsed);
+}
+
+export function validateDocScreenshotTauriFixture(
+	value: unknown,
+): DocScreenshotTauriFixture {
+	const input = record(value, "fixture");
+	if (input.schema !== DOC_SCREENSHOT_TAURI_FIXTURE_SCHEMA) {
+		throw new Error(
+			`fixture.schema must be ${DOC_SCREENSHOT_TAURI_FIXTURE_SCHEMA}.`,
+		);
+	}
+	const responseInput = record(input.responses, "fixture.responses");
+	const responses: DocScreenshotTauriFixture["responses"] = {};
+	for (const [command, response] of Object.entries(responseInput)) {
+		if (!command)
+			throw new Error("fixture.responses cannot have an empty command.");
+		if (!isJsonValue(response)) {
+			throw new Error(`fixture.responses.${command} is not JSON-serializable.`);
+		}
+		responses[command] = response;
+	}
+	return {
+		schema: DOC_SCREENSHOT_TAURI_FIXTURE_SCHEMA,
+		strict:
+			input.strict === undefined
+				? true
+				: booleanValue(input.strict, "fixture.strict"),
+		responses,
+	};
+}
+
+export async function loadDocScreenshotTauriFixture(
+	path: string,
+): Promise<DocScreenshotTauriFixture> {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(await readFile(path, "utf8"));
+	} catch (error) {
+		throw new Error(`Could not read Tauri fixture ${path}: ${String(error)}`);
+	}
+	return validateDocScreenshotTauriFixture(parsed);
+}
+
+export function outputFormatForCapture(
+	step: DocScreenshotCaptureStep,
+	defaultFormat: DocScreenshotFormat,
+): DocScreenshotFormat {
+	return (
+		step.format ??
+		(step.output ? formatFromExtension(step.output) : undefined) ??
+		defaultFormat
+	);
+}
+
+export function safeCaptureOutputPath(
+	outputDir: string,
+	step: DocScreenshotCaptureStep,
+	format: DocScreenshotFormat,
+): string {
+	const extension = format === "jpeg" ? "jpg" : format;
+	const requested = step.output ?? `${step.name}.${extension}`;
+	const absoluteDir = resolve(outputDir);
+	const absoluteOutput = resolve(absoluteDir, requested);
+	const relativeOutput = relative(absoluteDir, absoluteOutput);
+	if (
+		relativeOutput === "" ||
+		relativeOutput.startsWith("..") ||
+		isAbsolute(relativeOutput)
+	) {
+		throw new Error(`Capture output escapes outputDir: ${requested}`);
+	}
+	return absoluteOutput;
+}

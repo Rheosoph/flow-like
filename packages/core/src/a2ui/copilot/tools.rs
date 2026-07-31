@@ -905,6 +905,111 @@ mod tests {
     }
 
     #[test]
+    fn catalog_documents_every_interactive_component_and_how_to_choose() {
+        // The historical failure: voiceInput (and feedback/appLink/geoMap) were absent from the
+        // docs entirely, so the model imitated them from generic parts. Every registered
+        // interactive type must appear, and the selection table must map intents to types.
+        let docs = crate::a2ui::copilot::get_full_documentation();
+        for component_type in [
+            "`button`",
+            "`textField`",
+            "`select`",
+            "`slider`",
+            "`checkbox`",
+            "`switch`",
+            "`radioGroup`",
+            "`dateTimeInput`",
+            "`fileInput`",
+            "`imageInput`",
+            "`voiceInput`",
+            "`feedback`",
+            "`appLink`",
+            "`link`",
+            "`geoMap`",
+        ] {
+            assert!(
+                docs.contains(component_type),
+                "component docs must list {component_type}"
+            );
+        }
+        assert!(docs.contains("## Choosing the Right Component"));
+        assert!(docs.contains("push-to-talk"));
+        assert!(docs.contains("## Voice Input (voiceInput)"));
+        assert!(docs.contains("\"type\": \"voiceInput\""));
+        assert!(docs.contains("multiline"));
+        assert!(docs.contains("Never invent a type"));
+    }
+
+    #[test]
+    fn style_guide_teaches_design_reflection_and_reliable_channels() {
+        let docs = crate::a2ui::copilot::get_full_documentation();
+        assert!(docs.contains("## Design Reflection (BEFORE emitting)"));
+        assert!(docs.contains("Signature moment"));
+        assert!(docs.contains("NO runtime Tailwind engine"));
+        assert!(docs.contains("responsiveOverrides"));
+        assert!(docs.contains("## Typography (three real families already exist - use them)"));
+        assert!(docs.contains("var(--primary)"));
+        assert!(docs.contains("Never style\n   `:root`") || docs.contains("Never style `:root`"));
+        assert!(docs.contains("mobile-first"));
+    }
+
+    #[test]
+    fn style_guide_offers_distinct_directions_and_the_real_type_roles() {
+        // Diversity here cannot ride on hue (--primary is fixed by the app theme and hardcoded
+        // palette classes break dark mode), so the guide must supply structural directions and
+        // the three font families the theme actually ships.
+        let docs = crate::a2ui::copilot::get_full_documentation();
+        assert!(docs.contains("## Worked Direction Recipes"));
+        for direction in [
+            "### INSTRUMENT",
+            "### LEDGER",
+            "### LUMEN",
+            "### ATELIER",
+            "### BLUEPRINT",
+            "### MARQUEE",
+        ] {
+            assert!(
+                docs.contains(direction),
+                "missing direction recipe: {direction}"
+            );
+        }
+        for family in ["var(--font-serif)", "var(--font-mono)", "var(--font-sans)"] {
+            assert!(docs.contains(family), "type roles must name {family}");
+        }
+        assert!(docs.contains("`text-5xl`/`text-6xl` are NOT\n  compiled"));
+        assert!(docs.contains("fp-design: macro="));
+    }
+
+    #[test]
+    fn style_guide_does_not_prescribe_the_defaults_the_contract_bans() {
+        // The guide used to ship the exact recipes the design contract lists as banned tells,
+        // so the catalog and the guidance contradicted each other inside one prompt.
+        let docs = crate::a2ui::copilot::get_full_documentation();
+        for slop in [
+            "from-primary to-purple-500",
+            "border-l-4 border-primary pl-4",
+            "linear-gradient(135deg, var(--primary) 0%, purple 100%)",
+            "rounded-full bg-primary/10 text-primary px-3 py-1",
+        ] {
+            assert!(
+                !docs.contains(slop),
+                "component docs still prescribe a banned default: {slop}"
+            );
+        }
+        // A blanket hue scan cannot work here: the guide legitimately QUOTES `bg-[#ff00aa]` and
+        // `bg-white` as counter-examples, and "purples" is a Nivo palette name. So assert on the
+        // recipe forms above, and that every custom color in the guide is theme-derived.
+        let style_guide = crate::a2ui::copilot::get_documentation_section("style")
+            .expect("style section must exist");
+        assert!(style_guide.contains("color-mix(in oklab, var(--"));
+        assert!(style_guide.contains("NEVER hardcoded palette classes"));
+        assert!(
+            !style_guide.contains("rgba(0, 0, 0,"),
+            "style guide still ships a non-theme shadow color"
+        );
+    }
+
+    #[test]
     fn catalog_points_display_updates_at_element_setters_not_data_update() {
         // The product contract: workflow-driven display changes go through
         // element-level setters; Data Update is a last resort for `$.data.*`

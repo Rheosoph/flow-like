@@ -1,316 +1,274 @@
 ---
 title: Storage Configuration
-description: Configure object storage for Flow-Like Kubernetes deployment.
+description: Configure object storage and scoped runtime credentials for the Kubernetes backend.
 sidebar:
   order: 22
 ---
 
-Flow-Like requires S3-compatible object storage for workflow data, execution state, and logs. This page covers storage configuration specific to Kubernetes deployments.
+The Kubernetes API uses object storage for app metadata, user content, and
+execution logs. The Helm chart can wire AWS S3, Azure Blob Storage, Google
+Cloud Storage, Cloudflare R2, or a generic S3-compatible endpoint, but the
+checked-in API image does not currently provide the same end-to-end support
+for every advertised option.
 
-## Storage Buckets
+## Current Provider Status
 
-Flow-Like requires S3-compatible object storage for workflow data, execution state, and logs. This page covers storage configuration specific to Kubernetes deployments.
+| `storage.provider` | Backing store | Scoped runtime credentials in the checked-in API | Current guidance |
+| --- | --- | --- | --- |
+| `azure` | Azure Blob Storage | Included | Supported by the stock build |
+| `gcp` | Google Cloud Storage | Included | Supported by the stock build |
+| `r2` | R2 through its S3 API | Included | Use an existing Secret that also supplies `R2_API_TOKEN` |
+| `aws` | AWS S3 | The chart supports it, but the Kubernetes API target does not enable the `aws` feature | Rebuild the API with the `aws` feature before selecting it |
+| `s3` | Generic S3-compatible endpoint | Resolves to the AWS runtime-credential implementation, which is absent from the stock build | Not an end-to-end stock-image option |
 
-:::caution[Required Buckets]
-All three buckets (meta, content, logs) must be configured. Missing the logs bucket will cause executions to fail when trying to store execution logs.
+:::caution[Chart options are not a support guarantee]
+The chart renders `aws` and `s3` configurations, but the current
+`apps/backend/kubernetes/api/Cargo.toml` build omits the API package's `aws`
+feature. The API loads runtime credentials during startup, so those providers
+are rejected before it becomes ready. Enabling the feature is necessary but
+does not make an arbitrary S3-compatible service support AWS STS credential
+scoping.
 :::
 
-| Bucket | Purpose | Recommended Storage Class |
-|--------|---------|---------------------------|
-| Meta | App metadata, execution state | S3 Express One Zone |
-| Content | User files, workflow data | Standard S3 |
-| Logs | Execution logs | Standard S3 / S3 IA |
+## Storage Layout
 
-## AWS S3 Configuration
+Configure three logical storage locations:
 
-### Basic Setup
+| Location | Purpose |
+| --- | --- |
+| Meta | App and board metadata |
+| Content | App files, user files, and workflow data |
+| Logs | Persisted run logs |
 
-```yaml
-# In your Kubernetes Secret
-apiVersion: v1
-kind: Secret
-metadata:
-  name: flow-like-s3
-  namespace: flow-like
-type: Opaque
-stringData:
-  AWS_ACCESS_KEY_ID: "AKIAIOSFODNN7EXAMPLE"
-  AWS_SECRET_ACCESS_KEY: "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-  AWS_REGION: "us-west-2"
-  META_BUCKET: "flow-like-meta"
-  CONTENT_BUCKET: "flow-like-content"
-  LOG_BUCKET: "flow-like-logs"
-```
+Create the buckets or containers before installing the chart; the chart does
+not provision them. They may be separate locations or the same physical
+bucket/container referenced by the same name. Meta falls back to content in
+the shared storage configuration when it is omitted, while the chart emits an
+explicit meta value. The optional CDN store also falls back to content.
 
-### S3 Express One Zone
+Execution state is configured separately through the execution-state backend.
+It is not automatically stored in the meta bucket.
 
-S3 Express One Zone provides significantly better performance for metadata-heavy workloads:
+## Azure Blob Storage
 
-| Metric | Standard S3 | S3 Express |
-|--------|-------------|------------|
-| Latency | 100-200ms | 1-10ms |
-| Request Cost | $0.0004/1k | $0.0002/1k |
-| Storage Cost | $0.023/GB | $0.16/GB |
-
-**Best for:** Execution state store, app metadata, high-frequency reads/writes.
-
-Express buckets are automatically created in a specific availability zone:
-
-```bash
-# Create Express bucket in us-west-2 AZ 1
-aws s3api create-bucket \
-  --bucket flow-like-meta--usw2-az1--x-s3 \
-  --create-bucket-configuration \
-    LocationConstraint=us-west-2 \
-    Location={Type=AvailabilityZone,Name=usw2-az1} \
-    Bucket={DataRedundancy=SingleAvailabilityZone,Type=Directory}
-```
-
-Enable Express mode via environment variable:
+The chart can create the runtime Secret from values:
 
 ```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: flow-like-storage-config
-  namespace: flow-like
-data:
-  META_BUCKET_EXPRESS_ZONE: "true"
-  CONTENT_BUCKET_EXPRESS_ZONE: "false"
-  LOGS_BUCKET_EXPRESS_ZONE: "false"
+storage:
+  provider: azure
+  azure:
+    accountName: flowlikestorage
+    accountKey: replace-me
+    metaContainer: meta
+    contentContainer: content
+    logContainer: logs
 ```
 
-:::caution[Availability Zone]
-S3 Express buckets are single-AZ. Deploy your API pods in the same AZ for optimal latency. Use pod affinity or topology spread constraints.
-:::
+Keep credentials in an uncommitted, access-controlled values file. For a
+pre-created Secret, set `storage.azure.existingSecret` instead. It must expose:
 
-### IAM Permissions
+- `STORAGE_PROVIDER=azure`
+- `AZURE_STORAGE_ACCOUNT_NAME`
+- `AZURE_STORAGE_ACCOUNT_KEY`
+- `AZURE_META_CONTAINER`
+- `AZURE_CONTENT_CONTAINER`
+- `AZURE_LOG_CONTAINER`
 
-For S3 Express buckets, you need additional permissions:
+The account key is also used to mint container-scoped SAS credentials.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:DeleteObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::flow-like-*",
-        "arn:aws:s3:::flow-like-*/*"
-      ]
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3express:CreateSession"
-      ],
-      "Resource": [
-        "arn:aws:s3express:*:*:bucket/flow-like-*--*--x-s3"
-      ]
-    }
-  ]
-}
-```
-
-## Execution State Store
-
-The execution state store tracks running workflows and their events. By default, it uses the **meta bucket** for storage.
+## Google Cloud Storage
 
 ```yaml
-# ConfigMap
-data:
-  # Uses META_BUCKET by default, falls back to S3_STATE_BUCKET
-  EXECUTION_STATE_BACKEND: "s3"
+storage:
+  provider: gcp
+  gcp:
+    projectId: my-project
+    serviceAccountKey: |-
+      {"type":"service_account","project_id":"my-project"}
+    metaBucket: flow-like-meta
+    contentBucket: flow-like-content
+    logBucket: flow-like-logs
 ```
 
-This reuses the meta bucket configuration, so you don't need a separate bucket. If using S3 Express for the meta bucket, the state store automatically benefits from the lower latency.
+`serviceAccountKey` is the service-account JSON text consumed by
+`GOOGLE_APPLICATION_CREDENTIALS_JSON`; Kubernetes `stringData` performs the
+Secret's base64 encoding. Do not base64-encode the JSON a second time.
 
-:::tip[Cost Optimization]
-S3 Express has higher storage costs but lower request costs. For execution state (many small reads/writes), Express is typically cheaper overall.
-:::
+An existing GCP Secret must expose:
 
-## Scoped Runtime Credentials
+- `STORAGE_PROVIDER=gcp`
+- `GCP_PROJECT_ID`
+- `GOOGLE_APPLICATION_CREDENTIALS_JSON` when the workload cannot use ambient
+  credentials
+- `GCP_META_BUCKET`
+- `GCP_CONTENT_BUCKET`
+- `GCP_LOG_BUCKET`
 
-Flow-Like generates scoped credentials for every workflow execution using STS AssumeRole. This ensures users can only access their own prefix-isolated storage paths.
-
-:::caution[STS Compatibility Required]
-Scoped credentials require credential scoping support from your S3-compatible provider:
-- **AWS S3** ✅ Full support (STS AssumeRole)
-- **MinIO** ✅ Supported ([requires STS configuration](https://min.io/docs/minio/linux/developers/security-token-service.html))
-- **Cloudflare R2** ✅ Supported (uses [proprietary temp credentials API](https://developers.cloudflare.com/api/node/resources/r2/subresources/temporary_credentials/))
-- **Hetzner Object Storage** ❌ Not supported
-
-Providers without credential scoping support cannot be used with Flow-Like.
-:::
-
-### Setup
-
-1. Create a runtime role:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObject",
-        "s3:PutObject",
-        "s3:DeleteObject",
-        "s3:ListBucket"
-      ],
-      "Resource": [
-        "arn:aws:s3:::flow-like-content",
-        "arn:aws:s3:::flow-like-content/*",
-        "arn:aws:s3:::flow-like-meta",
-        "arn:aws:s3:::flow-like-meta/*",
-        "arn:aws:s3:::flow-like-logs",
-        "arn:aws:s3:::flow-like-logs/*"
-      ]
-    }
-  ]
-}
-```
-
-2. Add trust policy for the API service account:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Federated": "arn:aws:iam::123456789012:oidc-provider/oidc.eks.us-west-2.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE"
-      },
-      "Action": "sts:AssumeRoleWithWebIdentity",
-      "Condition": {
-        "StringEquals": {
-          "oidc.eks.us-west-2.amazonaws.com/id/EXAMPLED539D4633E53DE1B71EXAMPLE:sub": "system:serviceaccount:flow-like:flow-like-api"
-        }
-      }
-    }
-  ]
-}
-```
-
-3. Configure the API:
+Select it with:
 
 ```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: flow-like-runtime
-  namespace: flow-like
-type: Opaque
-stringData:
-  RUNTIME_ROLE_ARN: "arn:aws:iam::123456789012:role/FlowLikeRuntimeRole"
+storage:
+  provider: gcp
+  gcp:
+    existingSecret: flow-like-storage
 ```
-
-### Credential Scoping
-
-When `RUNTIME_ROLE_ARN` is set, each execution receives temporary credentials (valid 1 hour) scoped to:
-
-| Path Pattern | Access | Purpose |
-|--------------|--------|---------|
-| `apps/{app_id}/*` | Read/Write | App data |
-| `users/{user_id}/apps/{app_id}/*` | Read/Write | User's app data |
-| `runs/{app_id}/*` | Write | Execution logs |
-| `tmp/user/{user_id}/apps/{app_id}/*` | Read/Write | Temporary files |
-| `tmp/global/apps/{app_id}/*` | Read | Shared temporary files |
 
 ## Cloudflare R2
 
-R2 is S3-compatible and supports prefix-scoped temporary credentials through Cloudflare's [proprietary API](https://developers.cloudflare.com/api/node/resources/r2/subresources/temporary_credentials/):
+R2 uses the AWS-compatible object-store adapter for backing storage and its own
+temporary-credential API for runtime scoping. Create a private environment
+file for the Secret:
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: flow-like-r2
-  namespace: flow-like
-type: Opaque
-stringData:
-  # R2 credentials for S3 API access
-  R2_ACCESS_KEY_ID: "your-r2-access-key-id"
-  R2_SECRET_ACCESS_KEY: "your-r2-secret-access-key"
-  R2_ENDPOINT: "https://<account-id>.r2.cloudflarestorage.com"
-  # R2 Temp Credentials API (required for scoped credentials)
-  R2_ACCOUNT_ID: "your-cloudflare-account-id"
-  R2_API_TOKEN: "your-cloudflare-api-token"
-  # Bucket names
-  META_BUCKET: "flow-like-meta"
-  CONTENT_BUCKET: "flow-like-content"
-  LOG_BUCKET: "flow-like-logs"
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: flow-like-storage-config
-  namespace: flow-like
-data:
-  STORAGE_PROVIDER: "r2"
+```dotenv
+STORAGE_PROVIDER=aws
+RUNTIME_CREDENTIALS_PROVIDER=r2
+R2_ACCOUNT_ID=replace-me
+R2_API_TOKEN=replace-me
+R2_ACCESS_KEY_ID=replace-me
+R2_SECRET_ACCESS_KEY=replace-me
+AWS_ENDPOINT=https://replace-me.r2.cloudflarestorage.com
+AWS_REGION=auto
+AWS_ACCESS_KEY_ID=replace-me
+AWS_SECRET_ACCESS_KEY=replace-me
+AWS_USE_PATH_STYLE=true
+META_BUCKET=flow-like-meta
+CONTENT_BUCKET=flow-like-content
+LOG_BUCKET=flow-like-logs
 ```
 
-### R2 API Token Setup
+Create the Secret and select it:
 
-The API token needs the `Workers R2 Storage:Edit` permission:
-
-1. Go to [Cloudflare Dashboard](https://dash.cloudflare.com/) → **Manage Account** → **API Tokens**
-2. Create a custom token with:
-   - **Permissions**: `Account` → `Workers R2 Storage` → `Edit`
-   - **Account Resources**: Include your account
-
-## MinIO (Self-hosted S3)
-
-For air-gapped environments or local development:
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: flow-like-s3
-  namespace: flow-like
-type: Opaque
-stringData:
-  AWS_ACCESS_KEY_ID: "minioadmin"
-  AWS_SECRET_ACCESS_KEY: "minioadmin"
-  AWS_ENDPOINT: "http://minio.flow-like.svc:9000"
-  AWS_REGION: "us-east-1"
-  META_BUCKET: "flow-like-meta"
-  CONTENT_BUCKET: "flow-like-content"
-  LOG_BUCKET: "flow-like-logs"
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: flow-like-storage-config
-  namespace: flow-like
-data:
-  AWS_USE_PATH_STYLE: "true"
-  # Express zone not supported with MinIO
-  META_BUCKET_EXPRESS_ZONE: "false"
+```bash
+kubectl -n flow-like create secret generic flow-like-storage \
+  --from-env-file=flow-like-r2.env \
+  --dry-run=client -o yaml \
+  | kubectl apply -f -
 ```
 
-## Environment Variables Reference
+```yaml
+storage:
+  provider: r2
+  r2:
+    existingSecret: flow-like-storage
+```
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `STORAGE_PROVIDER` | Storage backend (`aws`, `r2`, `azure`, `gcp`) | `aws` |
-| `META_BUCKET` | Bucket for app metadata and execution state | Required |
-| `CONTENT_BUCKET` | Bucket for user content and workflow data | Required |
-| `LOG_BUCKET` | Bucket for execution logs | Required |
-| `META_BUCKET_EXPRESS_ZONE` | Enable S3 Express for meta bucket | `false` |
-| `CONTENT_BUCKET_EXPRESS_ZONE` | Enable S3 Express for content bucket | `false` |
-| `LOGS_BUCKET_EXPRESS_ZONE` | Enable S3 Express for logs bucket | `false` |
-| `RUNTIME_ROLE_ARN` | IAM role ARN for scoped runtime credentials (AWS/MinIO) | Optional |
-| `R2_ACCOUNT_ID` | Cloudflare account ID for R2 temp credentials | R2 only |
-| `R2_API_TOKEN` | Cloudflare API token for R2 temp credentials | R2 only |
-| `EXECUTION_STATE_BACKEND` | State store backend (`postgres`, `redis`, `s3`) | `postgres` |
-| `AWS_USE_PATH_STYLE` | Use path-style URLs (for MinIO/R2) | `false` |
+:::caution[R2 chart gap]
+The chart-generated R2 Secret does not currently include `R2_API_TOKEN`.
+Backing-store access can initialize without it, but requests that mint scoped
+temporary credentials fail. Use an existing Secret until that chart contract
+is updated.
+:::
+
+Grant the API token only the account-level R2 permissions required to create
+temporary credentials. Keep the S3 access keys and API token out of checked-in
+values.
+
+## AWS S3
+
+After rebuilding the Kubernetes API with the `flow-like-api/aws` feature, AWS
+storage requires:
+
+- A workload identity or static AWS credentials that can access the configured
+  buckets
+- `RUNTIME_ROLE_ARN`, whose role can be assumed by the API identity
+- An IAM policy on that runtime role that permits the object operations Flow-Like
+  narrows with per-request session policies
+
+For EKS workload identity, use an existing Secret that omits
+`AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` entirely:
+
+```dotenv
+STORAGE_PROVIDER=aws
+AWS_REGION=eu-central-1
+META_BUCKET=flow-like-meta
+CONTENT_BUCKET=flow-like-content
+LOG_BUCKET=flow-like-logs
+RUNTIME_ROLE_ARN=arn:aws:iam::123456789012:role/FlowLikeRuntimeRole
+```
+
+```yaml
+serviceAccount:
+  create: true
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/FlowLikeApiRole
+
+storage:
+  provider: aws
+  aws:
+    existingSecret: flow-like-storage
+```
+
+The chart-generated AWS Secret always writes the static credential keys, even
+when their values are empty. An explicit empty value is still a configured
+environment value and can prevent the AWS credential chain from using
+workload identity. Omitting those keys in an existing Secret avoids that
+misconfiguration.
+
+## Generic S3-Compatible Storage
+
+The chart's `s3` block supplies both `S3_*` settings for the Kubernetes storage
+adapter and `AWS_*` aliases used by the shared API layer:
+
+```yaml
+storage:
+  provider: s3
+  s3:
+    endpoint: https://objects.example.com
+    region: us-east-1
+    accessKeyId: replace-me
+    secretAccessKey: replace-me
+    metaBucket: flow-like-meta
+    contentBucket: flow-like-content
+    logBucket: flow-like-logs
+    usePathStyle: true
+```
+
+This is enough to describe backing-store access after enabling the API's
+`aws` feature. It is not proof that the service supports Flow-Like's scoped
+runtime-credential path: `s3` selects the AWS implementation, which calls AWS
+STS `AssumeRole` and requires `RUNTIME_ROLE_ARN`. Do not treat MinIO or another
+S3-compatible service as end-to-end supported without validating that path.
+
+## Scoped Credentials
+
+Flow-Like loads a master provider from `RUNTIME_CREDENTIALS_PROVIDER`, falling
+back to `STORAGE_PROVIDER` when the former is absent. Explicit empty values do
+not trigger the fallback and are configuration errors.
+
+For app and run operations, the API derives temporary credentials narrowed to
+paths such as:
+
+- `apps/{app_id}/`
+- `users/{user_id}/apps/{app_id}/`
+- `runs/{app_id}/`
+- `tmp/user/{user_id}/apps/{app_id}/`
+- `tmp/global/apps/{app_id}/`
+
+AWS uses `AssumeRole` with an inline session policy, Azure creates SAS tokens,
+GCP creates signed or token-based scoped access, and R2 calls its temporary
+credentials API. Provider-side IAM remains the outer permission boundary.
+
+## Validate the Configuration
+
+Render the selected provider before installing:
+
+```bash
+helm lint apps/backend/kubernetes/helm \
+  --values flow-like-values.yaml
+
+helm template flow-like apps/backend/kubernetes/helm \
+  --namespace flow-like \
+  --values flow-like-values.yaml
+```
+
+After installation, verify readiness without printing Secret values:
+
+```bash
+kubectl get deployment flow-like-api -n flow-like
+kubectl logs deployment/flow-like-api -n flow-like
+```
+
+Startup errors mentioning the provider, master credentials, or a missing
+bucket/container usually indicate either a missing Secret key, an explicit
+empty value, a bucket that was not created, or a provider feature that is not
+present in the API image.

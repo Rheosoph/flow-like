@@ -1,0 +1,191 @@
+{
+	"schema": "flow-like.doc-screenshot-http-fixture/v1",
+	"strict": true,
+	"blockedOrigins": [
+		"https://o4507505692901376.ingest.de.sentry.io",
+		"https://a.basemaps.cartocdn.com",
+		"https://b.basemaps.cartocdn.com",
+		"https://c.basemaps.cartocdn.com",
+		"https://img.youtube.com",
+		"https://www.youtube-nocookie.com",
+		"https://open.spotify.com",
+		"https://platform.twitter.com",
+		"https://www.redditmedia.com",
+		"https://opengraph.githubassets.com",
+		"https://www.linkedin.com",
+		"https://www.google.com"
+	],
+	"blockedEndpoints": ["http://localhost:8080/api/v1/og"],
+	"routes": [
+		{
+			"request": {
+				"method": "OPTIONS",
+				"url": "http://localhost:8080/api/v1/auth/openid"
+			},
+			"response": {
+				"status": 204,
+				"headers": {
+					"access-control-allow-origin": "*",
+					"access-control-allow-methods": "GET, OPTIONS",
+					"access-control-allow-headers": "content-type"
+				}
+			}
+		},
+		{
+			"request": {
+				"method": "GET",
+				"url": "http://localhost:8080/api/v1/auth/openid"
+			},
+			"response": {
+				"status": 200,
+				"headers": {
+					"access-control-allow-origin": "*"
+				},
+				"json": {
+					"authority": "http://localhost:8080",
+					"client_id": "flow-like-doc-screenshot",
+					"redirect_uri": "http://localhost:3001/callback",
+					"post_logout_redirect_uri": "http://localhost:3001/",
+					"response_type": "code",
+					"scope": "openid profile email",
+					"jwks_url": "http://localhost:8080/api/v1/auth/jwks",
+					"metadata": {
+						"issuer": "http://localhost:8080",
+						"authorization_endpoint": "http://localhost:8080/api/v1/auth/authorize",
+						"token_endpoint": "http://localhost:8080/api/v1/auth/token",
+						"userinfo_endpoint": "http://localhost:8080/api/v1/auth/userinfo"
+					}
+				}
+			}
+		},
+		{
+			"request": {
+				"method": "OPTIONS",
+				"url": "http://localhost:8080/api/v1/profile"
+			},
+			"response": {
+				"status": 204,
+				"headers": {
+					"access-control-allow-origin": "*",
+					"access-control-allow-methods": "GET, OPTIONS",
+					"access-control-allow-headers": "content-type"
+				}
+			}
+		},
+		{
+			"request": {
+				"method": "GET",
+				"url": "http://localhost:8080/api/v1/profile"
+			},
+			"response": {
+				"status": 200,
+				"headers": {
+					"access-control-allow-origin": "*"
+				},
+				"json": [
+					{
+						"id": "docs-profile",
+						"name": "Documentation",
+						"description": "Deterministic documentation capture profile",
+						"bit_ids": [],
+						"hub": "http://localhost:8080",
+						"hubs": ["http://localhost:8080"],
+						"user_id": "docs-user",
+						"created_at": "2026-01-01T00:00:00.000Z",
+						"updated_at": "2026-01-01T00:00:00.000Z"
+					}
+				]
+			}
+		},
+		{
+			"request": {
+				"method": "OPTIONS",
+				"url": "http://localhost:8080/api/v1/user/info"
+			},
+			"response": {
+				"status": 204,
+				"headers": {
+					"access-control-allow-origin": "*",
+					"access-control-allow-methods": "GET, OPTIONS",
+					"access-control-allow-headers": "content-type"
+				}
+			}
+		},
+		{
+			"request": {
+				"method": "GET",
+				"url": "http://localhost:8080/api/v1/user/info"
+			},
+			"response": {
+				"status": 200,
+				"headers": {
+					"access-control-allow-origin": "*"
+				},
+				"json": {
+					"id": "docs-user",
+					"name": "Documentation",
+					"email": "docs@example.invalid",
+					"permission": 0,
+					"status": "ACTIVE",
+					"tier": "FREE",
+					"created_at": "2026-01-01T00:00:00.000Z",
+					"updated_at": "2026-01-01T00:00:00.000Z"
+				}
+			}
+		},
+		{
+			"request": {
+				"method": "OPTIONS",
+				"url": "http://localhost:8080/api/v1/bit"
+			},
+			"response": {
+				"status": 204,
+				"headers": {
+					"access-control-allow-origin": "*",
+					"access-control-allow-methods": "POST, OPTIONS",
+					"access-control-allow-headers": "content-type"
+				}
+			}
+		},
+		{
+			"request": {
+				"method": "POST",
+				"url": "http://localhost:8080/api/v1/bit"
+			},
+			"response": {
+				"status": 200,
+				"headers": {
+					"access-control-allow-origin": "*"
+				},
+				"json": []
+			}
+		},
+		{
+			"request": {
+				"method": "OPTIONS",
+				"url": "http://localhost:8080/api/v1/apps"
+			},
+			"response": {
+				"status": 204,
+				"headers": {
+					"access-control-allow-origin": "*",
+					"access-control-allow-methods": "GET, OPTIONS",
+					"access-control-allow-headers": "content-type"
+				}
+			}
+		},
+		{
+			"request": {
+				"method": "GET",
+				"url": "http://localhost:8080/api/v1/apps"
+			},
+			"response": {
+				"status": 200,
+				"headers": {
+					"access-control-allow-origin": "*"
+				},
+				"json": []
+			}
+		}
+	]
+}

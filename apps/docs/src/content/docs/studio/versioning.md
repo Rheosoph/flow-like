@@ -1,147 +1,110 @@
 ---
 title: Versioning
-description: Version control for boards, events, and apps in Flow-Like
+description: Snapshot Flows and pin app entry points to known versions
 sidebar:
   order: 80
 ---
 
-Flow-Like has built-in versioning for boards, events, and apps. This allows you to safely manage changes, roll back to previous versions, and control which version is used in production.
+Flow-Like can save immutable versions of a Flow while keeping a separate
+editable draft. Events, Pages, and Templates can then refer to either the
+latest draft or a known version.
 
 ## Version Format
 
-All versions follow **semantic versioning** with three numbers:
+Flow versions use three numeric parts:
 
-```
-(major, minor, patch)
+```text
+major.minor.patch
 ```
 
 | Version Type | When to Use | Example |
-|--------------|-------------|----------|
-| **Major** | Breaking changes, new features | `(1,0,0)` → `(2,0,0)` |
-| **Minor** | New functionality, backwards compatible | `(1,0,0)` → `(1,1,0)` |
-| **Patch** | Bug fixes, small tweaks | `(1,0,0)` → `(1,0,1)` |
+| --- | --- | --- |
+| **Major** | Existing callers or behavior may need migration | `1.4.2` → `2.0.0` |
+| **Minor** | Compatible behavior or capability is added | `1.4.2` → `1.5.0` |
+| **Patch** | Compatible correction or small adjustment | `1.4.2` → `1.4.3` |
 
----
+Flow-Like does not infer the semantic meaning of a change. Choose the bump that
+matches how the Flow is consumed.
 
-## Board Versioning
+## Create a Flow version
 
-Boards include built-in versioning accessible via **Board Settings** in the top navigation bar:
+1. Open the Flow in Studio.
+2. Open **Manage Board** from the Studio toolbar.
+3. Under **Version**, select **Create Version**.
+4. Choose **Major**, **Minor**, or **Patch**.
 
-![A screenshot showing how to create a new board version in Flow-Like Studio](../../../assets/BoardVersions.webp)
+The current draft is saved as an immutable snapshot and the editable draft
+moves to the next version number. Existing snapshots are not overwritten.
 
-### How It Works
+![The Manage Board dialog in Flow-Like Studio, showing the version selector and version-creation menu](../../../assets/BoardVersions.webp)
 
-1. **Latest version** — Your working copy, always editable
-2. **Saved versions** — Snapshots stored as `{major}_{minor}_{patch}.board`
-3. **Version history** — List all saved versions and load any previous state
+The **Version** selector distinguishes:
 
-### Creating a Version
+- **Latest** — the editable Flow draft and its current version number.
+- A numbered version — a read-only snapshot.
 
-When you create a version:
-- The current board state is saved to `/versions/{board_id}/{major}_{minor}_{patch}.board`
-- The board's version number increments based on your selection (Major/Minor/Patch)
-- The "latest" working copy continues to be editable
+Open a numbered version to inspect its graph or execution history. Return to
+**Latest** before editing.
 
-### Loading a Version
+## Pin an Event
 
-You can load any previous version to:
-- Review what changed between releases
-- Roll back to a known-good state
-- Compare behavior across versions
+An Event can target **Latest** or a numbered Flow version:
 
----
+| Event target | Behavior |
+| --- | --- |
+| **Latest** | Uses the current Flow draft when the Event runs |
+| **Pinned version** | Uses that immutable snapshot until the Event is edited |
 
-## Event Versioning
+Pin production-facing Events when changes to the draft must not affect live
+behavior. Use **Latest** for development entry points where immediate changes
+are intentional.
 
-Events also have their own version history, independent of the board they reference.
+To change the target, open the Event and edit **Flow Version**. Confirm that
+the selected event node still exists in the target version and test the Event
+with representative payloads.
 
-### Event Version Triggers
+## Pages and actions
 
-A new event version is automatically created when you change:
-- The **board** the event points to
-- The **board version** (pinned vs latest)
-- The **entry node** within the board
-- The **canary configuration**
+Page-target Events also expose a **Flow Version** selector. Data Studio
+ontology actions can likewise bind to a published Flow version so a governed
+action does not drift with an editable draft.
 
-### Board Version Pinning
+If you update a Flow used by one of these entry points:
 
-Each event can reference a board in two ways:
+1. Create and test a new Flow version.
+2. Update the Event, Page target, or ontology action to the new version.
+3. Verify the complete interface or invocation path.
+4. Keep the previous version available until rollback is no longer required.
 
-| Mode | `board_version` | Behavior |
-|------|-----------------|----------|
-| **Latest** | `None` | Always uses the current board |
-| **Pinned** | `Some((1,2,3))` | Locked to specific version |
+## Flow Templates
 
-**Use pinned versions for production events** — this ensures your workflows don't break when you edit the board.
+A [Flow Template](/apps/templates/) snapshots either the latest draft or a
+selected Flow version. A Template has its own metadata and versions, but it
+does not replace versioning the source Flow.
 
-### Canary Releases
+Use a Template when you want a reusable Flow blueprint. Use a pinned Event
+when you want an App entry point to keep running a known implementation.
 
-Events support **canary deployments** with weighted traffic splitting:
+## App version metadata
 
-```rust
-CanaryEvent {
-    weight: 0.1,           // 10% of traffic
-    board_id: "...",
-    board_version: Some((2,0,0)),  // New version
-    ...
-}
-```
+An App also has a free-form **Version** field in its details. That value is
+release metadata for people browsing the App; editing it does not create a
+snapshot of the App, its Flows, storage, or Events.
 
-This lets you gradually roll out changes:
-- 90% of invocations go to the main board version
-- 10% go to the canary (new version)
-- Adjust weights as you gain confidence
+Treat the App version as a label for a tested collection of Flow and interface
+versions, and record the corresponding changes in the App changelog.
 
----
+## Roll back safely
 
-## App Versioning
+If a pinned entry point needs to be rolled back:
 
-Apps have an optional `version` field for tracking releases:
-
-```rust
-App {
-    version: Option<String>,  // e.g., "1.0.0"
-    changelog: Option<String>,
-    ...
-}
-```
-
-This is primarily for:
-- **Public apps** — Show users what version they're running
-- **Changelogs** — Document what changed between releases
-- **Templates** — Track template versions separately from boards
-
----
-
-## Best Practices
-
-### Development Workflow
-
-1. **Edit on latest** — Make changes to your board freely
-2. **Test locally** — Run the board with dev events
-3. **Create a version** — Snapshot when ready
-4. **Pin production events** — Point to the new version
-
-### Version Naming
-
-| Change | Version Bump |
-|--------|-------------|
-| New event type or major flow rewrite | Major |
-| Added nodes, new branches | Minor |
-| Fixed a bug, tweaked values | Patch |
-
-### Rollback Strategy
-
-If something breaks in production:
-1. **Re-pin the event** to the previous board version
-2. **Debug on latest** without affecting production
-3. **Create a patch version** with the fix
-4. **Re-pin to the new version**
-
----
+1. Re-select the previous tested Flow version on the Event or action.
+2. Keep debugging on **Latest**.
+3. Create a new patch version for the correction.
+4. Test and pin the corrected version.
 
 ## Related
 
-- [Events](/apps/events/) — Configure how workflows are triggered
-- [Logging](/studio/logging/) — Debug version-specific issues
-- [Templates](/apps/templates/) — Reusable versioned workflows
+- [Events](/apps/events/) — configure app entry points
+- [Logging](/studio/logging/) — inspect version-specific runs
+- [Templates](/apps/templates/) — create reusable Flow snapshots

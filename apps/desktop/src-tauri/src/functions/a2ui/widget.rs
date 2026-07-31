@@ -34,11 +34,9 @@ pub async fn get_widget(
 ) -> Result<Widget, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
-    // Check widget registry first
-    if let Some(widget) = flow_like_state.widget_registry.get(&widget_id) {
-        return Ok(widget.value().clone());
-    }
-
+    // The legacy open-widget registry is keyed only by bare widget id, so consulting it here can
+    // return another app's widget before app scope is validated. Nothing currently inserts into
+    // that registry; use authoritative app storage until the cache key carries (app_id, widget_id).
     let app = App::load(app_id, flow_like_state.clone()).await?;
     let widget = app.open_widget(widget_id, version).await?;
     Ok(widget)

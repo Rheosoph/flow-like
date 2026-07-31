@@ -433,17 +433,17 @@ eventsGeneric readFile(path: string, summary: bool, payload: Struct) {
     if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) })) { // exec_out_exists
         const setExtension4 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_index" })
         if (pathExists({ path: setExtension4.pathOut })) { // exec_out_exists
-            if (utilsTypesFallback({ value: summary, default: true }).result) {
-                const setExtension2 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_summary" })
-                const readToString = readToString({ path: setExtension2.pathOut })
-                return readToString.content
-            } else {
-                const setExtension6 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_md" })
-                const readToString2 = readToString({ path: setExtension6.pathOut })
-                return readToString2.content
-            }
         } else { // exec_out_missing
             indexPath({ path: path })
+        }
+        if (utilsTypesFallback({ value: summary, default: true }).result) {
+            const setExtension2 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_summary" })
+            const readToString = readToString({ path: setExtension2.pathOut })
+            return readToString.content
+        } else {
+            const setExtension6 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_md" })
+            const readToString2 = readToString({ path: setExtension6.pathOut })
+            return readToString2.content
         }
     } else { // exec_out_missing
         return stringFormat({ formatString: "Path {path} does not exist. No file found.", path: path })

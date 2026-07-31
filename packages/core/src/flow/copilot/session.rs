@@ -61,6 +61,10 @@ pub enum WorkflowSessionPhase {
     Initialized,
     ContextReady,
     Discovering,
+    /// The requested behavior has been split into ordered, individually executable segments and a
+    /// strategy chosen for how they reach the board. Sits between discovery and authoring because a
+    /// plan needs the declaration coverage but must precede the first source write.
+    Planning,
     Authoring,
     Validating,
     Validated,
@@ -329,6 +333,9 @@ pub enum WorkflowTelemetryKind {
     ContextReadAborted,
     ContextReadDeduplicated,
     PredraftContextBudgetExhausted,
+    ScopePlanned,
+    ScopeSegmentCompleted,
+    TimeExtensionGranted,
     FirstArtifactSlaBreached,
     ArtifactRetained,
     ValidationCompleted,
@@ -579,6 +586,77 @@ impl WorkflowSession {
             elapsed_ms,
             WorkflowTelemetryKind::DiscoveryStarted,
             json!({}),
+        );
+        Ok(())
+    }
+
+    /// Record the accepted scope plan. The segment shape itself is host-owned; the session tracks
+    /// only that planning happened and how large the resulting plan is.
+    pub fn record_scope_plan(
+        &mut self,
+        strategy: &str,
+        segment_count: usize,
+        revision: u8,
+        elapsed_ms: u64,
+    ) -> Result<(), WorkflowSessionError> {
+        self.require_active("record scope plan")?;
+        if self.artifact.is_none() {
+            self.phase = WorkflowSessionPhase::Planning;
+        }
+        self.telemetry.append(
+            elapsed_ms,
+            WorkflowTelemetryKind::ScopePlanned,
+            json!({
+                "strategy": strategy,
+                "segments": segment_count,
+                "revision": revision,
+            }),
+        );
+        Ok(())
+    }
+
+    /// Record that one planned segment reached the board. A committed segment is real progress, so
+    /// it renews the retry lease exactly as a fresh continuation does.
+    pub fn record_scope_segment_completed(
+        &mut self,
+        segment_id: &str,
+        index: usize,
+        total: usize,
+        elapsed_ms: u64,
+    ) -> Result<(), WorkflowSessionError> {
+        self.require_active("record scope segment")?;
+        self.consecutive_zero_progress_attempts = 0;
+        self.strategy_attempts.clear();
+        self.circuit = None;
+        self.telemetry.append(
+            elapsed_ms,
+            WorkflowTelemetryKind::ScopeSegmentCompleted,
+            json!({
+                "segment": segment_id,
+                "index": index,
+                "total": total,
+            }),
+        );
+        Ok(())
+    }
+
+    /// Record that the run earned more wall clock by demonstrating progress. Hosts own both the
+    /// ledger and the ceiling; the session only carries the fact for telemetry, so a long run is
+    /// auditable after the fact.
+    pub fn record_time_extension(
+        &mut self,
+        grants: u8,
+        earned_secs: u64,
+        elapsed_ms: u64,
+    ) -> Result<(), WorkflowSessionError> {
+        self.require_active("record time extension")?;
+        self.telemetry.append(
+            elapsed_ms,
+            WorkflowTelemetryKind::TimeExtensionGranted,
+            json!({
+                "grants": grants,
+                "earned_secs": earned_secs,
+            }),
         );
         Ok(())
     }

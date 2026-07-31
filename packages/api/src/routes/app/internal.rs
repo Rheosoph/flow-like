@@ -6,4 +6,5 @@ pub mod get_apps;
 pub mod get_detail;
 pub mod get_nodes;
 pub mod search_apps;
+pub mod search_templates;
 pub mod upsert_app;

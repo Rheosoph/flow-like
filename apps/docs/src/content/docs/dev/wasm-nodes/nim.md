@@ -8,7 +8,7 @@ sidebar:
     variant: note
 ---
 
-Nim compiles to C, then Emscripten compiles that C output to a standalone WebAssembly module. This two-stage pipeline (`nim → C → WASM`) gives you Nim's expressive syntax with near-native WASM performance and no tracing GC overhead thanks to ARC memory management.
+Nim compiles to C, then Emscripten compiles that C output to a standalone WebAssembly module. This two-stage pipeline gives you Nim's expressive syntax with near-native WASM performance and no tracing GC overhead thanks to ARC memory management.
 
 This template produces a **Core Module** — see [Runtime Models](/dev/wasm-nodes/runtime-models/) for how this differs from Component Model nodes.
 
@@ -18,22 +18,18 @@ This template produces a **Core Module** — see [Runtime Models](/dev/wasm-node
 - [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) — provides `emcc`
 - [mise](https://mise.jdx.dev/) (optional, for task runner)
 
-## Project Structure
+## Important Files
 
-```
-wasm-node-nim/
-├── flow-like.toml      # Package manifest (id, metadata, node list)
-├── node.nimble          # Nim package config + build task
-├── nim.cfg              # Compiler paths (local SDK reference)
-├── mise.toml            # Task runner config
-├── src/
-│   ├── node.nim         # ← Your node logic (edit this!)
-│   └── sdk.nim          # SDK module (host FFI bindings)
-├── examples/
-│   └── http_request.nim # HTTP permission example
-└── tests/
-    └── test_node.nim    # Unit tests (native)
-```
+| Path | Purpose |
+|------|---------|
+| `src/node.nim` | Defines node metadata, run logic, and exported Core Module functions |
+| `src/sdk.nim` | Re-exports the adjacent SDK modules and provides JSON helpers |
+| `node.nimble` | Configures the Nim package and build task |
+| `nim.cfg` | Adds the local SDK source directory to Nim's import path |
+| `examples/http_request.nim` | Demonstrates an HTTP request |
+| `tests/test_node.nim` | Contains native unit tests |
+| `flow-like.toml` | Declares the Flow-Like package |
+| `mise.toml` | Provides setup, build, test, and clean tasks |
 
 ## Template Code
 

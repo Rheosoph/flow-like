@@ -1,0 +1,174 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="title description">
+	<title id="title">Flow-Like Docker Compose architecture</title>
+	<desc id="description">Clients enter through the web application or API gateway. API replicas use PostgreSQL, Redis, object storage, runtime workers, the compiler, sink services, and realtime signaling. An optional monitoring profile adds Prometheus, Tempo, exporters, and Grafana.</desc>
+	<defs>
+		<linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#111217"/>
+			<stop offset="1" stop-color="#191a20"/>
+		</linearGradient>
+		<linearGradient id="api-card" x1="0" y1="0" x2="1" y2="1">
+			<stop offset="0" stop-color="#35231f"/>
+			<stop offset="1" stop-color="#211d1e"/>
+		</linearGradient>
+		<pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+			<circle cx="2" cy="2" r="1.2" fill="#ffffff" opacity="0.065"/>
+		</pattern>
+		<filter id="shadow" x="-25%" y="-30%" width="150%" height="175%">
+			<feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.34"/>
+		</filter>
+		<marker id="arrow-coral" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+			<path d="M0 0 10 5 0 10z" fill="#ff7652"/>
+		</marker>
+		<marker id="arrow-cyan" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+			<path d="M0 0 10 5 0 10z" fill="#59c7d8"/>
+		</marker>
+		<style>
+			text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+			.heading{fill:#f6f3f0;font-size:40px;font-weight:730;letter-spacing:-.7px}
+			.sub{fill:#aaa7a5;font-size:18px}
+			.kicker{fill:#ff8c6b;font-size:14px;font-weight:760;letter-spacing:2.1px}
+			.card-title{fill:#f5f2ef;font-size:20px;font-weight:700}
+			.card-copy{fill:#aaa7a5;font-size:14px}
+			.mini{fill:#c9c6c3;font-size:12px;font-weight:650}
+			.port{fill:#7ad8e7;font-size:12px;font-weight:720}
+		</style>
+	</defs>
+
+	<rect width="1600" height="900" rx="36" fill="url(#background)"/>
+	<rect x="26" y="26" width="1548" height="848" rx="29" fill="url(#dots)" stroke="#ffffff" stroke-opacity=".08"/>
+	<text x="76" y="91" class="heading">A complete single-host stack</text>
+	<text x="76" y="127" class="sub">Compose connects the product surface, API, execution plane, persistence, collaboration, and observability.</text>
+	<text x="1506" y="90" text-anchor="end" class="kicker">FLOW-LIKE · COMPOSE</text>
+
+	<!-- Network boundary -->
+	<rect x="278" y="168" width="1250" height="630" rx="32" fill="#15171c" fill-opacity=".72" stroke="#50535d" stroke-width="2"/>
+	<rect x="304" y="186" width="246" height="28" rx="14" fill="#292b32"/>
+	<circle cx="325" cy="200" r="5" fill="#4fd2a0"/>
+	<text x="340" y="205" fill="#c7c9cf" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="13" font-weight="720" letter-spacing="1.3">DOCKER COMPOSE NETWORK</text>
+
+	<!-- Connectors, deliberately unfiltered so they render in every SVG engine -->
+	<path d="M244 322H330" fill="none" stroke="#59c7d8" stroke-width="4" marker-end="url(#arrow-cyan)"/>
+	<path d="M244 402C270 402 284 324 330 324" fill="none" stroke="#ff7652" stroke-width="4" marker-end="url(#arrow-coral)"/>
+	<path d="M590 296H650" fill="none" stroke="#ff7652" stroke-width="4" marker-end="url(#arrow-coral)"/>
+	<path d="M910 296H970" fill="none" stroke="#ff7652" stroke-width="4" marker-end="url(#arrow-coral)"/>
+	<path d="M1215 366V408H455V448" fill="none" stroke="#59c7d8" stroke-width="3"/>
+	<path d="M1215 408H745V448" fill="none" stroke="#a58aff" stroke-width="3"/>
+	<path d="M1215 408H1035V448" fill="none" stroke="#4fd2a0" stroke-width="3"/>
+	<path d="M1390 366V588H420V620M800 588V620" fill="none" stroke="#ff7652" stroke-width="3"/>
+	<path d="M745 566V604H540V620" fill="none" stroke="#a58aff" stroke-width="3"/>
+	<path d="M745 604H1090" fill="none" stroke="#a58aff" stroke-width="3"/>
+	<path d="M745 604H1370" fill="none" stroke="#a58aff" stroke-width="3"/>
+	<path d="M1090 604V620M1370 604V620" fill="none" stroke="#a58aff" stroke-width="3"/>
+
+	<!-- Clients -->
+	<g filter="url(#shadow)">
+		<rect x="58" y="258" width="186" height="210" rx="25" fill="#202126" stroke="#5b5d66" stroke-width="2"/>
+		<rect x="82" y="282" width="78" height="27" rx="13.5" fill="#59c7d8" fill-opacity=".12" stroke="#59c7d8" stroke-opacity=".45"/>
+		<text x="121" y="301" text-anchor="middle" fill="#7ad8e7" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="11" font-weight="760" letter-spacing="1.2">CLIENTS</text>
+		<circle cx="104" cy="347" r="20" fill="#59c7d8" fill-opacity=".12"/>
+		<rect x="94" y="338" width="20" height="15" rx="2" fill="none" stroke="#7ad8e7" stroke-width="2.5"/>
+		<text x="136" y="353" class="card-title">Browser</text>
+		<line x1="84" y1="378" x2="218" y2="378" stroke="#ffffff" stroke-opacity=".08"/>
+		<circle cx="104" cy="413" r="20" fill="#ff7652" fill-opacity=".12"/>
+		<path d="M94 406h20v14H94zm4-5h12" fill="none" stroke="#ff987d" stroke-width="2.5"/>
+		<text x="136" y="419" class="card-title">Desktop</text>
+		<text x="84" y="449" class="card-copy">Web UI or remote API calls</text>
+	</g>
+
+	<!-- Entry plane -->
+	<g filter="url(#shadow)">
+		<rect x="330" y="238" width="260" height="128" rx="24" fill="#1e2725" stroke="#4fd2a0" stroke-opacity=".6"/>
+		<circle cx="370" cy="278" r="20" fill="#4fd2a0" fill-opacity=".13"/>
+		<rect x="359" y="269" width="22" height="17" rx="3" fill="none" stroke="#73ddb5" stroke-width="2.5"/>
+		<path d="M359 275h22" stroke="#73ddb5" stroke-width="2.5"/>
+		<text x="404" y="276" class="kicker" fill="#73ddb5">PRODUCT</text>
+		<text x="404" y="304" class="card-title">Web application</text>
+		<text x="356" y="338" class="card-copy">Static Next.js surface</text>
+		<text x="554" y="338" text-anchor="end" class="port">:3001</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="650" y="238" width="260" height="128" rx="24" fill="url(#api-card)" stroke="#ff7652" stroke-width="2"/>
+		<circle cx="690" cy="278" r="20" fill="#ff7652" fill-opacity=".15"/>
+		<path d="M679 271h22M679 278h22M679 285h22" stroke="#ff987d" stroke-width="2.5" stroke-linecap="round"/>
+		<text x="724" y="276" class="kicker">ENTRYPOINT</text>
+		<text x="724" y="304" class="card-title">API gateway</text>
+		<text x="676" y="338" class="card-copy">Nginx load balancer</text>
+		<text x="874" y="338" text-anchor="end" class="port">:8080</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="970" y="226" width="490" height="140" rx="26" fill="url(#api-card)" stroke="#ff7652" stroke-width="2.3"/>
+		<text x="1000" y="260" class="kicker">CONTROL PLANE</text>
+		<text x="1000" y="292" class="card-title">Flow-Like API replicas</text>
+		<text x="1000" y="321" class="card-copy">Auth · app state · dispatch · presigned access</text>
+		<rect x="1280" y="249" width="68" height="36" rx="11" fill="#ff7652" fill-opacity=".12" stroke="#ff7652" stroke-opacity=".45"/>
+		<text x="1314" y="272" text-anchor="middle" class="mini">API 1</text>
+		<rect x="1360" y="249" width="68" height="36" rx="11" fill="#ff7652" fill-opacity=".12" stroke="#ff7652" stroke-opacity=".45"/>
+		<text x="1394" y="272" text-anchor="middle" class="mini">API 2+</text>
+		<text x="1426" y="336" text-anchor="end" class="port">internal :8080</text>
+	</g>
+
+	<!-- Persistence -->
+	<g filter="url(#shadow)">
+		<rect x="330" y="448" width="250" height="118" rx="22" fill="#202126" stroke="#59c7d8" stroke-opacity=".55"/>
+		<ellipse cx="373" cy="486" rx="18" ry="8" fill="none" stroke="#7ad8e7" stroke-width="2.5"/>
+		<path d="M355 486v26c0 5 8 8 18 8s18-3 18-8v-26m-36 13c0 5 8 8 18 8s18-3 18-8" fill="none" stroke="#7ad8e7" stroke-width="2.5"/>
+		<text x="410" y="489" class="card-title">PostgreSQL</text>
+		<text x="410" y="516" class="card-copy">App metadata</text>
+		<rect x="355" y="535" width="82" height="21" rx="10.5" fill="#f1b35f" fill-opacity=".11"/>
+		<text x="396" y="550" text-anchor="middle" fill="#f6c779" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="10" font-weight="700">DB INIT JOB</text>
+		<text x="548" y="547" text-anchor="end" class="port">:5432</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="620" y="448" width="250" height="118" rx="22" fill="#232129" stroke="#a58aff" stroke-opacity=".55"/>
+		<path d="M657 481l18-9 18 9-18 9zm0 13 18 9 18-9m-36 12 18 9 18-9" fill="none" stroke="#beaaff" stroke-width="2.5" stroke-linejoin="round"/>
+		<text x="712" y="489" class="card-title">Redis</text>
+		<text x="712" y="516" class="card-copy">Run state + async queue</text>
+		<text x="838" y="547" text-anchor="end" class="port">:6379</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="910" y="448" width="250" height="118" rx="22" fill="#1e2725" stroke="#4fd2a0" stroke-opacity=".55" stroke-dasharray="7 6"/>
+		<path d="M946 485h34l10 10v22h-44z" fill="none" stroke="#73ddb5" stroke-width="2.5"/>
+		<text x="1004" y="489" class="card-title">Object storage</text>
+		<text x="1004" y="516" class="card-copy">Metadata · content · logs</text>
+		<text x="1128" y="547" text-anchor="end" fill="#73ddb5" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="11" font-weight="700">EXTERNAL PROVIDER</text>
+	</g>
+
+	<!-- Execution and support -->
+	<g filter="url(#shadow)">
+		<rect x="330" y="620" width="300" height="112" rx="22" fill="#202126" stroke="#ff7652" stroke-opacity=".6"/>
+		<text x="358" y="654" class="kicker">EXECUTION</text>
+		<text x="358" y="684" class="card-title">Runtime worker pool</text>
+		<text x="358" y="711" class="card-copy">HTTP runs + Redis queue consumers</text>
+		<rect x="530" y="646" width="72" height="31" rx="10" fill="#ff7652" fill-opacity=".12"/>
+		<text x="566" y="666" text-anchor="middle" class="mini">1…N</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="680" y="620" width="240" height="112" rx="22" fill="#232129" stroke="#a58aff" stroke-opacity=".55"/>
+		<text x="708" y="654" fill="#beaaff" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="13" font-weight="760" letter-spacing="1.5">BUILD</text>
+		<text x="708" y="684" class="card-title">WASM compiler</text>
+		<text x="708" y="711" class="card-copy">Custom-node targets</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="970" y="620" width="240" height="112" rx="22" fill="#202126" stroke="#f1b35f" stroke-opacity=".5"/>
+		<text x="998" y="654" fill="#f6c779" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="13" font-weight="760" letter-spacing="1.5">TRIGGERS</text>
+		<text x="998" y="684" class="card-title">Sink services</text>
+		<text x="998" y="711" class="card-copy">Cron + bot adapters</text>
+	</g>
+	<g filter="url(#shadow)">
+		<rect x="1260" y="620" width="200" height="112" rx="22" fill="#202126" stroke="#59c7d8" stroke-opacity=".5"/>
+		<text x="1288" y="654" fill="#7ad8e7" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="13" font-weight="760" letter-spacing="1.5">REALTIME</text>
+		<text x="1288" y="684" class="card-title">Signaling</text>
+		<text x="1288" y="711" class="card-copy">Collaboration rooms</text>
+	</g>
+
+	<!-- Optional observability -->
+	<rect x="330" y="756" width="1130" height="26" rx="13" fill="#292a31"/>
+	<text x="352" y="774" fill="#8f929b" font-family="Inter,ui-sans-serif,system-ui,sans-serif" font-size="11" font-weight="760" letter-spacing="1.4">OPTIONAL MONITORING PROFILE</text>
+	<circle cx="592" cy="769" r="5" fill="#ff7652"/><text x="607" y="774" class="mini">Prometheus</text>
+	<circle cx="727" cy="769" r="5" fill="#a58aff"/><text x="742" y="774" class="mini">Tempo</text>
+	<circle cx="831" cy="769" r="5" fill="#59c7d8"/><text x="846" y="774" class="mini">Redis + Postgres exporters</text>
+	<circle cx="1065" cy="769" r="5" fill="#4fd2a0"/><text x="1080" y="774" class="mini">Grafana</text>
+	<text x="1428" y="774" text-anchor="end" class="card-copy">Enabled with the `monitoring` profile</text>
+
+	<text x="76" y="842" class="sub">Solid cards are Compose services; the dashed storage card is supplied by your configured cloud or S3-compatible provider.</text>
+</svg>

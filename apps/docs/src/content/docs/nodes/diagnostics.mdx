@@ -1,0 +1,30 @@
+---
+title: "Diagnostics Node Catalog"
+description: "Diagnostics Flow-Like node category with 3 generated node references."
+sidebar:
+  order: 0
+  label: "Diagnostics"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Diagnostics nodes, Diagnostics, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Diagnostics"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Diagnostics Node Catalog\",\"description\":\"Diagnostics Flow-Like node category with 3 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/diagnostics/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Diagnostics\",\"keywords\":\"Diagnostics nodes, Diagnostics, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Diagnostics"}
+	label="Diagnostics"
+	nodes={nodesByCategory["Diagnostics"] ?? []}
+	client:load
+/>

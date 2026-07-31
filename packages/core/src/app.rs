@@ -56,6 +56,20 @@ pub enum AppCategory {
     Anime = 20,
 }
 
+/// What kind of thing the app is, structurally — an agent, a pipeline, a form.
+/// Orthogonal to [`AppCategory`], which says what the app is *about*. Left
+/// unset until the owner classifies it; the UI derives a suggestion from the
+/// app's contents in the meantime.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub enum AppType {
+    Agent = 0,
+    CustomInterface = 1,
+    DataFocus = 2,
+    DataPipeline = 3,
+    Analytics = 4,
+    Form = 5,
+}
+
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub enum AppStatus {
     Active = 0,
@@ -124,6 +138,10 @@ pub struct App {
     pub primary_category: Option<AppCategory>,
     pub secondary_category: Option<AppCategory>,
 
+    /// Owner-declared app type. `None` means unclassified.
+    #[serde(default)]
+    pub app_type: Option<AppType>,
+
     pub rating_sum: u64,
     pub rating_count: u64,
     pub download_count: u64,
@@ -190,6 +208,7 @@ impl Clone for App {
             relevance_score: self.relevance_score,
             primary_category: self.primary_category.clone(),
             secondary_category: self.secondary_category.clone(),
+            app_type: self.app_type.clone(),
             updated_at: self.updated_at,
             created_at: self.created_at,
             version: self.version.clone(),
@@ -241,6 +260,7 @@ impl App {
 
             primary_category: None,
             secondary_category: None,
+            app_type: None,
 
             price: None,
 
@@ -1127,6 +1147,7 @@ mod tests {
     async fn serialize_app() {
         let app = crate::app::App {
             id: "id".to_string(),
+            app_type: None,
             authors: vec!["author1".to_string(), "author2".to_string()],
             boards: vec!["board1".to_string(), "board2".to_string()],
             bits: vec!["bit1".to_string(), "bit2".to_string()],

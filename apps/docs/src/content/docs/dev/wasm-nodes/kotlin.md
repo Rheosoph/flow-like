@@ -30,20 +30,17 @@ java = "21"
 kotlin = "2.1"
 ```
 
-## Project Structure
+## Important Files
 
-```
-wasm-node-kotlin/
-├── src/
-│   └── wasmWasiMain/
-│       └── kotlin/
-│           └── node/
-│               └── Main.kt          # Node implementation
-├── build.gradle.kts                  # Kotlin/Wasm build config
-├── settings.gradle.kts               # Gradle settings
-├── flow-like.toml                    # Flow-Like package manifest
-└── mise.toml                         # Build tasks
-```
+| Path | Purpose |
+|------|---------|
+| `src/wasmWasiMain/kotlin/node/Main.kt` | Defines the node, run handler, and exported Core Module functions |
+| `build.gradle.kts` | Configures Kotlin Multiplatform, the WASI target, and SDK dependencies |
+| `settings.gradle.kts` | Configures the Gradle project |
+| `examples/HttpRequest.kt` | Demonstrates an HTTP request |
+| `gradlew` and `gradle/wrapper/` | Pin and launch the Gradle wrapper |
+| `flow-like.toml` | Declares the Flow-Like package |
+| `mise.toml` | Provides setup, build, test, and clean tasks |
 
 ## Template Code
 

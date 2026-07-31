@@ -6,12 +6,10 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    hash::{DefaultHasher, Hash, Hasher},
     io::Write,
     path::{Path, PathBuf},
-    sync::{
-        Arc, LazyLock, Mutex, OnceLock,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, LazyLock, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -68,14 +66,13 @@ use flow_like::flow::copilot::platform::{
     PlatformToolImageUrl, run_internet_search, run_memory_tool, take_platform_tool_image_urls,
 };
 use flow_like::flow::copilot::public_web::{
-    OpenUrlSessionBudget, WebResearchSession, run_archive_lookup_for_session,
-    run_open_url_for_session,
+    WebResearchSession, run_archive_lookup_for_session, run_open_url_for_session,
 };
 use flow_like::flow::copilot::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL,
-    OPEN_URL_TOOL, PlatformToolSpec, data_studio_tool_specs, find_global_tool_spec,
-    global_assistant_tool_specs, missing_required_args, resolve_tool_approval,
-    runtime_execution_tool_specs,
+    OPEN_URL_TOOL, PlatformToolSpec, cross_board_source_tool_specs, data_studio_tool_specs,
+    find_global_tool_spec, global_assistant_tool_specs, missing_required_args,
+    public_web_tool_specs, resolve_tool_approval, runtime_execution_tool_specs, scout_tool_specs,
 };
 #[cfg(test)]
 use flow_like::flow::copilot::typed_ir_schema_hint;
@@ -83,19 +80,20 @@ use flow_like::flow::copilot::{
     BeginFlowIrDraftArgs, BeginFlowIrDraftTool, BoardCommand, BoundBeginFlowIrDraftTool,
     CatalogProvider, CheckFlowScriptArgs, CheckFlowScriptTool, CommitFlowIrDraftArgs,
     CommitFlowIrDraftTool, CommitFlowScriptArgs, CommitFlowScriptTool, EmitCommandsArgs,
-    FlowCapabilityPlanRequest, FlowIrAcceptanceBinding, FlowIrDraftStore,
+    ExtendTimeBudgetTool, FlowCapabilityPlanRequest, FlowIrAcceptanceBinding, FlowIrDraftStore,
     FlowIrRetainedDraftSnapshot, GetCurrentFlowScriptTool, GetDeclarationsArgs,
     GetDeclarationsTool, GetNodeDetailsTool, GetUnconfiguredNodesTool, GraphContext,
     ListBoardNodesTool, ModelFacingEmitCommandsTool, NodeMetadata, PatchFlowScriptArgs,
-    PatchFlowScriptTool, PlanFlowIrTool, UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool,
-    UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool, ValidateFlowIrDraftArgs,
-    ValidateFlowIrDraftTool, ValidationIssue, WriteFlowScriptArgs, WriteFlowScriptTool,
-    board_has_no_nodes, build_list_board_nodes_output, build_node_details_output,
-    build_unconfigured_nodes_output, emit_validation_requires_flowscript,
-    flowscript_has_executable_node_call, flowscript_missing_function_helpers,
-    is_blocking_flowscript_diagnostic, parse_typed_ir_arguments, plan_flow_capabilities,
-    render_catalog_search_results, run_declaration_queries, tool_definition_parts,
-    validate_model_facing_emit_commands, validate_model_facing_emit_commands_scope,
+    PatchFlowScriptTool, PlanBoardScopeArgs, PlanBoardScopeTool, PlanFlowIrTool,
+    UpdateFlowIrDraftArgs, UpdateFlowIrDraftTool, UpsertFlowIrModuleArgs, UpsertFlowIrModuleTool,
+    ValidateFlowIrDraftArgs, ValidateFlowIrDraftTool, ValidationIssue, WriteFlowScriptArgs,
+    WriteFlowScriptTool, board_has_no_nodes, build_list_board_nodes_output,
+    build_node_details_output, build_unconfigured_nodes_output,
+    emit_validation_requires_flowscript, flowscript_has_executable_node_call,
+    flowscript_missing_function_helpers, is_blocking_flowscript_diagnostic,
+    parse_typed_ir_arguments, plan_flow_capabilities, render_catalog_search_results,
+    run_declaration_queries, tool_definition_parts, validate_model_facing_emit_commands,
+    validate_model_facing_emit_commands_scope,
 };
 use flow_like_types::sync::Mutex as AsyncMutex;
 use serde::de::DeserializeOwned;
@@ -656,6 +654,8 @@ pub(super) fn create_board_tools(
             board.clone(),
             live_board.clone(),
         ));
+        tools.push(create_plan_board_scope_tool());
+        tools.push(create_extend_time_budget_tool());
         if let (Some(provider), Some(acceptance_binding)) =
             (catalog_provider.clone(), acceptance_binding)
         {
@@ -748,6 +748,13 @@ pub fn create_board_support_tools(bridge: FrontendToolBridge) -> Vec<(Tool, Tool
             .iter()
             .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
     );
+    // Lets a board specialist fetch the FlowScript a Scout plan referenced, keeping fragment text
+    // out of the orchestrator's context.
+    tools.extend(
+        cross_board_source_tool_specs()
+            .iter()
+            .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
+    );
     tools
 }
 
@@ -767,12 +774,9 @@ pub fn sdk_tool_from_spec(
         .description(spec.description)
         .schema((spec.schema)());
     let spec = *spec;
-    let open_url_budget =
-        (spec.name == OPEN_URL_TOOL).then(|| Arc::new(Mutex::new(OpenUrlSessionBudget::default())));
-    let search_call_budget =
-        (spec.name == INTERNET_SEARCH_TOOL).then(|| Arc::new(AtomicUsize::new(0)));
-    let archive_call_budget =
-        (spec.name == ARCHIVE_LOOKUP_TOOL).then(|| Arc::new(AtomicUsize::new(0)));
+    // Budgets are NOT per-tool-instance: they live on the shared `WebResearchSession` so that
+    // several research agents running concurrently in one turn draw from one allowance instead of
+    // each receiving a full one.
     let handler: ToolHandler = Arc::new(move |_name, args| {
         if let Some(error) = missing_required_args(&spec, args) {
             return ToolResultObject::text(
@@ -787,10 +791,7 @@ pub fn sdk_tool_from_spec(
                 if let Some(error) = session.public_web_phase_error(INTERNET_SEARCH_TOOL) {
                     return ToolResultObject::text(error.to_string());
                 }
-                let budget = search_call_budget
-                    .as_ref()
-                    .expect("internet_search handler has a session budget");
-                if !reserve_local_web_call(budget, 12) {
+                if !session.reserve_search_call() {
                     return ToolResultObject::text(local_web_call_budget_error(
                         INTERNET_SEARCH_TOOL,
                         "search_session_call_budget_exceeded",
@@ -808,12 +809,7 @@ pub fn sdk_tool_from_spec(
                 if let Some(error) = session.public_web_phase_error(OPEN_URL_TOOL) {
                     return ToolResultObject::text(error.to_string());
                 }
-                let prepared = open_url_budget
-                    .as_ref()
-                    .expect("open_url handler has a session budget")
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .prepare_unbatched_call(args.clone());
+                let prepared = session.prepare_open_url_call(args.clone());
                 match prepared {
                     Ok(arguments) => {
                         let mut result =
@@ -831,10 +827,7 @@ pub fn sdk_tool_from_spec(
                 if let Some(error) = session.public_web_phase_error(ARCHIVE_LOOKUP_TOOL) {
                     return ToolResultObject::text(error.to_string());
                 }
-                let budget = archive_call_budget
-                    .as_ref()
-                    .expect("archive_lookup handler has a session budget");
-                if !reserve_local_web_call(budget, 4) {
+                if !session.reserve_archive_call() {
                     return ToolResultObject::text(local_web_call_budget_error(
                         ARCHIVE_LOOKUP_TOOL,
                         "archive_session_call_budget_exceeded",
@@ -868,14 +861,6 @@ pub fn sdk_tool_from_spec(
         }
     });
     (tool, handler)
-}
-
-fn reserve_local_web_call(counter: &AtomicUsize, limit: usize) -> bool {
-    counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |calls| {
-            (calls < limit).then_some(calls + 1)
-        })
-        .is_ok()
 }
 
 fn local_web_call_budget_error(tool: &str, code: &str, message: &str) -> String {
@@ -933,8 +918,13 @@ pub fn create_global_assistant_tools(
     bridge: FrontendToolBridge,
     memory: Option<Arc<AssistantMemory>>,
     user_prompt: &str,
+    run_id: Option<&str>,
 ) -> Vec<(Tool, ToolHandler)> {
-    let web_research_session = Arc::new(WebResearchSession::new(user_prompt));
+    // The orchestrator no longer holds the public-web tools — `research_agent` does — but it still
+    // needs the turn's session. Its non-web tool calls close the public-web phase, and that closure
+    // has to reach the researchers: an orchestrator that has read private app data must not be able
+    // to launder a web request through a delegated researcher afterwards.
+    let web_research_session = web_research_session_for_turn(user_prompt, run_id);
     global_assistant_tool_specs(memory.is_some())
         .iter()
         .map(|spec| {
@@ -946,6 +936,53 @@ pub fn create_global_assistant_tools(
             )
         })
         .collect()
+}
+
+/// Live web-research sessions, keyed per turn.
+///
+/// A turn may run the orchestrator plus several `research_agent` delegations concurrently, and all
+/// of them must share one provenance ledger and one spend budget. Entries are pruned whenever the
+/// map is consulted: a session whose only remaining owner is the map itself belongs to a finished
+/// turn, so it is dropped rather than leaking a spent budget into a later identical question. Same
+/// bounded-by-liveness pattern as the nested-run gate map.
+static WEB_RESEARCH_SESSIONS: LazyLock<Mutex<HashMap<String, Arc<WebResearchSession>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Resolve the shared session for one turn.
+///
+/// The key is the owning run plus the immutable top-level user message. Both sides can compute it
+/// without new plumbing: the orchestrator has its own run id and prompt, and a delegated researcher
+/// receives the same `runId` and `sourceUserPrompt` in its tool context — so they share a budget
+/// and a provenance ledger, which is the point.
+///
+/// The run id is what keeps that sharing *bounded*. Several chat turns can now generate at once,
+/// and keying on the prompt alone made two turns asking the same question share one spend budget
+/// and one citation allowlist — so one turn could exhaust the other's budget, and worse, one turn
+/// reading private app data would close the other's public-web phase.
+///
+/// Seeding from the prompt is also required for correctness: [`WebResearchSession::new`] authorizes
+/// any URLs the user themselves pasted.
+pub fn web_research_session_for_turn(
+    user_prompt: &str,
+    run_id: Option<&str>,
+) -> Arc<WebResearchSession> {
+    let mut sessions = WEB_RESEARCH_SESSIONS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    sessions.retain(|_, session| Arc::strong_count(session) > 1);
+    sessions
+        .entry(web_research_session_key(user_prompt, run_id))
+        .or_insert_with(|| Arc::new(WebResearchSession::new(user_prompt)))
+        .clone()
+}
+
+/// Hash rather than store the prompt: the map is process-global and a raw user message is the last
+/// thing that should sit in a long-lived static.
+fn web_research_session_key(user_prompt: &str, run_id: Option<&str>) -> String {
+    let mut hasher = DefaultHasher::new();
+    user_prompt.trim().hash(&mut hasher);
+    run_id.unwrap_or_default().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
 }
 
 /// Tool set for the nested Data Studio specialist. It reuses the shipped `database_tool` (table/DB
@@ -964,6 +1001,44 @@ pub fn create_data_studio_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHa
             .iter()
             .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None)),
     );
+    for name in DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES {
+        if let Some(spec) = find_global_tool_spec(name) {
+            tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
+        }
+    }
+    tools
+}
+
+/// Tool set for the nested Research specialist: the public-web tools, and nothing else.
+///
+/// This is the only scope that holds them. The isolation is the security story as much as the
+/// context story — a researcher that cannot read app databases, storage or memory has no private
+/// data to leak into an outbound query, and the orchestrator that does hold that data cannot make
+/// outbound requests itself.
+///
+/// `user_prompt` must be the immutable top-level user message so the researcher joins the turn's
+/// shared session rather than opening a private one with a fresh budget.
+pub fn create_research_tools(
+    bridge: FrontendToolBridge,
+    user_prompt: &str,
+    run_id: Option<&str>,
+) -> Vec<(Tool, ToolHandler)> {
+    let session = web_research_session_for_turn(user_prompt, run_id);
+    public_web_tool_specs()
+        .iter()
+        .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, Some(session.clone())))
+        .collect()
+}
+
+/// Tool set for the nested Scout specialist: the discovery/inspection specs plus the same cross-app
+/// discovery tools the Data Studio specialist reuses. Entirely read-only — the mutating tools it
+/// recommends (`fork_app`, `acquire_app`, `create_app`) belong to the global orchestrator, so their
+/// approval prompts surface at the top level. Public-web research is orchestrator-only too.
+pub fn create_scout_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHandler)> {
+    let mut tools: Vec<(Tool, ToolHandler)> = scout_tool_specs()
+        .iter()
+        .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, None))
+        .collect();
     for name in DATA_STUDIO_APP_DISCOVERY_TOOL_NAMES {
         if let Some(spec) = find_global_tool_spec(name) {
             tools.push(sdk_tool_from_spec(&spec, bridge.clone(), None, None));
@@ -1259,6 +1334,10 @@ Operations:
   `if_not_exists` defaults to true; no seed row is inserted. A `partial` result with
   `explicit_schema_create_not_deployed` means the remote API is older than this client: retain the
   schema request and continue the workflow build instead of switching to a smoke test.
+  Any failure of a setup operation here (create_table, build_index, optimize) is best effort, never
+  a blocker: report the pending setup and keep building. The workflow creates the table on its first
+  write — for embedding tables that write derives the true vector width, which create_table can only
+  guess — and builds its own indices with the Build Index node after that write.
 - describe_table: schema, indices, and row count. Set `include_sample: false` for bounded schema
   discovery that an immutable FlowPilot manifest can satisfy; omitted/true also reads sample rows.
 - query: SQL/filter/vector/FTS query via the existing database query API.
@@ -1778,6 +1857,49 @@ fn create_get_declarations_tool(provider: Arc<dyn CatalogProvider>) -> (Tool, To
         };
         let declarations = block_on_tool(run_declaration_queries(&provider, &declaration_args));
         ToolResultObject::text(declarations)
+    });
+
+    (tool, handler)
+}
+
+/// The time budget lives entirely in the host run loop, which intercepts this call in preflight and
+/// answers from its progress ledger. This body is only reached on a surface with no such loop.
+fn create_extend_time_budget_tool() -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&ExtendTimeBudgetTool);
+
+    let handler: ToolHandler = Arc::new(move |_name, _args| {
+        ToolResultObject::text(
+            json!({
+                "status": "time_budget_unavailable",
+                "retryable": false,
+                "next_action": "continue_building",
+                "message": "This run has no extendable host time budget; continue within the budget you have.",
+            })
+            .to_string(),
+        )
+    });
+
+    (tool, handler)
+}
+
+/// The accepted plan itself is owned by the host loop state, which mirrors this exact validation in
+/// preflight. This handler only renders the acceptance the model reads back.
+fn create_plan_board_scope_tool() -> (Tool, ToolHandler) {
+    let tool = tool_from_rig_definition(&PlanBoardScopeTool);
+
+    let handler: ToolHandler = Arc::new(move |_name, args| {
+        let parsed: PlanBoardScopeArgs =
+            match parse_flowscript_arguments(args.clone(), "plan_board_scope") {
+                Ok(parsed) => parsed,
+                Err(result) => return result,
+            };
+        let payload = match flow_like::flow::copilot::accept_scope_plan(parsed) {
+            Ok(plan) => plan.acceptance_payload(),
+            Err(rejection) => rejection.payload(),
+        };
+        ToolResultObject::text(
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string()),
+        )
     });
 
     (tool, handler)
@@ -3001,28 +3123,36 @@ BOUNDVALUE FORMAT (ALL props use this):
 CHILDREN FORMAT:
 "children": {"explicitList": ["child-id-1", "child-id-2"]}
 
-AVAILABLE COMPONENTS:
-Layout: column, row, grid, stack, scrollArea, box, center, spacer
-Display: text, image, icon, badge, avatar, progress, spinner, divider, markdown, diffView
-Interactive: button, textField, select, slider, checkbox, switch, link
-Container: card, modal, tabs, accordion, drawer, tooltip
+AVAILABLE COMPONENTS (full docs + selection table in your system prompt):
+Layout: column, row, grid, stack, scrollArea, absolute, aspectRatio, overlay, box, center, spacer
+Display: text, image, icon, video, lottie, badge, avatar, userProfile, progress, spinner, skeleton, divider, markdown, diffView, filePreview, geoMap
+Interactive: button, textField (multiline for textarea), select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, voiceInput (audio recording/dictation), feedback (thumbs rating), appLink, link
+Container: card, modal, tabs, accordion, drawer, tooltip, popover
+Data: table, plotlyChart, nivoChart, calendar, gantt
+Vision: boundingBoxOverlay, imageLabeler, imageHotspot
+Game: canvas2d, sprite, shape, scene3d, model3d, dialogue, characterPortrait, choiceMenu, inventoryGrid, healthBar, miniMap
+Embeds: iframe
+Widgets: widgetInstance
+Pick the purpose-built component for the intent (audio recording -> voiceInput, never a button+fileInput imitation); consult the "Choosing the Right Component" table in your system prompt.
 
 THEME COLORS (use these, not hardcoded):
 bg-background, bg-muted, bg-card, bg-primary, bg-secondary
 text-foreground, text-muted-foreground, text-primary-foreground
 border-border
 
-CUSTOM CSS (for advanced effects):
-Use canvasSettings.customCss for animations/effects not achievable with Tailwind:
+STYLING TRUTH:
+- className renders STANDARD Tailwind utilities only — there is no runtime Tailwind engine, arbitrary values like w-[437px] or bg-[#ff00aa] silently render nothing.
+- Typed style fields (background gradients, border, shadow, exact sizes, transform, filter, backdropFilter, animation, typography, responsiveOverrides) always render — use them for custom values.
+- canvasSettings.customCss (scoped to the surface) covers keyframes, hover/focus, pseudo-elements:
 {"canvasSettings": {"backgroundColor": "bg-background", "customCss": ".animated { animation: fade 1s; } @keyframes fade { from{opacity:0} to{opacity:1} }"}}
 
 EXAMPLE - Simple card:
 {
-  "rootComponentId": "card-1",
+  "rootComponentId": "root",
   "canvasSettings": {"backgroundColor": "bg-background"},
   "components": [
     {
-      "id": "card-1",
+      "id": "root",
       "style": {"className": "p-4"},
       "component": {
         "type": "card",
@@ -4485,12 +4615,28 @@ mod tests {
     }
 
     #[test]
-    fn local_web_call_budget_is_atomic_and_bounded() {
-        let calls = AtomicUsize::new(0);
-        assert!(reserve_local_web_call(&calls, 2));
-        assert!(reserve_local_web_call(&calls, 2));
-        assert!(!reserve_local_web_call(&calls, 2));
-        assert_eq!(calls.load(Ordering::Relaxed), 2);
+    fn web_call_budgets_are_shared_across_agents_via_the_session() {
+        // Budgets used to be per-tool-instance, so two concurrent research runs
+        // each got a full allowance. They now live on the shared session: the
+        // second agent sees the first agent's spend.
+        let session = WebResearchSession::new("");
+        let mut granted = 0;
+        while session.reserve_search_call() {
+            granted += 1;
+            assert!(granted <= 64, "search budget must be bounded");
+        }
+        assert!(granted > 0, "a fresh session must allow some searching");
+
+        // Same ledger from a second handle, as a parallel agent would hold.
+        let shared = std::sync::Arc::new(session);
+        let second_agent = shared.clone();
+        assert!(
+            !second_agent.reserve_search_call(),
+            "a second agent must not get a fresh search allowance"
+        );
+
+        let summary = shared.spend_summary();
+        assert_eq!(summary["search_calls_used"], granted);
     }
 
     #[tokio::test(flavor = "multi_thread")]

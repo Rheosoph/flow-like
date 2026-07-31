@@ -134,7 +134,9 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	const [profileLoaded, setProfileLoaded] = useState(false);
 	const [authPushed, setAuthPushed] = useState(false);
 
-	const isPublicPath = PUBLIC_PATHS.some((path) => pathname?.startsWith(path));
+	const isPublicPath =
+		pathname === "/debug/markdown" ||
+		PUBLIC_PATHS.some((path) => pathname?.startsWith(path));
 
 	// Listen for auth changes from other tabs
 	useEffect(() => {

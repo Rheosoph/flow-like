@@ -78,7 +78,7 @@ Adding new nodes is one of the best ways to contribute:
 ### Frontend
 
 - Desktop app (`apps/desktop`)
-- Web app (`apps/web-app`)
+- Web app (`apps/web`)
 - Shared UI components (`packages/ui`)
 
 ## Code Guidelines

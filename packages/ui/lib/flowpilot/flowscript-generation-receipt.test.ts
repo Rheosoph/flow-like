@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, test } from "vitest";
 
+import type { BoardEditJobPhase } from "../schema/copilot";
 import {
+	boardEditJobAppliedCommandCount,
 	clearFlowScriptGenerationRuns,
 	createFlowScriptGenerationTrace,
 	extractFlowScriptCompilerReceipt,
@@ -126,11 +128,12 @@ describe("FlowScript generation compiler receipts", () => {
 		const pending = trace.finish({
 			outcome: "awaiting_approval",
 			finalWorkspaceStatus: "queued",
-			appliedCommands: 4,
+			appliedCommands: 0,
 			persistedReadbackVerified: false,
 			endedAtMs: 50,
 		});
 		expect(pending?.outcome).toBe("awaiting_approval");
+		expect(pending?.appliedCommands).toBe(0);
 		const run = updateFlowScriptGenerationRunReceipt(
 			{
 				appId: "app-1",
@@ -157,8 +160,51 @@ describe("FlowScript generation compiler receipts", () => {
 				isSuccessfulFlowScriptCommitReceipt(receipt),
 			),
 		).toBe(true);
+		expect(run?.appliedCommands).toBe(4);
 		expect(flowScriptGenerationRunsForConversation("conversation-1")).toEqual([
 			run,
 		]);
+	});
+
+	test("counts commands only after the native board job has applied", () => {
+		const review = {
+			commandCount: 4,
+			commandCounts: { AddNode: 4 },
+			commandSummaries: ["Add nodes"],
+			replacementMode: false,
+			destructiveEffects: [],
+		};
+		const commandPayload = {
+			status: "error" as const,
+			message: "Apply did not complete.",
+			commands: [{ type: "AddNode" } as never],
+			board_commands: [],
+			diagnostics: ["Apply did not complete."],
+		};
+		const phases: BoardEditJobPhase[] = [
+			"preparing",
+			"awaiting_approval",
+			"applying",
+			"denied",
+			"stale",
+			"failed",
+			"cancelled",
+		];
+
+		for (const phase of phases) {
+			expect(
+				boardEditJobAppliedCommandCount({
+					phase,
+					review,
+					result: commandPayload,
+				}),
+			).toBe(0);
+		}
+		for (const phase of [
+			"applied_pending_delivery",
+			"applied",
+		] satisfies BoardEditJobPhase[]) {
+			expect(boardEditJobAppliedCommandCount({ phase, review })).toBe(4);
+		}
 	});
 });

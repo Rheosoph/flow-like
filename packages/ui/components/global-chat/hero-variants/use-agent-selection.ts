@@ -134,7 +134,9 @@ export function useAgentSelection() {
 			isAgent &&
 			isDesktop &&
 			!copilotSDK.isRunning &&
-			!copilotSDK.isConnecting
+			!copilotSDK.isConnecting &&
+			!copilotSDK.error &&
+			!copilotSDK.diagnostic
 		) {
 			void copilotSDK.start().catch(() => undefined);
 		}
@@ -143,6 +145,8 @@ export function useAgentSelection() {
 		isDesktop,
 		copilotSDK.isRunning,
 		copilotSDK.isConnecting,
+		copilotSDK.error,
+		copilotSDK.diagnostic,
 		copilotSDK.start,
 	]);
 
@@ -246,6 +250,18 @@ export function useAgentSelection() {
 		autoReasoningEffortName,
 		isAgent,
 		connecting: copilotSDK.isConnecting,
-		connected: copilotSDK.isRunning && isAgent,
+		connected:
+			copilotSDK.isRunning &&
+			isAgent &&
+			!copilotSDK.diagnostic &&
+			copilotSDK.authStatus?.authenticated !== false,
+		diagnostic: isAgent ? copilotSDK.diagnostic : null,
+		retry: copilotSDK.retry,
+		statusText:
+			isAgent && !copilotSDK.diagnostic
+				? copilotSDK.authStatus?.authenticated && copilotSDK.authStatus.login
+					? `Signed in as ${copilotSDK.authStatus.login}${copilotSDK.authStatus.message ? ` · ${copilotSDK.authStatus.message}` : ""}`
+					: copilotSDK.authStatus?.message
+				: undefined,
 	};
 }

@@ -643,6 +643,53 @@ impl Node {
 
         self.hash = Some(hasher.finalize64());
     }
+
+    /// Hash the user-facing definition of a node without including board placement or
+    /// graph wiring.
+    ///
+    /// This is intended for caches of semantic artifacts such as embeddings. Moving a
+    /// node, connecting it elsewhere, or changing its generated id does not change the
+    /// text or pin shape represented by those artifacts and therefore must not invalidate
+    /// them.
+    pub fn semantic_hash(&self) -> u64 {
+        let mut hasher = HighwayHasher::new(highway::Key([
+            0x0123456789abcdef,
+            0xfedcba9876543210,
+            0x0011223344556677,
+            0x8899aabbccddeeff,
+        ]));
+
+        hasher.append(self.name.as_bytes());
+        hasher.append(self.friendly_name.as_bytes());
+        hasher.append(self.description.as_bytes());
+        hasher.append(self.category.as_bytes());
+
+        let mut pins: Vec<_> = self.pins.values().collect();
+        pins.sort_by(|left, right| {
+            let pin_type_order = |pin_type: &PinType| match pin_type {
+                PinType::Input => 0_u8,
+                PinType::Output => 1_u8,
+            };
+            pin_type_order(&left.pin_type)
+                .cmp(&pin_type_order(&right.pin_type))
+                .then_with(|| left.index.cmp(&right.index))
+                .then_with(|| left.name.cmp(&right.name))
+        });
+        for pin in pins {
+            hasher.append(pin.name.as_bytes());
+            hasher.append(pin.friendly_name.as_bytes());
+            hasher.append(pin.description.as_bytes());
+            hasher.append(&(pin.pin_type.clone() as u8).to_le_bytes());
+            hasher.append(&(pin.data_type.clone() as u8).to_le_bytes());
+            hasher.append(&(pin.value_type.clone() as u8).to_le_bytes());
+            hasher.append(&pin.index.to_le_bytes());
+            if let Some(schema) = &pin.schema {
+                hasher.append(schema.as_bytes());
+            }
+        }
+
+        hasher.finalize64()
+    }
 }
 
 #[async_trait]
@@ -727,5 +774,38 @@ mod tests {
         let second = node.hash.unwrap();
 
         assert_ne!(first, second, "Node hash should change when scores change");
+    }
+
+    #[test]
+    fn semantic_hash_ignores_canvas_position_and_graph_wiring() {
+        let mut node = super::Node::new("test_node", "Test", "desc", "Cat");
+        let pin_id = node
+            .add_input_pin("input", "Input", "An input", super::VariableType::String)
+            .id
+            .clone();
+        let initial = node.semantic_hash();
+
+        node.coordinates = Some((10.0, 20.0, 1.0));
+        node.pins
+            .get_mut(&pin_id)
+            .unwrap()
+            .depends_on
+            .insert("upstream-pin".to_string());
+
+        assert_eq!(initial, node.semantic_hash());
+    }
+
+    #[test]
+    fn semantic_hash_tracks_display_metadata_and_pin_shape() {
+        let mut node = super::Node::new("test_node", "Test", "desc", "Cat");
+        node.add_input_pin("input", "Input", "An input", super::VariableType::String);
+        let initial = node.semantic_hash();
+
+        node.description = "updated description".to_string();
+        assert_ne!(initial, node.semantic_hash());
+
+        let after_description = node.semantic_hash();
+        node.add_output_pin("output", "Output", "An output", super::VariableType::String);
+        assert_ne!(after_description, node.semantic_hash());
     }
 }

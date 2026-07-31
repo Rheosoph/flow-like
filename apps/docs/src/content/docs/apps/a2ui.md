@@ -1,165 +1,69 @@
 ---
 title: Custom UI (A2UI)
-description: Build Rich User Interfaces with AI or by Hand
+description: Build rich user interfaces with AI or by hand
 sidebar:
   order: 46
 ---
 
-Flow-Like supports [A2UI (Agent-to-User Interface)](https://a2ui.org/), an open protocol created by Google that enables rich, structured user interfaces to be generated dynamically.
+Flow-Like uses [A2UI (Agent-to-User Interface)](https://a2ui.org/) to describe
+rich interfaces as structured data. The same component model powers visual
+Pages, reusable Widgets, and interfaces returned by a Flow.
 
-## What is A2UI?
+Because the interface is data rather than hard-coded application markup, you
+can build it visually, edit its JSON, or ask FlowPilot to help generate and
+refine it.
 
-A2UI is a JSON-based format for describing user interfaces. It defines **pages** (full-screen layouts) and **widgets** (reusable components) that can be rendered into beautiful, interactive UIs.
-
-The key insight: the same JSON format that AI agents produce can also be created by humans using a visual builder.
-
-## Two Ways to Build
-
-### 1. Visual Drag-and-Drop Builder
-
-Flow-Like provides a visual interface builder where you can:
-
-- **Drag and drop** components onto a canvas
-- **Configure** each component's properties visually
-- **Preview** your interface in real-time
-- **Connect** to your Flows for dynamic data
-
-No coding required—perfect for designers and non-technical users who want full control over their interfaces.
-
-See **[Pages](/apps/pages/)** and **[Widgets](/apps/widgets/)** for detailed guides on using the visual builder.
-
-### 2. AI-Generated Interfaces
-
-Connect an AI agent to your Flow, and it can generate A2UI interfaces on-the-fly:
-
-- **Dynamic layouts** that adapt to context
-- **Personalized content** based on user data
-- **Conversational UI** that evolves with the interaction
-
-Both approaches output the same A2UI JSON format, so you can mix and match—start with a template you designed, let AI customize it, then refine it visually.
-
-## Core Concepts
+## Where A2UI appears
 
 ### Pages
 
-Pages are full-screen layouts specific to your app. Each page:
+A [Page](/apps/pages/) is a full interface owned by a Flow. It combines an A2UI
+component tree with Page-level settings such as layout, lifecycle events, and
+SEO metadata. A UI Event gives the Page a navigable [route](/apps/routes/).
 
-- Has a unique URL path via [Routes](/apps/routes/)
-- Contains components arranged in a layout
-- Can bind to flow data for dynamic content
-- Supports different layout types (Grid, Stack, Sidebar)
-
-**[Learn more about Pages →](/apps/pages/)**
+![A support operations Page rendered in Flow-Like's visual Page Builder](../../../assets/PageBuilder.webp)
 
 ### Widgets
 
-Widgets are reusable UI components that can be shared:
+A [Widget](/apps/widgets/) is a reusable A2UI component tree owned by an app.
+It can expose selected component properties for each instance and define named
+events that the containing workflow can handle.
 
-- Build once, use across multiple pages
-- Configure with customization options per instance
-- Version and share within your organization
+![A reusable support health card in Flow-Like's visual Widget Builder](../../../assets/WidgetBuilder.webp)
 
-**[Learn more about Widgets →](/apps/widgets/)**
+### Flow-generated interfaces
 
-### Routes
+A Flow can return A2UI updates at runtime. This is useful when the structure or
+content must respond to execution data, user input, or an AI-generated result.
+The renderer applies those updates to the active surface.
 
-Routes map URL paths to pages or events:
+## Three ways to create an interface
 
-- Define navigation structure for your app
-- Support deep linking to specific content
-- Can trigger events for API endpoints
+### Visual Builder
 
-**[Learn more about Routes →](/apps/routes/)**
+The Page and Widget builders provide a component catalog, hierarchy, live
+canvas, and property Inspector. Use them to compose a surface without writing
+the component payload by hand.
 
-## Supported Components
+### FlowPilot
 
-Flow-Like supports a comprehensive set of A2UI components:
+FlowPilot can work with the active builder surface. Describe the interface or
+the change you want, review the result on the canvas, and continue refining it.
+Specific components also offer **Optimize with FlowPilot** from the builder.
 
-| Category | Components |
-|----------|------------|
-| **Layout** | Row, Column, Stack, Grid, ScrollArea, AspectRatio, Overlay, Absolute, Box, Center, Spacer |
-| **Display** | Text, Image, Icon, Video, Markdown, Divider, Badge, Avatar, UserProfile, Progress, Spinner, Skeleton, Lottie, Iframe, Table, PlotlyChart, NivoChart, FilePreview, BoundingBoxOverlay, GeoMap |
-| **Interactive** | Button, Feedback, AppLink, TextField, Select, Slider, Checkbox, Switch, RadioGroup, DateTimeInput, FileInput, ImageInput, VoiceInput, Link, ImageLabeler, ImageHotspot |
-| **Container** | Card, Modal, Tabs, Accordion, Drawer, Tooltip, Popover |
-| **Game/Visual** | Canvas2D, Sprite, Shape, Scene3D, Model3D, Dialogue, CharacterPortrait, ChoiceMenu, InventoryGrid, HealthBar, MiniMap |
-| **Special** | WidgetInstance |
+### Dev Mode
 
-For a complete reference, see **[A2UI Components](/reference/a2ui-components/)**.
+Select **Dev Mode** in the builder toolbar to inspect or edit the underlying
+JSON. This is useful for precise changes, generated payloads, and debugging.
+Return to the visual canvas to validate the result.
 
-## When to Use What
+All three approaches modify the same component model, so you can move between
+them during one editing session.
 
-| Use Case | Recommendation |
-|----------|----------------|
-| Simple chat responses | Use the [Chat UI](/apps/chat-ui/) |
-| Rich dashboards | Use Pages with data bindings |
-| AI-generated reports | Use A2UI with AI generation |
-| Interactive forms | Use Pages with form components |
-| Reusable UI patterns | Create Widgets |
-| Multi-page apps | Use Pages + Routes |
+## Core structure
 
-## Getting Started
-
-### Create a Page
-
-1. Open your app in Flow-Like
-2. Click the **gear icon** (⚙️) → **Pages & Routes**
-3. Create a new page or open the Page Builder
-4. Design your interface with drag-and-drop
-
-### Set Up Routing
-
-1. In **Pages & Routes**, switch to the **Routes** tab
-2. Click **Add Route**
-3. Define the path and select your page as the target
-4. Mark one route as default (home page)
-
-### Connect to Data
-
-1. In the Page Builder, select a component
-2. Find **Data Binding** in the properties panel
-3. Choose a path from your flow's data
-4. The component displays live data when running
-
-## Human + AI Collaboration
-
-The real power of A2UI in Flow-Like is combining human creativity with AI capabilities:
-
-1. **Design a template** using the visual builder
-2. **Mark sections as dynamic** where AI can fill in content
-3. **Connect to an AI Flow** that provides personalized data
-4. **Users see** a polished interface with relevant content
-
-This gives you:
-
-- **Consistent branding** - You control the design
-- **Dynamic content** - AI personalizes for each user
-- **Maintainability** - Update templates, AI adapts
-
-## AI-Powered Interface Generation
-
-Don't want to design from scratch? Use AI to generate A2UI interfaces instantly:
-
-### FlowPilot (Built-in)
-
-Flow-Like includes **FlowPilot**, an integrated AI assistant that can generate A2UI interfaces directly within the app. Simply describe what you want and FlowPilot creates the components for you—no copy-pasting required.
-
-- **Context-aware** - FlowPilot understands your app's data and existing pages
-- **Interactive** - Refine and iterate on designs through conversation
-- **Integrated** - Generated UI appears directly in the page builder
-
-### ChatGPT Frontend Builder (External)
-
-We also provide a free [**FlowLike Frontend Builder GPT**](https://chatgpt.com/g/g-6965146c7f5c81918a2501c5a860d9e3-flow-like-frontend-builder) for generating A2UI JSON outside of Flow-Like.
-
-**Example prompts:**
-- "Create a login form with email, password, and remember me checkbox"
-- "Build a dashboard with 4 stat cards and a line chart"
-- "Make a pricing page with 3 tier cards (Free, Pro, Enterprise)"
-- "Create a user profile card with avatar, name, and edit button"
-
-The GPT outputs JSON that you can paste directly into Flow-Like's page builder.
-
-Generated A2UI should always use a single root component:
+An A2UI surface has one root component and a collection of components
+referenced by ID:
 
 ```json
 {
@@ -169,23 +73,78 @@ Generated A2UI should always use a single root component:
       "id": "root",
       "component": {
         "type": "column",
-        "children": { "explicitList": ["content"] }
+        "children": {
+          "explicitList": ["heading", "content"]
+        }
+      }
+    },
+    {
+      "id": "heading",
+      "component": {
+        "type": "text",
+        "content": {
+          "literalString": "Support overview"
+        }
+      }
+    },
+    {
+      "id": "content",
+      "component": {
+        "type": "text",
+        "content": {
+          "literalString": "24 requests are open."
+        }
       }
     }
   ]
 }
 ```
 
-Use `root` as the only top-level component ID, then place all visible sections inside its `children`.
+The root is the only top-level component. Layout components reference their
+children by ID, which makes the hierarchy explicit and lets the builder move
+or replace individual sections safely.
 
-### Styling Rules
+## Values, data, and actions
 
-The generator uses **shadcn/ui theme tokens** for automatic dark/light mode support:
-- **Preferred:** `bg-background`, `text-foreground`, `bg-primary`, `text-muted-foreground`
-- **Also allowed:** Hardcoded colors (`bg-red-500`) when you request specific colors
+Component properties can use a literal value or a binding to surface data. A
+literal is appropriate for fixed labels and presentation. A binding is
+appropriate for values supplied or updated by the Flow.
 
-For best results, ask for mobile-first layouts. Good generated UIs use `w-full`, `max-w-*`, responsive grid classes like `grid-cols-1 md:grid-cols-2 lg:grid-cols-3`, and stable heights or aspect ratios for charts, maps, media, and 3D scenes.
+Interactive components can trigger a Page workflow with a `workflow_event`
+action that identifies the selected Event by `nodeId`. Widget components use
+`widget_event` plus an `actionId` that the containing instance binds to a
+workflow. Navigation uses the separate `navigate_page` or `external_link`
+action. A handler can update data or return new A2UI content after it runs.
 
-:::tip[For Developers]
-Building A2UI programmatically? Check the **[Developer Guide](/dev/a2ui/overview/)** for the full specification, TypeScript interfaces, and code examples.
+For the available component types and their exact properties, use the
+[A2UI component reference](/reference/a2ui-components/).
+
+## Create and expose a Page
+
+1. Open the Flow that should provide the Page's behavior.
+2. Open its **Pages** panel and select **New**.
+3. Build the interface visually, with FlowPilot, or in Dev Mode.
+4. In the app's **Events** workspace, create or edit a UI Event.
+5. Configure that Event to open the Page and assign a unique route.
+6. Preview the Page with representative data before sharing the app.
+
+Create reusable component groups in the app's **Widgets** workspace, then add
+them to Pages as Widget instances.
+
+## Design for both themes
+
+Prefer semantic theme classes such as `bg-background`, `bg-card`,
+`text-foreground`, `text-muted-foreground`, and `border-border`. They adapt to
+the active light or dark theme. Use fixed colors only when the color itself
+carries meaning, and verify contrast in both modes.
+
+Responsive layouts should start with a single-column or flexible structure,
+then add wider-screen grid rules where needed. Give charts, media, maps, and
+other visual surfaces an explicit height or aspect ratio so their surrounding
+layout remains stable.
+
+:::tip[For developers]
+See the [A2UI Developer Guide](/dev/a2ui/overview/) for programmatic surface
+updates and the [FlowPilot UI reference](/reference/flowpilot-ui/) for
+AI-assisted generation.
 :::

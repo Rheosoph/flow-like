@@ -1,615 +1,296 @@
 ---
 title: A2UI Migration Guide
-description: Migrate from existing UI approaches to the A2UI component system
+description: Migrate React or HTML interfaces to Flow-Like's current A2UI surface contract
 ---
 
-import { Steps, Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside, Steps, Card, CardGrid } from '@astrojs/starlight/components';
 
-# A2UI Migration Guide
+Migrating to A2UI means translating an interface into a normalized component
+tree and moving behavior into named Flow Events. It is not a source-to-source
+React compiler: arbitrary JavaScript, browser APIs, and component-local effects
+do not run inside an A2UI surface.
 
-This guide helps you migrate from other UI approaches to the A2UI component system.
+![A2UI authoring and runtime architecture in Flow-Like](../../../assets/A2UIArchitecture.svg)
 
-## Overview
+Use A2UI when the interface should be generated, edited visually, shared
+between Pages and Widgets, or driven directly by Flow-Like workflows. Keep a
+custom web frontend when the experience depends on unsupported browser
+behavior or a specialized third-party UI library.
 
-A2UI (App-to-UI) is a declarative, platform-agnostic UI system that:
+## The migration model
 
-- Renders natively on web, desktop, and mobile
-- Supports real-time streaming updates
-- Integrates with flow-based architectures
-- Enables AI-assisted UI generation
+| Existing UI concern | A2UI equivalent |
+| --- | --- |
+| DOM or JSX hierarchy | Flat `components` array plus child ID references |
+| Component props | Typed properties directly inside `component` |
+| React state | Bound values, Page state, global state, or element values |
+| Event handler | Board Event selected by a `workflow_event` action and `nodeId` |
+| Repeated interactive component | Reusable Widget and `widgetInstance` |
+| CSS module or inline CSS | `style.className` and structured style fields |
+| Client-side route change | `navigate_page` action or a route Event |
+| API call in the component | Flow nodes behind a named Event |
 
----
+<Aside type="caution" title="Do not migrate the old examples literally">
+  The runtime uses lower-camel-case component types and has no nested `props`
+  object. Components such as `List` and action objects such as `onClick`,
+  `updateData`, or `openModal` belong to older experiments and should not be
+  used in new surfaces.
+</Aside>
 
-## Migration Paths
+## Step-by-step
+
+<Steps>
+1. **Inventory the interface**
+
+   Identify layout containers, visible values, inputs, actions, repeated
+   patterns, loading states, and navigation. Separate presentation from the
+   code that fetches or mutates data.
+
+2. **Choose the target surface**
+
+   Use a Page for routeable app UI and a Widget for a reusable surface.
+   Create the target from the relevant Flow so it retains the Flow's
+   `boardId`.
+
+3. **Build the static hierarchy**
+
+   Recreate the structure with `column`, `row`, `grid`, `card`, and other
+   current components. Give every component a stable semantic ID.
+
+4. **Move values into bindings**
+
+   Use literal `BoundValue` objects for static copy and path bindings for
+   shared data. Inputs keep their current value on the element; workflows can
+   read or update it through element nodes.
+
+5. **Replace handlers with board Events**
+
+   Create one Event per purpose, connect it to the relevant handler Flow, and
+   select it on the interactive component. The builder emits a
+   `workflow_event` action whose `context.nodeId` identifies the Event. The
+   handler reads live values instead of receiving a copied form payload.
+
+6. **Extract repeated UI into Widgets**
+
+   Repeated cards, rows, and action groups should use `widgetInstance` rather
+   than duplicated component trees. Declare interactive action IDs in the
+   Widget definition, then bind them when each Widget is instantiated.
+
+7. **Verify both themes and runtime paths**
+
+   Test the visual builder, rendered Page or Widget, loading and error states,
+   keyboard navigation, light and dark mode, and every route or Event binding.
+</Steps>
+
+## Example: React card to A2UI
+
+The React version combines layout, local state, and a submit handler:
+
+```tsx
+function ProfileCard() {
+  const [email, setEmail] = useState("");
+
+  return (
+    <section className="rounded-xl border p-6">
+      <h2>Profile</h2>
+      <input
+        type="email"
+        value={email}
+        onChange={(event) => setEmail(event.target.value)}
+      />
+      <button onClick={() => saveProfile(email)}>Save profile</button>
+    </section>
+  );
+}
+```
+
+The A2UI surface keeps presentation declarative:
+
+```json
+{
+  "rootComponentId": "root",
+  "components": [
+    {
+      "id": "root",
+      "style": {
+        "className": "rounded-xl border border-border bg-card p-6 text-card-foreground"
+      },
+      "component": {
+        "type": "column",
+        "gap": { "literalString": "16px" },
+        "children": {
+          "explicitList": ["heading", "email", "save"]
+        }
+      }
+    },
+    {
+      "id": "heading",
+      "component": {
+        "type": "text",
+        "content": { "literalString": "Profile" },
+        "variant": { "literalString": "heading" },
+        "size": { "literalString": "xl" },
+        "weight": { "literalString": "semibold" }
+      }
+    },
+    {
+      "id": "email",
+      "component": {
+        "type": "textField",
+        "value": { "literalString": "" },
+        "label": { "literalString": "Email address" },
+        "inputType": { "literalString": "email" },
+        "required": { "literalBool": true }
+      }
+    },
+    {
+      "id": "save",
+      "component": {
+        "type": "button",
+        "label": { "literalString": "Save profile" },
+        "actions": [
+          {
+            "name": "workflow_event",
+            "context": {
+              "nodeId": "save-profile-event-node"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+The Event selected by `save-profile-event-node` uses **Get Element Value** for
+the `email` element, validates it, performs the storage or API operation, and
+updates the surface with element setter nodes.
+
+## Component mapping
+
+| HTML or React pattern | A2UI component |
+| --- | --- |
+| `<div>` / `<section>` | `box`, `column`, `row`, `grid`, or `card` |
+| Heading, paragraph, label | `text` |
+| Rich text | `markdown` |
+| `<img>` | `image` |
+| `<video>` | `video` |
+| Status chip | `badge` |
+| Avatar or user summary | `avatar` or `userProfile` |
+| `<button>` | `button` |
+| `<a>` | `link` or `appLink` |
+| `<input>` / `<textarea>` | `textField` |
+| `<select>` | `select` |
+| Checkbox or toggle | `checkbox` or `switch` |
+| Radio buttons | `radioGroup` |
+| Date or time input | `dateTimeInput` |
+| File upload | `fileInput`, `imageInput`, or `voiceInput` |
+| Table | `table` |
+| Dialog | `modal` or `drawer` |
+| Tabs | `tabs` |
+| Disclosure list | `accordion` |
+| Chart | `nivoChart` or `plotlyChart` |
+| Calendar or project timeline | `calendar` or `gantt` |
+| Map | `geoMap` |
+
+See the [component reference](/reference/a2ui-components/) for the complete
+71-component catalog.
+
+## State and data
+
+Choose the narrowest state mechanism that fits the data:
+
+| State | Use it for |
+| --- | --- |
+| Literal component property | Static design-time content |
+| Element value | Current input or component value |
+| Surface `dataModel` binding | Shared data used by several components |
+| Page state | State that belongs to one Page |
+| Global state | State intentionally shared across Pages |
+| Runtime Variable | Deployment-specific public or secret configuration |
+
+For workflow-driven display updates, prefer the targeted nodes:
+
+- **Set Element Text**, **Set Badge Content**, or **Set Markdown Content**
+- **Set Element Value**
+- **Push CSV to Table** or **Update Table**
+- **Push Data to Chart**
+- **Set Progress**
+- **Set Element Action**
+
+Use a general data-model update only when the surface deliberately binds
+several components to the same `$.data.*` path.
+
+## Repeated content
+
+There is no standalone `List` component in the current catalog. For a dynamic
+collection:
+
+1. Create a Widget for one row or card.
+2. Bind inner values to `$.item.*`.
+3. Declare any row actions on the Widget.
+4. Place it with `widgetInstance`.
+5. Let the owning board supply the collection.
+
+Template children remain useful for simple, non-interactive repetition, but a
+Widget is the safer choice when an item has buttons, exposed styling, or its
+own action contract.
+
+## Styling and responsiveness
+
+Start from semantic theme tokens:
+
+```json
+{
+  "className": "grid grid-cols-1 gap-4 rounded-xl border border-border bg-card p-4 text-card-foreground md:grid-cols-2 lg:grid-cols-3"
+}
+```
+
+This adapts to theme and viewport changes without hard-coding separate light
+and dark palettes. Structured style fields are available for backgrounds,
+borders, shadows, sizing, spacing, positioning, transforms, typography, and
+responsive overrides.
+
+Avoid copying a large application stylesheet wholesale. Move only the rules
+that establish hierarchy, spacing, responsive behavior, and meaningful visual
+state.
+
+## What should remain custom
 
 <CardGrid>
-  <Card title="From React Components" icon="react">
-    Convert React JSX to A2UI JSON structures.
+  <Card title="Specialized browser APIs" icon="globe">
+    Keep custom code for interfaces that rely on browser APIs or third-party
+    controls the A2UI runtime does not expose.
   </Card>
-  <Card title="From HTML/CSS" icon="html">
-    Transform static markup to A2UI components.
+  <Card title="Unbounded client logic" icon="seti:javascript">
+    Effects, timers, and arbitrary client-side state machines should become
+    Flow logic or stay in a custom frontend.
   </Card>
-  <Card title="From Custom JSON" icon="document">
-    Map your schema to A2UI format.
-  </Card>
-  <Card title="From Figma" icon="figma">
-    Export Figma designs as A2UI.
+  <Card title="Pixel-specific canvases" icon="seti:html">
+    Use the 2D and 3D components when they fit; retain a purpose-built renderer
+    when exact custom drawing behavior is essential.
   </Card>
 </CardGrid>
 
----
+## Migration checklist
 
-## From React Components
+- Every component has a stable, unique ID.
+- Types and property names match the current lower-camel-case contract.
+- Every typed property uses the correct `BoundValue` shape.
+- Child relationships reference component IDs.
+- Repeated interactive UI is a Widget, not copied components.
+- Every action maps to one purposeful Event.
+- Event handlers read current element values at execution time.
+- Loading, empty, success, and error states are visible.
+- Focus order, labels, alt text, and keyboard behavior are verified.
+- Semantic theme tokens work in light and dark mode.
+- Page routes and query parameters resolve through Events.
 
-### Basic Mapping
+## Related guides
 
-<Tabs>
-  <TabItem label="React">
-    ```tsx
-    <div className="p-4 bg-white rounded-lg shadow">
-      <h2 className="text-xl font-bold">{title}</h2>
-      <p className="text-gray-600">{description}</p>
-      <button onClick={handleClick}>
-        Click me
-      </button>
-    </div>
-    ```
-  </TabItem>
-  <TabItem label="A2UI">
-    ```json
-    {
-      "type": "Column",
-      "style": {
-        "className": "p-4 bg-white rounded-lg shadow"
-      },
-      "children": [
-        {
-          "type": "Text",
-          "props": {
-            "variant": "h2",
-            "content": { "path": "/title" }
-          },
-          "style": { "className": "text-xl font-bold" }
-        },
-        {
-          "type": "Text",
-          "props": {
-            "content": { "path": "/description" }
-          },
-          "style": { "className": "text-gray-600" }
-        },
-        {
-          "type": "Button",
-          "props": {
-            "label": "Click me"
-          },
-          "actions": {
-            "onClick": {
-              "type": "emit",
-              "event": "button_clicked"
-            }
-          }
-        }
-      ]
-    }
-    ```
-  </TabItem>
-</Tabs>
-
-### Component Mapping Table
-
-| React | A2UI Equivalent |
-|-------|-----------------|
-| `<div>` | `Column`, `Row`, or `Stack` |
-| `<span>` | `Text` |
-| `<h1>`-`<h6>` | `Text` with `variant` prop |
-| `<p>` | `Text` |
-| `<img>` | `Image` |
-| `<button>` | `Button` |
-| `<input type="text">` | `TextField` |
-| `<input type="checkbox">` | `Checkbox` |
-| `<input type="radio">` | `RadioGroup` |
-| `<select>` | `Select` |
-| `<ul>/<ol>` | `List` |
-| `<form>` | `Column` with form handling |
-
-### Event Handling
-
-<Tabs>
-  <TabItem label="React">
-    ```tsx
-    const handleSubmit = (e) => {
-      e.preventDefault();
-      submitForm(formData);
-    };
-
-    <form onSubmit={handleSubmit}>
-      <input
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-      />
-      <button type="submit">Submit</button>
-    </form>
-    ```
-  </TabItem>
-  <TabItem label="A2UI">
-    ```json
-    {
-      "type": "Column",
-      "children": [
-        {
-          "type": "TextField",
-          "props": {
-            "value": { "path": "/form/name" }
-          },
-          "actions": {
-            "onChange": {
-              "type": "update",
-              "path": "/form/name"
-            }
-          }
-        },
-        {
-          "type": "Button",
-          "props": { "label": "Submit" },
-          "actions": {
-            "onClick": {
-              "type": "submit",
-              "formId": "contact-form"
-            }
-          }
-        }
-      ]
-    }
-    ```
-  </TabItem>
-</Tabs>
-
-### Conditional Rendering
-
-<Tabs>
-  <TabItem label="React">
-    ```tsx
-    {isLoading && <Spinner />}
-    {error && <ErrorMessage error={error} />}
-    {data && <DataDisplay data={data} />}
-    ```
-  </TabItem>
-  <TabItem label="A2UI">
-    ```json
-    {
-      "type": "Column",
-      "children": [
-        {
-          "type": "Icon",
-          "condition": { "path": "/isLoading" },
-          "props": { "name": "spinner", "spin": true }
-        },
-        {
-          "type": "Text",
-          "condition": { "path": "/error" },
-          "props": { "content": { "path": "/error" } },
-          "style": { "className": "text-red-500" }
-        },
-        {
-          "type": "Column",
-          "condition": { "path": "/data" },
-          "children": [...]
-        }
-      ]
-    }
-    ```
-  </TabItem>
-</Tabs>
-
-### Lists and Iteration
-
-<Tabs>
-  <TabItem label="React">
-    ```tsx
-    <ul>
-      {items.map((item) => (
-        <li key={item.id}>
-          <span>{item.name}</span>
-          <button onClick={() => deleteItem(item.id)}>
-            Delete
-          </button>
-        </li>
-      ))}
-    </ul>
-    ```
-  </TabItem>
-  <TabItem label="A2UI">
-    ```json
-    {
-      "type": "List",
-      "props": {
-        "items": { "path": "/items" }
-      },
-      "itemTemplate": {
-        "type": "Row",
-        "style": { "className": "justify-between items-center" },
-        "children": [
-          {
-            "type": "Text",
-            "props": { "content": { "path": "name" } }
-          },
-          {
-            "type": "Button",
-            "props": { "label": "Delete", "variant": "ghost" },
-            "actions": {
-              "onClick": {
-                "type": "emit",
-                "event": "delete_item",
-                "payload": { "id": { "path": "id" } }
-              }
-            }
-          }
-        ]
-      }
-    }
-    ```
-  </TabItem>
-</Tabs>
-
----
-
-## From HTML/CSS
-
-### Structure Conversion
-
-<Tabs>
-  <TabItem label="HTML">
-    ```html
-    <div class="card">
-      <div class="card-header">
-        <img src="avatar.jpg" class="avatar">
-        <div class="user-info">
-          <h3 class="user-name">John Doe</h3>
-          <span class="user-role">Developer</span>
-        </div>
-      </div>
-      <div class="card-body">
-        <p>User description here...</p>
-      </div>
-      <div class="card-footer">
-        <button class="btn btn-primary">Follow</button>
-      </div>
-    </div>
-    ```
-  </TabItem>
-  <TabItem label="A2UI">
-    ```json
-    {
-      "type": "Card",
-      "children": [
-        {
-          "type": "Row",
-          "style": { "className": "gap-3 items-center" },
-          "children": [
-            {
-              "type": "Image",
-              "props": { "src": { "path": "/user/avatar" } },
-              "style": { "className": "w-12 h-12 rounded-full" }
-            },
-            {
-              "type": "Column",
-              "children": [
-                {
-                  "type": "Text",
-                  "props": {
-                    "variant": "h3",
-                    "content": { "path": "/user/name" }
-                  }
-                },
-                {
-                  "type": "Text",
-                  "props": { "content": { "path": "/user/role" } },
-                  "style": { "className": "text-muted-foreground" }
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "type": "Text",
-          "props": { "content": { "path": "/user/description" } },
-          "style": { "className": "py-4" }
-        },
-        {
-          "type": "Button",
-          "props": { "label": "Follow", "variant": "default" }
-        }
-      ]
-    }
-    ```
-  </TabItem>
-</Tabs>
-
-### CSS to Tailwind
-
-A2UI uses Tailwind CSS classes. Common conversions:
-
-| CSS Property | Tailwind Class |
-|-------------|----------------|
-| `margin: 16px` | `m-4` |
-| `padding: 24px` | `p-6` |
-| `display: flex` | `flex` |
-| `flex-direction: column` | `flex-col` |
-| `justify-content: space-between` | `justify-between` |
-| `align-items: center` | `items-center` |
-| `gap: 8px` | `gap-2` |
-| `border-radius: 8px` | `rounded-lg` |
-| `font-size: 18px` | `text-lg` |
-| `font-weight: bold` | `font-bold` |
-| `color: #gray` | `text-gray-500` |
-| `background: white` | `bg-white` |
-
----
-
-## State Management
-
-### Local State
-
-A2UI uses a data path system instead of component state:
-
-<Tabs>
-  <TabItem label="React useState">
-    ```tsx
-    const [count, setCount] = useState(0);
-
-    <button onClick={() => setCount(c => c + 1)}>
-      Count: {count}
-    </button>
-    ```
-  </TabItem>
-  <TabItem label="A2UI Data Paths">
-    ```json
-    {
-      "type": "Button",
-      "props": {
-        "label": {
-          "template": "Count: {count}",
-          "values": { "count": { "path": "/count" } }
-        }
-      },
-      "actions": {
-        "onClick": {
-          "type": "update",
-          "path": "/count",
-          "transform": "increment"
-        }
-      }
-    }
-    ```
-  </TabItem>
-</Tabs>
-
-### Form State
-
-<Tabs>
-  <TabItem label="React Form">
-    ```tsx
-    const [form, setForm] = useState({
-      email: '',
-      password: ''
-    });
-
-    <input
-      type="email"
-      value={form.email}
-      onChange={(e) => setForm({
-        ...form,
-        email: e.target.value
-      })}
-    />
-    ```
-  </TabItem>
-  <TabItem label="A2UI Form">
-    ```json
-    {
-      "type": "TextField",
-      "props": {
-        "type": "email",
-        "value": { "path": "/form/email" },
-        "placeholder": "Enter email"
-      },
-      "actions": {
-        "onChange": {
-          "type": "update",
-          "path": "/form/email"
-        }
-      }
-    }
-    ```
-  </TabItem>
-</Tabs>
-
----
-
-## Step-by-Step Migration
-
-<Steps>
-
-1. **Audit Your Components**
-
-   List all components that need migration. Prioritize:
-   - High-usage components
-   - Simple, self-contained components
-   - Components without complex state
-
-2. **Map Data Requirements**
-
-   Document what data each component needs:
-   - Props received from parents
-   - Internal state
-   - External data (API, context)
-
-3. **Design Data Paths**
-
-   Create a data path schema:
-   ```
-   /user/name
-   /user/email
-   /form/email
-   /form/password
-   /ui/isModalOpen
-   /items/0/name
-   ```
-
-4. **Convert Components**
-
-   Start with leaf components (no children), then work up:
-   - Convert structure to A2UI JSON
-   - Map CSS/styles to Tailwind classes
-   - Replace event handlers with actions
-   - Add data bindings
-
-5. **Set Up Actions**
-
-   Map interactions to A2UI actions:
-   - Click handlers → `onClick` actions
-   - Form changes → `onChange` with `update`
-   - Submissions → `submit` actions
-   - Navigation → `navigate` actions
-
-6. **Test and Validate**
-
-   - Verify visual appearance matches
-   - Test all interactions
-   - Check responsive behavior
-   - Validate data flows correctly
-
-</Steps>
-
----
-
-## Common Patterns
-
-### Modal Dialog
-
-<Tabs>
-  <TabItem label="Before">
-    ```tsx
-    const [isOpen, setIsOpen] = useState(false);
-
-    <button onClick={() => setIsOpen(true)}>Open</button>
-    <Modal open={isOpen} onClose={() => setIsOpen(false)}>
-      <ModalContent>...</ModalContent>
-    </Modal>
-    ```
-  </TabItem>
-  <TabItem label="A2UI">
-    ```json
-    {
-      "type": "Column",
-      "children": [
-        {
-          "type": "Button",
-          "props": { "label": "Open" },
-          "actions": {
-            "onClick": {
-              "type": "update",
-              "path": "/ui/modalOpen",
-              "value": true
-            }
-          }
-        },
-        {
-          "type": "Modal",
-          "props": {
-            "open": { "path": "/ui/modalOpen" }
-          },
-          "actions": {
-            "onClose": {
-              "type": "update",
-              "path": "/ui/modalOpen",
-              "value": false
-            }
-          },
-          "children": [...]
-        }
-      ]
-    }
-    ```
-  </TabItem>
-</Tabs>
-
-### Tabs
-
-<Tabs>
-  <TabItem label="Before">
-    ```tsx
-    const [activeTab, setActiveTab] = useState('tab1');
-
-    <Tabs value={activeTab} onChange={setActiveTab}>
-      <Tab value="tab1">Tab 1</Tab>
-      <Tab value="tab2">Tab 2</Tab>
-    </Tabs>
-    <TabPanel value="tab1">Content 1</TabPanel>
-    <TabPanel value="tab2">Content 2</TabPanel>
-    ```
-  </TabItem>
-  <TabItem label="A2UI">
-    ```json
-    {
-      "type": "Tabs",
-      "props": {
-        "value": { "path": "/ui/activeTab" },
-        "tabs": [
-          { "value": "tab1", "label": "Tab 1" },
-          { "value": "tab2", "label": "Tab 2" }
-        ]
-      },
-      "actions": {
-        "onChange": {
-          "type": "update",
-          "path": "/ui/activeTab"
-        }
-      },
-      "children": [
-        {
-          "type": "Column",
-          "condition": {
-            "path": "/ui/activeTab",
-            "equals": "tab1"
-          },
-          "children": [...]
-        },
-        {
-          "type": "Column",
-          "condition": {
-            "path": "/ui/activeTab",
-            "equals": "tab2"
-          },
-          "children": [...]
-        }
-      ]
-    }
-    ```
-  </TabItem>
-</Tabs>
-
----
-
-## Tips for Success
-
-<Aside type="tip" title="Start Small">
-Begin with simple, isolated components. Gain confidence before tackling complex components.
-</Aside>
-
-<Aside type="tip" title="Use FlowPilot">
-FlowPilot can help convert React components to A2UI. Paste your React code and ask for conversion.
-</Aside>
-
-<Aside type="caution" title="Complex Logic">
-Heavy JavaScript logic in components may need to move to flow nodes. A2UI handles presentation; flows handle business logic.
-</Aside>
-
----
-
-## Next Steps
-
-- [A2UI Component Reference](/reference/a2ui-components) - Full component documentation
-- [Widget Builder Guide](/reference/widget-builder) - Visual widget creation
-- [FlowPilot UI Generation](/reference/flowpilot-ui) - AI-assisted UI generation
+- [A2UI component reference](/reference/a2ui-components/)
+- [A2UI overview](/dev/a2ui/overview/)
+- [Visual builder](/dev/a2ui/visual-builder/)
+- [Pages](/dev/a2ui/pages/)
+- [Widgets](/dev/a2ui/widgets/)
+- [FlowPilot UI generation](/reference/flowpilot-ui/)

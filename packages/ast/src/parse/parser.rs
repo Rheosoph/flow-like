@@ -1159,9 +1159,19 @@ impl Parser<'_> {
                     self.bump();
                     let index = self.expr()?;
                     self.expect(&Tok::RBracket)?;
-                    expr = Expr::Index {
-                        base: Box::new(expr),
-                        index: Box::new(index),
+                    // The renderer uses bracketed string syntax for struct keys that cannot be
+                    // written as a plain identifier (`value["row-rejection-reason"]`). Preserve
+                    // that as `Member`, the same AST shape the renderer started from. Numeric or
+                    // dynamic brackets remain collection indexes.
+                    expr = match index {
+                        Expr::Literal(Literal::String(field)) => Expr::Member {
+                            base: Box::new(expr),
+                            field,
+                        },
+                        index => Expr::Index {
+                            base: Box::new(expr),
+                            index: Box::new(index),
+                        },
                     };
                 }
                 _ => break,

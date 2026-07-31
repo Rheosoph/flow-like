@@ -1,494 +1,149 @@
 ---
 title: Data Loading & Storage
-description: Import, store, and manage data from files, databases, and cloud sources
+description: Load files, spreadsheets, databases, and external sources into Flow-Like workflows
 sidebar:
   order: 2
 ---
 
-Every data science project starts with data. Flow-Like provides comprehensive tools for loading data from various sources, storing it efficiently, and managing your data assets.
+Choose the reader from the source format and expected data size. Preserve the source path and schema alongside the loaded data so downstream analysis remains traceable.
 
-## Loading CSV Files
+## Choose a loading path
 
-CSV is the most common data format. Flow-Like offers two approaches:
+| Input | Recommended starting point |
+|-------|----------------------------|
+| Small text file | [Read to String](/nodes/data/files/content/read-to-string/) |
+| Large CSV | [Buffered CSV Reader](/nodes/utils/csv/csv-buffered-reader/) |
+| Queryable CSV, JSON, or Parquet | Mount it in a DataFusion session |
+| Excel workbook | Cell, worksheet, or table extraction nodes |
+| JSON payload | Parse with a schema; repair only when the source is expected to be imperfect |
+| App file | Use the app storage path abstraction |
+| Local structured records | Open the local database and insert or upsert |
+| External database or lake | Register it with DataFusion |
+| Provider file store | Use the provider connection and its typed file nodes |
 
-### Simple Read: Read to String
+## CSV files
 
-For smaller files, read the entire contents:
+Use [Buffered CSV Reader](/nodes/utils/csv/csv-buffered-reader/) when the file should be processed in bounded batches. Validate the header before accepting the first batch and keep a rejection path for malformed rows.
 
-```
-Read to String
-    │
-    ├── Path: (FlowPath to CSV)
-    │
-    └── Content ──▶ (string with CSV data)
-```
+For SQL analysis, use [Mount CSV](/nodes/data/datafusion/df-mount-csv/) to register the file in a [DataFusion session](/nodes/data/datafusion/df-create-session/).
 
-### Streaming Read: Buffered CSV Reader
+Check:
 
-For large files, stream data in chunks to avoid memory issues:
+- delimiter and quoting rules;
+- text encoding;
+- whether headers are present and unique;
+- decimal, date, and timezone conventions;
+- empty-string versus null behavior;
+- expected row count and key uniqueness.
 
-```
-Buffered CSV Reader
-    │
-    ├── Path: (FlowPath to CSV)
-    ├── Chunk Size: 10000  (rows per batch)
-    ├── Delimiter: ","
-    │
-    ├── On Chunk ──▶ (triggers for each batch)
-    ├── Chunk ──▶ (current batch data)
-    │
-    └── Done ──▶ (file fully processed)
-```
+## Excel files
 
-**When to use each:**
+| Need | Node |
+|------|------|
+| Read or write one cell | [Excel Read Cell](/nodes/data/excel/excel-read-cell/), [Excel Write Cell](/nodes/data/excel/excel-write-cell/) |
+| Discover worksheets | [Get Sheet Names](/nodes/data/excel/files-spreadsheet-get-sheet-names/) |
+| Extract predictable tables | [Extract Tables (Excel)](/nodes/data/excel/data-excel-extract-tables/) |
+| Extract irregular tables | [Extract Tables AI (Excel)](/nodes/data/excel/data-excel-extract-tables-ai/) |
 
-| Approach | File Size | Memory Usage | Use Case |
-|----------|-----------|--------------|----------|
-| Read to String | < 50MB | High | Quick analysis, small datasets |
-| Buffered Reader | Any size | Controlled | ETL pipelines, large datasets |
+Inspect sheet names first, then select the intended sheet and validate its expected columns. AI extraction is useful for unusual layouts, but it should still be followed by type, row-count, and business-rule checks.
 
-## Loading Excel Files
+## JSON
 
-Flow-Like provides comprehensive Excel support:
+Use [Parse JSON with Schema](/nodes/utils/json/parse-with-schema/) when the expected shape is known. The schema makes required fields and types explicit and avoids spreading defensive field checks throughout the board.
 
-### Basic Operations
+[Repair Parse JSON](/nodes/utils/json/repair-parse/) is for input that may be almost, but not quite, valid JSON. Do not use repair to hide a broken contract from a system you control; fix the producer or reject the payload.
 
-| Node | Purpose |
-|------|---------|
-| **Get Sheet Names** | List all sheets in a workbook |
-| **Get Row** | Read a specific row |
-| **Loop Rows** | Iterate through all rows |
-| **Read Cell** | Read a specific cell value |
+## Parquet and analytical files
 
-### Intelligent Table Extraction
+[Mount Parquet](/nodes/data/datafusion/df-mount-parquet/) registers a Parquet file for SQL queries without converting it to rows first. Parquet is a good fit for repeated analytical scans because it is columnar and carries a schema.
 
-The **Try Extract Tables** node automatically detects tables in Excel:
-
-```
-Try Extract Tables
-    │
-    ├── Path: (FlowPath to Excel)
-    ├── Min Table Cells: 4
-    ├── Max Header Rows: 3
-    ├── Drop Totals: true
-    ├── Group Similar Headers: true
-    │
-    └── Tables ──▶ (array of detected tables)
-```
-
-This is powerful for messy spreadsheets with:
-- Multiple tables per sheet
-- Headers spanning multiple rows
-- Merged cells
-- Total/summary rows
-
-### Excel Workflow Example
-
-```
-Get Sheet Names ──▶ For Each Sheet ──▶ Try Extract Tables ──▶ Process
-        │                  │                    │
-        │                  │                    └── tables array
-        │                  └── sheet name
-        └── ["Sheet1", "Data", "Summary"]
-```
-
-## Loading JSON Files
-
-### Parse with Schema Validation
-
-For structured JSON, validate against a schema:
-
-```
-Parse with Schema
-    │
-    ├── JSON: (JSON string)
-    ├── Schema: (JSON Schema definition)
-    │
-    ├── Valid ──▶ (parsing succeeded)
-    ├── Result ──▶ (parsed object)
-    │
-    └── Invalid ──▶ (validation failed)
-```
-
-### Repair Malformed JSON
-
-The **Repair Parse** node fixes common JSON issues:
-
-```
-Repair Parse
-    │
-    ├── Input: "{name: 'John', age: 30}"  (invalid JSON)
-    │
-    └── Result ──▶ {"name": "John", "age": 30}  (fixed)
-```
-
-Handles:
-- Unquoted keys
-- Single quotes
-- Trailing commas
-- Missing brackets
-
-## Working with Parquet
-
-Parquet is ideal for large analytical datasets:
-
-```
-Mount Parquet to DataFusion
-    │
-    ├── Path: (FlowPath to .parquet)
-    ├── Table Name: "analytics"
-    │
-    └── Session ──▶ (DataFusion session with table)
-```
-
-Then query with SQL:
 ```sql
-SELECT * FROM analytics WHERE date > '2025-01-01'
+SELECT
+  region,
+  SUM(revenue) AS revenue
+FROM analytics
+WHERE event_date >= DATE '2026-01-01'
+GROUP BY region
+ORDER BY revenue DESC;
 ```
 
-## Using App Storage
-
-Every Flow-Like app has dedicated storage for files and databases.
-
-### Uploading Files
-
-1. Go to your app's **Storage** section
-2. Click **Upload** or drag-and-drop files
-3. Files are now accessible via FlowPath
-
-### FlowPath Explained
-
-FlowPath is Flow-Like's unified path system:
-
-| Path Type | Example | Description |
-|-----------|---------|-------------|
-| **App Storage** | `storage://data/sales.csv` | Files in your app's storage |
-| **Temp** | `temp://processing/output.csv` | Temporary files (cleared on restart) |
-| **Absolute** | `/Users/me/data.csv` | Local filesystem (desktop only) |
-
-### Creating Paths in Flows
-
-```
-Make FlowPath
-    │
-    ├── Scheme: "storage"
-    ├── Path: "data/sales.csv"
-    │
-    └── Path ──▶ (FlowPath object)
-```
-
-## Database Storage (LanceDB)
-
-Flow-Like includes LanceDB, a vector database for storing structured data:
-
-### Opening/Creating a Database
-
-```
-Open Database
-    │
-    ├── Name: "my_dataset"
-    │
-    └── Database ──▶ (connection reference)
-```
-
-### Inserting Data
-
-**Single Record:**
-```
-Insert
-    │
-    ├── Database: (connection)
-    ├── Data: {"name": "John", "age": 30, "city": "NYC"}
-    │
-    └── End
-```
-
-**Batch Insert:**
-```
-Batch Insert
-    │
-    ├── Database: (connection)
-    ├── Values: [array of records]
-    │
-    └── End
-```
-
-**From CSV:**
-```
-Batch Insert CSV
-    │
-    ├── Database: (connection)
-    ├── CSV: (CSVTable data)
-    │
-    └── End
-```
-
-### Write Batching
-
-Database connections use **automatic micro-batching** to reduce the number of
-storage operations. Instead of writing every record to disk immediately, writes
-are buffered and flushed in configurable batches.
-
-**How it works:**
-
-1. Every insert or upsert is buffered in memory.
-2. When the buffer reaches the configured **batch size** (default: 1 000), it is
-   flushed to storage as a single operation.
-3. Before any **read** (filter, search, count, …), remaining buffered writes are
-   flushed automatically to guarantee consistency.
-4. At the **end of the workflow**, a completion hook flushes whatever is left.
-
-You can configure the batch size on the **Open Database** node:
-
-```
-Open Database
-    │
-    ├── Name: "my_dataset"
-    ├── Batch Size: 1000        ← records buffered before flush
-    │
-    └── Database ──▶ (connection)
-```
-
-:::tip[Choosing a batch size]
-Larger batches reduce the number of write operations (better for cloud storage
-like S3/R2) but use more memory. A batch size of **500–2 000** works well for
-most workloads.
-:::
-
-**Schema-mismatch handling:**
-
-When records in a batch have different schemas (different JSON keys), the batch
-insert would normally fail. The batching layer handles this transparently with a
-three-tier fallback:
-
-1. **Schema pre-filter** — Records are compared against the table's Arrow schema.
-   Those with matching field names are grouped into one batch; outliers are
-   separated.
-2. **Divide & conquer** — If a batch still fails (e.g. type mismatches), it is
-   split in half and each half is retried recursively.
-3. **Single-record ingest** — At the leaf of the recursion, individual records
-   that still fail are logged and skipped.
-
-This means that a handful of malformed records will never take down the entire
-batch — the valid majority is always written efficiently.
-
-**Operation coalescing:**
-
-The buffer preserves the order of operations but coalesces consecutive runs of
-the same type. For example, a sequence of:
-
-```
-insert → insert → insert → upsert → upsert → insert → insert
-```
-
-is flushed as three batches:
-
-1. **Batch insert** (first 3 records)
-2. **Batch upsert / merge-insert** (2 records)
-3. **Batch insert** (last 2 records)
-
-Only **insert** and **upsert** (merge-insert) are buffered. Mutating operations
-like **delete**, **index**, and **optimize** always flush first and then execute
-immediately.
-
-**Manual flush:**
-
-You can force a flush at any point with the **Flush Database** node:
-
-```
-Flush Database
-    │
-    ├── Database: (connection)
-    │
-    └── End
-```
-
-This is useful when you need to guarantee writes are persisted before continuing
-with logic that does not go through the database nodes (e.g. external API calls
-that read from the same storage).
-
-### Querying Data
-
-| Node | Purpose | Use Case |
-|------|---------|----------|
-| **Filter** | SQL WHERE clause | Exact matches, ranges |
-| **List** | Paginated listing | Browse all data |
-| **Vector Search** | Similarity search | Find similar items |
-| **FTS Search** | Full-text search | Keyword matching |
-| **Hybrid Search** | Vector + FTS | Best of both |
-
-```
-Filter Database
-    │
-    ├── Database: (connection)
-    ├── SQL Filter: "age > 25 AND city = 'NYC'"
-    ├── Limit: 100
-    │
-    └── Results ──▶ (matching records)
-```
-
-### Database Maintenance
-
-| Node | Purpose |
-|------|---------|
-| **Flush** | Force buffered writes to storage |
-| **Index** | Create indexes for faster queries |
-| **Optimize** | Compact and optimize storage |
-| **Purge** | Remove deleted records permanently |
-| **Get Schema** | Inspect table structure |
-| **Count** | Get record count |
-
-## External Data Sources
-
-### Cloud Storage
-
-Connect to cloud object stores:
-
-```
-S3 Store
-    │
-    ├── Bucket: "my-data-bucket"
-    ├── Region: "us-east-1"
-    ├── Access Key: (secret)
-    ├── Secret Key: (secret)
-    │
-    └── Store ──▶ (object store connection)
-```
-
-**Supported Providers:**
-- AWS S3
-- Azure Blob Storage
-- Google Cloud Storage
-- S3-compatible (MinIO, etc.)
-
-### SaaS Integrations
-
-Flow-Like connects to popular services:
-
-| Service | Capabilities |
-|---------|-------------|
-| **GitHub** | Clone repos, issues, PRs, releases |
-| **Notion** | Pages, databases, search |
-| **Confluence** | Pages, spaces, comments |
-| **Google Workspace** | Sheets, Drive, Calendar |
-| **Microsoft 365** | Excel, OneDrive, SharePoint |
-| **Databricks** | Query Databricks tables |
-
-### Database Connections
-
-Connect directly to databases for federated queries:
-
-```
-Register PostgreSQL
-    │
-    ├── Host: "db.example.com"
-    ├── Port: 5432
-    ├── Database: "analytics"
-    ├── User: (secret)
-    ├── Password: (secret)
-    ├── Table: "transactions"
-    ├── Alias: "txns"
-    │
-    └── Session ──▶ (DataFusion session)
-```
-
-Now query with SQL: `SELECT * FROM txns WHERE amount > 1000`
-
-## Data Transformation
-
-### File Operations
-
-| Node | Purpose |
-|------|---------|
-| **Copy** | Duplicate a file |
-| **Rename** | Change file name |
-| **Delete** | Remove a file |
-| **Exists** | Check if file exists |
-| **List Paths** | List directory contents |
-| **Sign URL** | Generate temporary download URL |
-
-### Writing Output
-
-**Write String:**
-```
-Write String
-    │
-    ├── Path: (FlowPath)
-    ├── Content: "CSV data..."
-    │
-    └── End
-```
-
-**Write Bytes:**
-```
-Write Bytes
-    │
-    ├── Path: (FlowPath)
-    ├── Bytes: (binary data)
-    │
-    └── End
-```
-
-## Best Practices
-
-### 1. Use Appropriate Chunk Sizes
-For streaming reads, balance memory vs. performance:
-- Small chunks (1000): Low memory, slower
-- Large chunks (50000): Fast, more memory
-
-### 2. Index Your Databases
-Create indexes on columns you filter frequently:
-```
-Index Database
-    │
-    ├── Database: (connection)
-    ├── Columns: ["user_id", "date"]
-```
-
-### 3. Use Parquet for Analytics
-Convert large CSVs to Parquet for:
-- Faster queries (columnar)
-- Better compression
-- Type preservation
-
-### 4. Organize Storage Logically
-```
-storage://
-├── raw/           # Original files
-├── processed/     # Cleaned data
-├── models/        # Trained ML models
-└── exports/       # Output files
-```
-
-### 5. Handle Errors Gracefully
-Always check for file existence before reading:
-```
-Exists ──▶ Branch ──▶ Read File
-              │
-              └── (File not found) ──▶ Error handling
-```
-
-## Common Issues
-
-### "File not found"
-- Check the FlowPath scheme (storage://, temp://, etc.)
-- Verify the file was uploaded to app storage
-- Check for typos in the path
-
-### "Out of memory on large files"
-- Use Buffered CSV Reader with smaller chunk sizes
-- Process data incrementally instead of loading all at once
-- Consider converting to Parquet format
-
-### "CSV parsing errors"
-- Check delimiter settings (comma vs. semicolon)
-- Verify encoding (UTF-8 is recommended)
-- Look for unquoted special characters in data
-
-## Next Steps
-
-With your data loaded, continue to:
-
-- **[DataFusion & SQL](/topics/datascience/datafusion/)** – Query and transform with SQL
-- **[Machine Learning](/topics/datascience/ml/)** – Build predictive models
-- **[Data Visualization](/topics/datascience/visualization/)** – Create charts and dashboards
+Use [Mount JSON](/nodes/data/datafusion/df-mount-json/) for JSON or NDJSON and [Mount CSV](/nodes/data/datafusion/df-mount-csv/) for delimited files.
+
+## App storage and paths
+
+App storage gives workflows a provider-independent path to files owned by the app. See [App storage](/apps/storage/) for how files are organized and accessed.
+
+The file catalog provides distinct path constructors:
+
+| Source | Node |
+|--------|------|
+| App storage directory | [Storage Dir](/nodes/data/files/directories/path-from-storage-dir/) |
+| Explicit raw path | [Raw Path](/nodes/data/files/path/raw-path/) |
+| Convert a raw path into a Flow-Like path | [From Raw Path](/nodes/data/files/path/from-raw-path/) |
+| Convert a local path value | [Local Path to Path](/nodes/data/files/pathbuf-to-path/) |
+
+Use [Path Exists?](/nodes/data/files/operations/path-exists/) before an optional read, and [List Paths](/nodes/data/files/operations/path-list-paths/) to enumerate a directory. Avoid relying on machine-specific paths in a board intended to run on different backends.
+
+## Local database
+
+[Open Database](/nodes/data/database/open-local-db/) opens the app-local database. Choose a write node by volume and retry behavior:
+
+| Behavior | Node |
+|----------|------|
+| Insert one record | [Insert](/nodes/data/database/insert/insert-local-db/) |
+| Insert a collection | [Batch Insert](/nodes/data/database/insert/batch-insert-local-db/) |
+| Insert a CSV table | [Batch Insert (CSV)](/nodes/data/database/insert/csv-insert-local-db/) |
+| Retry-safe single write | [Upsert](/nodes/data/database/insert/upsert-local-db/) |
+| Retry-safe collection write | [Batch Upsert](/nodes/data/database/insert/batch-upsert-local-db/) |
+
+Build a stable key before using upsert. After a large write, [Flush Database](/nodes/data/database/optimization/flush-local-db/) can make the persistence boundary explicit. Use [Build Index](/nodes/data/database/optimization/index-local-db/) for fields that support repeated filters or searches, then measure whether the index improves the intended workload.
+
+Query local records with [(SQL) Filter Database](/nodes/data/database/search/filter-local-db/). Keep result limits and selected fields bounded for interactive workflows.
+
+## External sources
+
+DataFusion can register PostgreSQL, MySQL, SQLite, DuckDB, ClickHouse, Oracle, BigQuery, Athena, FlightSQL, and other cataloged sources. Browse [DataFusion databases](/nodes/data/datafusion/databases/) and [DataFusion lakes](/nodes/data/datafusion/lakes/) for the current set.
+
+Provider nodes cover service-specific file and data operations. The catalog includes [AWS, Azure, GCP, and Cloudflare provider builders](/nodes/data/providers/) plus typed integrations for services such as Microsoft 365, Google Workspace, GitHub, Notion, Atlassian, and Databricks.
+
+Keep credentials in secrets or provider connections, not in path strings or examples.
+
+## Writing files
+
+Use:
+
+- [Write String](/nodes/data/files/content/write-string/) for text;
+- [Write Bytes](/nodes/data/files/content/write-bytes/) for binary content;
+- format-specific writers when the destination has a structured contract.
+
+Write to a temporary or versioned path first when replacing an important artifact. Confirm the result before moving consumers to the new file.
+
+## Loading checklist
+
+- [ ] Reader matches the actual format and expected size
+- [ ] Source path, version, and ingestion time are retained
+- [ ] Header or schema is validated before processing
+- [ ] Large files are streamed, mounted, or batched
+- [ ] Invalid rows have a rejection reason and source reference
+- [ ] Destination writes are retry-safe
+- [ ] Credentials come from secrets or provider connections
+- [ ] Machine-specific paths are avoided in portable boards
+- [ ] Row counts and key uniqueness are checked
+
+## Troubleshooting
+
+| Symptom | Check |
+|---------|-------|
+| File not found | Path constructor, storage scope, permissions, execution backend |
+| Out of memory | Buffered reader, DataFusion mount, batch size, selected columns |
+| CSV rows shift columns | Delimiter, quoting, embedded newlines, encoding |
+| Spreadsheet table is missing | Worksheet selection, merged cells, table boundaries |
+| JSON fields disappear | Schema optionality, field names, repair behavior |
+| Duplicate database records | Stable key, upsert choice, checkpoint timing |
+
+## Next steps
+
+- [DataFusion and SQL](/topics/datascience/datafusion/)
+- [Machine learning](/topics/datascience/ml/)
+- [Data visualization](/topics/datascience/visualization/)
+- [Data pipelines](/topics/data-pipelines/overview/)

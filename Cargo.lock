@@ -7798,6 +7798,7 @@ dependencies = [
  "mime_guess",
  "num_cpus",
  "once_cell",
+ "parking_lot",
  "percent-encoding",
  "portpicker",
  "proptest",

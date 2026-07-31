@@ -48,6 +48,7 @@ export function A2UITextField({
 	);
 	const inputType = useResolved<string>(component.inputType) ?? "text";
 	const multiline = useResolved<boolean>(component.multiline);
+	const rows = useResolved<number>(component.rows);
 	const maxLength = useResolved<number>(component.maxLength);
 	const { setByPath } = useData();
 
@@ -128,6 +129,7 @@ export function A2UITextField({
 				placeholder={placeholder}
 				disabled={disabled}
 				maxLength={maxLength}
+				{...(multiline && rows ? { rows } : {})}
 				className={cn(error && "border-destructive")}
 				onChange={(e) => handleChange(e.target.value)}
 				onBlur={handleCommit}

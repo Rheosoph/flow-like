@@ -24,6 +24,7 @@ import type {
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
 import {
+	mergeMetadataMedia,
 	stabilizeMetadata,
 	stabilizeMetadataEntries,
 } from "@flow-like/flow-like-ui/lib/stable-asset-url";
@@ -376,16 +377,22 @@ export class AppState implements IAppState {
 
 				const exists = localApps.find(([localApp]) => localApp.id === app.id);
 				if (exists) {
-					// Prefer the local metadata even though the remote copy may be
-					// newer. Both sides presign their media independently, so
-					// adopting the remote copy here would swap every icon's URL
-					// from the local asset:// form to an https:// one and make the
-					// browser re-download artwork it already has. The remote
-					// metadata is pushed to local storage below, so the next read
-					// picks it up from a single consistent source. Apps that have
-					// no local metadata yet still fall back to the remote copy,
-					// since the library skips entries without it.
-					mergedData.set(app.id, [app, exists[1] ?? meta]);
+					// Keep the local metadata record: it is the copy the rest of the
+					// app treats as authoritative, and adopting the remote names and
+					// timestamps here reorders the library on every sync.
+					//
+					// Media cannot come from it. `push_app_meta` pins the media fields
+					// to whatever the local record already held — it has to, since
+					// those fields name files on disk that only `push_app_media`
+					// writes — so the copy below never adopts this app's artwork. A
+					// cloud-hosted app therefore reads back with no artwork at all, or
+					// with a signature frozen on the day it was first cached. Real
+					// local artwork presigns to an unsigned asset:// URL and is kept,
+					// so offline apps still skip re-downloading what they already have.
+					mergedData.set(app.id, [
+						app,
+						exists[1] ? mergeMetadataMedia(exists[1], meta) : meta,
+					]);
 					invoke("update_app", { app }).catch(() => {});
 					if (meta)
 						invoke("push_app_meta", {

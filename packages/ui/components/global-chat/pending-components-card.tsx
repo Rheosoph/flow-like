@@ -85,7 +85,7 @@ export function PendingComponentsCard() {
 				return;
 			}
 			restaged.applyComponents(current.components, current.canvasSettings);
-			setPendingComponents(null);
+			setPendingComponents(null, null);
 			toast.success(
 				`Applied ${current.components.length} component${current.components.length === 1 ? "" : "s"} to the builder.`,
 			);
@@ -95,7 +95,7 @@ export function PendingComponentsCard() {
 	}, [setPendingComponents]);
 
 	const handleDismiss = useCallback(
-		() => setPendingComponents(null),
+		() => setPendingComponents(null, null),
 		[setPendingComponents],
 	);
 

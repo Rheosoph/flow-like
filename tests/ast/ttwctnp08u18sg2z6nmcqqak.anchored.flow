@@ -433,17 +433,17 @@ eventsGeneric readFile(path: string, summary: bool, payload: Struct) {   //@n:o4
     if (pathExists({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }) })) { // exec_out_exists   //@n:mj5m20m80usoqz2tctq8a1g9
         const setExtension4 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_index" })   //@n:pd8mngp8dg77ntdkzzu9eq63
         if (pathExists({ path: setExtension4.pathOut })) { // exec_out_exists   //@n:mtn7qgfssz2266oq3u4u8qr0
-            if (utilsTypesFallback({ value: summary, default: true }).result) {   //@n:nfc4p5mgnszvzwoyi0v63e4x
-                const setExtension2 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_summary" })   //@n:hei8qighn5h4rd1yw0yayxkv
-                const readToString = readToString({ path: setExtension2.pathOut })   //@n:d25nzcnh8lssfuo5gf8zyetl
-                return readToString.content   //@n:de09bpkohphy3tdcc62kcj8a
-            } else {
-                const setExtension6 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_md" })   //@n:sp4r8vqyry058rd5sftfsc6h
-                const readToString2 = readToString({ path: setExtension6.pathOut })   //@n:fx72h965tbhonwgyrehqctem
-                return readToString2.content   //@n:f5rma68p1tyzrewrxq6zekeu
-            }
         } else { // exec_out_missing
             indexPath({ path: path })   //@n:bhf5ysrs8kkvnihujne5oaw8
+        }
+        if (utilsTypesFallback({ value: summary, default: true }).result) {   //@n:nfc4p5mgnszvzwoyi0v63e4x
+            const setExtension2 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_summary" })   //@n:hei8qighn5h4rd1yw0yayxkv
+            const readToString = readToString({ path: setExtension2.pathOut })   //@n:d25nzcnh8lssfuo5gf8zyetl
+            return readToString.content   //@n:de09bpkohphy3tdcc62kcj8a
+        } else {
+            const setExtension6 = setExtension({ path: child({ parentPath: pathFromUserDir({ nodeScope: false }), childName: path }), extension: "flow_md" })   //@n:sp4r8vqyry058rd5sftfsc6h
+            const readToString2 = readToString({ path: setExtension6.pathOut })   //@n:fx72h965tbhonwgyrehqctem
+            return readToString2.content   //@n:f5rma68p1tyzrewrxq6zekeu
         }
     } else { // exec_out_missing
         return stringFormat({ formatString: "Path {path} does not exist. No file found.", path: path })   //@n:a2ogmuh4frf12fkbme7f5mst

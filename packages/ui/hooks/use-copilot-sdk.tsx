@@ -1,12 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
 	AgentBackendProvider,
 	CopilotAuthStatus,
 	CopilotConnectionConfig,
 	CopilotModel,
 } from "../components/flowpilot/types";
+import {
+	type AgentBackendDiagnostic,
+	classifyAgentBackendError,
+} from "../lib/flowpilot/agent-backend-diagnostics";
 import { isTauri } from "../lib/platform";
 import { copilotBackendConnectionCoordinator } from "./copilot-backend-coordinator";
 
@@ -55,6 +59,8 @@ interface UseCopilotSDKResult {
 	authStatus: CopilotAuthStatus | null;
 	/** Error message if any */
 	error: string | null;
+	/** Actionable interpretation of the current backend/auth failure. */
+	diagnostic: AgentBackendDiagnostic | null;
 	/** Start the Copilot SDK client */
 	start: (config?: CopilotConnectionConfig) => Promise<void>;
 	/** Stop the Copilot SDK client */
@@ -63,6 +69,8 @@ interface UseCopilotSDKResult {
 	refreshModels: () => Promise<void>;
 	/** Refresh auth status */
 	refreshAuthStatus: () => Promise<void>;
+	/** Retry startup or refresh a running backend after the user fixes the issue. */
+	retry: () => Promise<void>;
 }
 
 /**
@@ -115,8 +123,6 @@ export function useCopilotSDK(
 				return;
 			}
 
-			setError(null);
-
 			try {
 				const { invoke } = await import("@tauri-apps/api/core");
 				const targetBackend = config?.backend ?? backend;
@@ -133,7 +139,14 @@ export function useCopilotSDK(
 				);
 			} catch (e) {
 				const errMsg = e instanceof Error ? e.message : String(e);
-				setError(errMsg);
+				// An immediate repeat can hit the coordinator's short cooldown.
+				// Preserve the actual native failure instead of replacing it with
+				// that secondary backoff message.
+				setError((current) =>
+					current && errMsg.toLowerCase().includes("cooling down")
+						? current
+						: errMsg,
+				);
 				throw e;
 			}
 		},
@@ -208,6 +221,27 @@ export function useCopilotSDK(
 		}
 	}, [backend, isTauriEnv, isRunning]);
 
+	const retry = useCallback(async () => {
+		if (!isRunning) {
+			await start();
+			return;
+		}
+		setError(null);
+		await refreshModels();
+		await refreshAuthStatus();
+	}, [isRunning, refreshAuthStatus, refreshModels, start]);
+
+	const diagnostic = useMemo(() => {
+		if (error) return classifyAgentBackendError(backend, error);
+		if (authStatus?.authenticated === false) {
+			return classifyAgentBackendError(
+				backend,
+				authStatus.message || `${backend} authentication required`,
+			);
+		}
+		return null;
+	}, [authStatus, backend, error]);
+
 	// Check initial running state
 	useEffect(() => {
 		if (!isTauriEnv) return;
@@ -252,9 +286,11 @@ export function useCopilotSDK(
 		hasLoadedModelCatalog,
 		authStatus,
 		error,
+		diagnostic,
 		start,
 		stop,
 		refreshModels,
 		refreshAuthStatus,
+		retry,
 	};
 }

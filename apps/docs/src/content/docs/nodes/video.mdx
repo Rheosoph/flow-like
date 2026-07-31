@@ -1,0 +1,30 @@
+---
+title: "Video Node Catalog"
+description: "Video Flow-Like node category with 14 generated node references."
+sidebar:
+  order: 0
+  label: "Video"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Video nodes, Video, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Video"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"CollectionPage\",\"name\":\"Video Node Catalog\",\"description\":\"Video Flow-Like node category with 14 generated node references.\",\"url\":\"https://docs.flow-like.com/nodes/video/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Video\",\"keywords\":\"Video nodes, Video, Flow-Like node catalog, Flow-Like nodes, workflow automation, node reference, pins, schemas, security ratings\"}"
+---
+
+import { NodeCategoryOverview } from "../../../components/node-docs/NodeReference";
+import { nodesByCategory } from "../../../generated/catalog-nodes";
+
+<NodeCategoryOverview
+	category={"Video"}
+	label="Video"
+	nodes={nodesByCategory["Video"] ?? []}
+	client:load
+/>

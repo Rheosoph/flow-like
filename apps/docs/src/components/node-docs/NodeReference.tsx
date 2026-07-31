@@ -159,7 +159,9 @@ function asSchema(value: unknown): JsonSchema | undefined {
 
 function schemaArray(value: unknown): JsonSchema[] {
 	if (!Array.isArray(value)) return [];
-	return value.map(asSchema).filter((schema): schema is JsonSchema => Boolean(schema));
+	return value
+		.map(asSchema)
+		.filter((schema): schema is JsonSchema => Boolean(schema));
 }
 
 function parseSchema(schema?: string): JsonSchema | undefined {
@@ -251,7 +253,8 @@ function schemaRequired(schema: JsonSchema, root: JsonSchema): Set<string> {
 
 function literalValue(value: unknown): string {
 	if (typeof value === "string") return `"${value}"`;
-	if (typeof value === "number" || typeof value === "boolean") return String(value);
+	if (typeof value === "number" || typeof value === "boolean")
+		return String(value);
 	if (value === null) return "null";
 	const serialized = JSON.stringify(value);
 	if (!serialized) return String(value);
@@ -280,7 +283,8 @@ function schemaTypeLabel(schema?: JsonSchema, root?: JsonSchema): string {
 		const additional = asSchema(resolved.additionalProperties);
 		if (additional) return `Map<string, ${schemaTypeLabel(additional, base)}>`;
 	}
-	if (typeof type === "string") return resolved.format ? `${type}:${resolved.format}` : type;
+	if (typeof type === "string")
+		return resolved.format ? `${type}:${resolved.format}` : type;
 
 	if (schemaArray(resolved.oneOf).length > 0) {
 		return `oneOf (${schemaArray(resolved.oneOf).length})`;
@@ -289,7 +293,8 @@ function schemaTypeLabel(schema?: JsonSchema, root?: JsonSchema): string {
 		return `anyOf (${schemaArray(resolved.anyOf).length})`;
 	}
 	if (schemaProperties(resolved, base)) return "object";
-	if (resolved.items) return `Array<${schemaTypeLabel(asSchema(resolved.items), base)}>`;
+	if (resolved.items)
+		return `Array<${schemaTypeLabel(asSchema(resolved.items), base)}>`;
 
 	return "value";
 }
@@ -402,12 +407,18 @@ function schemaMeta(schema: JsonSchema, root: JsonSchema): string[] {
 			}`,
 		);
 	}
-	if (resolved.const !== undefined) meta.push(`const ${literalValue(resolved.const)}`);
-	if (resolved.default !== undefined) meta.push(`default ${literalValue(resolved.default)}`);
-	if (typeof resolved.minimum === "number") meta.push(`min ${resolved.minimum}`);
-	if (typeof resolved.maximum === "number") meta.push(`max ${resolved.maximum}`);
-	if (typeof resolved.minLength === "number") meta.push(`min length ${resolved.minLength}`);
-	if (typeof resolved.maxLength === "number") meta.push(`max length ${resolved.maxLength}`);
+	if (resolved.const !== undefined)
+		meta.push(`const ${literalValue(resolved.const)}`);
+	if (resolved.default !== undefined)
+		meta.push(`default ${literalValue(resolved.default)}`);
+	if (typeof resolved.minimum === "number")
+		meta.push(`min ${resolved.minimum}`);
+	if (typeof resolved.maximum === "number")
+		meta.push(`max ${resolved.maximum}`);
+	if (typeof resolved.minLength === "number")
+		meta.push(`min length ${resolved.minLength}`);
+	if (typeof resolved.maxLength === "number")
+		meta.push(`max length ${resolved.maxLength}`);
 
 	return meta.slice(0, 4);
 }
@@ -469,9 +480,7 @@ function SchemaFieldTree({
 
 	if (visibleFields.length === 0) {
 		return (
-			<div className="node-schema-empty">
-				No named fields in this schema.
-			</div>
+			<div className="node-schema-empty">No named fields in this schema.</div>
 		);
 	}
 
@@ -612,7 +621,7 @@ function ScoreStrip({ scores }: { scores?: CatalogScores }) {
 							<span>{field.help}</span>
 						</div>
 						<div className={scoreClass(score)}>
-							<span>{10 -score}/10</span>
+							<span>{score}/10</span>
 							<small>{label}</small>
 						</div>
 					</div>
@@ -622,7 +631,10 @@ function ScoreStrip({ scores }: { scores?: CatalogScores }) {
 	);
 }
 
-function MetadataPill({ label, value }: { label: string; value: string | number }) {
+function MetadataPill({
+	label,
+	value,
+}: { label: string; value: string | number }) {
 	return (
 		<div className="node-meta-pill">
 			<span>{label}</span>
@@ -638,7 +650,8 @@ function PinOptionTags({ pin }: { pin: CatalogPin }) {
 	if (options.sensitive) tags.push("Sensitive");
 	if (options.enforceSchema) tags.push("Schema enforced");
 	if (options.enforceGenericValueType) tags.push("Generic type enforced");
-	if (options.range) tags.push(`Range ${options.range[0]} to ${options.range[1]}`);
+	if (options.range)
+		tags.push(`Range ${options.range[0]} to ${options.range[1]}`);
 	if (options.step !== undefined) tags.push(`Step ${options.step}`);
 
 	if (tags.length === 0 && !options.validValues?.length) return null;
@@ -677,11 +690,14 @@ function PinList({
 				<p className="node-empty-copy">No {side} pins.</p>
 			) : (
 				<div className="node-pin-list">
-					{pins.map((pin) => {
+					{pins.map((pin, position) => {
 						const defaultValue = formatValue(pin.defaultValue);
 						const schema = schemaLabel(pin.schema);
 						return (
-							<article className="node-pin-row" key={`${side}-${pin.name}`}>
+							<article
+								className="node-pin-row"
+								key={`${side}-${pin.index}-${pin.name}-${pin.dataType}-${position}`}
+							>
 								<div
 									className={`node-pin-dot node-pin-dot-${side} ${pinColorClass(
 										pin.dataType,
@@ -720,7 +736,7 @@ function PinList({
 }
 
 function NodeCard({ node }: { node: CatalogNode }) {
-	const security = node.scores?.security ?? 0;
+	const security = node.scores?.security;
 	return (
 		<a className="node-card" href={slugHref(node.slug)}>
 			<div className="node-card-header">
@@ -734,7 +750,13 @@ function NodeCard({ node }: { node: CatalogNode }) {
 			<div className="node-card-footer">
 				<span>{node.inputCount} in</span>
 				<span>{node.outputCount} out</span>
-				<span className={scoreClass(security)}>Security {10-security}/10</span>
+				{security === undefined ? (
+					<span className="node-score node-score-unrated">
+						Security unrated
+					</span>
+				) : (
+					<span className={scoreClass(security)}>Security {security}/10</span>
+				)}
 			</div>
 		</a>
 	);
@@ -769,9 +791,13 @@ function NodeDirectory({
 				normalize(node.description).includes(needle) ||
 				normalize(node.category).includes(needle);
 			const matchesCategory = category === "all" || node.category === category;
-			const securityScore = node.scores?.security ?? 0;
+			const securityScore = node.scores?.security;
 			const matchesSecurity =
-				security === "all" || scoreLabel(securityScore).toLowerCase() === security;
+				security === "all" ||
+				(security === "unrated"
+					? securityScore === undefined
+					: securityScore !== undefined &&
+						scoreLabel(securityScore).toLowerCase() === security);
 			return matchesQuery && matchesCategory && matchesSecurity;
 		});
 	}, [nodes, query, category, security]);
@@ -786,7 +812,7 @@ function NodeDirectory({
 					</p>
 				</div>
 			</div>
-			<div className="node-toolbar" role="search">
+			<search className="node-toolbar">
 				<label>
 					<span>Search</span>
 					<input
@@ -820,9 +846,10 @@ function NodeDirectory({
 						<option value="low">Low exposure</option>
 						<option value="medium">Medium exposure</option>
 						<option value="high">High exposure</option>
+						<option value="unrated">Unrated</option>
 					</select>
 				</label>
-			</div>
+			</search>
 			<div className="node-card-grid">
 				{filtered.map((node) => (
 					<NodeCard node={node} key={node.name} />
@@ -843,7 +870,7 @@ export function NodeReference({ node }: { node?: CatalogNode }) {
 
 	const inputs = node.pins.filter((pin) => pin.pinType === "Input");
 	const outputs = node.pins.filter((pin) => pin.pinType === "Output");
-	const security = node.scores?.security ?? 0;
+	const security = node.scores?.security;
 
 	return (
 		<div className="node-doc not-content">
@@ -851,7 +878,6 @@ export function NodeReference({ node }: { node?: CatalogNode }) {
 				<NodeIcon node={node} />
 				<div className="node-doc-hero-copy">
 					<p className="node-kicker">{displayCategoryPath(node.category)}</p>
-					<h1>{node.friendlyName}</h1>
 					<p>{node.description}</p>
 					<div className="node-tag-row">
 						<span>{node.name}</span>
@@ -866,7 +892,10 @@ export function NodeReference({ node }: { node?: CatalogNode }) {
 			<section className="node-meta-grid" aria-label="Node metadata">
 				<MetadataPill label="Inputs" value={node.inputCount} />
 				<MetadataPill label="Outputs" value={node.outputCount} />
-				<MetadataPill label="Security exposure" value={`${10-security}/10`} />
+				<MetadataPill
+					label="Security exposure"
+					value={security === undefined ? "Unrated" : `${security}/10`}
+				/>
 				<MetadataPill label="Package" value={node.packageName} />
 			</section>
 
@@ -948,10 +977,11 @@ export function NodeCategoryOverview({
 	nodes: CatalogNode[];
 }) {
 	const displayCategory = displayCategoryPath(category);
-	const title = `${
+	const categoryLabel =
 		label ??
-		displayCategorySegment(category.split("/").filter(Boolean).at(-1) ?? category)
-	} Node Catalog`;
+		displayCategorySegment(
+			category.split("/").filter(Boolean).at(-1) ?? category,
+		);
 	const subcategories = Array.from(new Set(nodes.map((node) => node.category)))
 		.filter((name) => name !== category)
 		.sort((a, b) => a.localeCompare(b));
@@ -959,8 +989,7 @@ export function NodeCategoryOverview({
 	return (
 		<div className="node-doc not-content">
 			<header className="node-category-hero">
-				<p className="node-kicker">Generated category</p>
-				<h1>{title}</h1>
+				<p className="node-kicker">{categoryLabel} category</p>
 				<p>
 					Generated from {nodes.length} catalog node
 					{nodes.length === 1 ? "" : "s"} in {displayCategory}.
@@ -1000,11 +1029,10 @@ export function NodeCatalogOverview({
 		<div className="node-doc not-content">
 			<header className="node-category-hero">
 				<p className="node-kicker">Generated from the native catalog</p>
-				<h1>Node Catalog</h1>
 				<p>
 					Browse generated documentation for every built-in Flow-Like node.
-					Categories, pins, descriptions, flags, defaults, and ratings come
-					directly from Rust catalog metadata.
+					Categories, pins, descriptions, flags, defaults, and available ratings
+					come directly from Rust catalog metadata.
 				</p>
 			</header>
 
@@ -1012,7 +1040,10 @@ export function NodeCatalogOverview({
 				<MetadataPill label="Nodes" value={nodes.length} />
 				<MetadataPill label="Categories" value={categories.length} />
 				<MetadataPill label="Scored nodes" value={scoredNodes.length} />
-				<MetadataPill label="High security exposure" value={highSecurityNodes} />
+				<MetadataPill
+					label="High security exposure"
+					value={highSecurityNodes}
+				/>
 			</section>
 
 			<section className="node-section">

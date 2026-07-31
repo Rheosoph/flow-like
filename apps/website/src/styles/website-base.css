@@ -4,6 +4,24 @@
  * are now guarded by [data-desktop-app] in global.css, so the website
  * never receives them.  These rules just set sensible scroll defaults.
  */
+:root {
+	--website-content-max: 1920px;
+	--website-content-gutter: clamp(22px, 7vw, 134px);
+	--website-content-edge: max(
+		var(--website-content-gutter),
+		calc(
+			(100vw - var(--website-content-max)) / 2 +
+			var(--website-content-gutter)
+		)
+	);
+}
+
+.website-content-canvas {
+	box-sizing: border-box;
+	width: min(100%, var(--website-content-max));
+	margin-inline: auto;
+}
+
 html {
 	height: auto;
 	min-height: 100%;

@@ -5,222 +5,102 @@ sidebar:
   order: 43
 ---
 
-Widgets are reusable UI building blocks that you can use across pages and apps. Build them once, use them everywhere.
+Widgets are reusable A2UI component trees that belong to an app. Use a Widget
+when the same interface pattern should appear more than once, such as a status
+card, navigation block, or compact form.
 
-## What are Widgets?
+Unlike a built-in component such as Text or Button, a Widget can combine many
+components, carry its own data model, and expose selected properties for each
+instance to customize.
 
-A widget is a self-contained UI component with:
+## Manage Widgets
 
-- **Visual design** - Layout and appearance
-- **Customization options** - Properties you can configure per-use
-- **Data bindings** - Connections to your flow data
+Open an app and select **Widgets**. The Widget list shows the reusable
+interfaces available in that app.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│              Widget: Metric Card                            │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│   ┌─────────┐                                               │
-│   │   📈    │   Revenue                                     │
-│   └─────────┘   $124,500                                    │
-│                 ▲ 12.5% from last month                     │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│  Customization Options:                                     │
-│  • Title → "Revenue"                                        │
-│  • Icon → "chart"                                           │
-│  • Value binding → /sales/total                             │
-│  • Trend binding → /sales/trend                             │
-└─────────────────────────────────────────────────────────────┘
-```
+Select **Create Widget** to add one. Give it a clear name and description so
+other builders know where it should be used. Selecting an existing Widget
+opens its details view, where you can:
 
-## Widgets vs Components
+- inspect the rendered **Widget Preview**;
+- edit its name, description, tags, and detailed description;
+- review the properties that are configurable on each instance;
+- see its component count, data entries, and current version.
 
-| Concept | Description | Scope |
-|---------|-------------|-------|
-| **Components** | Basic building blocks (Text, Button) | Built-in |
-| **Widgets** | Composed from components | Your organization |
+![The Widgets workspace in Flow-Like Desktop, showing a rendered support health Widget and its metadata](../../../assets/WidgetsOverview.webp)
 
-Think of components as LEGO bricks and widgets as the custom structures you build with them.
+## Build a Widget
 
-## Using Widgets
+Select **Open Builder** from the Widget details view. The visual Widget Builder
+uses the same three-part workspace as the [Page Builder](/apps/pages/):
 
-### In the Page Builder
+- **Components / Hierarchy** — add components and inspect their nesting.
+- **Canvas** — arrange and preview the Widget.
+- **Inspector** — edit the selected component's content, layout, style,
+  bindings, and actions.
 
-1. Open a page in the Page Builder
-2. Look in the **Components** panel
-3. Find **Widgets** section (or search)
-4. Drag the widget onto your canvas
-5. Configure its properties
+The toolbar includes copy, cut, paste, and delete controls, plus **Dev Mode**
+for the underlying JSON, **Save**, and **Preview**.
 
-### Customizing Per-Instance
+![The visual Widget Builder in Flow-Like Desktop, showing the expanded hierarchy for a reusable support health card](../../../assets/WidgetBuilder.webp)
 
-Each widget instance can have different values:
+## Make a Widget configurable
 
-```
-Page: Dashboard
-├── Metric Card Widget
-│   └── Title: "Revenue" / Value: /sales/revenue
-├── Metric Card Widget
-│   └── Title: "Orders" / Value: /orders/count
-└── Metric Card Widget
-    └── Title: "Users" / Value: /users/active
-```
+An exposed property connects a friendly option on the Widget instance to a
+property on one of the Widget's components. For example, a status-card Widget
+could expose:
 
-Same widget, three different configurations.
+| Instance option | Target inside the Widget |
+| --- | --- |
+| Heading | the `content` property of a Text component |
+| Accent | a color or style property on the outer Card |
+| Value | a bound value used by the metric Text |
+| Show details | a Boolean property controlling optional content |
 
-## Creating Widgets
+Each Widget instance on a Page can supply different exposed-property values
+without changing the Widget definition. Only expose choices that are useful to
+the person composing the Page; keep internal layout details private unless
+they genuinely need per-instance control.
 
-### The Widget Builder
+## Data and events
 
-Flow-Like provides a visual Widget Builder for creating your own widgets.
+A Widget can include a data model for values used by its components. In the
+Inspector, a supported property can use a fixed literal or bind to a path in
+that model.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  Widget Builder: KPI Card                             [Test] [Save] │
-├─────────────┬───────────────────────────────────┬───────────────────┤
-│             │                                    │                   │
-│  COMPONENTS │           CANVAS                   │   CUSTOMIZATIONS  │
-│             │                                    │                   │
-│  ┌───────┐  │   ┌─────────────────────────┐     │   Title           │
-│  │ Text  │  │   │  ┌──────┐               │     │   ☑ Customizable  │
-│  └───────┘  │   │  │ Icon │  Title        │     │   Default: "KPI"  │
-│  ┌───────┐  │   │  └──────┘               │     │                   │
-│  │ Icon  │  │   │  ┌──────────────────┐   │     │   Icon            │
-│  └───────┘  │   │  │    Value         │   │     │   ☑ Customizable  │
-│  ┌───────┐  │   │  │    $124,500      │   │     │   Default: "chart"│
-│  │ Card  │  │   │  └──────────────────┘   │     │                   │
-│  └───────┘  │   │  Trend: ▲ 12.5%        │     │   Value           │
-│             │   └─────────────────────────┘     │   ☑ Customizable  │
-│             │                                    │   Binding path... │
-├─────────────┴───────────────────────────────────┴───────────────────┤
-│  Test Data: { title: "Revenue", value: 124500, trend: 12.5 }        │
-└─────────────────────────────────────────────────────────────────────┘
-```
+The **Events** tab in Widget Settings defines named events that elements inside
+the Widget can trigger. When the Widget is instantiated, those events can be
+bound to workflows. This keeps the reusable interface independent from the
+specific Flow that handles an interaction.
 
-### Steps to Create a Widget
+## Widget Settings
 
-1. **Open Widget Builder** from Studio > Widgets
-2. **Add components** to build your layout
-3. **Mark customization options** for configurable properties
-4. **Define data bindings** for dynamic content
-5. **Test with sample data** to verify behavior
-6. **Save and publish** your widget
+Select **Settings** in the builder header to manage the Widget itself:
 
-### Customization Options
+- **General** — name, description, and tags.
+- **Events** — named events that Widget elements can trigger.
+- **Versions** — load an existing snapshot or create a Patch, Minor, or Major
+  version from the current state.
+- **Advanced** — IDs, timestamps, component count, and data-model size.
 
-When building a widget, you can mark certain properties as customizable:
+Creating a version saves the current changes and records a snapshot. Use a
+Patch version for a compatible correction, a Minor version for a compatible
+addition, and a Major version when existing uses may need review.
 
-| Option Type | Description | Example |
-|-------------|-------------|---------|
-| **Text** | Editable text | Titles, labels |
-| **Number** | Numeric value | Sizes, limits |
-| **Color** | Color picker | Accent colors |
-| **Boolean** | On/off toggle | Show/hide elements |
-| **Binding** | Data path | Dynamic content |
-| **Select** | Dropdown options | Variants, sizes |
+## Design guidance
 
-### Exposed Properties
+- Keep the Widget focused on one reusable job.
+- Use theme tokens such as `bg-card` and `text-muted-foreground` so it remains
+  readable in light and dark mode.
+- Provide useful default content and test empty, long, and narrow states.
+- Name exposed properties for the Page author, not for the internal component
+  implementation.
+- Define a Widget event when behavior should be supplied by the containing
+  Page or Flow.
 
-For advanced widgets, you can expose component properties to allow deeper customization:
+## What's next?
 
-```json
-{
-  "widget": "metric-card",
-  "customizations": {
-    "title": "Revenue",
-    "showTrend": true
-  },
-  "exposedProps": {
-    "card.borderRadius": "8px",
-    "icon.color": "#3b82f6"
-  }
-}
-```
-
-## Widget Library
-
-### Built-in Widgets
-
-Flow-Like includes common widgets out of the box:
-
-| Widget | Description |
-|--------|-------------|
-| **Metric Card** | Display a single metric with trend |
-| **Data Table** | Sortable, filterable table |
-| **Line Chart** | Time series visualization |
-| **Bar Chart** | Categorical comparisons |
-| **Form Card** | Input form in a card |
-| **Navigation Bar** | App navigation menu |
-| **Footer** | Page footer with links |
-
-### Organization Widgets
-
-Create widgets for your organization:
-
-- **Branded components** - Company colors and styles
-- **Common patterns** - Frequently used layouts
-- **Team templates** - Shared starting points
-
-## Widget Versioning
-
-Widgets support versioning for safe updates:
-
-| Version | Status | Description |
-|---------|--------|-------------|
-| v1.0.0 | Stable | Original release |
-| v1.1.0 | Stable | Added trend indicator |
-| v2.0.0 | Latest | New layout, breaking changes |
-
-Pages can pin to a specific version or follow the latest.
-
-### Version Selection
-
-When using a widget:
-
-1. Choose the widget
-2. Select version:
-   - **Latest** - Always use newest
-   - **Stable** - Use latest stable
-   - **Specific** - Pin to exact version
-
-## Best Practices
-
-### Design for Reuse
-
-:::tip[Single Purpose]
-Each widget should do one thing well. A "Metric Card" displays a metric—don't add navigation to it.
-:::
-
-### Sensible Defaults
-
-Provide good default values so widgets look good immediately:
-
-- Default title: "Metric" (not empty)
-- Default color: Theme primary (not hard-coded)
-- Default size: Medium (not tiny or huge)
-
-### Document Your Widgets
-
-Add descriptions to help others understand:
-
-- **Widget description** - What it does
-- **Option descriptions** - What each customization controls
-- **Usage examples** - Common configurations
-
-### Test Edge Cases
-
-Test your widgets with:
-
-- Empty data
-- Very long text
-- Very short text
-- Many items
-- No items
-- Different screen sizes
-
-## What's Next?
-
-- **[Pages](/apps/pages/)** - Use widgets in pages
-- **[Custom UI](/apps/a2ui/)** - Learn about the underlying format
-- **[Widget Builder Guide](/reference/widget-builder/)** - Detailed builder reference
+- [Pages](/apps/pages/) — compose Widgets into full interfaces
+- [Custom UI (A2UI)](/apps/a2ui/) — understand the underlying interface model
+- [Widget Builder Guide](/reference/widget-builder/) — use the builder in
+  detail

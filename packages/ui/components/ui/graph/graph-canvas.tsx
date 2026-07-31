@@ -3,6 +3,7 @@
 import { SigmaContainer, useRegisterEvents, useSigma } from "@react-sigma/core";
 import "@react-sigma/core/lib/style.css";
 import {
+	DEFAULT_EDGE_CURVATURE,
 	EdgeCurvedArrowProgram,
 	indexParallelEdgesIndex,
 } from "@sigma/edge-curve";
@@ -29,12 +30,17 @@ import {
 	useRef,
 	useState,
 } from "react";
-import { NodeCircleProgram, createNodeCompoundProgram } from "sigma/rendering";
+import {
+	EdgeArrowProgram,
+	NodeCircleProgram,
+	createNodeCompoundProgram,
+} from "sigma/rendering";
 import type {
 	LabelStyle,
 	SubgraphNode,
 	SubgraphResult,
 } from "../../../state/backend-state/graph-state";
+import { getParallelEdgeRenderAttributes } from "./edge-rendering";
 import { getIconDataUri } from "./icon-svg";
 import { drawNodeHover, drawNodeLabel } from "./label-renderer";
 import { getGraphTheme, invalidateGraphTheme } from "./theme-colors";
@@ -187,15 +193,6 @@ function styleToNodeSize(
 		return min + ratio * (max - min);
 	}
 	return 10;
-}
-
-function getParallelCurvature(index: number, maxIndex: number): number {
-	if (maxIndex <= 0) return 0;
-	if (index < 0) return -getParallelCurvature(-index, maxIndex);
-	const amplitude = 3.5;
-	const maxCurvature =
-		(amplitude * (1 - Math.exp(-maxIndex / amplitude))) / maxIndex;
-	return (maxCurvature * index) / maxIndex;
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -654,7 +651,7 @@ async function buildGraphAsync(
 				size: (isHuge ? 0.3 : isLarge ? 0.6 : 1) * edgeWidth,
 				color: hexToRgba(edgeHex, getBaseEdgeAlpha(nodeCount)),
 				originalColor: edgeHex,
-				type: "curvedArrow",
+				type: "arrow",
 				edgeId: edge.id,
 				forceLabel: false,
 				usesDefaultColor: !edge.style?.color,
@@ -691,12 +688,14 @@ async function buildGraphAsync(
 				| number
 				| null
 				| undefined;
-			const curvature =
-				typeof parallelIndex === "number" &&
-				typeof parallelMaxIndex === "number"
-					? getParallelCurvature(parallelIndex, parallelMaxIndex)
-					: 0;
-			graph.setEdgeAttribute(edge, "curvature", curvature);
+			graph.mergeEdgeAttributes(
+				edge,
+				getParallelEdgeRenderAttributes(
+					parallelIndex,
+					parallelMaxIndex,
+					DEFAULT_EDGE_CURVATURE,
+				),
+			);
 		});
 		if (isCancelled()) return null;
 		await waitForNextFrame();
@@ -1673,8 +1672,11 @@ export function GraphCanvas({
 				"bordered-image": IconNodeProgram,
 				circle: NodeCircleProgram,
 			},
-			defaultEdgeType: "curvedArrow",
-			edgeProgramClasses: { curvedArrow: EdgeCurvedArrowProgram },
+			defaultEdgeType: "arrow",
+			edgeProgramClasses: {
+				arrow: EdgeArrowProgram,
+				curvedArrow: EdgeCurvedArrowProgram,
+			},
 			renderEdgeLabels: !isHuge,
 			enableEdgeEvents: !isHuge,
 			edgeLabelSize: 10,

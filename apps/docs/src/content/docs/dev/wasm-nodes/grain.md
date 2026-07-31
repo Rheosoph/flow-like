@@ -24,16 +24,15 @@ sudo curl -L --output /usr/local/bin/grain \
   && sudo chmod +x /usr/local/bin/grain
 ```
 
-## Project Structure
+## Important Files
 
-```
-wasm-node-grain/
-├── src/
-│   └── main.gr           # Main node implementation
-├── flow-like.toml         # Flow-Like package manifest
-├── mise.toml              # Build tasks
-└── README.md
-```
+| Path | Purpose |
+|------|---------|
+| `src/main.gr` | Defines the node and its exported Core Module functions |
+| `examples/http_request.gr` | Demonstrates an HTTP request with the required permission |
+| `flow-like.toml` | Declares the Flow-Like package |
+| `mise.toml` | Provides setup, build, test, and clean tasks |
+| `README.md` | Template-specific setup and usage notes |
 
 The SDK lives in `../wasm-sdk-grain/` and is included via the `-I` compiler flag. It provides `Types`, `Context`, `Memory`, and `Sdk` modules.
 
@@ -43,7 +42,7 @@ The SDK lives in `../wasm-sdk-grain/` and is included via the `-I` compiler flag
 
 Edit `src/main.gr` and modify `buildDefinition` to describe your node's pins and metadata:
 
-```grain title="src/main.gr"
+```text title="src/main.gr"
 module Main
 
 from "sdk" include Sdk
@@ -92,7 +91,7 @@ let buildDefinition = () => {
 
 Every Core Module node must export `get_node`, `get_nodes`, `run`, `alloc`, `dealloc`, and `get_abi_version`. Grain uses `@externalName("...")` to set the export name and `@unsafe` for raw pointer operations. Memory packing returns a packed i64 (`ptr << 32 | len`).
 
-```grain title="src/main.gr"
+```text title="src/main.gr"
 @unsafe
 @externalName("get_node")
 provide let _getNode = () => {
@@ -113,7 +112,7 @@ provide let _getNodes = () => {
 
 The `run` export receives a pointer and length to the JSON execution input. Use `Context` helpers to read inputs, set outputs, log, and stream:
 
-```grain title="src/main.gr"
+```text title="src/main.gr"
 @unsafe
 @externalName("run")
 provide let _run = (ptr: WasmI32, len: WasmI32) => {
@@ -143,7 +142,7 @@ provide let _run = (ptr: WasmI32, len: WasmI32) => {
 
 Re-export `alloc` and `dealloc` — required by the host to pass data across the WASM boundary:
 
-```grain title="src/main.gr"
+```text title="src/main.gr"
 @unsafe
 @externalName("alloc")
 provide let _alloc = (size: WasmI32) => {

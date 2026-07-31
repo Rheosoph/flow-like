@@ -8,30 +8,39 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	FLOWPILOT_APP_CREATION_CASES,
-	FLOWPILOT_E2E_DEFAULT_MODEL,
+	FLOWPILOT_E2E_DEFAULT_MODEL_KEY,
+	FLOWPILOT_E2E_MODEL_KEYS,
 	type FlowPilotE2ECaseId,
 	type FlowPilotE2ECliEnvelope,
+	type FlowPilotE2EModelKey,
 	buildCasePrompt,
+	flowPilotE2ECaseRunTimeoutMs,
 	flowPilotE2ECliExitCode,
+	flowPilotE2EModel,
 	formatAppCreationReport,
 	isFlowPilotE2ECliEnvelope,
 	normalizeFlowPilotE2ECliEnvelope,
+	resolveFlowPilotE2EModelKey,
 	resolveFlowPilotE2ERunCases,
 } from "../lib/flowpilot-e2e";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const desktopDir = resolve(scriptDir, "..");
 const MAX_REPEAT = 20;
-// Must stay above the runner page's RUN_TIMEOUT_MS (35 min) plus collection overhead.
-const DEFAULT_CASE_TIMEOUT_MS = 40 * 60_000;
+// Mirrors the runner page's MAX_PARALLEL_CASES / the chat's concurrent-run cap.
+const MAX_CONCURRENCY = 4;
+// Headroom over each case's own run ceiling for startup, collection and cancellation.
+const CASE_OVERHEAD_MS = 5 * 60_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 5 * 60_000;
 const CALLBACK_BODY_LIMIT = 256 * 1024 * 1024;
 
 export interface CliOptions {
 	caseIds: FlowPilotE2ECaseId[];
 	suite?: "smoke" | "full";
+	modelKey: FlowPilotE2EModelKey;
 	minChars?: number;
 	repeat: number;
+	concurrency: number;
 	failFast: boolean;
 	json: boolean;
 	list: boolean;
@@ -61,12 +70,15 @@ Usage:
   bun run flowpilot:e2e -- --case simple-agent
   bun run flowpilot:e2e -- --suite smoke --min-chars 1200 --json
   bun run flowpilot:e2e -- --case forum --case ops-dashboard --repeat 3
+  bun run flowpilot:e2e -- --case ai-adventure --model sol
 
 Options:
   --case <id>             Select a case; repeat the flag for an ordered subset
   --suite <smoke|full>    Select the three-case smoke suite or all cases (default: smoke)
+  --model <${FLOWPILOT_E2E_MODEL_KEYS.join("|")}>    Pin the benchmark model, by alias or model id (default: ${FLOWPILOT_E2E_DEFAULT_MODEL_KEY})
   --min-chars <n>         Override the non-whitespace FlowScript sanity floor
   --repeat <n>            Repeat each selected case, 1-${MAX_REPEAT} (default: 1)
+  --concurrency <n>       Cases in flight at once, 1-${MAX_CONCURRENCY} (default: 1; not with --fail-fast)
   --fail-fast             Stop after the first failed case
   --output <path>         Copy the complete JSON envelope to this path
   --json                  Print the complete JSON envelope to stdout
@@ -109,7 +121,9 @@ function positiveInteger(value: string, flag: string): number {
 export function parseArgs(args: string[]): CliOptions {
 	const options: CliOptions = {
 		caseIds: [],
+		modelKey: FLOWPILOT_E2E_DEFAULT_MODEL_KEY,
 		repeat: 1,
+		concurrency: 1,
 		failFast: false,
 		json: false,
 		list: false,
@@ -150,6 +164,10 @@ export function parseArgs(args: string[]): CliOptions {
 				throw new Error("--suite must be smoke or full.");
 			}
 			options.suite = value;
+		} else if (arg === "--model" || arg.startsWith("--model=")) {
+			const [value, consumed] = valueAfter(normalizedArgs, index, "--model");
+			index = consumed;
+			options.modelKey = resolveFlowPilotE2EModelKey(value);
 		} else if (arg === "--min-chars" || arg.startsWith("--min-chars=")) {
 			const [value, consumed] = valueAfter(
 				normalizedArgs,
@@ -164,6 +182,17 @@ export function parseArgs(args: string[]): CliOptions {
 			options.repeat = positiveInteger(value, "--repeat");
 			if (options.repeat > MAX_REPEAT) {
 				throw new Error(`--repeat cannot exceed ${MAX_REPEAT}.`);
+			}
+		} else if (arg === "--concurrency" || arg.startsWith("--concurrency=")) {
+			const [value, consumed] = valueAfter(
+				normalizedArgs,
+				index,
+				"--concurrency",
+			);
+			index = consumed;
+			options.concurrency = positiveInteger(value, "--concurrency");
+			if (options.concurrency > MAX_CONCURRENCY) {
+				throw new Error(`--concurrency cannot exceed ${MAX_CONCURRENCY}.`);
 			}
 		} else if (arg === "--timeout-ms" || arg.startsWith("--timeout-ms=")) {
 			const [value, consumed] = valueAfter(
@@ -196,6 +225,11 @@ export function parseArgs(args: string[]): CliOptions {
 
 	if (options.caseIds.length > 0 && options.suite) {
 		throw new Error("Use either --case or --suite, not both.");
+	}
+	if (options.concurrency > 1 && options.failFast) {
+		throw new Error(
+			"--fail-fast needs sequential cases; drop it or use --concurrency 1.",
+		);
 	}
 	options.caseIds = [...new Set(options.caseIds)];
 	return options;
@@ -543,7 +577,8 @@ function printDryRun(options: CliOptions): void {
 		}),
 	);
 	const value = {
-		model: FLOWPILOT_E2E_DEFAULT_MODEL,
+		modelKey: options.modelKey,
+		model: flowPilotE2EModel(options.modelKey),
 		repeat: options.repeat,
 		failFast: options.failFast,
 		prompts,
@@ -569,7 +604,7 @@ function printEnvelope(
 		return;
 	}
 	console.log(
-		`${envelope.passed ? "PASS" : "FAIL"} FlowPilot E2E: ${envelope.summary.passed}/${envelope.summary.requestedRuns} runs passed in ${Math.round(envelope.durationMs / 1000)}s`,
+		`${envelope.passed ? "PASS" : "FAIL"} FlowPilot E2E (${envelope.selection.modelKey}): ${envelope.summary.passed}/${envelope.summary.requestedRuns} runs passed in ${Math.round(envelope.durationMs / 1000)}s`,
 	);
 	if (envelope.error) console.log(`Infrastructure: ${envelope.error}`);
 	for (const artifact of envelope.artifacts) {
@@ -627,6 +662,7 @@ async function run(options: CliOptions): Promise<number> {
 		const callbackExpectation = {
 			runId,
 			caseIds: definitions.map((item) => item.id),
+			modelKey: options.modelKey,
 			repeat: options.repeat,
 			minFlowScriptNonWhitespaceChars: options.minChars,
 			failFast: options.failFast,
@@ -701,7 +737,9 @@ async function run(options: CliOptions): Promise<number> {
 			"cases",
 			definitions.map((item) => item.id).join(","),
 		);
+		runnerUrl.searchParams.set("model", options.modelKey);
 		runnerUrl.searchParams.set("repeat", String(options.repeat));
+		runnerUrl.searchParams.set("concurrency", String(options.concurrency));
 		if (options.minChars !== undefined) {
 			runnerUrl.searchParams.set("minChars", String(options.minChars));
 		}
@@ -733,8 +771,9 @@ async function run(options: CliOptions): Promise<number> {
 			env.MACOSX_DEPLOYMENT_TARGET ??= "14.0";
 		}
 
+		const pinnedModel = flowPilotE2EModel(options.modelKey);
 		console.error(
-			`Starting ${definitions.length * options.repeat} FlowPilot run(s) with codex/${FLOWPILOT_E2E_DEFAULT_MODEL.model}/${FLOWPILOT_E2E_DEFAULT_MODEL.reasoningEffort}...`,
+			`Starting ${definitions.length * options.repeat} FlowPilot run(s) with ${pinnedModel.provider}/${pinnedModel.model}/${pinnedModel.reasoningEffort}...`,
 		);
 		const tauriArgs = ["run", "tauri", "dev", "--no-watch", "--config", config];
 		if (inlineConfig) tauriArgs.push("--config", inlineConfig);
@@ -764,7 +803,14 @@ async function run(options: CliOptions): Promise<number> {
 		const timeoutMs =
 			options.timeoutMs ??
 			DEFAULT_STARTUP_TIMEOUT_MS +
-				definitions.length * options.repeat * DEFAULT_CASE_TIMEOUT_MS;
+				options.repeat *
+					definitions.reduce(
+						(total, caseDefinition) =>
+							total +
+							flowPilotE2ECaseRunTimeoutMs(caseDefinition) +
+							CASE_OVERHEAD_MS,
+						0,
+					);
 		let timeout: ReturnType<typeof setTimeout> | undefined;
 		const timeoutPromise = new Promise<FlowPilotE2ECliEnvelope>(
 			(_resolve, reject) => {

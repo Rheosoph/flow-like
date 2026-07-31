@@ -1,554 +1,188 @@
 ---
 title: DataFusion & SQL Analytics
-description: Query any data source with SQL using Apache DataFusion
+description: Query files, databases, and data-lake tables through one Flow-Like SQL session
 sidebar:
   order: 3
 ---
 
-**DataFusion** is Flow-Like's SQL analytics engine. It lets you query data from multiple sources—CSVs, Parquet files, databases, cloud storage—using standard SQL, all unified under a single query interface.
-
-:::tip[Why DataFusion?]
-DataFusion is Apache Arrow-based, meaning it's fast, memory-efficient, and supports complex analytical queries. Think of it as having a powerful SQL database that can query anything.
-:::
-
-## How It Works
-
-DataFusion creates a virtual SQL layer over your data:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    DataFusion Session                       │
-│                                                             │
-│   ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌──────────────┐ │
-│   │  CSV    │  │ Parquet │  │ Postgres │  │  Delta Lake  │ │
-│   │  Files  │  │  Files  │  │   Table  │  │    Table     │ │
-│   └────┬────┘  └────┬────┘  └────┬─────┘  └──────┬───────┘ │
-│        │            │            │               │          │
-│        └────────────┴─────┬──────┴───────────────┘          │
-│                           │                                  │
-│                    ┌──────▼──────┐                          │
-│                    │  SQL Query  │                          │
-│                    │   Engine    │                          │
-│                    └──────┬──────┘                          │
-│                           │                                  │
-│                    ┌──────▼──────┐                          │
-│                    │   Results   │                          │
-│                    │  (CSVTable) │                          │
-│                    └─────────────┘                          │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Creating a Session
-
-Start by creating a DataFusion session:
-
-```
-Create DataFusion Session
-    │
-    ├── Memory Limit: (optional, e.g., "4GB")
-    ├── Batch Size: 8192
-    ├── Enable Object Store: true
-    │
-    └── Session ──▶ (DataFusion session reference)
-```
-
-**Configuration options:**
-
-| Option | Description | Default |
-|--------|-------------|---------|
-| Memory Limit | Maximum memory for queries | Unlimited |
-| Batch Size | Rows processed at once | 8192 |
-| Enable Object Store | Allow cloud storage access | true |
-| Parallelize | Number of parallel workers | Auto |
-
-## Mounting Data Sources
-
-### Mount CSV Files
-
-```
-Mount CSV
-    │
-    ├── Session: (DataFusion session)
-    ├── Path: (FlowPath to CSV)
-    ├── Table Name: "sales"
-    ├── Has Header: true
-    ├── Delimiter: ","
-    │
-    └── Session ──▶ (session with table registered)
-```
-
-Now query: `SELECT * FROM sales`
-
-### Mount Parquet Files
-
-```
-Mount Parquet
-    │
-    ├── Session: (DataFusion session)
-    ├── Path: (FlowPath to Parquet)
-    ├── Table Name: "events"
-    │
-    └── Session ──▶ (session with table)
-```
-
-### Mount JSON/NDJSON
-
-```
-Mount JSON
-    │
-    ├── Session: (DataFusion session)
-    ├── Path: (FlowPath to JSON)
-    ├── Table Name: "logs"
-    │
-    └── Session ──▶ (session with table)
-```
-
-### Register LanceDB Tables
-
-Use data from your LanceDB databases:
-
-```
-Register Lance Table
-    │
-    ├── Session: (DataFusion session)
-    ├── Database: (LanceDB connection)
-    ├── Alias: "customers"
-    │
-    └── Session ──▶ (session with table)
-```
-
-### Register CSV Tables (In-Memory)
-
-For CSVTable data already in memory:
-
-```
-Register CSV Table
-    │
-    ├── Session: (DataFusion session)
-    ├── CSV Table: (CSVTable from previous node)
-    ├── Table Name: "processed_data"
-    │
-    └── Session ──▶ (session with table)
-```
-
-## Connecting to Databases
-
-DataFusion supports federated queries across multiple databases.
-
-### PostgreSQL
-
-```
-Register PostgreSQL
-    │
-    ├── Session: (DataFusion session)
-    ├── Host: "db.example.com"
-    ├── Port: 5432
-    ├── Database: "analytics"
-    ├── Schema: "public"
-    ├── User: (secret reference)
-    ├── Password: (secret reference)
-    ├── Table: "transactions"
-    ├── Alias: "txns"
-    ├── SSL Mode: "require"
-    │
-    └── Session ──▶ (session with database table)
-```
-
-### MySQL
-
-```
-Register MySQL
-    │
-    ├── Session: (DataFusion session)
-    ├── Host: "mysql.example.com"
-    ├── Port: 3306
-    ├── Database: "app_db"
-    ├── User: (secret)
-    ├── Password: (secret)
-    ├── Table: "users"
-    ├── Alias: "users"
-    │
-    └── Session ──▶ (session with table)
-```
-
-### Other Databases
-
-| Database | Node | Notes |
-|----------|------|-------|
-| SQLite | Register SQLite | File-based, local only |
-| DuckDB | Register DuckDB | Embedded analytics |
-| ClickHouse | Register ClickHouse | Column-oriented OLAP |
-| Oracle | Register Oracle | Enterprise database |
-
-## Data Lakes
-
-### Delta Lake
-
-Query Delta Lake tables with time travel:
-
-```
-Register Delta Lake
-    │
-    ├── Session: (DataFusion session)
-    ├── Path: (FlowPath to delta table)
-    ├── Table Name: "orders"
-    │
-    └── Session ──▶ (session with Delta table)
-```
-
-**Time Travel:**
-```
-Delta Time Travel
-    │
-    ├── Session: (DataFusion session)
-    ├── Path: (FlowPath to delta table)
-    ├── Table Name: "orders_historical"
-    ├── Version: 5  (or timestamp)
-    │
-    └── Session ──▶ (session with historical version)
-```
-
-Query data as it was at a specific point in time!
-
-### Apache Iceberg
-
-```
-Register Iceberg
-    │
-    ├── Session: (DataFusion session)
-    ├── Path: (FlowPath to Iceberg table)
-    ├── Table Name: "events"
-    │
-    └── Session ──▶ (session with Iceberg table)
-```
-
-### Hive-Partitioned Data
-
-For partitioned Parquet/JSON files:
-
-```
-Register Hive Parquet
-    │
-    ├── Session: (DataFusion session)
-    ├── Path: (FlowPath to partitioned data)
-    ├── Table Name: "partitioned_data"
-    ├── Partition Columns: ["year", "month"]
-    │
-    └── Session ──▶ (session with partitioned table)
-```
-
-## Cloud Services
-
-### AWS Athena
-
-Query data in AWS Athena:
-
-```
-Register Athena
-    │
-    ├── Session: (DataFusion session)
-    ├── Region: "us-east-1"
-    ├── Database: "default"
-    ├── Table: "web_logs"
-    ├── Output Location: "s3://my-bucket/athena-results/"
-    ├── Access Key: (secret)
-    ├── Secret Key: (secret)
-    │
-    └── Session ──▶ (session with Athena table)
-```
-
-### Arrow Flight SQL
-
-For high-performance data transfer:
-
-```
-Register Flight SQL
-    │
-    ├── Session: (DataFusion session)
-    ├── Endpoint: "grpc://flight-server:8815"
-    ├── Table Name: "realtime_data"
-    │
-    └── Session ──▶ (session with Flight table)
-```
-
-## Executing Queries
-
-### SQL Query Node
-
-Execute SQL and get structured results:
-
-```
-SQL Query
-    │
-    ├── Session: (DataFusion session)
-    ├── Query: "SELECT region, SUM(revenue) as total
-    │           FROM sales
-    │           WHERE year = 2025
-    │           GROUP BY region
-    │           ORDER BY total DESC"
-    │
-    ├── End ──▶ (query complete)
-    ├── CSV Table ──▶ (columnar results)
-    ├── Rows ──▶ (array of row objects)
-    └── Schema ──▶ (column definitions)
-```
-
-### Execute SQL (Markdown Output)
-
-For AI agents or text-based output:
-
-```
-Execute SQL
-    │
-    ├── Session: (DataFusion session)
-    ├── Query: "SELECT * FROM sales LIMIT 10"
-    │
-    ├── End ──▶ (query complete)
-    ├── Result ──▶ (markdown-formatted table)
-    ├── Row Count ──▶ (number of rows)
-    └── Column Count ──▶ (number of columns)
-```
-
-This is perfect for feeding results to LLMs!
-
-## Time Series Queries
-
-DataFusion excels at time series analysis.
-
-### Time Bin Aggregation
-
-Aggregate by time intervals:
-
-```
-Time Bin Aggregation
-    │
-    ├── Session: (DataFusion session)
-    ├── Table: "events"
-    ├── Time Column: "timestamp"
-    ├── Interval: "1 hour"
-    ├── Value Column: "count"
-    ├── Aggregation: "SUM"
-    │
-    └── Results ──▶ (time-binned data)
-```
-
-**Supported intervals:** second, minute, hour, day, week, month, year
-
-### Date Truncation
-
-Group by date parts:
-
-```
-Date Trunc Aggregation
-    │
-    ├── Session: (DataFusion session)
-    ├── Table: "sales"
-    ├── Time Column: "order_date"
-    ├── Granularity: "month"
-    ├── Value Column: "revenue"
-    ├── Aggregation: "SUM"
-    │
-    └── Results ──▶ (monthly aggregates)
-```
-
-### Time Range Filtering
-
-Filter to a specific time window:
-
-```
-Time Range Filter
-    │
-    ├── Session: (DataFusion session)
-    ├── Table: "logs"
-    ├── Time Column: "timestamp"
-    ├── Start: "2025-01-01T00:00:00"
-    ├── End: "2025-01-31T23:59:59"
-    │
-    └── Results ──▶ (filtered data)
-```
-
-## Utility Nodes
-
-### List Tables
-
-See all registered tables:
-
-```
-List Tables
-    │
-    ├── Session: (DataFusion session)
-    │
-    └── Tables ──▶ ["sales", "customers", "orders"]
-```
-
-### Describe Table
-
-Get table schema:
-
-```
-Describe Table
-    │
-    ├── Session: (DataFusion session)
-    ├── Table Name: "sales"
-    │
-    └── Schema ──▶ [
-        {name: "id", type: "Int64"},
-        {name: "amount", type: "Float64"},
-        {name: "date", type: "Timestamp"}
-    ]
-```
-
-## Writing Results
-
-### Write to Delta Lake
-
-Persist query results:
-
-```
-Write Delta
-    │
-    ├── Session: (DataFusion session)
-    ├── Query: "SELECT * FROM processed_data"
-    ├── Path: (FlowPath to output)
-    ├── Mode: "overwrite"  (or "append")
-    │
-    └── End
-```
-
-## Complete Example: Multi-Source Analytics
-
-Here's a real-world example joining data from multiple sources:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│  Create Session                                             │
-│       │                                                     │
-│       ▼                                                     │
-│  Register PostgreSQL (orders from production DB)            │
-│       │                                                     │
-│       ▼                                                     │
-│  Mount CSV (product catalog from file)                      │
-│       │                                                     │
-│       ▼                                                     │
-│  Register Delta Lake (historical analytics)                 │
-│       │                                                     │
-│       ▼                                                     │
-│  SQL Query:                                                 │
-│    "SELECT                                                  │
-│       p.category,                                           │
-│       COUNT(o.id) as order_count,                          │
-│       SUM(o.amount) as revenue,                            │
-│       AVG(h.avg_delivery_days) as avg_delivery             │
-│     FROM orders o                                           │
-│     JOIN products p ON o.product_id = p.id                 │
-│     LEFT JOIN historical h ON p.category = h.category      │
-│     GROUP BY p.category"                                    │
-│       │                                                     │
-│       ▼                                                     │
-│  Results ──▶ Dashboard / Report                             │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## SQL Features Supported
-
-DataFusion supports a rich SQL dialect:
-
-### Aggregations
+Flow-Like embeds Apache DataFusion as a query layer. A workflow creates a session, registers one or more sources as named tables, then runs SQL across those tables.
+
+## Session model
+
+| Step | Purpose |
+|------|---------|
+| Create session | Allocate one query context for the run |
+| Register sources | Give files, databases, or lake tables stable SQL names |
+| Inspect | List tables and confirm schemas |
+| Query | Filter, join, aggregate, or window the registered data |
+| Deliver | Send the result to another node, table, chart, file, or model tool |
+
+Start with [Create DataFusion Session](/nodes/data/datafusion/df-create-session/) and pass the same session value to every registration and query node that should share tables.
+
+## Register files and in-memory data
+
+| Source | Node |
+|--------|------|
+| CSV file | [Mount CSV](/nodes/data/datafusion/df-mount-csv/) |
+| JSON or NDJSON file | [Mount JSON](/nodes/data/datafusion/df-mount-json/) |
+| Parquet file | [Mount Parquet](/nodes/data/datafusion/df-mount-parquet/) |
+| Lance table | [Register Lance Table](/nodes/data/datafusion/df-register-lance/) |
+| CSVTable value already in the workflow | [Register Table](/nodes/data/datafusion/df-register-csv-table/) |
+
+Choose a SQL-safe table name and keep it stable across the query. Validate file schemas before assuming a column type.
+
+## Register databases
+
+The generated catalog includes:
+
+| Database | Node |
+|----------|------|
+| PostgreSQL | [Register PostgreSQL](/nodes/data/datafusion/databases/df-register-postgres/) |
+| MySQL | [Register MySQL](/nodes/data/datafusion/databases/df-register-mysql/) |
+| SQLite | [Register SQLite](/nodes/data/datafusion/databases/df-register-sqlite/) |
+| DuckDB | [Register DuckDB](/nodes/data/datafusion/databases/df-register-duckdb/) |
+| ClickHouse | [Register ClickHouse](/nodes/data/datafusion/databases/df-register-clickhouse/) |
+| Oracle | [Register Oracle](/nodes/data/datafusion/databases/df-register-oracle/) |
+| BigQuery | [Register BigQuery](/nodes/data/datafusion/databases/df-register-bigquery/) |
+| FlightSQL | [Register FlightSQL](/nodes/data/datafusion/databases/df-register-flightsql/) |
+| Athena | [Register Athena Table](/nodes/data/datafusion/databases/df-register-athena/) |
+
+Store credentials in secrets or provider connections. Use a read-only account for analytical workflows unless the board explicitly requires writes elsewhere.
+
+## Register data-lake tables
+
+| Format | Nodes |
+|--------|-------|
+| Delta Lake | [Register Delta Table](/nodes/data/datafusion/lakes/df-register-delta/), [Delta Table Info](/nodes/data/datafusion/lakes/df-delta-info/), [Delta Time Travel](/nodes/data/datafusion/lakes/df-delta-time-travel/) |
+| Apache Iceberg | [Register Iceberg Table](/nodes/data/datafusion/lakes/df-register-iceberg/), [Iceberg Table Info](/nodes/data/datafusion/lakes/df-iceberg-info/), [Iceberg Time Travel](/nodes/data/datafusion/lakes/df-iceberg-time-travel/) |
+| Hive-partitioned Parquet | [Register Hive Parquet](/nodes/data/datafusion/lakes/df-register-hive-parquet/) |
+| Partitioned JSON | [Register Partitioned JSON](/nodes/data/datafusion/lakes/df-register-partitioned-json/) |
+
+Time-travel nodes are useful for reproducible analysis. Record the selected table version or snapshot with the analysis result.
+
+For Athena results stored in S3, [Mount Athena S3 Results](/nodes/data/datafusion/databases/df-mount-athena-query/) can make the result available to the session.
+
+## Inspect the session
+
+Use [List Tables](/nodes/data/datafusion/tools/df-list-tables/) to confirm registration and [Describe Table](/nodes/data/datafusion/tools/df-describe-table/) to inspect the schema.
+
+Inspecting first is especially important for agent-driven analysis and sources whose schema can evolve. Do not let a model guess table or column names when the workflow can retrieve them.
+
+## Execute SQL
+
+### Structured workflow output
+
+[SQL Query](/nodes/data/datafusion/df-sql-query/) returns:
+
+- a CSVTable for analytics and visualization;
+- an array of row objects for workflow iteration;
+- the row count.
+
+Use it when downstream nodes need structured values.
+
+### Agent-readable output
+
+[Execute SQL](/nodes/data/datafusion/tools/df-execute-sql/) returns a Markdown table, a CSVTable, and the row count. Its formatted text output is convenient for a controlled data-analysis tool, but large results should remain in structured storage rather than being copied into a model context.
+
+## SQL examples
+
+### Aggregate by period
+
 ```sql
 SELECT
-    category,
-    COUNT(*), SUM(amount), AVG(price),
-    MIN(date), MAX(date),
-    STDDEV(rating), VARIANCE(score)
-FROM products
-GROUP BY category
-HAVING COUNT(*) > 10
+  DATE_TRUNC('month', order_date) AS month,
+  SUM(revenue) AS revenue
+FROM orders
+WHERE order_date >= DATE '2026-01-01'
+GROUP BY DATE_TRUNC('month', order_date)
+ORDER BY month;
 ```
 
-### Window Functions
+### Join registered sources
+
 ```sql
 SELECT
-    date,
-    revenue,
-    SUM(revenue) OVER (ORDER BY date ROWS 6 PRECEDING) as rolling_7day,
-    RANK() OVER (PARTITION BY region ORDER BY revenue DESC) as rank
-FROM sales
+  o.order_id,
+  c.customer_name,
+  o.revenue
+FROM orders AS o
+JOIN customers AS c
+  ON o.customer_id = c.customer_id
+WHERE o.status = 'complete';
 ```
 
-### Joins
+### Window calculation
+
 ```sql
-SELECT * FROM orders o
-INNER JOIN customers c ON o.customer_id = c.id
-LEFT JOIN shipping s ON o.id = s.order_id
+SELECT
+  order_date,
+  revenue,
+  SUM(revenue) OVER (
+    ORDER BY order_date
+    ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+  ) AS seven_row_revenue
+FROM daily_sales;
 ```
 
-### Common Table Expressions (CTEs)
+### Common table expression
+
 ```sql
 WITH monthly_sales AS (
-    SELECT DATE_TRUNC('month', date) as month, SUM(amount) as total
-    FROM sales
-    GROUP BY 1
+  SELECT
+    DATE_TRUNC('month', order_date) AS month,
+    SUM(revenue) AS revenue
+  FROM orders
+  GROUP BY DATE_TRUNC('month', order_date)
 )
-SELECT month, total,
-       total - LAG(total) OVER (ORDER BY month) as change
+SELECT *
 FROM monthly_sales
+ORDER BY month;
 ```
 
-## Best Practices
+Dynamic query text should be constructed only from strictly parsed or allow-listed values. The SQL Query node accepts a query string; do not concatenate arbitrary user input into it.
 
-### 1. Push Down Filters
-Let DataFusion push filters to data sources:
-```sql
--- Good: filter will be pushed to Postgres
-SELECT * FROM postgres_table WHERE status = 'active'
+## Time-series helper nodes
 
--- Less efficient: filter applied after full scan
-SELECT * FROM (SELECT * FROM postgres_table) WHERE status = 'active'
-```
+The catalog includes workflow-oriented helpers for common time operations:
 
-### 2. Use Appropriate Data Formats
-| Scenario | Recommended Format |
-|----------|-------------------|
-| Frequent full scans | Parquet |
-| Frequent updates | Delta Lake |
-| Small lookup tables | CSV (in-memory) |
-| Real-time data | Database connection |
+- [Time Bin Aggregation](/nodes/data/datafusion/aggregation/df-time-bin-aggregation/)
+- [Date Truncate Aggregation](/nodes/data/datafusion/aggregation/df-date-trunc-aggregation/)
+- [Window Aggregation](/nodes/data/datafusion/aggregation/df-window-aggregation/)
+- [Time Range Filter](/nodes/data/datafusion/time/df-time-range-filter/)
+- [DateTime to SQL Timestamp](/nodes/data/datafusion/time/df-datetime-to-timestamp/)
 
-### 3. Limit Result Sets
-Always use LIMIT when exploring:
-```sql
-SELECT * FROM large_table LIMIT 100
-```
+Use SQL when the calculation is already clear there. Use helper nodes when their typed inputs make a reusable board easier to configure safely.
 
-### 4. Index Database Tables
-Ensure source database tables are properly indexed for the columns you filter on.
+## Write results
 
-### 5. Monitor Memory
-Set memory limits for large queries to prevent crashes.
+[Write Delta Table](/nodes/data/datafusion/lakes/df-write-delta/) writes a result into Delta Lake. For other destinations, pass the CSVTable or row output to the corresponding file, database, API, or A2UI node.
+
+Before publishing a derived table, record its source window, query or board version, and row count.
+
+## Performance guidance
+
+- Filter early and select only required columns.
+- Prefer Parquet or a lake table for repeated analytical scans.
+- Aggregate before sending data to an A2UI page or model.
+- Add `LIMIT` while exploring an unfamiliar table.
+- Avoid per-row workflow loops for operations SQL can perform as a set.
+- Inspect whether source filters are pushed down before assuming a federated query is cheap.
+- Separate a fast summary query from slower drill-down queries.
 
 ## Troubleshooting
 
-### "Table not found"
-- Check table registration succeeded
-- Verify table name (case-sensitive)
-- Use List Tables to see registered tables
+| Symptom | Check |
+|---------|-------|
+| Table not found | Same session value, registration execution path, exact table name |
+| Column not found | Describe Table output, casing, schema evolution |
+| Query is slow | Selected columns, filters, join size, source pushdown |
+| Memory pressure | Result size, early aggregation, Parquet, batch boundaries |
+| Unexpected duplicate rows | Join keys and source grain |
+| Agent produces invalid SQL | List/describe tools, read-only tool, row limits, retry policy |
 
-### "Query is slow"
-- Check data source is accessible
-- Use EXPLAIN to analyze query plan
-- Consider partitioned data for large datasets
+## Next steps
 
-### "Memory error"
-- Set memory limits on session creation
-- Use LIMIT clauses
-- Process data in chunks
-
-## Next Steps
-
-Now that you can query any data source:
-
-- **[Machine Learning](/topics/datascience/ml/)** – Build ML models on query results
-- **[Data Visualization](/topics/datascience/visualization/)** – Create charts from SQL results
-- **[AI-Powered Analysis](/topics/datascience/ai-analysis/)** – Let AI agents query your data
+- [Data loading and storage](/topics/datascience/loading/)
+- [Data visualization](/topics/datascience/visualization/)
+- [AI-powered analysis](/topics/datascience/ai-analysis/)
+- [Data pipelines](/topics/data-pipelines/overview/)

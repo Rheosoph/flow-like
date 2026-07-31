@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like internal tool architecture</title>
+  <desc id="desc">A routed app page contains layout, display, and input components. Workflows push data into elements, while component actions trigger workflows, navigate to pages, or open external links.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff8a68"/><stop offset="1" stop-color="#ff5d3d"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <marker id="greenArrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10z" fill="#34d399"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.section{fill:#f7f8fa;font-size:21px;font-weight:720}.item{fill:#d8dbe1;font-size:15px;font-weight:650}.note{fill:#929aa7;font-size:14px}.tiny{fill:#89919e;font-size:13px;font-weight:700;letter-spacing:1.1px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/><rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="254" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="kicker">A2UI APP PAGES</text>
+  <text x="64" y="136" class="heading">Pages, components, data, and actions</text>
+  <text x="64" y="169" class="sub">Compose an interface visually, let workflows update its elements, and bind interactions to explicit outcomes.</text>
+
+  <path d="M310 380H366" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M750 380H806" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M1070 380H1126" fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M938 524C938 612 558 612 558 554" fill="none" stroke="#34d399" stroke-width="4" stroke-dasharray="8 8" marker-end="url(#greenArrow)"/>
+
+  <g>
+    <rect x="64" y="238" width="246" height="286" rx="25" fill="#191c22" stroke="#373d48" stroke-width="2"/>
+    <text x="94" y="280" class="tiny">ROUTE</text><text x="94" y="315" class="section">App pages</text>
+    <rect x="94" y="342" width="186" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="118" y="369" class="item">/dashboard</text>
+    <rect x="94" y="396" width="186" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="118" y="423" class="item">/customers</text>
+    <rect x="94" y="450" width="186" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="118" y="477" class="item">/customers/:id</text>
+  </g>
+
+  <g>
+    <rect x="366" y="206" width="384" height="348" rx="28" fill="#1d1d22" stroke="#ff7656" stroke-width="2"/>
+    <rect x="396" y="236" width="64" height="64" rx="18" fill="url(#coral)" filter="url(#glow)"/>
+    <path d="M411 253h34v30h-34zM411 264h34M423 253v30" fill="none" stroke="#15171b" stroke-width="3"/>
+    <text x="484" y="258" class="tiny">COMPOSE</text><text x="484" y="293" class="section">Surface components</text>
+    <rect x="396" y="328" width="150" height="74" rx="15" fill="#292327" stroke="#5d3c35"/><text x="471" y="359" text-anchor="middle" class="item">Layout</text><text x="471" y="383" text-anchor="middle" class="note">Row • grid • card</text>
+    <rect x="566" y="328" width="154" height="74" rx="15" fill="#292327" stroke="#5d3c35"/><text x="643" y="359" text-anchor="middle" class="item">Display</text><text x="643" y="383" text-anchor="middle" class="note">Text • table • chart</text>
+    <rect x="396" y="420" width="150" height="74" rx="15" fill="#292327" stroke="#5d3c35"/><text x="471" y="451" text-anchor="middle" class="item">Input</text><text x="471" y="475" text-anchor="middle" class="note">Field • select • file</text>
+    <rect x="566" y="420" width="154" height="74" rx="15" fill="#292327" stroke="#5d3c35"/><text x="643" y="451" text-anchor="middle" class="item">Feedback</text><text x="643" y="475" text-anchor="middle" class="note" style="font-size:13px">Badge • progress • modal</text>
+  </g>
+
+  <g>
+    <rect x="806" y="238" width="264" height="286" rx="25" fill="#1d1c24" stroke="#5b5278" stroke-width="2"/>
+    <text x="836" y="280" class="tiny">CONNECT</text><text x="836" y="315" class="section">Element data</text>
+    <rect x="836" y="342" width="204" height="50" rx="13" fill="#282534" stroke="#574e71"/><circle cx="860" cy="367" r="6" fill="#a78bfa"/><text x="880" y="373" class="item">Set element value</text>
+    <rect x="836" y="406" width="204" height="50" rx="13" fill="#282534" stroke="#574e71"/><circle cx="860" cy="431" r="6" fill="#34d399"/><text x="878" y="437" class="item" style="font-size:14px">Push table / chart data</text>
+    <rect x="836" y="470" width="204" height="32" rx="11" fill="#282534" stroke="#574e71"/><text x="938" y="491" text-anchor="middle" class="note">Read current input state</text>
+  </g>
+
+  <g>
+    <rect x="1126" y="206" width="250" height="348" rx="28" fill="#1b2422" stroke="#34d399" stroke-width="2"/>
+    <text x="1156" y="248" class="tiny">ACT</text><text x="1156" y="283" class="section">Bound outcomes</text>
+    <rect x="1156" y="314" width="190" height="58" rx="14" fill="#202b28" stroke="#3e6759"/><circle cx="1180" cy="343" r="7" fill="#34d399"/><text x="1200" y="349" class="item">Trigger workflow</text>
+    <rect x="1156" y="388" width="190" height="58" rx="14" fill="#202b28" stroke="#3e6759"/><circle cx="1180" cy="417" r="7" fill="#ff7656"/><text x="1200" y="423" class="item">Navigate to page</text>
+    <rect x="1156" y="462" width="190" height="58" rx="14" fill="#202b28" stroke="#3e6759"/><circle cx="1180" cy="491" r="7" fill="#a78bfa"/><text x="1200" y="497" class="item">Open external link</text>
+  </g>
+  <text x="720" y="650" text-anchor="middle" class="sub">Workflow events read current element state, perform the operation, then update the surface with the result.</text>
+</svg>

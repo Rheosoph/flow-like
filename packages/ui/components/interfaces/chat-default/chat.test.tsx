@@ -5,8 +5,11 @@ import { createRoot } from "react-dom/client";
 
 let chatBoxRenderCount = 0;
 
+// `mock.module` is process-global, so this stub also stands in for `next-themes` in every other
+// test file of this run. Omitting `ThemeProvider` broke any importer that pulls it in.
 mock.module("next-themes", () => ({
 	useTheme: () => ({ resolvedTheme: "dark" }),
+	ThemeProvider: ({ children }: { children?: React.ReactNode }) => children,
 }));
 
 mock.module("react-spinners/PuffLoader", () => ({ default: () => null }));

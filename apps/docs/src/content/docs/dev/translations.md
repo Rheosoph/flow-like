@@ -25,25 +25,19 @@ Flow-Like's website supports 11 languages. This guide explains how to add or upd
 
 ## File Structure
 
-Translations are organized in individual locale files:
+Translations are split into shared dictionaries, the current landing-page dictionary, and page-specific dictionaries:
 
-```
-apps/website/src/i18n/
-├── index.ts           # Main exports and utilities
-└── locales/
-    ├── index.ts       # Barrel export
-    ├── en.ts          # English (base language)
-    ├── de.ts          # German
-    ├── es.ts          # Spanish
-    ├── fr.ts          # French
-    ├── zh.ts          # Chinese
-    ├── ja.ts          # Japanese
-    ├── ko.ts          # Korean
-    ├── pt.ts          # Portuguese
-    ├── it.ts          # Italian
-    ├── nl.ts          # Dutch
-    └── sv.ts          # Swedish
-```
+| Path | Purpose |
+|------|---------|
+| `apps/website/src/i18n/index.ts` | Registers supported languages, merges dictionaries, and provides lookup helpers |
+| `apps/website/src/i18n/locales/index.ts` | Exports the shared locale dictionaries |
+| `apps/website/src/i18n/locales/<code>.ts` | Shared dictionary for one language; English is the fallback |
+| `apps/website/src/i18n/locales/v5/<code>.ts` | Current landing-page dictionary for one language |
+| `apps/website/src/i18n/locales/v5/index.ts` | Collects the current landing-page dictionaries |
+| `apps/website/src/i18n/locales/pages/<page>-<code>.ts` | Page-specific dictionary for one language |
+| `apps/website/src/i18n/locales/pages/<page>.ts` | Registers a page's dictionaries and English fallback |
+
+The `v4/` directory contains legacy English content. Use the shared, `v5`, and page-specific locations above for current website work.
 
 ## Updating Existing Translations
 
@@ -71,6 +65,8 @@ export const de = {
 2. Export your translations following the English structure
 3. Add the export to `locales/index.ts`
 4. Register the language in `index.ts`
+
+For complete coverage, also add the language to `locales/v5/index.ts` and provide any page-specific dictionaries used by the routes you intend to publish. Missing keys fall back to English, which is useful during development but should not be treated as a completed translation.
 
 ### Step 1: Create the Locale File
 

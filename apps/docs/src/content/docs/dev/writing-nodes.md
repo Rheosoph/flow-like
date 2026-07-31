@@ -1,349 +1,243 @@
 ---
-title: Writing Nodes
-description: Writing Custom Nodes in Rust for FlowLike
+title: Writing Native Nodes
+description: Add Rust nodes to Flow-Like's built-in catalog
 sidebar:
   order: 20
 ---
 
-Nodes follow a very simple creation process. Let us create an example node.
+Native nodes are Rust implementations compiled into Flow-Like's catalog. Use
+them when contributing a generally useful node to this repository. For private
+or independently distributed extensions, use
+[WASM nodes](/dev/wasm-nodes/overview/) instead.
 
-## The Node Object
-The Node object is our Logic Wrapper.
+## The `NodeLogic` contract
 
-### The Node Skeleton
+A native node implements `NodeLogic` from
+`packages/core/src/flow/node.rs`:
 
-A Node has to implement the `NodeLogic` Trait. Most importantly it has to implement `get_node()` and `run()`.
-
-In the following we have a look at the "**Branch**" Node for Boolean Control Flow, comparable to the IF statement. The Node has to be constructed with a unique name and a friendly name. The unique name is used to determine the logic to execute, so it should not be changed in any way later on.
-
-A Node always has Pins attached to it. There are multiple Pins you can use.
-
-### Helpful descriptions & quality scores
-When you create a node or a pin, add clear descriptions for both the node
-and each pin. These descriptions surface in the UI and make it easier for users to
-understand the purpose of the node or what a pin expects. If you omit the pin
-description the runtime now auto-generates a helpful default based on the pin
-type (for example _Trigger pin_, _Input Integer_ or _Emits execution to the next
-node(s)_).
-
-Nodes also expose a `scores` object that lets you assign quality metrics in the
-following categories: `privacy`, `security`, `performance`, `governance`,
-`reliability` and `cost`. Each score ranges from `0` (low, bad) to `10` (high, good), and
-is visible in the node info overlay to help users discover trade-offs at-a-glance.
-
-```rust title="Branch Node"
+```rust
 #[async_trait]
-impl NodeLogic for BranchNode {
-    fn get_node(&self) -> Node {
-        let mut node = Node::new(
-            "control_branch",
-            "Branch",
-            "Branches the flow based on a condition",
-            "Control",
-        );
-        node.add_icon("/flow/icons/split.svg");
+pub trait NodeLogic: Send + Sync {
+    fn get_node(&self) -> Node;
 
-        node.add_input_pin("exec_in", "Input", "Trigger Pin", VariableType::Execution);
-        node.add_input_pin(
-            "condition",
-            "Condition",
-            "The condition to evaluate",
-            VariableType::Boolean,
-        )
-        .set_default_value(Some(serde_json::json!(true)));
+    async fn run(
+        &self,
+        context: &mut ExecutionContext,
+    ) -> flow_like_types::Result<()>;
 
-        node.add_output_pin(
-            "true",
-            "True",
-            "The flow to follow if the condition is true",
-            VariableType::Execution,
-        );
-        node.add_output_pin(
-            "false",
-            "False",
-            "The flow to follow if the condition is false",
-            VariableType::Execution,
-        );
-
-        return node;
-    }
-
-    async fn run(&self, context: &mut ExecutionContext) -> anyhow::Result<()> {
-        let condition = context.evaluate_pin::<bool>("condition").await?;
-
-        let true_pin = context.get_pin_by_name("true").await?;
-        let false_pin = context.get_pin_by_name("false").await?;
-
-        if condition {
-            context.activate_exec_pin_ref(&true_pin).await?;
-            context.deactivate_exec_pin_ref(&false_pin).await?;
-
-            return Ok(());
-        }
-
-        context.deactivate_exec_pin_ref(&true_pin).await?;
-        context.activate_exec_pin_ref(&false_pin).await?;
-
-        return Ok(());
-    }
+    async fn on_update(&self, _node: &mut Node, _board: &Board) {}
 }
-
 ```
 
-### Pure Nodes
-Pure Nodes are nodes without Execution Pins. These nodes might be cached by the runtime, so you should only use this type, if you do not produce any sideeffects.
-The `Branch` Node from [the previous section](##the-node-skeleton) is an example of a Pure Node.
+- `get_node` defines stable metadata, pins, defaults, and presentation.
+- `run` reads inputs, writes outputs, and activates execution pins.
+- `on_update` is optional and updates a placed node when its definition depends
+  on board state or pin defaults.
 
----
+Register implementations with the catalog attribute and make them
+constructible with `Default`:
 
-```rust title="A Pure Node 'Add'"
+```rust
+#[crate::register_node]
+#[derive(Default)]
+pub struct AddIntegerNode;
+```
+
+The node's internal name is its persistent logic identifier. Treat it as an API:
+do not rename it after boards have started using the node.
+
+## A pure data node
+
+A pure node has no execution pins and must not produce side effects. The runtime
+may evaluate it on demand or cache its result. The integer-add node in
+`packages/catalog/std/src/utils/int/add.rs` is a compact example:
+
+```rust
+use flow_like::flow::{
+    execution::context::ExecutionContext,
+    node::{Node, NodeLogic},
+    variable::VariableType,
+};
+use flow_like_types::{async_trait, json::json};
+
+#[crate::register_node]
+#[derive(Default)]
+pub struct AddIntegerNode;
+
 #[async_trait]
 impl NodeLogic for AddIntegerNode {
     fn get_node(&self) -> Node {
-        let mut node = Node::new("int_add", "+", "Adds two Integers", "Math/Int");
+        let mut node = Node::new(
+            "int_add",
+            "+",
+            "Adds two integers",
+            "Math/Int",
+        );
         node.add_icon("/flow/icons/sigma.svg");
-
         node.add_input_pin(
             "integer1",
             "Integer 1",
-            "Input Integer",
+            "First integer",
             VariableType::Integer,
         );
         node.add_input_pin(
             "integer2",
             "Integer 2",
-            "Input Integer",
+            "Second integer",
             VariableType::Integer,
         );
-
         node.add_output_pin(
             "sum",
             "Sum",
-            "Sum of the two integers",
+            "Sum of both integers",
             VariableType::Integer,
         );
-
-        return node;
+        node
     }
 
-    async fn run(&self, context: &mut ExecutionContext) -> anyhow::Result<()> {
-        let integer1: i64 = context.evaluate_pin("integer1").await?;
-        let integer2: i64 = context.evaluate_pin("integer2").await?;
-        let sum = integer1 + integer2;
-        context.set_pin_value("sum", json!(sum)).await?;
+    async fn run(
+        &self,
+        context: &mut ExecutionContext,
+    ) -> flow_like_types::Result<()> {
+        let left: i64 = context.evaluate_pin("integer1").await?;
+        let right: i64 = context.evaluate_pin("integer2").await?;
+        context.set_pin_value("sum", json!(left + right)).await?;
         Ok(())
     }
 }
 ```
 
-### Dynamic Nodes
-You can dynamically update your Node, if you want to. This has many use cases. Some examples are:
-1. You have updated your node and you need to update the Pins of it gracefully.
-2. Your Node should behave differently, depending on the rest of the board.
-3. Your Node should behave differently, depending on the Input of the Node, for example in the `Format` Node bellow, where we add new Pins, based on the Input String and adjust the types of these new Pins depending on the connected type.
-4. You are working with Generic Typed Nodes
+The Branch node is **not** pure: its input and outputs include execution pins.
 
-Most of these use cases are quite advanced. You can find examples for this in our code base, if you look for the `on_update` function.
+## An execution node
 
-```rust title="On Update Function for the Format Node"
-async fn on_update(&self, node: &mut Node, board: Arc<Board>) {
-        let pins: Vec<_> = node
-            .pins
-            .values()
-            .filter(|p| p.name != "format_string" && p.pin_type == PinType::Input)
-            .collect();
+Execution pins control which downstream path runs. A branch reads its condition,
+deactivates both outputs, then activates the selected output:
 
-        let format_string: String = node
-            .get_pin_by_name("format_string")
-            .and_then(|pin| pin.default_value.clone())
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-            .and_then(|json| json.as_str().map(ToOwned::to_owned))
-            .unwrap_or_default();
+```rust
+async fn run(
+    &self,
+    context: &mut ExecutionContext,
+) -> flow_like_types::Result<()> {
+    let condition: bool = context.evaluate_pin("condition").await?;
+    let true_pin = context.get_pin_by_name("true").await?;
+    let false_pin = context.get_pin_by_name("false").await?;
 
-        let mut current_placeholders = pins
-            .iter()
-            .map(|p| (p.name.clone(), *p))
-            .collect::<HashMap<_, _>>();
+    context.deactivate_exec_pin_ref(&true_pin).await?;
+    context.deactivate_exec_pin_ref(&false_pin).await?;
 
-        let mut all_placeholders = HashSet::new();
-        let mut missing_placeholders = HashSet::new();
-
-        for cap in self.regex.captures_iter(&format_string) {
-            if let Some(placeholder) = cap.get(1).map(|m| m.as_str().to_string()) {
-                all_placeholders.insert(placeholder.clone());
-                if current_placeholders.remove(&placeholder).is_none() {
-                    missing_placeholders.insert(placeholder);
-                }
-            }
-        }
-
-        let ids_to_remove = current_placeholders
-            .values()
-            .map(|p| p.id.clone())
-            .collect::<Vec<_>>();
-        ids_to_remove.iter().for_each(|id| {
-            node.pins.remove(id);
-        });
-
-        for placeholder in missing_placeholders {
-            node.add_input_pin(&placeholder, &placeholder, "", VariableType::Generic);
-        }
-
-        all_placeholders.iter().for_each(|placeholder| {
-            let _ = node.match_type(&placeholder, board.clone(), None);
-        })
+    if condition {
+        context.activate_exec_pin_ref(&true_pin).await?;
+    } else {
+        context.activate_exec_pin_ref(&false_pin).await?;
     }
-```
-The `on_update` function gets Read Access to the whole board, in case you need to fetch information about it.
 
-:::caution
- Keep in mind, that this function is called on every update to the board, keep it efficient.
-:::
-:::tip
-You can use the `on_update` function to validate the Node and return Error codes that are attached to your node to notify the user that the Node needs some more configuration. You can even dynamically change the name of the Node or Pins or add Comments.
-:::
-
-## The Context Object
-By now you have probably wondered about the input elements you get for your node. First you get a reference to the state of the app, where you can interact with Model Providers and get a cached HTTP Client.
-
-More important however is the `Context` Object. This context let´s you do multiple things.
-
-### Pin Interactions
-The context object is your best friend interacting with Pins. Most of the time you will use it to read and write to Pins. You can either do so by reference or by name.
-If you have to write to a pin multiple times, the reference one is cheaper.
-
-The Type we use for Communication is the abstract `serde_json:Value`. It allows to write a lot of
-
-```rust title="Reading and Writing Pins"
-// The Type is necessary in this case to guide the evaluate_pin function. This evaluation is by name.
-let string: String = context.evaluate_pin("string").await?;
-
-// Setting the "length" Pin with a JSON Value
-context.set_pin_value("length", json!(length)).await?;
+    Ok(())
+}
 ```
 
-## Pins
-Pins are a subcomponent for your Node. They act an interface to other Nodes.
+See `packages/catalog/std/src/control/branch_node.rs` for the complete
+definition.
 
-### Pin Options
-You can guide the user on how to correctly use your node by setting Options to the Node Pins. These options can be ranges for numbers, Valid Values for Enum like String Pins or Schema enforced Struct Pins.
+## Reading and writing pins
 
-### Pin Schemas
-Struct Pins can have a Schema attached to it. This can help to make sure users are not accidentally connecting invalid Pins. This Schema can be enforced or just a guidance.
+Pin values cross the runtime boundary as JSON and are deserialized into the type
+you request:
 
-```rust title="Setting a Schema"
+```rust
+let text: String = context.evaluate_pin("text").await?;
+let limit: i64 = context.evaluate_pin("limit").await?;
+
+context
+    .set_pin_value("result", flow_like_types::json::json!(text))
+    .await?;
+```
+
+When repeatedly accessing one pin, resolve it once with
+`get_pin_by_name` and use the reference-based context methods.
+
+Pin names are also persistent interface identifiers. Prefer descriptive,
+lowercase names and keep them stable. Each node and pin should have a useful
+description because the editor surfaces that text directly.
+
+## Schemas and options
+
+Struct pins can carry a JSON Schema generated from a Rust type:
+
+```rust
 node.add_input_pin(
-            "bit",
-            "Model Bit",
-            "The Bit that contains the Model",
-            VariableType::Struct,
-        )
-    .set_schema::<Bit>();
+    "bit",
+    "Model Bit",
+    "Model configuration",
+    VariableType::Struct,
+)
+.set_schema::<Bit>();
 ```
 
-```rust title="Enforcing a Schema"
+To make the schema a connection constraint rather than editor guidance:
+
+```rust
 node.add_input_pin(
-            "bit",
-            "Model Bit",
-            "The Bit that contains the Model",
-            VariableType::Struct,
-        )
-    .set_schema::<Bit>()
-    .set_options(PinOptions::new().set_enforce_schema(true).build());
+    "bit",
+    "Model Bit",
+    "Model configuration",
+    VariableType::Struct,
+)
+.set_schema::<Bit>()
+.set_options(PinOptions::new().set_enforce_schema(true).build());
 ```
 
-:::note
-Pin Schemas are not stored inline with the node. These are classical JSON Schema definitions, which can be quite huge.
-We are hashing these Schemars for all nodes and storing them in the references of the board. Depending on the Size of the Struct you are working with this can however still add quite some overhead.
-:::
+Schemas are stored in the board's schema references rather than copied inline
+into every node.
 
+Some nodes deliberately define repeated pins with the same name so the editor
+can add more instances. The catalog lint checks enforce the supported shape;
+use an existing variadic node as a reference before introducing this pattern.
 
-### Dynamic Pin Amount
-As you might have seen already, there is the option to allow an arbitrary amount of input or output pins. This can be achieved by defining the same Pin Name multiple times. Users can than add more Pins of this type to the node in the frontend. The minimum number of Pins in this case is however 2.
+## Dynamic definitions
 
-```rust title="And Node" {7} {15}
-fn get_node(&self) -> Node {
-        let mut node = Node::new("bool_and", "And", "Boolean And operation", "Utils/Bool");
+Use `on_update(&mut Node, &Board)` when a node's visible pins depend on its
+configuration. The Format String node scans placeholders such as `{customer}`
+and keeps corresponding generic input pins in sync:
 
-        node.add_icon("/flow/icons/bool.svg");
-
-        node.add_input_pin(
-            "boolean",
-            "Boolean",
-            "Input Pin for AND Operation",
-            VariableType::Boolean,
-        )
-        .set_default_value(Some(json!(false)));
-
-        node.add_input_pin(
-            "boolean",
-            "Boolean",
-            "Input Pin for AND Operation",
-            VariableType::Boolean,
-        )
-        .set_default_value(Some(json!(false)));
-
-        node.add_output_pin(
-            "result",
-            "Result",
-            "AND operation between all boolean inputs",
-            VariableType::Boolean,
-        );
-
-        return node;
-    }
+```rust
+async fn on_update(&self, node: &mut Node, board: &Board) {
+    // Read configuration from node defaults.
+    // Add missing pins and remove stale pins.
+    // Reconcile connected types against `board`.
+}
 ```
 
-## Contribute vs Local Node
-Currently we only offer the creation of nodes via a pull request into the project (or your fork). In the future we will add the option to create nodes in either Lua or WebAssembly.
+See `packages/catalog/std/src/utils/string/format.rs` for the full,
+duplicate-safe implementation.
 
+`on_update` runs frequently while a board is edited. Keep it deterministic,
+idempotent, and inexpensive. Preserve existing pin IDs whenever possible so
+connections are not needlessly discarded.
 
-## Best Practices
-Some of the best practices we recommend for the creation of great nodes.
+## Node scores
 
-#### 1. Early Returns
-Keep your nodes readable for our code audits. Part of this is follow standard coding best practices as much as possible.
+`NodeScores` contains `privacy`, `security`, `performance`, `governance`,
+`reliability`, and `cost`, each from `0` to `10`. These are impact/risk
+indicators: a higher number means greater impact in that category, not “better
+quality.” In particular, a higher `performance` score means worse performance.
 
-#### 2. Prefer Execution Path Failures on Execution Nodes
-You should catch and handle errors gracefully. You have two main options for this.
-1. Add a Failed Execution Pin. This will help the user to write custom logic, catching the error on their side.
-2. For Pure Nodes (the ones without Execution Pins), you can use a success Boolean Pin.
+Only add scores you can justify consistently with comparable catalog nodes.
 
-If you have the option to use the Failed Execution Pin, we prefer that.
+## Validate a contribution
 
-```rust title="Failed Execution Path"
-// From the Pop Array Node
- async fn run(&self, context: &mut ExecutionContext) -> anyhow::Result<()> {
-        // We initialize by setting the failed path. This node might be executed multiple times.
-        // Resetting its state is good practice and makes sure we don't get strange behavior.
-        context.activate_exec_pin("failed").await?;
-        context.deactivate_exec_pin("exec_out").await?;
-        let array_in: Vec<Value> = context.evaluate_pin("array_in").await?;
-        let mut array_out = array_in.clone();
-        let popped_value = array_out.pop();
-        let success = popped_value.is_some();
+Run the catalog definition checks after adding or changing native nodes:
 
-        context.set_pin_value("array_out", json!(array_out)).await?;
-        if let Some(value) = popped_value {
-            context.set_pin_value("value", json!(value)).await?;
-        }
-
-        // In case of success, we activate the normal execution path, deactivating the failed route.
-        if success {
-            context.deactivate_exec_pin("failed").await?;
-            context.activate_exec_pin("exec_out").await?;
-        }
-
-        Ok(())
-    }
+```bash
+mise run test:catalog:lint
 ```
 
-#### 3. Use Logging
-Show your users what went wrong. Do not rely on the Runtime to Log the error that made your Node Fail. Handle the error and return more meaningful errors. You can also use this to warn the user, just print information that might be helpful or Debugging Information.
+Also run a targeted package test or check for the catalog you changed. For the
+standard catalog:
 
-```rust title="Logging is easy,"
-context.log_message(
-    "Your Error",
-    crate::flow::execution::LogLevel::Error,
-);
+```bash
+cargo test -p flow-like-catalog-std
 ```
+
+Before opening a pull request, follow the repository-wide steps in
+[Contributing](/dev/contribute/).

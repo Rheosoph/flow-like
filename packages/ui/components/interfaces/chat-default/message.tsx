@@ -40,9 +40,23 @@ import {
 } from "./attachment-dialog";
 import type { IAttachment, IMessage } from "./chat-db";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
+import { buildInlineSegments } from "./inline-segments";
 import { MessageWidgets } from "./message-widgets";
-import { PlanSteps } from "./plan-steps";
+import { InlineStepGroup, PlanSteps } from "./plan-steps";
 import { UsageStats } from "./usage-stats";
+
+function ThinkingIndicator() {
+	return (
+		<div className="flex items-center gap-1.5 py-1">
+			<div className="flex gap-1">
+				<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
+				<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
+				<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
+			</div>
+			<span className="text-xs text-muted-foreground ml-1">Thinking...</span>
+		</div>
+	);
+}
 
 interface MessageProps {
 	message: IMessage;
@@ -750,6 +764,42 @@ export const MessageComponent = memo(
 				? message.current_step_id
 				: undefined;
 
+		// Anchors index into the RAW content string — only trust them when content is that string
+		// (array-form content is re-joined for display, which shifts offsets).
+		const inlineSegments = useMemo(
+			() =>
+				isUser || typeof message.inner.content !== "string"
+					? null
+					: buildInlineSegments(messageContent.text, planSteps),
+			[isUser, message.inner.content, messageContent.text, planSteps],
+		);
+
+		// Which segments are still moving while the turn streams: the growing text tail (not
+		// necessarily the last segment — an action anchored at the end sorts after it) and the one
+		// action group that can still gain steps.
+		const { lastTextSegmentIndex, liveSegmentIndex } = useMemo(() => {
+			let lastText = -1;
+			let lastSteps = -1;
+			let withCurrent = -1;
+			inlineSegments?.forEach((segment, index) => {
+				if (segment.steps) {
+					lastSteps = index;
+					if (
+						currentPlanStepId &&
+						segment.steps.some((step) => step.id === currentPlanStepId)
+					) {
+						withCurrent = index;
+					}
+					return;
+				}
+				lastText = index;
+			});
+			return {
+				lastTextSegmentIndex: lastText,
+				liveSegmentIndex: withCurrent === -1 ? lastSteps : withCurrent,
+			};
+		}, [inlineSegments, currentPlanStepId]);
+
 		const usageStats = !isUser ? (message.usage_stats ?? []) : [];
 		const hasUsageStats = usageStats.length > 0;
 		const hasFooterContent =
@@ -784,7 +834,7 @@ export const MessageComponent = memo(
 								: "var(--fl-chat-ai-message-foreground, var(--foreground))",
 						}}
 					>
-						{!isUser && planSteps.length > 0 && (
+						{!isUser && !inlineSegments && planSteps.length > 0 && (
 							<PlanSteps
 								steps={planSteps}
 								currentStepId={currentPlanStepId}
@@ -804,17 +854,47 @@ export const MessageComponent = memo(
 									: undefined
 							}
 						>
-							{loading && !isUser && messageContent.text === "" ? (
-								<div className="flex items-center gap-1.5 py-1">
-									<div className="flex gap-1">
-										<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:0ms]" />
-										<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:150ms]" />
-										<span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/60 animate-bounce [animation-delay:300ms]" />
-									</div>
-									<span className="text-xs text-muted-foreground ml-1">
-										Thinking...
-									</span>
-								</div>
+							{inlineSegments ? (
+								<>
+									{inlineSegments.map((segment, index) =>
+										segment.steps ? (
+											<InlineStepGroup
+												key={segment.key}
+												steps={segment.steps}
+												// Only the group owning the active step gets the live
+												// flags. Earlier groups are frozen (anchors never move
+												// backwards), so handing them the bubble's `loading`
+												// would spin them at "Working…" for the whole turn.
+												currentStepId={
+													segment.steps.some(
+														(step) => step.id === currentPlanStepId,
+													)
+														? currentPlanStepId
+														: undefined
+												}
+												loading={loading && index === liveSegmentIndex}
+											/>
+										) : loading && index === lastTextSegmentIndex ? (
+											<StreamingTextEditor
+												key={segment.key}
+												content={segment.text ?? ""}
+											/>
+										) : (
+											<TextEditor
+												key={segment.key}
+												initialContent={segment.text ?? ""}
+												isMarkdown={true}
+												editable={false}
+											/>
+										),
+									)}
+									{loading &&
+										Boolean(
+											inlineSegments[inlineSegments.length - 1]?.steps,
+										) && <ThinkingIndicator />}
+								</>
+							) : loading && !isUser && messageContent.text === "" ? (
+								<ThinkingIndicator />
 							) : loading && !isUser && messageContent.text !== "" ? (
 								<StreamingTextEditor content={messageContent.text} />
 							) : (

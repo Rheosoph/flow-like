@@ -67,7 +67,7 @@ export function InlineAppPageCard({
 			animate={{ opacity: 1, y: 0, scale: 1 }}
 			exit={{ opacity: 0, y: 8, scale: 0.98 }}
 			transition={{ type: "spring", stiffness: 380, damping: 32 }}
-			className="mx-3 mb-2 rounded-xl border border-border dark:border-white/20 bg-muted shadow-[0_12px_32px_-8px_rgba(0,0,0,0.35)] dark:shadow-[0_16px_40px_-8px_rgba(0,0,0,0.85)] overflow-hidden shrink-0"
+			className="mx-auto mb-2 w-[calc(100%_-_1.5rem)] max-w-6xl rounded-xl border border-border dark:border-white/20 bg-muted shadow-[0_12px_32px_-8px_rgba(0,0,0,0.35)] dark:shadow-[0_16px_40px_-8px_rgba(0,0,0,0.85)] overflow-hidden shrink-0"
 		>
 			<div className="flex items-center justify-between gap-2 px-3 py-2 bg-primary/5">
 				<button
@@ -123,7 +123,7 @@ export function InlineAppPageCard({
 						    fixed-position page content escapes the card and bleeds over the chat. */}
 						<div className="p-2 pt-1">
 							<div
-								className={`${compact ? "h-95 max-h-[50vh]" : "h-120 max-h-[60vh]"} relative overflow-hidden flex flex-col rounded-md border border-black/15 dark:border-black/60 bg-background contain-[layout_paint]`}
+								className={`${compact ? "h-95 max-h-[calc(50vh-3.5rem)]" : "h-120 max-h-[calc(60vh-4.5rem)]"} relative overflow-hidden flex flex-col rounded-md border border-black/15 dark:border-black/60 bg-background contain-[layout_paint]`}
 							>
 								<UsePageContent
 									eventConfig={EVENT_CONFIG}

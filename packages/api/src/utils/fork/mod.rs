@@ -1761,6 +1761,8 @@ pub async fn fork_app_with_visibility(
                     owner_role_id: NotSet,
                     primary_category: Set(src_app_row.primary_category.clone()),
                     secondary_category: Set(src_app_row.secondary_category.clone()),
+                    // A fork of an agent is still an agent.
+                    app_type: Set(src_app_row.app_type.clone()),
                     rating_sum: Set(0),
                     rating_count: Set(0),
                     download_count: Set(0),

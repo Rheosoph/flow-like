@@ -1,0 +1,97 @@
+{
+	"schemaVersion": 1,
+	"createdOn": "2026-07-29",
+	"visualSystem": {
+		"canvas": "dark charcoal",
+		"primary": "#ff7656",
+		"secondary": ["#34d399", "#a78bfa"],
+		"type": "system sans-serif",
+		"svgViewBox": "0 0 1440 720"
+	},
+	"assets": [
+		{
+			"file": "GenAIOverview.webp",
+			"dimensions": "1672x941",
+			"source": "built-in image generation",
+			"page": "topics/genai/overview.md"
+		},
+		{
+			"file": "DataPipelinesOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/data-pipelines/overview.md"
+		},
+		{
+			"file": "BusinessIntelligenceOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/business-intelligence/overview.md"
+		},
+		{
+			"file": "ChatbotsOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/chatbots/overview.md"
+		},
+		{
+			"file": "RAGOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/genai/rag.md"
+		},
+		{
+			"file": "DataScienceOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/datascience/overview.md"
+		},
+		{
+			"file": "SummarizationStrategiesOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/document-processing/summarization-strategies.md"
+		},
+		{
+			"file": "SummarizationDecisionGuide.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/document-processing/summarization-strategies.md"
+		},
+		{
+			"file": "APIIntegrationsOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/api-integrations/overview.md"
+		},
+		{
+			"file": "InternalToolsOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/internal-tools/overview.md"
+		},
+		{
+			"file": "DocumentProcessingOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/document-processing/overview.md"
+		},
+		{
+			"file": "DesktopAutomationOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/desktop-automation/overview.md"
+		},
+		{
+			"file": "OntologyOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/ontology/overview.md"
+		},
+		{
+			"file": "RemoteOntologyOverview.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/ontology/remote.md"
+		}
+	]
+}

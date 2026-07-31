@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like long-document summarization pipeline</title>
+  <desc id="desc">Text or document pages are chunked, optionally enriched with entity context, processed with one of five summarization strategies, iterated when needed, optionally compressed with Chain of Density, and returned as a final summary.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="0" y="0" width="1440" height="720"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.stage{fill:#f7f8fa;font-size:19px;font-weight:720}.note{fill:#9199a6;font-size:14px}.pill{fill:#d8dbe1;font-size:14px;font-weight:650}.optional{fill:#a78bfa;font-size:12px;font-weight:760;letter-spacing:1.2px}.optional-copy{font-size:17px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/><rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="296" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="kicker">LONG-DOCUMENT SUMMARY</text>
+  <text x="64" y="136" class="heading">A controlled path from pages to signal</text>
+  <text x="64" y="169" class="sub">Chunk the source, choose a strategy, then refine only as much as the output requires.</text>
+
+  <g fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)" filter="url(#glow)">
+    <path d="M276 374H314"/>
+    <path d="M518 374H556"/>
+    <path d="M936 374H974"/>
+    <path d="M1178 374H1216"/>
+  </g>
+
+  <g><rect x="64" y="296" width="212" height="156" rx="24" fill="#191c22" stroke="#464c57" stroke-width="2"/><path d="M96 333h34l14 14v48H96z" fill="none" stroke="#ff7656" stroke-width="4"/><path d="M130 333v16h14M106 365h28M106 378h28" stroke="#ff7656" stroke-width="3"/><text x="174" y="355" class="stage">Text or pages</text><text x="174" y="383" class="note">Raw source</text></g>
+  <g><rect x="328" y="296" width="190" height="156" rx="24" fill="#191c22" stroke="#4d3a36" stroke-width="2"/><text x="423" y="348" text-anchor="middle" class="stage">Chunk</text><text x="423" y="376" text-anchor="middle" class="note">Markdown-aware</text><rect x="367" y="398" width="112" height="28" rx="9" fill="#282329" stroke="#5d3c35"/><text x="423" y="417" text-anchor="middle" class="pill">With overlap</text></g>
+  <g>
+    <rect x="570" y="236" width="366" height="276" rx="28" fill="#1d1c24" stroke="#8b6ee8" stroke-width="2"/>
+    <text x="753" y="282" text-anchor="middle" class="stage">Choose a strategy</text><text x="753" y="309" text-anchor="middle" class="note">Match the document and delivery goal.</text>
+    <rect x="606" y="338" width="136" height="42" rx="12" fill="#292635" stroke="#5b5278"/><text x="674" y="364" text-anchor="middle" class="pill">Refine</text>
+    <rect x="758" y="338" width="142" height="42" rx="12" fill="#292635" stroke="#5b5278"/><text x="829" y="364" text-anchor="middle" class="pill">MapReduce</text>
+    <rect x="606" y="394" width="136" height="42" rx="12" fill="#292635" stroke="#5b5278"/><text x="674" y="420" text-anchor="middle" class="pill">Hierarchical</text>
+    <rect x="758" y="394" width="142" height="42" rx="12" fill="#292635" stroke="#5b5278"/><text x="829" y="420" text-anchor="middle" class="pill">Hybrid</text>
+    <rect x="606" y="450" width="294" height="38" rx="12" fill="#292635" stroke="#5b5278"/><text x="753" y="475" text-anchor="middle" class="pill">SlidingWindow</text>
+  </g>
+  <g><rect x="988" y="296" width="190" height="156" rx="24" fill="#191c22" stroke="#4d3a36" stroke-width="2"/><text x="1083" y="348" text-anchor="middle" class="stage">Iterate</text><text x="1083" y="376" text-anchor="middle" class="note">If still too long</text><path d="M1050 415c14-18 48-18 64 0m0 0-3-16m3 16-17-1" fill="none" stroke="#ff7656" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <g><rect x="1230" y="296" width="146" height="156" rx="24" fill="#1f2a27" stroke="#34d399" stroke-width="2"/><circle cx="1303" cy="343" r="24" fill="#34d399" filter="url(#glow)"/><path d="M1291 343l8 8 16-20" fill="none" stroke="#12201b" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><text x="1303" y="398" text-anchor="middle" class="stage">Summary</text><text x="1303" y="425" text-anchor="middle" class="note">Final output</text></g>
+
+  <g><path d="M423 452V488H502V526" fill="none" stroke="#a78bfa" stroke-width="3" stroke-dasharray="6 6"/><rect x="352" y="526" width="300" height="80" rx="20" fill="#22202b" stroke="#5b5278" stroke-dasharray="7 7"/><text x="378" y="554" class="optional">OPTIONAL CONTEXT</text><text x="502" y="582" text-anchor="middle" class="stage optional-copy">Extract and preserve entities</text></g>
+  <g><path d="M1083 452V488H960V526" fill="none" stroke="#a78bfa" stroke-width="3" stroke-dasharray="6 6"/><rect x="782" y="526" width="306" height="80" rx="20" fill="#22202b" stroke="#5b5278" stroke-dasharray="7 7"/><text x="808" y="554" class="optional">OPTIONAL POLISH</text><text x="935" y="582" text-anchor="middle" class="stage optional-copy">Chain of Density compression</text></g>
+  <text x="720" y="666" text-anchor="middle" class="sub">Optional stages add calls and cost; enable them when preservation or density matters.</text>
+</svg>

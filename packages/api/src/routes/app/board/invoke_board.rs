@@ -295,7 +295,7 @@ pub async fn invoke_board(
     if !is_jwt_configured() {
         println!("Execution JWT signing not configured");
         return Err(ApiError::internal_error(anyhow!(
-            "Execution JWT signing not configured (missing EXECUTION_KEY/EXECUTION_PUB env vars)"
+            "Execution JWT signing not configured (missing BACKEND_KEY/BACKEND_PUB)"
         )));
     }
 

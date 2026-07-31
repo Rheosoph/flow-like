@@ -1,453 +1,194 @@
 ---
-title: AI-Powered Analysis
-description: Combine GenAI agents with data science for intelligent insights
+title: AI-Powered Data Analysis
+description: Build controlled data-analysis agents with SQL and Flow-Like tools
 sidebar:
   order: 6
 ---
 
-The most powerful data science workflows combine traditional analytics with AI. Flow-Like lets you build **AI agents that can query databases, analyze data, and generate insights**—all through natural language.
+An AI analysis workflow can translate a question into bounded tool calls, inspect results, and explain the finding. The model should not replace the data contract: the workflow still controls sources, permissions, available tools, row limits, and delivery.
 
-## Why AI + Data Science?
+## When to use an analysis agent
 
-| Traditional Approach | AI-Powered Approach |
-|---------------------|---------------------|
-| Write SQL queries manually | Ask questions in plain English |
-| Build fixed dashboards | Generate dynamic insights |
-| Code data transformations | Describe what you need |
-| Static reports | Conversational exploration |
+| Good fit | Prefer a deterministic workflow |
+|----------|--------------------------------|
+| Ad-hoc questions over governed tables | Recurring KPI with a fixed definition |
+| Schema exploration and query drafting | Regulatory or financial output requiring exact repeatability |
+| Choosing among approved analytical tools | Bulk transformation with known logic |
+| Explaining a validated result | High-volume report generation |
+| Guided diagnostic investigation | A one-step filter or aggregation |
 
-:::tip[Best of Both Worlds]
-AI agents use the same DataFusion, ML, and visualization capabilities—they just let you access them through conversation.
-:::
+Use the agent for interpretation and tool selection. Keep governed metrics and repeated transformations in explicit SQL or reusable boards.
 
-## The Data Science Agent
+## Agent architecture
 
-A data science agent has access to your data and can:
+| Layer | Responsibility |
+|-------|----------------|
+| Model | Plans and explains within its instructions |
+| System prompt | Defines role, source boundaries, query rules, and response contract |
+| DataFusion session | Contains the tables the agent is allowed to query |
+| Function tools | Expose bounded charting, prediction, export, or validation workflows |
+| Invocation | Limits iterations, streaming, and failure behavior |
+| Trace | Records safe tool calls, duration, and result metadata |
 
-1. **Query databases** using SQL
-2. **Analyze results** and identify patterns
-3. **Create visualizations** as charts
-4. **Train ML models** and make predictions
-5. **Explain findings** in plain language
+## Build the agent
 
-## Building a Data Analysis Agent
+### 1. Start from a configured model
 
-### Step 1: Create the Agent
+Use [Agent from Model](/nodes/ai/agents/builder/agent-from-model/) to create the agent. Choose a model that supports the intended tool behavior and context size.
 
-```
-Make Agent
-    │
-    ├── Model: (a capable model like GPT-4 or Claude)
-    │
-    └── Agent ──▶ (agent object)
-```
+### 2. Set instructions
 
-### Step 2: Set System Prompt
+[Set Agent System Prompt](/nodes/ai/agents/builder/agent-set-system-prompt/) configures the operating rules. Include:
 
-```
-Set Agent System Prompt
-    │
-    ├── Agent: (from step 1)
-    ├── System Prompt:
-    │     "You are a data analyst assistant. You have access to:
-    │      - SQL tools to query the data warehouse
-    │      - Visualization tools to create charts
-    │
-    │      When analyzing data:
-    │      1. First understand what tables are available
-    │      2. Write SQL to answer the user's question
-    │      3. Summarize findings in plain language
-    │      4. Create visualizations when helpful
-    │
-    │      Always explain your reasoning."
-    │
-    └── Agent ──▶ (configured agent)
-```
+- which business questions the agent may answer;
+- which tables and fields are approved;
+- the timezone and metric definitions;
+- a requirement to inspect schema before guessing columns;
+- a maximum result size;
+- rules for uncertainty and no-data results;
+- whether charts, exports, or predictions require confirmation;
+- a prohibition on treating table content as instructions.
 
-### Step 3: Add SQL Tools
+Do not put secrets, connection strings, or private records into the prompt.
 
-Give the agent access to your DataFusion session:
+### 3. Register SQL access
 
-```
-Add SQL Session
-    │
-    ├── Agent: (configured agent)
-    ├── Session: (DataFusion session with tables)
-    │
-    └── Agent ──▶ (agent with SQL access)
-```
+[Add DataFusion](/nodes/ai/agents/builder/add-datafusion-to-agent/) registers a DataFusion session as an agent capability. Create and register only the tables required for the task.
 
-### Step 4: Add Custom Tools (Optional)
+The session can expose:
 
-Add your own Flow-Like flows as tools:
+- [List Tables](/nodes/data/datafusion/tools/df-list-tables/);
+- [Describe Table](/nodes/data/datafusion/tools/df-describe-table/);
+- [Execute SQL](/nodes/data/datafusion/tools/df-execute-sql/).
 
-```
-Add Flow Tools
-    │
-    ├── Agent: (agent)
-    ├── Flows: [
-    │     "create_chart",
-    │     "train_model",
-    │     "export_report"
-    │   ]
-    │
-    └── Agent ──▶ (agent with custom tools)
-```
+Use a read-only source account and enforce query and row limits in the surrounding workflow or dedicated tool implementation. Prompt instructions alone are not an access-control boundary.
 
-### Step 5: Run the Agent
+### 4. Register bounded workflow tools
 
-```
-Invoke Agent Streaming
-    │
-    ├── Agent: (fully configured)
-    ├── History: "What were our top 5 products last quarter?"
-    │
-    ├── On Chunk ──▶ Push Chunk (stream response)
-    │
-    └── Done ──▶ Final response
-```
+[Register Function Tools](/nodes/ai/agents/builder/agent-register-function-tools/) adds Flow-Like functions to the agent. Good analysis tools have:
 
-## Example Conversation
+- one narrow purpose;
+- a typed input schema;
+- a bounded output;
+- no hidden write side effects;
+- clear error messages;
+- an authorization check where required.
 
-**User:** "What were our sales trends last month?"
+Examples include `render_chart`, `score_customer`, `validate_metric`, or `export_approved_report`. Avoid one generic tool that can execute arbitrary boards.
 
-**Agent thinks:** *I need to query the sales table, aggregate by day, and analyze the trend.*
+[Register MCP Tools](/nodes/ai/agents/builder/agent-register-mcp-tools/) can add tools from an MCP server. Review those tools and their credentials before exposing them to the agent.
 
-**Agent executes:**
+### 5. Invoke with limits
+
+Use [Invoke Agent](/nodes/ai/agents/agent-invoke/) for a complete result or [Stream Invoke Agent](/nodes/ai/agents/agent-stream-invoke/) for progressive output.
+
+Set:
+
+- a maximum number of tool iterations;
+- timeouts for model and tool calls;
+- a maximum query result size;
+- an explicit failure response;
+- confirmation before costly or externally visible actions.
+
+## Example analysis
+
+For the question “How has completed-order revenue changed by day?”, the agent should inspect the schema and produce a bounded query such as:
+
 ```sql
-SELECT DATE_TRUNC('day', order_date) as day,
-       SUM(amount) as daily_sales
+SELECT
+  DATE_TRUNC('day', order_date) AS day,
+  SUM(revenue) AS revenue
 FROM orders
-WHERE order_date >= '2025-01-01'
-  AND order_date < '2025-02-01'
-GROUP BY 1
-ORDER BY 1
+WHERE status = 'complete'
+  AND order_date >= DATE '2026-07-01'
+GROUP BY DATE_TRUNC('day', order_date)
+ORDER BY day;
 ```
 
-**Agent responds:**
-> "Sales in January showed an upward trend, starting at $45,000 on January 1st and reaching $78,000 by January 31st—a 73% increase. The strongest days were Fridays, averaging $65,000 compared to $42,000 on Mondays.
->
-> Here's the daily trend:
->
-> ```nivo
-> type: line
-> title: January 2025 Daily Sales
-> ---
-> day,sales
-> 2025-01-01,45000
-> 2025-01-02,48000
-> ...
-> ```"
+The workflow can pass the structured result to a chart tool, while the final response states the date range, metric definition, material trend, and any missing-data caveat.
 
-## SQL Tools in Detail
+Do not let the model invent a result when the query fails or returns no rows. Tool status and result metadata should be separate from the narrative answer.
 
-When you add a SQL session to an agent, it gains these capabilities:
+## Analysis tools
 
-### Execute SQL
+### Schema exploration
 
-The agent can run any SQL query:
+Expose table discovery before query execution. A model that can call **List Tables** and **Describe Table** is less likely to guess names, types, or joins.
 
-```sql
-SELECT customer_segment,
-       COUNT(*) as customers,
-       AVG(lifetime_value) as avg_ltv
-FROM customers
-GROUP BY customer_segment
-ORDER BY avg_ltv DESC
-```
+### Chart generation
 
-### Explore Schema
+A chart tool should accept a small structured table plus an approved chart type and labels. The tool can push data to an A2UI chart with [Push Data to Chart](/nodes/ui/elements/charts/a2ui-push-csv-to-chart/).
 
-The agent can discover what tables and columns exist:
+The model may suggest the chart, but the workflow should validate:
 
-```sql
--- What tables are available?
-SHOW TABLES
+- supported chart type;
+- row and series limits;
+- labels and units;
+- light- and dark-theme contrast;
+- absence of sensitive fields.
 
--- What columns are in this table?
-DESCRIBE sales
-```
+### Prediction
 
-### Complex Analytics
+A prediction tool should load a fixed model version, validate the feature schema, run [Predict](/nodes/ai/ml/ml-predict/), and return a compact result with the model version. Do not allow the agent to silently train and deploy a new model in the same operation.
 
-Window functions, CTEs, joins—the agent can write sophisticated queries:
+### Export
 
-```sql
-WITH monthly_sales AS (
-    SELECT DATE_TRUNC('month', date) as month,
-           product_category,
-           SUM(revenue) as revenue
-    FROM sales
-    GROUP BY 1, 2
-)
-SELECT month, product_category, revenue,
-       revenue - LAG(revenue) OVER (
-           PARTITION BY product_category
-           ORDER BY month
-       ) as month_over_month_change
-FROM monthly_sales
-```
+An export tool should take a validated result or report identifier, not arbitrary file content and paths. Confirm recipients and data classification before external delivery.
 
-## Creating Tool Flows for Agents
+## Handle large results
 
-Build custom capabilities as Flow-Like flows:
+Models are not databases or spreadsheet viewers. For large queries:
 
-### Chart Generation Tool
+1. aggregate or filter in SQL;
+2. return row count and a small preview;
+3. store the full structured result outside the prompt;
+4. provide a chart, table, or export through a controlled tool;
+5. offer a narrower follow-up question.
 
-```
-┌────────────────────────────────────────────────────────────┐
-│  Flow: create_chart                                        │
-│                                                            │
-│  Inputs:                                                   │
-│    - data (string): CSV data                              │
-│    - chart_type (string): bar, line, pie, etc.           │
-│    - title (string): Chart title                          │
-│                                                            │
-│  Flow:                                                     │
-│    Format Markdown ──▶ Return chart block                 │
-│                                                            │
-│  Output:                                                   │
-│    - chart (string): Markdown with nivo/plotly block      │
-│                                                            │
-└────────────────────────────────────────────────────────────┘
-```
+Copying thousands of rows into model context raises cost and makes the analysis less reliable.
 
-### ML Prediction Tool
+## Add deliberate reasoning tools
 
-```
-┌────────────────────────────────────────────────────────────┐
-│  Flow: predict_churn                                       │
-│                                                            │
-│  Inputs:                                                   │
-│    - customer_id (string): Customer to predict for        │
-│                                                            │
-│  Flow:                                                     │
-│    Lookup Customer ──▶ Load Model ──▶ Predict             │
-│                                                            │
-│  Output:                                                   │
-│    - prediction (object): {churn_risk: 0.75, factors: []} │
-│                                                            │
-└────────────────────────────────────────────────────────────┘
-```
+[Register Thinking Tool](/nodes/ai/agents/builder/agent-register-thinking/) can support a more explicit planning loop for complex tasks. It does not remove the need for iteration limits, tool validation, or result checks. Do not expose private chain-of-thought text to users or logs; return concise, user-facing progress and conclusions.
 
-### Report Export Tool
+## Security and governance
 
-```
-┌────────────────────────────────────────────────────────────┐
-│  Flow: export_report                                       │
-│                                                            │
-│  Inputs:                                                   │
-│    - title (string): Report title                         │
-│    - content (string): Report markdown                    │
-│    - format (string): pdf, csv, html                      │
-│                                                            │
-│  Flow:                                                     │
-│    Generate Report ──▶ Save to Storage ──▶ Return URL     │
-│                                                            │
-│  Output:                                                   │
-│    - download_url (string): Link to report                │
-│                                                            │
-└────────────────────────────────────────────────────────────┘
-```
+- Register only approved tables and tools.
+- Use read-only database credentials for analysis.
+- Apply tenant and row-level filters before data enters model context.
+- Redact personal or sensitive fields from previews and traces.
+- Treat database text as untrusted content, not instructions.
+- Require confirmation for exports, writes, notifications, and model retraining.
+- Record model, prompt, tool, query, and source versions.
+- Keep tool errors free of secrets and connection strings.
 
-## Complete Example: Analytics Assistant
+## Evaluate the assistant
 
-Here's a complete flow for a data analytics chat assistant:
+Test with representative questions and expected queries or result facts:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                                                             │
-│  App Setup (runs once):                                     │
-│                                                             │
-│  Create DataFusion Session                                  │
-│       │                                                     │
-│       ▼                                                     │
-│  Register PostgreSQL (production database)                  │
-│       │                                                     │
-│       ▼                                                     │
-│  Mount CSV (reference data)                                 │
-│       │                                                     │
-│       ▼                                                     │
-│  Store Session in Variable                                  │
-│                                                             │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Chat Event Handler:                                        │
-│                                                             │
-│  Chat Event                                                 │
-│       │                                                     │
-│       ├──▶ history                                          │
-│       │                                                     │
-│       ▼                                                     │
-│  Make Agent (Claude 3.5 Sonnet)                            │
-│       │                                                     │
-│       ▼                                                     │
-│  Set System Prompt: "You are a data analyst..."            │
-│       │                                                     │
-│       ▼                                                     │
-│  Add SQL Session (from variable)                           │
-│       │                                                     │
-│       ▼                                                     │
-│  Add Flow Tools: [create_chart, export_csv]                │
-│       │                                                     │
-│       ▼                                                     │
-│  Add Thinking Tool                                          │
-│       │                                                     │
-│       ▼                                                     │
-│  Invoke Agent Streaming                                     │
-│       │                                                     │
-│       ├── On Chunk ──▶ Push Chunk                          │
-│       │                                                     │
-│       └── Done ──▶ Log completion                          │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
-```
-
-## Use Cases
-
-### 1. Ad-Hoc Data Exploration
-
-**User prompts:**
-- "Show me sales by region for last quarter"
-- "Which products have declining sales?"
-- "Compare this year to last year"
-
-### 2. Automated Reporting
-
-**User prompts:**
-- "Generate a weekly sales report"
-- "Create an executive summary of Q4 performance"
-- "Export the top 100 customers to CSV"
-
-### 3. Predictive Insights
-
-**User prompts:**
-- "Which customers are at risk of churning?"
-- "Predict next month's revenue"
-- "What factors drive customer lifetime value?"
-
-### 4. Data Quality Checks
-
-**User prompts:**
-- "Are there any anomalies in yesterday's data?"
-- "Check for duplicate records"
-- "Find missing values in the customer table"
-
-## Best Practices
-
-### 1. Provide Good Context
-
-Include table descriptions in your system prompt:
-
-```
-You have access to these tables:
-- orders: Order transactions (id, customer_id, amount, date)
-- customers: Customer info (id, name, segment, join_date)
-- products: Product catalog (id, name, category, price)
-```
-
-### 2. Guide the Analysis Process
-
-```
-When analyzing data:
-1. First understand the question
-2. Check what data is available
-3. Write and execute SQL
-4. Summarize key findings
-5. Suggest visualizations or next steps
-```
-
-### 3. Handle Large Results
-
-```
-For queries that might return many rows:
-- Always use LIMIT unless explicitly asked for all data
-- Summarize results instead of showing raw data
-- Offer to export large datasets to files
-```
-
-### 4. Enable Reasoning
-
-Add the **Thinking Tool** for complex analysis:
-
-```
-Add Thinking Tool
-    │
-    ├── Agent: (your agent)
-    │
-    └── Agent ──▶ (agent with step-by-step reasoning)
-```
-
-### 5. Secure Your Data
-
-- Use read-only database connections when possible
-- Limit which tables the agent can access
-- Log all queries for audit purposes
-
-## Combining with ML
-
-Agents can leverage ML models you've trained:
-
-### Option 1: Pre-trained Model Tool
-
-Create a flow that loads and runs a saved model:
-
-```
-Flow: predict_with_model
-    │
-    ├── Input: features (array)
-    │
-    ├── Load ML Model (saved model)
-    ├── Predict
-    │
-    └── Output: prediction
-```
-
-### Option 2: On-Demand Training
-
-Let the agent trigger model training:
-
-```
-Flow: train_classifier
-    │
-    ├── Input: table_name, target_column
-    │
-    ├── Query Data
-    ├── Split Dataset
-    ├── Fit Decision Tree
-    ├── Evaluate
-    ├── Save Model
-    │
-    └── Output: accuracy, model_path
-```
+| Layer | Checks |
+|-------|--------|
+| Tool selection | Correct tool, no unnecessary calls, bounded iterations |
+| SQL | Valid tables and columns, correct grain, filters, joins, limits |
+| Result | Matches a trusted query or fixture |
+| Explanation | Correct units, scope, caveats, and no unsupported claim |
+| Security | Refuses inaccessible data and ignores injected table content |
+| Operations | Handles empty results, timeouts, and tool failures |
 
 ## Troubleshooting
 
-### "Agent writes invalid SQL"
-- Include table schemas in the system prompt
-- Add examples of correct queries
-- Use models known for good SQL (GPT-4, Claude)
+| Symptom | Check |
+|---------|-------|
+| Invalid SQL | Schema tools, clearer table descriptions, retry policy |
+| Wrong metric | Central metric definition, grain, filters, timezone |
+| Agent skips tools | Tool description, system instructions, model capability |
+| Response is slow | Result size, iterations, tool latency, streaming |
+| Hallucinated finding | Failed-tool handling, result grounding, final validation |
+| Sensitive data appears | Registered fields, source filters, trace redaction |
 
-### "Agent doesn't use tools"
-- Verify tools are properly connected
-- Mention available tools in the system prompt
-- Try more explicit user prompts
+## Next steps
 
-### "Responses are slow"
-- Use streaming to show progress
-- Set query timeouts
-- Consider caching frequent queries
-
-### "Agent hallucinates data"
-- Require the agent to always query before stating facts
-- Include verification steps in the system prompt
-- Log and validate SQL before execution
-
-## Next Steps
-
-Combine AI-powered analysis with:
-
-- **[DataFusion & SQL](/topics/datascience/datafusion/)** – Understand the SQL capabilities
-- **[Machine Learning](/topics/datascience/ml/)** – Build models the agent can use
-- **[Data Visualization](/topics/datascience/visualization/)** – Create charts from agent output
-- **[AI Agents](/topics/genai/agents/)** – Deep dive into agent capabilities
+- [AI agents](/topics/genai/agents/)
+- [DataFusion and SQL](/topics/datascience/datafusion/)
+- [Machine learning](/topics/datascience/ml/)
+- [Data visualization](/topics/datascience/visualization/)

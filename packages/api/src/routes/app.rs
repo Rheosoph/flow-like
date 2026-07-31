@@ -47,6 +47,12 @@ pub fn routes() -> Router<AppState> {
         .route("/nodes", get(internal::get_nodes::get_nodes))
         .route("/{app_id}/nodes", get(internal::get_nodes::get_app_nodes))
         .route("/search", get(internal::search_apps::search_apps))
+        // Literal segment, mounted on the root router. It must NOT live under
+        // the `/{app_id}` nest, where `/{app_id}/templates` would shadow it.
+        .route(
+            "/templates/search",
+            get(internal::search_templates::search_templates),
+        )
         .route(
             "/{app_id}",
             get(internal::get_app::get_app)
@@ -157,6 +163,34 @@ pub async fn ensure_app_publicly_visible(
         .one(&state.db)
         .await?
         .ok_or(ApiError::FORBIDDEN)
+}
+
+impl From<crate::entity::sea_orm_active_enums::AppType> for flow_like::app::AppType {
+    fn from(value: crate::entity::sea_orm_active_enums::AppType) -> Self {
+        use crate::entity::sea_orm_active_enums::AppType as Db;
+        match value {
+            Db::Agent => flow_like::app::AppType::Agent,
+            Db::CustomInterface => flow_like::app::AppType::CustomInterface,
+            Db::DataFocus => flow_like::app::AppType::DataFocus,
+            Db::DataPipeline => flow_like::app::AppType::DataPipeline,
+            Db::Analytics => flow_like::app::AppType::Analytics,
+            Db::Form => flow_like::app::AppType::Form,
+        }
+    }
+}
+
+impl From<flow_like::app::AppType> for crate::entity::sea_orm_active_enums::AppType {
+    fn from(value: flow_like::app::AppType) -> Self {
+        use crate::entity::sea_orm_active_enums::AppType as Db;
+        match value {
+            flow_like::app::AppType::Agent => Db::Agent,
+            flow_like::app::AppType::CustomInterface => Db::CustomInterface,
+            flow_like::app::AppType::DataFocus => Db::DataFocus,
+            flow_like::app::AppType::DataPipeline => Db::DataPipeline,
+            flow_like::app::AppType::Analytics => Db::Analytics,
+            flow_like::app::AppType::Form => Db::Form,
+        }
+    }
 }
 
 impl From<crate::entity::sea_orm_active_enums::Category> for flow_like::app::AppCategory {
@@ -358,6 +392,7 @@ impl From<app::Model> for flow_like::app::App {
             relevance_score: model.relevance_score,
             primary_category: model.primary_category.map(|cat| cat.into()),
             secondary_category: model.secondary_category.map(|cat| cat.into()),
+            app_type: model.app_type.map(|kind| kind.into()),
             updated_at: SystemTime::UNIX_EPOCH
                 + std::time::Duration::from_secs(model.updated_at.and_utc().timestamp() as u64),
             created_at: SystemTime::UNIX_EPOCH
@@ -437,6 +472,7 @@ impl From<flow_like::app::App> for app::Model {
             created_at: chrono::Utc::now().naive_utc(),
             primary_category: app.primary_category.map(|cat| cat.into()),
             secondary_category: app.secondary_category.map(|cat| cat.into()),
+            app_type: app.app_type.map(|kind| kind.into()),
             allow_forking: app.allow_forking,
             forked_from: app.forked_from,
             forked_at: app.forked_at.and_then(|t| {

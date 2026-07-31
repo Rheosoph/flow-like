@@ -158,10 +158,15 @@ export interface WidgetBuilderProps {
 	actionContext?: {
 		appId?: string;
 		boardId?: string;
+		pageId?: string;
 		pages?: { id: string; name: string; boardId?: string }[];
 		workflowEvents?: { nodeId: string; name: string }[];
 		widgetActions?: { id: string; label: string; description?: string }[];
 		eventId?: string;
+		onLoadEventId?: string;
+		onUnloadEventId?: string;
+		onIntervalEventId?: string;
+		onIntervalSeconds?: number;
 	};
 	/** Current page ID for the page switcher */
 	currentPageId?: string;
@@ -178,6 +183,7 @@ export function WidgetBuilder({
 	className,
 	initialComponents = [],
 	initialWidgetRefs,
+	widgetId,
 	surfaceId = "builder-surface",
 	onSave,
 	onExport,
@@ -215,6 +221,7 @@ export function WidgetBuilder({
 			<WidgetBuilderWithDnd
 				className={className}
 				surfaceId={surfaceId}
+				widgetId={widgetId}
 				mode={mode}
 				setMode={setMode}
 				leftTab={leftTab}
@@ -236,6 +243,7 @@ export function WidgetBuilder({
 interface WidgetBuilderContentProps {
 	className?: string;
 	surfaceId: string;
+	widgetId?: string;
 	mode: "edit" | "preview";
 	setMode: (mode: "edit" | "preview") => void;
 	leftTab: "palette" | "hierarchy";
@@ -269,6 +277,7 @@ function WidgetBuilderWithDnd(props: WidgetBuilderContentProps) {
 function WidgetBuilderContent({
 	className,
 	surfaceId,
+	widgetId,
 	mode,
 	setMode,
 	leftTab,
@@ -423,9 +432,15 @@ function WidgetBuilderContent({
 
 	// Publish the live widget surface for the global assistant while the builder is mounted.
 	useEffect(() => {
+		const pageId = actionContext?.pageId ?? currentPageId;
+		const kind = pageId ? "page" : "widget";
 		const surface: AssistantWidgetSurface = {
 			surfaceId,
+			kind,
 			appId: actionContext?.appId,
+			boardId: actionContext?.boardId,
+			pageId,
+			widgetId: kind === "widget" ? widgetId : undefined,
 			currentComponents,
 			selectedComponentIds: selectedIds,
 			captureScreenshot,
@@ -439,7 +454,11 @@ function WidgetBuilderContent({
 		};
 	}, [
 		surfaceId,
+		widgetId,
 		actionContext?.appId,
+		actionContext?.boardId,
+		actionContext?.pageId,
+		currentPageId,
 		currentComponents,
 		selectedIds,
 		captureScreenshot,

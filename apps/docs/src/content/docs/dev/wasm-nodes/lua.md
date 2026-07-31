@@ -31,17 +31,15 @@ source ./emsdk_env.sh
 
 ## How It Works
 
-```
-sdk.lua + node.lua ─→ embed as C string arrays ─┐
-                                                  ├─→ Emscripten ─→ node.wasm
-Lua 5.4 source (static lib) + glue.c ───────────┘
-```
+| Stage | What the build does |
+|-------|---------------------|
+| Fetch | CMake downloads Lua 5.4.7 and obtains the Flow-Like Lua SDK |
+| Embed | `src/node.lua` and the SDK's `sdk.lua` become generated C string constants |
+| Compile | Lua is built as a static WASM library; `liolib.c` and `loslib.c` are excluded because their OS calls are unavailable |
+| Bridge | The SDK's `glue.c` initializes Lua, loads both scripts, and exposes host functions through the `sdk` module |
+| Link | Emscripten combines the interpreter, embedded scripts, and glue into `node.wasm` |
 
-1. **CMake fetches Lua 5.4.7** source automatically (no system install needed).
-2. Lua is compiled as a **static library** for WASM. `liolib.c` and `loslib.c` are excluded since OS syscalls are unavailable in bare WASM.
-3. Your `src/node.lua` and the SDK's `sdk.lua` are **embedded as C string constants** at build time.
-4. The C glue layer (`glue.c`) initialises a Lua state, loads both scripts, and bridges WASM exports (`get_node`, `get_nodes`, `run`, `alloc`, `dealloc`) to global Lua functions.
-5. Host FFI functions (`flowlike_*` imported from the `env` module) are exposed to Lua via the `sdk` module.
+The glue layer maps the module exports (`get_node`, `get_nodes`, `run`, `alloc`, `dealloc`, and `get_abi_version`) to global Lua functions and imports the `flowlike_*` host functions from the `env` module.
 
 Key Emscripten flags: `-sSTANDALONE_WASM`, `-sALLOW_MEMORY_GROWTH=1`, `-sSUPPORT_LONGJMP=emscripten`, `--no-entry`, `-O2`.
 
@@ -208,7 +206,7 @@ The C glue layer imports `flowlike_*` functions from the `env` module and expose
 
 ## Related
 
-→ [WASM Nodes Overview](/dev/wasm-nodes/overview/)
-→ [Component Model vs Core Modules](/dev/wasm-nodes/runtime-models/)
-→ [C/C++ Template](/dev/wasm-nodes/cpp/)
-→ [Rust Template](/dev/wasm-nodes/rust/)
+- [WASM Nodes Overview](/dev/wasm-nodes/overview/)
+- [Component Model vs Core Modules](/dev/wasm-nodes/runtime-models/)
+- [C/C++ Template](/dev/wasm-nodes/cpp/)
+- [Rust Template](/dev/wasm-nodes/rust/)

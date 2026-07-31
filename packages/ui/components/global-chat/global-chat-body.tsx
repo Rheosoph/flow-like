@@ -63,10 +63,7 @@ import { getApiOrigin } from "../../lib/api-url";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { isTauri } from "../../lib/platform";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
-import {
-	type IMessage,
-	globalChatDb,
-} from "../../state/global-chat/global-chat-db";
+import type { IMessage } from "../../state/global-chat/global-chat-db";
 import {
 	type MemoryEntry,
 	clearGlobalChatMemory,
@@ -76,17 +73,24 @@ import {
 } from "../../state/global-chat/global-chat-memory";
 import {
 	AGENT_MODEL_KEY,
+	LAST_CONVERSATION_KEY,
+	MAX_CONCURRENT_GLOBAL_CHAT_RUNS,
 	beginGlobalChatTurnSelection,
+	isGlobalChatAtRunCapacity,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import {
-	LAST_CONVERSATION_KEY,
+	cancelGlobalChatRun,
+	clearGlobalChatQueueDrain,
 	driveGlobalChatStream,
 	makeGlobalChatMessage,
 	persistGlobalChatMessage,
 	persistGlobalChatSession,
-	resumeGlobalChatStream,
+	readActiveRun,
+	restoreGlobalChatConversation,
 	setActiveRun,
+	setGlobalChatQueueDrain,
+	steerGlobalChatRun,
 	tauriStart,
 } from "../../state/global-chat/global-chat-stream";
 import { runGlobalChatTool } from "../../state/global-chat/global-chat-tool-registry";
@@ -103,7 +107,11 @@ import {
 	normalizeAIProvider,
 } from "../flowpilot/types";
 import { fileToAttachment } from "../interfaces/chat-default/attachment";
-import { Chat, type IChatRef } from "../interfaces/chat-default/chat";
+import {
+	Chat,
+	type IChatConcurrency,
+	type IChatRef,
+} from "../interfaces/chat-default/chat";
 import { ChatWidgetExecutionProvider } from "../interfaces/chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
@@ -159,6 +167,10 @@ const GLOBAL_CHAT_CONFIG = {
 	tools: [] as string[],
 };
 
+// FlowScript itself needs at least 420px. Keep app previews above the split until the remaining
+// conversation column is wide enough for a useful embedded desktop surface.
+const INLINE_ARTIFACT_COLUMN_LAYOUT_MIN_WIDTH = 1280;
+
 interface GlobalChatBodyProps {
 	variant?: "page" | "overlay";
 }
@@ -197,8 +209,22 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		(s) => s.enableOverlayAutoOpen,
 	);
 	const appendMessage = useGlobalChatStore((s) => s.appendMessage);
-	const setStreaming = useGlobalChatStore((s) => s.setStreaming);
 	const consumeDraft = useGlobalChatStore((s) => s.consumeDraft);
+	const runs = useGlobalChatStore((s) => s.runs);
+	const queue = useGlobalChatStore((s) => s.queue);
+	const removeQueuedMessage = useGlobalChatStore((s) => s.removeQueuedMessage);
+	const activeRuns = useMemo(
+		() =>
+			Object.values(runs)
+				.filter((run) => run.conversationId === activeConversationId)
+				.sort((a, b) => a.startedAt - b.startedAt),
+		[runs, activeConversationId],
+	);
+	const queuedMessages = useMemo(
+		() =>
+			queue.filter((entry) => entry.conversationId === activeConversationId),
+		[queue, activeConversationId],
+	);
 	const inlineAppChats = useGlobalChatStore((s) => s.inlineAppChats);
 	const removeInlineAppChat = useGlobalChatStore((s) => s.removeInlineAppChat);
 	const inlineAppPages = useGlobalChatStore((s) => s.inlineAppPages);
@@ -244,62 +270,41 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 
 	useEffect(() => {
 		const state = useGlobalChatStore.getState();
-		if (state.messages.length > 0 || state.isStreaming) return;
+		// A pending hero-bar draft owns this mount: restoring the previous conversation underneath
+		// it would land the prompt in the old transcript (racy, depends on IndexedDB latency).
+		if (state.messages.length > 0 || state.isStreaming || state.draft) return;
 		let lastId: string | null = null;
 		try {
 			lastId = sessionStorage.getItem(LAST_CONVERSATION_KEY);
 		} catch {
 			return;
 		}
+		// No restore pointer, but a run is still in flight: the user started a new chat while the
+		// previous turn was generating, then reloaded. Restore THAT conversation instead of leaving
+		// the live Rust run orphaned — an empty new chat has nothing to lose, an unfinalized answer
+		// does. `readActiveRun` survives the reload; only the run's own teardown clears it.
+		if (!lastId) lastId = readActiveRun()?.conversationId ?? null;
 		if (!lastId) return;
-		void (async () => {
-			try {
-				const restored = await globalChatDb.messages
-					.where("sessionId")
-					.equals(lastId)
-					.sortBy("timestamp");
-				const current = useGlobalChatStore.getState();
-				if (
-					restored.length > 0 &&
-					current.messages.length === 0 &&
-					!current.isStreaming
-				) {
-					// Mid-stream checkpoints may carry unsettled steps — settle them so the
-					// restored message doesn't render an eternal spinner.
-					const normalized = restored.map((message) => ({
-						...message,
-						current_step_id: undefined,
-						tools: [],
-						plan_steps: message.plan_steps?.map((step) =>
-							step.status === "progress" || step.status === "planned"
-								? { ...step, status: "done" as const }
-								: step,
-						),
-					}));
-					current.loadConversation(lastId, normalized);
-					// If a response was still streaming when the webview reloaded, the Rust run kept
-					// going into a dead channel — re-attach and continue rendering it live. No-op when
-					// nothing is in flight (the run already finished/GC'd → checkpoint stays as-is).
-					resumeGlobalChatStream();
-				}
-			} catch {
-				// best-effort restore
-			}
-		})();
+		// Shared restore path (also used by the history popover): normalizes stale checkpoints and
+		// re-attaches any run that was still streaming when the webview reloaded. `skipIfBusy`
+		// re-checks after the Dexie read so a conversation/draft that appeared meanwhile wins.
+		restoreGlobalChatConversation(lastId, { skipIfBusy: true }).catch(() => {
+			// best-effort restore
+		});
 	}, []);
 
-	// The streaming bubble lives in the store so the reply keeps rendering when the conversation
-	// morphs between /chat and the overlay mid-response. Mirror it into this surface's <Chat> ref
-	// via a non-reactive subscription — pushCurrentMessageUpdate already throttles via RAF.
+	// Streaming bubbles live in the store so replies keep rendering when the conversation morphs
+	// between /chat and the overlay mid-response. Mirror them into this surface's <Chat> ref via a
+	// non-reactive subscription — pushCurrentMessageUpdate already throttles via RAF. There may be
+	// several at once; <Chat> keys them by message id and renders one live bubble each.
 	useEffect(() => {
-		const push = (message: IMessage | null) => {
-			if (message) chatRef.current?.pushCurrentMessageUpdate(message);
-			else chatRef.current?.clearCurrentMessageUpdate();
+		const push = (messages: IMessage[]) => {
+			chatRef.current?.pushCurrentMessageUpdate(messages);
 		};
-		push(useGlobalChatStore.getState().streamingMessage);
+		push(useGlobalChatStore.getState().streamingMessages);
 		return useGlobalChatStore.subscribe((state, prev) => {
-			if (state.streamingMessage !== prev.streamingMessage) {
-				push(state.streamingMessage);
+			if (state.streamingMessages !== prev.streamingMessages) {
+				push(state.streamingMessages);
 			}
 		});
 	}, []);
@@ -486,7 +491,17 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		async (content, filesAttached) => {
 			const trimmed = content.trim();
 			const state = useGlobalChatStore.getState();
-			if (state.isStreaming) return;
+			// Concurrency is allowed up to the cap; past it the message is queued rather than
+			// dropped, and drains as soon as a turn finishes.
+			if (isGlobalChatAtRunCapacity(state)) {
+				if (!trimmed && (filesAttached?.length ?? 0) === 0) return;
+				state.enqueueMessage({
+					conversationId: state.activeConversationId,
+					content: trimmed,
+					files: filesAttached,
+				});
+				return;
+			}
 			const agentSelection = Object.freeze({
 				provider: state.provider,
 				selectedModelId: state.selectedModelId,
@@ -529,18 +544,19 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						},
 			);
 			if (!trimmed && attachments.length === 0) return;
-			// Attachment preparation is asynchronous. Re-check the singleton turn claim so two rapid
-			// sends cannot start overlapping runs and replace each other's execution selection.
-			if (useGlobalChatStore.getState().isStreaming) return;
+			// Attachment preparation is asynchronous, so re-check capacity: several sends can be
+			// preparing uploads at the same time.
+			if (isGlobalChatAtRunCapacity(useGlobalChatStore.getState())) {
+				useGlobalChatStore.getState().enqueueMessage({
+					conversationId: state.activeConversationId,
+					content: trimmed,
+					files: filesAttached,
+				});
+				return;
+			}
 			// A real interaction on the full FlowPilot page starts a new visibility cycle. If the
 			// user previously dismissed the dock, later agent/navigation activity may show it again.
 			if (variant === "page") state.enableOverlayAutoOpen();
-			setStreaming(true);
-			useGlobalChatStore.getState().clearPendingAppRefs();
-			useGlobalChatStore.getState().clearSubPlanSteps();
-			useGlobalChatStore.getState().clearInteractions();
-			useGlobalChatStore.getState().clearSubAttachments();
-			useGlobalChatStore.getState().clearSubUsageStats();
 
 			const sessionId = state.activeConversationId;
 			const priorMessages = state.messages;
@@ -564,8 +580,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				responseMessage.id,
 				agentSelection,
 			);
-			useGlobalChatStore.getState().setStreamingMessage({ ...responseMessage });
 			// Register the run so a reload mid-response can re-attach to the live Rust stream.
+			// driveGlobalChatStream creates the store record itself.
 			setActiveRun(sessionId, responseMessage.id, turnSelection);
 
 			const historyPayload = priorMessages.map((m) => ({
@@ -652,6 +668,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			await driveGlobalChatStream({
 				responseMessage,
 				agentSelection: turnSelection,
+				label: trimmed,
 				inputPreview: {
 					prompt: trimmed,
 					attachments: allFiles.map((file) => ({
@@ -687,6 +704,9 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					: webGlobalChatStart({
 							baseUrl: getApiOrigin(),
 							token: authUser?.access_token ?? undefined,
+							// The server mints its own run id; the transport needs ours to tag tool
+							// requests and to register this run's cancel/steer control.
+							clientRunId: responseMessage.id,
 							onToolRequest: runGlobalChatTool,
 							onLifecycle: FLOWPILOT_DEBUG_ENABLED
 								? (event) => {
@@ -725,7 +745,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						}),
 			});
 		},
-		[appendMessage, setStreaming, backend, variant],
+		[appendMessage, backend, variant],
 	);
 
 	// Answer an app-chat dialog raised during a call_app_chat run. Responding unblocks the app's
@@ -748,17 +768,87 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		[backend.profile, setInteractionResponded],
 	);
 
+	// Queue drain. Installed as a module-level hook (not just an effect) because the run that frees
+	// capacity may finish long after the surface that started it unmounted — the finishing run
+	// calls this directly. The effect below covers the other direction: capacity that frees up
+	// while this surface is mounted, e.g. after a cancel.
+	const sendRef = useRef(handleSendMessage);
+	useEffect(() => {
+		sendRef.current = handleSendMessage;
+	}, [handleSendMessage]);
+	const drainQueue = useCallback((conversationId: string) => {
+		const state = useGlobalChatStore.getState();
+		if (conversationId !== state.activeConversationId) return;
+		if (isGlobalChatAtRunCapacity(state)) return;
+		const next = state.takeNextQueuedMessage(conversationId);
+		if (!next) return;
+		void sendRef.current(next.content, next.files);
+	}, []);
+	useEffect(() => {
+		setGlobalChatQueueDrain(drainQueue);
+		return () => clearGlobalChatQueueDrain(drainQueue);
+	}, [drainQueue]);
+	useEffect(() => {
+		if (queuedMessages.length === 0) return;
+		if (activeRuns.length >= MAX_CONCURRENT_GLOBAL_CHAT_RUNS) return;
+		drainQueue(activeConversationId);
+	}, [queuedMessages, activeRuns.length, activeConversationId, drainQueue]);
+
+	/** Stop one live turn. The partial reply is kept and committed. */
+	const handleStopRun = useCallback((runId: string) => {
+		void cancelGlobalChatRun(runId);
+	}, []);
+
+	/**
+	 * Send the composer's text into a turn that is already running instead of starting a new one.
+	 * Targets the most recently started run — that is the one the user is watching.
+	 */
+	const handleSteer = useCallback(
+		async (content: string) => {
+			const target = activeRuns
+				.filter((run) => run.status === "streaming")
+				.at(-1);
+			if (!target) return false;
+			const delivered = await steerGlobalChatRun(target.runId, content);
+			if (!delivered) {
+				toast.error(
+					"FlowPilot could not take that mid-run. It was not sent — try again or wait for the turn to finish.",
+				);
+			}
+			return delivered;
+		},
+		[activeRuns],
+	);
+
 	// Auto-send a pending draft exactly once — handed off from the landing hero bar or attached to
 	// a surface's requestOpenAssistant(prompt). Subscribing to the draft (instead of running only on
 	// mount) lets it fire in BOTH variants, including when the overlay body is already mounted;
 	// consumeDraft() clears the store atomically so a concurrently mounted page/overlay pair cannot
-	// double-send. While a response streams the draft stays queued (handleSendMessage would drop it
-	// silently) — the isStreaming dependency re-fires the effect when the stream ends.
+	// double-send. A live turn no longer blocks it — only the concurrency cap does, and the
+	// run-count dependency re-fires the effect when capacity frees up.
 	//
 	// Readiness gate: right after a reload the draft would otherwise fire before auth and the model
 	// list settle — modelId undefined makes the backend pick an arbitrary "best" profile model
 	// (which can stall for minutes hosting a local model) and the auth token would be missing for
 	// hosted ones. The deps re-fire the effect the moment a model is selected.
+	const chatConcurrency = useMemo<IChatConcurrency>(
+		() => ({
+			runs: activeRuns,
+			queued: queuedMessages,
+			atCapacity: activeRuns.length >= MAX_CONCURRENT_GLOBAL_CHAT_RUNS,
+			onStop: handleStopRun,
+			onSteer: handleSteer,
+			onRemoveQueued: removeQueuedMessage,
+		}),
+		[
+			activeRuns,
+			queuedMessages,
+			handleStopRun,
+			handleSteer,
+			removeQueuedMessage,
+		],
+	);
+
 	const pendingDraft = useGlobalChatStore((s) => s.draft);
 	const draftReady =
 		!auth.isLoading &&
@@ -766,15 +856,22 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			? copilotSDK.models.length > 0 && Boolean(selectedModelId)
 			: Boolean(selectedModelId) ||
 				(llmBits.data !== undefined && bitsModels.length === 0));
-	// biome-ignore lint/correctness/useExhaustiveDependencies: send on new drafts / readiness / stream-end only, not on every handleSendMessage identity change.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: send on new drafts / readiness / capacity only, not on every handleSendMessage identity change.
 	useEffect(() => {
 		if (!pendingDraft || !draftReady) return;
-		if (useGlobalChatStore.getState().isStreaming) return;
+		// A draft only waits for actual capacity now — a live turn no longer blocks it.
+		if (isGlobalChatAtRunCapacity(useGlobalChatStore.getState())) return;
 		const draft = consumeDraft();
 		if (!draft) return;
 		if (draft.modelId) setSelectedModelId(draft.modelId);
 		void handleSendMessage(draft.prompt, draft.files);
-	}, [pendingDraft, draftReady, isStreaming, consumeDraft, setSelectedModelId]);
+	}, [
+		pendingDraft,
+		draftReady,
+		activeRuns.length,
+		consumeDraft,
+		setSelectedModelId,
+	]);
 
 	const compact = variant === "overlay";
 
@@ -809,6 +906,17 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const canSideBySide = layoutWidth >= 768;
 	const showWorkspace = hasFlowscript && !flowscriptHidden;
 	const sideBySideWorkspace = showWorkspace && canSideBySide;
+	const hasInlineArtifacts =
+		inlineAppChats.length > 0 ||
+		inlineAppPages.length > 0 ||
+		inlineAppSurfaces.length > 0 ||
+		pendingComponents !== null;
+	const splitWorkspaceBelowInlineArtifacts =
+		sideBySideWorkspace &&
+		hasInlineArtifacts &&
+		layoutWidth < INLINE_ARTIFACT_COLUMN_LAYOUT_MIN_WIDTH;
+	const fullHeightConversationColumn =
+		sideBySideWorkspace && !splitWorkspaceBelowInlineArtifacts;
 
 	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
 	const modelOptions = useMemo<ProviderModelPickerModel[]>(
@@ -1197,110 +1305,147 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				<GlobalChatHistory />
 			</header>
 
-			{(inlineAppChats.length > 0 ||
-				inlineAppPages.length > 0 ||
-				inlineAppSurfaces.length > 0 ||
-				pendingComponents !== null) && (
-				<div className="shrink-0 max-h-[60vh] overflow-y-auto pt-2">
-					<PendingComponentsCard />
-					{inlineAppPages.map((page) => (
-						<InlineAppPageCard
-							key={page.id}
-							page={page}
-							onClose={removeInlineAppPage}
-							compact={compact}
-						/>
-					))}
-					{inlineAppSurfaces.map((surface) => (
-						<InlineAppSurfaceCard
-							key={surface.id}
-							surface={surface}
-							onClose={removeInlineAppSurface}
-							compact={compact}
-						/>
-					))}
-					{inlineAppChats.map((chat) => (
-						<InlineAppChatCard
-							key={chat.id}
-							chat={chat}
-							onClose={removeInlineAppChat}
-							compact={compact}
-						/>
-					))}
-				</div>
-			)}
-
 			<div
 				ref={layoutRef}
-				className={`flex min-h-0 flex-1 ${sideBySideWorkspace ? "flex-row" : "flex-col"}`}
+				className={`min-h-0 min-w-0 flex-1 overflow-hidden ${
+					fullHeightConversationColumn
+						? "flex flex-row"
+						: splitWorkspaceBelowInlineArtifacts
+							? "grid grid-cols-[minmax(0,1fr)_clamp(420px,48%,660px)] grid-rows-[auto_minmax(0,1fr)]"
+							: "flex flex-col"
+				}`}
 			>
-				{/* Must be a flex column: <Chat>'s root sizes itself with flex-1/min-h-0, and without a
-				    flex parent its height collapses to content size, breaking the internal scroll area.
-				    In a narrow dock the workspace replaces the chat rather than squeezing beside it, so
-				    hide (don't unmount) the chat to keep its scroll/stream state alive underneath. */}
 				<div
-					className={`relative flex flex-col flex-1 min-h-0 ${
-						showWorkspace && !canSideBySide ? "hidden" : ""
-					}`}
+					// On a roomy desktop surface, app previews belong to the conversation column so
+					// FlowScript can use the full height beside them. `contents` lets narrower split
+					// and stacked layouts position the same mounted children without losing app state.
+					className={
+						fullHeightConversationColumn
+							? "relative flex min-h-0 min-w-0 flex-1 flex-col"
+							: "contents"
+					}
 				>
-					{showEmptyState && (
-						<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center gap-5 px-6 text-center">
-							<span className="flex size-16 items-center justify-center rounded-[1.25rem] bg-linear-to-br from-primary/25 via-primary/10 to-purple-600/20 text-primary shadow-xl shadow-primary/25 ring-1 ring-primary/15">
-								<SparklesIcon className="size-8" />
-							</span>
-							<div className="space-y-1.5">
-								<h2 className="text-xl font-semibold tracking-tight">
-									Chat with FlowPilot
-								</h2>
-								<p className="mx-auto max-w-xs text-sm text-muted-foreground">
-									Ask anything — or let it create apps, open the store, and talk
-									to your apps for you.
-								</p>
-							</div>
-							<div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
-								{EMPTY_SUGGESTIONS.map(({ label, icon: Icon, prompt }) => (
-									<Button
-										key={label}
-										variant="outline"
-										size="sm"
-										className="h-10 md:h-8 gap-1.5 rounded-full border-border/60 bg-background/80 text-xs text-foreground/80 outline-none transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover:shadow-sm focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0 motion-safe:hover:-translate-y-px"
-										onClick={() => void handleSendMessage(prompt)}
-									>
-										<Icon className="size-3.5" />
-										{label}
-									</Button>
-								))}
-							</div>
+					{hasInlineArtifacts && (
+						<div
+							className={`min-w-0 shrink-0 max-h-[60vh] overflow-y-auto pt-2 ${
+								splitWorkspaceBelowInlineArtifacts
+									? "col-span-2 row-start-1"
+									: ""
+							}`}
+						>
+							<PendingComponentsCard />
+							{inlineAppPages.map((page) => (
+								<InlineAppPageCard
+									key={page.id}
+									page={page}
+									onClose={removeInlineAppPage}
+									compact={compact}
+								/>
+							))}
+							{inlineAppSurfaces.map((surface) => (
+								<InlineAppSurfaceCard
+									key={surface.id}
+									surface={surface}
+									onClose={removeInlineAppSurface}
+									compact={compact}
+								/>
+							))}
+							{inlineAppChats.map((chat) => (
+								<InlineAppChatCard
+									key={chat.id}
+									chat={chat}
+									onClose={removeInlineAppChat}
+									compact={compact}
+								/>
+							))}
 						</div>
 					)}
-					{/* Embedded-widget actions (ActionHandler's widget_event) route through
-					    runWidgetAction to the widget's originating use-case board. */}
-					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
-						<Chat
-							ref={chatRef}
-							sessionId={activeConversationId}
-							messages={messages}
-							onSendMessage={handleSendMessage}
-							isStreamActive={isStreaming}
-							config={GLOBAL_CHAT_CONFIG}
-							activeInteractions={activeInteractions}
-							onRespondToInteraction={handleRespondToInteraction}
-							inlinePrompt={
-								toolPrompt ? (
-									<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
-								) : undefined
-							}
-						/>
-					</ChatWidgetExecutionProvider>
+
+					{/* Must be a flex column: <Chat>'s root sizes itself with flex-1/min-h-0, and
+					    without a flex parent its height collapses to content size, breaking the
+					    internal scroll area. In a narrow dock the workspace replaces the chat rather
+					    than squeezing beside it, so hide (don't unmount) the chat to keep its
+					    scroll/stream state alive underneath. */}
+					<div
+						className={`relative flex min-h-0 min-w-0 flex-1 flex-col ${
+							splitWorkspaceBelowInlineArtifacts
+								? "col-start-1 row-start-2"
+								: ""
+						} ${showWorkspace && !canSideBySide ? "hidden" : ""}`}
+					>
+						{showEmptyState && (
+							<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center gap-5 px-6 text-center">
+								<span className="flex size-16 items-center justify-center rounded-[1.25rem] bg-linear-to-br from-primary/25 via-primary/10 to-purple-600/20 text-primary shadow-xl shadow-primary/25 ring-1 ring-primary/15">
+									<SparklesIcon className="size-8" />
+								</span>
+								<div className="space-y-1.5">
+									<h2 className="text-xl font-semibold tracking-tight">
+										Chat with FlowPilot
+									</h2>
+									<p className="mx-auto max-w-xs text-sm text-muted-foreground">
+										Ask anything — or let it create apps, open the store, and
+										talk to your apps for you.
+									</p>
+								</div>
+								<div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
+									{EMPTY_SUGGESTIONS.map(({ label, icon: Icon, prompt }) => (
+										<Button
+											key={label}
+											variant="outline"
+											size="sm"
+											className="h-10 md:h-8 gap-1.5 rounded-full border-border/60 bg-background/80 text-xs text-foreground/80 outline-none transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover:shadow-sm focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0 motion-safe:hover:-translate-y-px"
+											onClick={() => void handleSendMessage(prompt)}
+										>
+											<Icon className="size-3.5" />
+											{label}
+										</Button>
+									))}
+								</div>
+							</div>
+						)}
+						{/* Embedded-widget actions (ActionHandler's widget_event) route through
+						    runWidgetAction to the widget's originating use-case board. */}
+						<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
+							<Chat
+								ref={chatRef}
+								sessionId={activeConversationId}
+								messages={messages}
+								onSendMessage={handleSendMessage}
+								isStreamActive={isStreaming}
+								// Supplying this is what unlocks the composer: sends are never
+								// blocked; they start another turn, queue, or steer the running one.
+								concurrency={chatConcurrency}
+								config={GLOBAL_CHAT_CONFIG}
+								activeInteractions={activeInteractions}
+								onRespondToInteraction={handleRespondToInteraction}
+								inlinePrompt={
+									toolPrompt ? (
+										<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />
+									) : undefined
+								}
+							/>
+						</ChatWidgetExecutionProvider>
+					</div>
 				</div>
-				{showWorkspace && flowscriptWorkspace && (
-					<FlowScriptWorkspacePanel
-						source={flowscriptWorkspace.source}
-						status={flowscriptWorkspace.status}
-						fill={!canSideBySide}
-						onClose={() => setFlowscriptHidden(true)}
-					/>
-				)}
+				{showWorkspace &&
+					flowscriptWorkspace &&
+					(splitWorkspaceBelowInlineArtifacts ? (
+						<div className="col-start-2 row-start-2 flex min-h-0 min-w-0 overflow-hidden border-l border-border/30">
+							<FlowScriptWorkspacePanel
+								source={flowscriptWorkspace.source}
+								status={flowscriptWorkspace.status}
+								fill
+								onClose={() => setFlowscriptHidden(true)}
+							/>
+						</div>
+					) : (
+						<FlowScriptWorkspacePanel
+							source={flowscriptWorkspace.source}
+							status={flowscriptWorkspace.status}
+							fill={!canSideBySide}
+							onClose={() => setFlowscriptHidden(true)}
+						/>
+					))}
 			</div>
 
 			{profileId && (

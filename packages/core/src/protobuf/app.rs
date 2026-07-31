@@ -1,4 +1,4 @@
-use crate::app::{App, AppCategory, AppExecutionMode, AppStatus, AppVisibility};
+use crate::app::{App, AppCategory, AppExecutionMode, AppStatus, AppType, AppVisibility};
 use flow_like_types::{FromProto, Timestamp, ToProto};
 use std::time::SystemTime;
 
@@ -13,6 +13,7 @@ impl ToProto<flow_like_types::proto::App> for App {
             changelog: self.changelog.clone(),
             primary_category: self.primary_category.clone().map(|c| c.to_proto()),
             secondary_category: self.secondary_category.clone().map(|c| c.to_proto()),
+            app_type: self.app_type.clone().map(|t| t.to_proto()),
             status: self.status.to_proto(),
             version: self.version.clone(),
             visibility: self.visibility.to_proto(),
@@ -57,6 +58,7 @@ impl FromProto<flow_like_types::proto::App> for App {
             rating_sum: proto.rating_sum as u64,
             primary_category: proto.primary_category.map(AppCategory::from_proto),
             secondary_category: proto.secondary_category.map(AppCategory::from_proto),
+            app_type: proto.app_type.and_then(AppType::from_proto),
             status: AppStatus::from_proto(proto.status),
             version: proto.version,
             visibility: AppVisibility::from_proto(proto.visibility),
@@ -77,6 +79,35 @@ impl FromProto<flow_like_types::proto::App> for App {
             forked_at: proto.forked_at.and_then(|t| SystemTime::try_from(t).ok()),
             app_state: None,
             frontend: None,
+        }
+    }
+}
+
+impl AppType {
+    /// Proto reserves 0 for `APP_TYPE_UNSPECIFIED`, so the wire values are
+    /// deliberately offset by one from the Rust discriminants.
+    fn to_proto(&self) -> i32 {
+        match self {
+            AppType::Agent => 1,
+            AppType::CustomInterface => 2,
+            AppType::DataFocus => 3,
+            AppType::DataPipeline => 4,
+            AppType::Analytics => 5,
+            AppType::Form => 6,
+        }
+    }
+
+    /// `None` for unspecified or unknown values — an app the current build
+    /// cannot classify stays unclassified rather than being mislabelled.
+    fn from_proto(value: i32) -> Option<Self> {
+        match value {
+            1 => Some(AppType::Agent),
+            2 => Some(AppType::CustomInterface),
+            3 => Some(AppType::DataFocus),
+            4 => Some(AppType::DataPipeline),
+            5 => Some(AppType::Analytics),
+            6 => Some(AppType::Form),
+            _ => None,
         }
     }
 }

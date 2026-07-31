@@ -57,7 +57,7 @@ const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
 
   .v5-hero__topfade { position: absolute; inset: 0 0 auto 0; height: 160px; z-index: 1; pointer-events: none; background: linear-gradient(to bottom, color-mix(in oklab, var(--background) 62%, transparent), transparent); }
 
-  .hero-copy { position: relative; z-index: 2; width: min(790px, 59vw); margin-left: 7vw; margin-top: -2vh; padding-top: 64px; }
+  .hero-copy { position: relative; z-index: 2; width: min(790px, 59vw); margin-left: var(--website-content-edge); margin-top: -2vh; padding-top: 64px; }
   .live { display: flex; align-items: center; gap: 10px; margin-bottom: 30px; color: var(--accent); }
   .live > i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 17px color-mix(in oklab, var(--accent) 65%, transparent); }
   .v5-hero h1 { font-size: clamp(56px, 6.8vw, 110px); line-height: .91; letter-spacing: -.066em; margin: 0; font-weight: 680; color: var(--foreground); }
@@ -68,7 +68,7 @@ const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
   .hero-actions > a:first-child { border-color: transparent; background: linear-gradient(100deg, var(--primary), var(--accent)); color: var(--primary-foreground); box-shadow: 0 12px 30px color-mix(in oklab, var(--primary) 24%, transparent); }
   .hero-actions > a:hover { transform: translateY(-3px); background: var(--foreground); color: var(--background); }
 
-  .hero-card { position: absolute; z-index: 3; right: 6vw; bottom: 12vh; width: min(390px, 32vw); overflow: hidden; border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent); border-radius: 16px; background: color-mix(in oklab, var(--card) 92%, transparent); color: var(--foreground); backdrop-filter: blur(22px); box-shadow: 0 30px 100px color-mix(in oklab, var(--primary) 22%, transparent); animation: v5-float 7s ease-in-out infinite; }
+  .hero-card { position: absolute; z-index: 3; right: var(--website-content-edge); bottom: 12vh; width: min(390px, 32vw); overflow: hidden; border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent); border-radius: 16px; background: color-mix(in oklab, var(--card) 92%, transparent); color: var(--foreground); backdrop-filter: blur(22px); box-shadow: 0 30px 100px color-mix(in oklab, var(--primary) 22%, transparent); animation: v5-float 7s ease-in-out infinite; }
   @keyframes v5-float { 0%, 100% { transform: translateY(0) rotate(.15deg); } 50% { transform: translateY(-12px) rotate(-.15deg); } }
   .hero-card > header, .hero-card > footer { height: 46px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .11em; }
   .hero-card > header span, .hero-card > footer span { display: flex; align-items: center; gap: 8px; }
@@ -86,7 +86,7 @@ const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
   .hero-card > footer span { color: var(--accent); }
   .hero-card > footer b { font-size: 10px; color: var(--muted-foreground); }
 
-  .hero-tech { position: absolute; z-index: 2; left: 7vw; right: 7vw; bottom: 24px; display: flex; align-items: center; justify-content: space-between; color: var(--muted-foreground); font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .16em; }
+  .hero-tech { position: absolute; z-index: 2; left: var(--website-content-edge); right: var(--website-content-edge); bottom: 24px; display: flex; align-items: center; justify-content: space-between; color: var(--muted-foreground); font: 8px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .16em; }
   .hero-tech > div { display: flex; gap: 7px; }
   .hero-tech i { padding: 6px 9px; border: 1px solid var(--border); border-radius: 20px; font-style: normal; }
 

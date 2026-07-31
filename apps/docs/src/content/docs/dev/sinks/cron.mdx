@@ -1,230 +1,111 @@
 ---
 title: Cron Sink
-description: Schedule workflow executions using cron expressions
+description: Schedule recurring or one-time workflow executions
 sidebar:
   order: 5
 ---
 
-The Cron sink allows you to trigger workflow executions on a schedule using standard cron expressions.
+The Cron sink triggers an event on a recurring cron expression or at one future local date and time.
 
-## How It Works
+## Execution targets
 
-### Local Mode
+| Target | Scheduler | Availability |
+|---|---|---|
+| **Local** | Scheduler inside the desktop app | Runs only while the app is open |
+| **Remote** | The hub's configured scheduling backend | Runs independently of the desktop app |
+| **Hybrid** | Both schedulers register the event | May create two runs for the same scheduled time |
 
-When running the desktop app, Flow-Like uses a local scheduler to trigger executions:
+For a conceptual view of how both paths converge on the event, see [Event Sinks](/dev/sinks/).
 
-```
-┌──────────────┐
-│   Flow-Like  │
-│   Desktop    │
-│  ┌────────┐  │
-│  │ Cron   │──┼──► Trigger Execution
-│  │ Sched. │  │
-│  └────────┘  │
-└──────────────┘
-```
+## Configuration
 
-**Advantages:**
-- Works offline
-- No server required
-- Uses local system time
+| Field | Type | Meaning |
+|---|---|---|
+| `expression` | string or `null` | Five- or six-field cron expression for a recurring schedule |
+| `scheduled_for` | object or `null` | One-time `{ "date": "YYYY-MM-DD", "time": "HH:MM" }` value |
+| `timezone` | string | IANA timezone; defaults to `UTC` |
+| `sink_execution` | `LOCAL`, `REMOTE`, or `HYBRID` | Where the schedule is registered when both environments are available |
 
-**Limitations:**
-- Computer must be running
-- Missed executions when computer is off
+A schedule uses either `expression` or `scheduled_for`, not both.
 
-### Remote Mode
+### Recurring schedule
 
-When deployed to a server, the scheduler runs continuously:
+Flow-Like accepts the standard five-field form:
 
-```
-┌──────────────┐
-│   Flow-Like  │
-│    Server    │
-│  ┌────────┐  │
-│  │ Cron   │──┼──► Trigger Execution
-│  │ Sched. │  │
-│  └────────┘  │
-└──────────────┘
+```text
+minute hour day-of-month month day-of-week
 ```
 
-**Advantages:**
-- Runs 24/7
-- Reliable execution
-- No missed schedules
+| Position | Field | Range |
+| ---: | --- | --- |
+| 1 | Minute | `0`–`59` |
+| 2 | Hour | `0`–`23` |
+| 3 | Day of month | `1`–`31` |
+| 4 | Month | `1`–`12` |
+| 5 | Day of week | `0`–`7`; Sunday is `0` or `7` |
 
-## Configuration Options
+Flow-Like also accepts a leading seconds field:
 
-| Field | Type | Description | Required |
-|-------|------|-------------|----------|
-| `expression` | string | Cron expression | Yes |
-| `timezone` | string | Timezone (e.g., `America/New_York`) | No |
-| `enabled` | boolean | Whether the schedule is active | No |
-
-## Cron Expression Format
-
-Standard 5-field cron format:
-
-```
-┌───────────── minute (0 - 59)
-│ ┌───────────── hour (0 - 23)
-│ │ ┌───────────── day of month (1 - 31)
-│ │ │ ┌───────────── month (1 - 12)
-│ │ │ │ ┌───────────── day of week (0 - 6) (Sunday = 0)
-│ │ │ │ │
-│ │ │ │ │
-* * * * *
+```text
+second minute hour day-of-month month day-of-week
 ```
 
-### Special Characters
+Hosted schedulers differ. AWS EventBridge Scheduler and Kubernetes CronJobs are minute-precision, so use five fields—or `0` or `*` in the seconds position—when a schedule includes those remote targets. The event editor flags incompatible expressions.
 
-| Character | Description | Example |
-|-----------|-------------|---------|
-| `*` | Any value | `* * * * *` (every minute) |
-| `,` | List | `1,15,30 * * * *` (at 1, 15, 30 min) |
-| `-` | Range | `1-5 * * * *` (minutes 1-5) |
-| `/` | Step | `*/15 * * * *` (every 15 minutes) |
-
-### Examples
-
-| Expression | Description |
-|------------|-------------|
-| `0 * * * *` | Every hour at minute 0 |
-| `0 9 * * *` | Every day at 9:00 AM |
-| `0 9 * * 1-5` | Weekdays at 9:00 AM |
+| Expression | Meaning |
+|---|---|
+| `0 * * * *` | At minute 0 of every hour |
+| `0 9 * * *` | Every day at 09:00 |
+| `0 9 * * 1-5` | Weekdays at 09:00 |
 | `*/15 * * * *` | Every 15 minutes |
-| `0 0 1 * *` | First day of month at midnight |
-| `0 12 * * 0` | Sundays at noon |
-| `30 4 1,15 * *` | 1st and 15th at 4:30 AM |
+| `0 0 1 * *` | First day of each month at midnight |
+| `*/30 * * * * *` | Every 30 seconds; local or another seconds-capable scheduler only |
 
-## Timezones
+Lists (`1,15,30`), ranges (`1-5`), and steps (`*/15`) are supported by the cron parser. Validate the expression in the event editor because provider-specific translation can reject combinations that a local parser accepts.
 
-By default, cron expressions use the system timezone (local mode) or server timezone (remote mode). You can override this:
-
-```json
-{
-  "expression": "0 9 * * *",
-  "timezone": "America/New_York"
-}
-```
-
-### Common Timezones
-
-- `UTC` - Coordinated Universal Time
-- `America/New_York` - Eastern Time
-- `America/Los_Angeles` - Pacific Time
-- `Europe/London` - British Time
-- `Europe/Berlin` - Central European Time
-- `Asia/Tokyo` - Japan Standard Time
-
-## Payload
-
-Cron triggers receive a payload with execution context:
+### One-time schedule
 
 ```json
 {
-  "trigger": "cron",
-  "scheduled_time": "2024-01-15T09:00:00Z",
-  "actual_time": "2024-01-15T09:00:01Z",
-  "expression": "0 9 * * *",
-  "timezone": "UTC"
+  "scheduled_for": {
+    "date": "2026-08-15",
+    "time": "09:30"
+  },
+  "timezone": "Europe/Berlin",
+  "sink_execution": "REMOTE"
 }
 ```
 
-## Missed Executions
+The runtime resolves the date and time in the selected IANA timezone. A one-time local schedule is removed after it fires; remote behavior is implemented by the configured scheduler.
 
-### Local Mode Behavior
+## Timezones and daylight saving time
 
-If the computer was off during a scheduled time:
-- **Default**: The execution is skipped
-- Execution resumes at the next scheduled time
+Use an IANA name such as `UTC`, `Europe/Berlin`, or `America/New_York`. Avoid fixed numeric offsets for civil-time schedules because they do not express daylight-saving transitions.
 
-### Remote Mode Behavior
+Local scheduling resolves the next occurrence in the chosen timezone. Remote providers receive that timezone where their API supports it.
 
-With proper server infrastructure, missed executions shouldn't occur. However, if the server was down:
-- The execution is skipped
-- Consider using persistent job queues for critical schedules
+## Trigger payload
 
-## Use Cases
+Cron does not promise a portable synthetic payload containing `scheduled_time` or `actual_time`. The desktop scheduler and the Docker Compose scheduler can invoke the event without a trigger payload, while a provider integration may attach provider metadata.
 
-### Daily Report
+If the workflow needs stable context, put it in the event's configured payload or derive it inside the flow. Treat any provider metadata as optional.
 
-Generate and send a daily report every morning:
+## Missed and duplicate executions
 
-```json
-{
-  "expression": "0 8 * * *",
-  "timezone": "America/New_York"
-}
-```
+- Do not assume a missed occurrence will be replayed after the desktop app or scheduler returns.
+- A hosted provider may retry failed delivery; the internal service endpoint supports idempotency keys for callers that supply them.
+- Hybrid scheduling intentionally registers more than one delivery path and can therefore produce duplicate real-world invocations.
+- For critical schedules, make the workflow idempotent and record the business period it is processing.
 
-### Hourly Data Sync
+## Operational checks
 
-Sync data every hour:
-
-```json
-{
-  "expression": "0 * * * *"
-}
-```
-
-### Weekly Backup
-
-Run backup every Sunday at 2 AM:
-
-```json
-{
-  "expression": "0 2 * * 0"
-}
-```
-
-### End of Month Processing
-
-Process on the last day of each month:
-
-```json
-{
-  "expression": "0 23 28-31 * *"
-}
-```
-
-:::note
-For true "last day of month" scheduling, you may need workflow logic to check if it's actually the last day.
-:::
-
-## Monitoring
-
-### Checking Schedule Status
-
-The sink status indicates:
-- Whether the schedule is active
-- Next scheduled execution time
-- Last execution time and result
-
-### Execution History
-
-All cron executions are logged with:
-- Scheduled vs actual execution time
-- Run ID for tracking
-- Execution result
-
-## Best Practices
-
-1. **Use specific times** when possible - avoid `* * * * *` unless truly needed
-2. **Consider timezones** - be explicit to avoid confusion
-3. **Avoid overlapping** - ensure previous run completes before next starts
-4. **Add buffer time** - schedule a few minutes after the hour to avoid clock drift issues
-5. **Monitor execution** - check that scheduled jobs are running
-6. **Test expressions** - verify your cron expression does what you expect
-
-## Cron Expression Validators
-
-Test your cron expressions:
-- [crontab.guru](https://crontab.guru/) - Simple expression explainer
-- [cronhub.io/cron-expression-generator](https://cronhub.io/cron-expression-generator) - Visual builder
+1. Confirm the event and sink are active.
+2. Check the event editor's next-run preview.
+3. For remote schedules, verify the scheduler resource or worker is present.
+4. Inspect the resulting run status and logs rather than relying only on scheduler delivery logs.
 
 ## Limitations
 
-- **Minimum interval**: 1 minute
-- **Maximum schedules per event**: Depends on hub configuration
-- **Execution timeout**: Follows standard workflow timeout settings
+- Remote precision and accepted cron syntax depend on the selected scheduling backend.
+- Overlap prevention is not implicit; use workflow-level locking or idempotency when one run must finish before the next begins.
+- Scheduling a range such as `28-31` does not mean “last day of month.” Add a calendar check inside the workflow.

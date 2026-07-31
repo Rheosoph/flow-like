@@ -163,23 +163,22 @@ executorPool:
 # Backend JWT Configuration (Required for execution)
 # =============================================================================
 # ES256 keypair for signing execution JWTs
-# Generate with: ./scripts/gen-execution-keys.sh
+# Generate from the repository root with: ./tools/gen-execution-keys.sh --export
 #
 # IMPORTANT: Do NOT commit real keys here! Use one of these methods:
-#   1. Use --set-file when installing:
-#      helm install flow-like ./helm --set-file jwt.backendKey=./secrets/backend.key
-#   2. Create a separate values-secrets.yaml (add to .gitignore):
+#   1. Create a pre-existing Kubernetes Secret and set jwt.existingSecret.
+#   2. Create a separate values-secrets.yaml (already covered by .gitignore):
 #      helm install flow-like ./helm -f values.yaml -f values-secrets.yaml
-#   3. Use existingSecret to reference a pre-created Kubernetes secret
 #
 jwt:
-  # Base64-encoded PEM private key (set via --set or values-secrets.yaml)
+  # Base64-encoded PEM private key (use an existing Secret or values-secrets.yaml)
   backendKey: ""
-  # Base64-encoded PEM public key (set via --set or values-secrets.yaml)
+  # Base64-encoded PEM public key (use an existing Secret or values-secrets.yaml)
   backendPub: ""
   # Key identifier
   backendKid: "backend-es256-v1"
-  # Use existing secret instead of creating one
+  # Use an existing Secret instead of creating one. It must contain
+  # BACKEND_KEY, BACKEND_PUB, and BACKEND_KID.
   existingSecret: ""
 
 # =============================================================================
@@ -298,7 +297,7 @@ llm:
 # Database Configuration
 # =============================================================================
 # type: internal | external
-#   - internal: Deploy CockroachDB within the cluster (recommended for self-hosting)
+#   - internal: Deploy a single-node CockroachDB for evaluation/development
 #   - external: Use an external PostgreSQL/CockroachDB database
 database:
   type: internal
@@ -322,7 +321,9 @@ database:
 
   # Internal CockroachDB configuration (when type=internal)
   internal:
-    replicas: 3
+    # The current workload uses CockroachDB start-single-node and must remain 1.
+    # Use database.type=external for a production database.
+    replicas: 1
     image:
       repository: cockroachdb/cockroach
       tag: v24.2.0
@@ -358,6 +359,8 @@ redis:
   architecture: standalone
   auth:
     enabled: true
+    # Use an existing Secret with a REDIS_PASSWORD key. When set, the chart
+    # injects that password into both Redis and the API connection URL.
     existingSecret: ""
     password: ""
   master:

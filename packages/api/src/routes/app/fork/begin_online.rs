@@ -148,6 +148,7 @@ pub async fn begin_online_fork(
                     owner_role_id: NotSet,
                     primary_category: Set(None),
                     secondary_category: Set(None),
+                    app_type: Set(None),
                     rating_sum: Set(0),
                     rating_count: Set(0),
                     download_count: Set(0),

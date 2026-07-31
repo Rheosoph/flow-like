@@ -83,6 +83,12 @@ May,18,15
 const EXAMPLE_NIVO_CSV = `\`\`\`nivo
 type: bar
 title: Monthly Sales
+xLabel: Month
+yLabel: Amount
+showLegend: true
+legendPosition: bottom
+stacked: false
+animate: false
 ---
 month,sales,expenses,profit
 Jan,4200,3100,1100
@@ -494,23 +500,27 @@ export default function DebugMarkdownPage() {
 			</div>
 
 			{/* Live Editor */}
-			<section className="space-y-4">
+			<section className="space-y-4" data-doc-screenshot="live-editor">
 				<h2 className="text-xl font-semibold">Live Editor</h2>
 				<div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 					<div>
-						<label className="block text-sm font-medium mb-2">
+						<label
+							htmlFor="markdown-debug-source"
+							className="block text-sm font-medium mb-2"
+						>
 							Raw Markdown
 						</label>
 						<textarea
+							id="markdown-debug-source"
 							className="w-full h-[600px] p-4 font-mono text-sm bg-muted/50 rounded-md border resize-none"
 							value={customMarkdown}
 							onChange={(e) => setCustomMarkdown(e.target.value)}
 						/>
 					</div>
-					<div>
-						<label className="block text-sm font-medium mb-2">
+					<div data-doc-screenshot="rendered-output">
+						<div className="block text-sm font-medium mb-2">
 							Rendered Output
-						</label>
+						</div>
 						<div className="h-[600px] p-4 bg-background border rounded-md overflow-auto">
 							<TextEditor
 								key={customMarkdown}
@@ -593,6 +603,7 @@ function ExampleSection({
 				{examples.map((example) => (
 					<div
 						key={example.title}
+						data-example-title={example.title}
 						className="border rounded-lg overflow-hidden"
 					>
 						<div className="bg-muted/50 px-4 py-2 flex items-center justify-between">

@@ -107,23 +107,32 @@ services:
 
       # Redis (execution state + job queue)
       REDIS_URL: redis://redis:6379
-      EXECUTION_STATE_BACKEND: redis
+      EXECUTION_STATE_BACKEND: ${EXECUTION_STATE_BACKEND:-redis}
       EXECUTION_STATE_TTL_SECONDS: ${EXECUTION_STATE_TTL_SECONDS:-86400}
 
       # Storage provider
       STORAGE_PROVIDER: ${STORAGE_PROVIDER:-aws}
+      RUNTIME_CREDENTIALS_PROVIDER: ${RUNTIME_CREDENTIALS_PROVIDER-${STORAGE_PROVIDER:-aws}}
 
       # Generic bucket names (fallback for all providers)
       META_BUCKET: ${META_BUCKET:-flow-like-meta}
       CONTENT_BUCKET: ${CONTENT_BUCKET:-flow-like-content}
       LOG_BUCKET: ${LOG_BUCKET:-flow-like-logs}
+      CDN_BUCKET_NAME: ${CDN_BUCKET_NAME:-}
 
       # AWS S3 (when STORAGE_PROVIDER=aws)
       AWS_ENDPOINT: ${AWS_ENDPOINT:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
       AWS_USE_PATH_STYLE: ${AWS_USE_PATH_STYLE:-true}
+      AWS_META_BUCKET: ${AWS_META_BUCKET:-}
+      AWS_CONTENT_BUCKET: ${AWS_CONTENT_BUCKET:-}
+      AWS_LOG_BUCKET: ${AWS_LOG_BUCKET:-}
+      META_BUCKET_EXPRESS_ZONE: ${META_BUCKET_EXPRESS_ZONE:-false}
+      CONTENT_BUCKET_EXPRESS_ZONE: ${CONTENT_BUCKET_EXPRESS_ZONE:-false}
+      LOGS_BUCKET_EXPRESS_ZONE: ${LOGS_BUCKET_EXPRESS_ZONE:-false}
       # Role ARN for scoped credentials (per-user/per-app isolation)
       RUNTIME_ROLE_ARN: ${RUNTIME_ROLE_ARN:-}
 
@@ -135,20 +144,31 @@ services:
       AZURE_LOG_CONTAINER: ${AZURE_LOG_CONTAINER:-}
 
       # GCP Storage (when STORAGE_PROVIDER=gcp)
-      GCS_PROJECT_ID: ${GCS_PROJECT_ID:-}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-}
       GOOGLE_APPLICATION_CREDENTIALS_JSON: ${GOOGLE_APPLICATION_CREDENTIALS_JSON:-}
+      GCP_META_BUCKET: ${GCP_META_BUCKET:-}
+      GCP_CONTENT_BUCKET: ${GCP_CONTENT_BUCKET:-}
+      GCP_LOG_BUCKET: ${GCP_LOG_BUCKET:-}
+
+      # Cloudflare R2 temporary credentials (when the runtime credential
+      # provider is configured as R2 in the hub config)
+      R2_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID:-}
+      R2_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY:-}
+      R2_ENDPOINT: ${R2_ENDPOINT:-}
+      R2_ACCOUNT_ID: ${R2_ACCOUNT_ID:-}
+      R2_API_TOKEN: ${R2_API_TOKEN:-}
 
       # Execution Backend Configuration
       # EXECUTION_BACKEND: For /invoke (streaming) - default http
       # ASYNC_EXECUTION_BACKEND: For /invoke/async - default redis
       EXECUTION_BACKEND: ${EXECUTION_BACKEND:-http}
       ASYNC_EXECUTION_BACKEND: ${ASYNC_EXECUTION_BACKEND:-redis}
-      EXECUTOR_URL: http://runtime:9000
+      EXECUTOR_URL: ${EXECUTOR_URL:-http://runtime:9000}
       REDIS_EXECUTION_QUEUE: ${REDIS_EXECUTION_QUEUE:-exec:jobs}
       EXECUTION_TIMEOUT_SECONDS: ${EXECUTION_TIMEOUT_SECONDS:-3600}
       COMPILATION_BACKEND: ${COMPILATION_BACKEND:-inline}
-      COMPILER_URL: http://compiler:8081
-      API_BASE_URL: http://api:8080
+      COMPILER_URL: ${COMPILER_URL:-http://compiler:8081}
+      API_BASE_URL: ${API_BASE_URL:-http://api:8080}
       WASM_COMPILATION_TARGETS: ${WASM_COMPILATION_TARGETS:-}
 
       # Unified backend JWT keys (used for execution, realtime, etc.)
@@ -161,6 +181,17 @@ services:
 
       # Optional services
       SENTRY_DSN: ${SENTRY_DSN:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_ENDPOINT: ${OPENROUTER_ENDPOINT:-https://openrouter.ai/api}
+      HOSTED_OPENAI_API_KEY: ${HOSTED_OPENAI_API_KEY:-}
+      HOSTED_OPENAI_ENDPOINT: ${HOSTED_OPENAI_ENDPOINT:-https://api.openai.com}
+      HOSTED_ANTHROPIC_API_KEY: ${HOSTED_ANTHROPIC_API_KEY:-}
+      HOSTED_ANTHROPIC_ENDPOINT: ${HOSTED_ANTHROPIC_ENDPOINT:-https://api.anthropic.com}
+      HOSTED_AZURE_API_KEY: ${HOSTED_AZURE_API_KEY:-}
+      HOSTED_AZURE_ENDPOINT: ${HOSTED_AZURE_ENDPOINT:-}
+      HOSTED_BEDROCK_ENDPOINT: ${HOSTED_BEDROCK_ENDPOINT:-}
+      HOSTED_VERTEX_API_KEY: ${HOSTED_VERTEX_API_KEY:-}
+      HOSTED_VERTEX_ENDPOINT: ${HOSTED_VERTEX_ENDPOINT:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_ENDPOINT: ${OPENAI_ENDPOINT:-}
 
@@ -293,7 +324,7 @@ services:
         condition: service_healthy
     ports:
       - "${COMPILER_PORT:-8081}:8081"
-      - "${COMPILER_METRICS_PORT:-9091}:9091"
+      - "${COMPILER_METRICS_PORT:-9092}:9091"
     environment:
       PORT: 8081
       METRICS_PORT: 9091

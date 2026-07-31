@@ -19,4 +19,4 @@ Next, you will see the landing page of the desktop app. Congratulations—you ma
 
 ![A screenshot of the Flow-Like Desktop landing page with swimlanes for public apps, models, and more](../../../assets/LandingPage.webp)
 
-There are additional features of the desktop app to explore next, or you can jump ahead and [create your first app](/docs/apps/create/) to start building a workflow.
+There are additional features of the desktop app to explore next, or you can jump ahead and [create your first app](/apps/create/) to start building a workflow.

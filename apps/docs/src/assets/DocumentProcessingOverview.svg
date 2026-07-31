@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1440 720" role="img" aria-labelledby="title desc">
+  <title id="title">Flow-Like document processing architecture</title>
+  <desc id="desc">PDFs, DOCX files, spreadsheets, images, and HTML are read, rendered, or streamed, then converted into text, tables, schemas, or optional AI extraction before being stored in databases, search indexes, reports, or APIs.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101216"/><stop offset="1" stop-color="#17191f"/></linearGradient>
+    <linearGradient id="coral" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#ff8a68"/><stop offset="1" stop-color="#ff5d3d"/></linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse"><circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/></pattern>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="10" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0 10 5 0 10z" fill="#ff7656"/></marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.section{fill:#f7f8fa;font-size:21px;font-weight:720}.prep-title{fill:#f7f8fa;font-size:19px;font-weight:720}.item{fill:#d8dbe1;font-size:15px;font-weight:650}.item-wide{font-size:14px}.note{fill:#929aa7;font-size:14px}.tiny{fill:#89919e;font-size:13px;font-weight:700;letter-spacing:1.1px}
+    </style>
+  </defs>
+  <rect width="1440" height="720" rx="28" fill="url(#bg)"/><rect width="1440" height="720" rx="28" fill="url(#grid)"/>
+  <rect x="64" y="58" width="302" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/><circle cx="84" cy="75" r="5" fill="#ff7656"/><text x="99" y="81" class="kicker">DOCUMENT PROCESSING</text>
+  <text x="64" y="136" class="heading">Turn files into structured, useful data</text>
+  <text x="64" y="169" class="sub">Choose deterministic readers first, then add schema extraction or a configured model where layout requires it.</text>
+
+  <g fill="none" stroke="#ff7656" stroke-width="5" stroke-linecap="round" marker-end="url(#arrow)">
+    <path d="M302 384H344"/>
+    <path d="M632 384H674"/>
+    <path d="M1020 384H1062"/>
+  </g>
+
+  <g>
+    <rect x="64" y="226" width="238" height="316" rx="25" fill="#191c22" stroke="#373d48" stroke-width="2"/>
+    <text x="94" y="268" class="tiny">INPUT</text><text x="94" y="303" class="section">Documents</text>
+    <rect x="94" y="330" width="80" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="134" y="357" text-anchor="middle" class="item">PDF</text>
+    <rect x="188" y="330" width="84" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="230" y="357" text-anchor="middle" class="item">DOCX</text>
+    <rect x="94" y="386" width="178" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="183" y="413" text-anchor="middle" class="item">Excel and CSV</text>
+    <rect x="94" y="442" width="80" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="134" y="469" text-anchor="middle" class="item">Image</text>
+    <rect x="188" y="442" width="84" height="42" rx="12" fill="#232730" stroke="#414754"/><text x="230" y="469" text-anchor="middle" class="item">HTML</text>
+    <text x="183" y="514" text-anchor="middle" class="note">Local or app storage</text>
+  </g>
+
+  <g>
+    <rect x="358" y="246" width="274" height="276" rx="25" fill="#1d1d22" stroke="#ff7656" stroke-width="2"/>
+    <rect x="388" y="276" width="62" height="62" rx="18" fill="url(#coral)" filter="url(#glow)"/>
+    <path d="M404 293h30v29h-30zM410 301h18M410 309h18" fill="none" stroke="#15171b" stroke-width="3"/>
+    <text x="474" y="297" class="tiny">PREPARE</text><text x="474" y="326" class="prep-title"><tspan x="474">Read and</tspan><tspan x="474" dy="24">normalize</tspan></text>
+    <rect x="388" y="370" width="214" height="42" rx="12" fill="#292327" stroke="#5d3c35"/><text x="495" y="397" text-anchor="middle" class="item">Read • render • stream</text>
+    <rect x="388" y="426" width="214" height="42" rx="12" fill="#292327" stroke="#5d3c35"/><text x="495" y="453" text-anchor="middle" class="item">Split • batch • convert</text>
+    <text x="495" y="496" text-anchor="middle" class="note">Preserve source metadata</text>
+  </g>
+
+  <g>
+    <rect x="688" y="206" width="332" height="356" rx="28" fill="#1d1c24" stroke="#5b5278" stroke-width="2"/>
+    <text x="718" y="248" class="tiny">UNDERSTAND</text><text x="718" y="283" class="section">Extract structure</text>
+    <rect x="718" y="314" width="132" height="78" rx="15" fill="#282534" stroke="#574e71"/><circle cx="742" cy="339" r="6" fill="#a78bfa"/><text x="766" y="345" class="item">Text</text><text x="784" y="373" text-anchor="middle" class="note">Markdown-aware</text>
+    <rect x="866" y="314" width="124" height="78" rx="15" fill="#282534" stroke="#574e71"/><circle cx="890" cy="339" r="6" fill="#34d399"/><text x="914" y="345" class="item">Tables</text><text x="928" y="373" text-anchor="middle" class="note">Rows and cells</text>
+    <rect x="718" y="410" width="272" height="54" rx="14" fill="#282534" stroke="#574e71"/><circle cx="742" cy="437" r="6" fill="#ff7656"/><text x="864" y="443" text-anchor="middle" class="item item-wide">Typed schema extraction</text>
+    <rect x="718" y="480" width="272" height="54" rx="14" fill="#282534" stroke="#574e71"/><circle cx="742" cy="507" r="6" fill="#a78bfa"/><text x="864" y="513" text-anchor="middle" class="item item-wide">Optional configured AI model</text>
+  </g>
+
+  <g>
+    <rect x="1076" y="226" width="300" height="316" rx="25" fill="#1b2422" stroke="#34d399" stroke-width="2"/>
+    <text x="1106" y="268" class="tiny">DELIVER</text><text x="1106" y="303" class="section">Useful outputs</text>
+    <rect x="1106" y="330" width="240" height="42" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="1130" cy="351" r="6" fill="#34d399"/><text x="1152" y="357" class="item">Database records</text>
+    <rect x="1106" y="386" width="240" height="42" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="1130" cy="407" r="6" fill="#a78bfa"/><text x="1152" y="413" class="item">Search index</text>
+    <rect x="1106" y="442" width="240" height="42" rx="12" fill="#202b28" stroke="#3e6759"/><circle cx="1130" cy="463" r="6" fill="#ff7656"/><text x="1152" y="469" class="item">Report or template</text>
+    <rect x="1106" y="498" width="240" height="28" rx="10" fill="#202b28" stroke="#3e6759"/><text x="1226" y="517" text-anchor="middle" class="note">API • storage • notification</text>
+  </g>
+  <text x="720" y="642" text-anchor="middle" class="sub">Batch large collections, validate extracted fields, and preserve the original file for audit or reprocessing.</text>
+</svg>

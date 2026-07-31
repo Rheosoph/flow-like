@@ -201,11 +201,15 @@ pub async fn finalize_online_fork(
         bucket_app.execution_mode = settings.execution_mode.clone();
     }
     bucket_app.updated_at = std::time::SystemTime::now();
+    // The manifest carried the source app's type across; mirror it onto the row
+    // so `GET /apps/{id}`, which reads the row, agrees with the bucket.
+    let app_type_db = bucket_app.app_type.clone().map(Into::into);
     bucket_app.save().await?;
 
     let mut active = app_row.into_active_model();
     active.visibility = Set(visibility.clone());
     active.status = Set(Status::Active);
+    active.app_type = Set(app_type_db);
     active.total_size = Set(total_size_bytes as i64);
     if let Some(settings) = &app_settings {
         active.changelog = Set(settings.changelog.clone());

@@ -10,9 +10,14 @@ export type FlowPilotE2ECaseId =
 	| "mail-approval"
 	| "doc-compliance"
 	| "webhook-enrichment"
-	| "agent-tools";
+	| "agent-tools"
+	| "multi-board-pages"
+	| "ai-adventure";
 
 export type FlowPilotE2EReasoningEffort = "low" | "medium" | "high";
+
+/** Stable benchmark alias for a pinned generation model. */
+export type FlowPilotE2EModelKey = "terra" | "sol";
 
 export interface FlowPilotE2EModelConfig {
 	provider: "codex";
@@ -51,6 +56,15 @@ export interface FlowPilotE2ERequiredNodeCapability {
 	anyOf: readonly string[];
 }
 
+export interface FlowPilotE2ERequiredPageBoardBinding {
+	/** Semantic alias, name, or id of the persisted page. */
+	page: string;
+	/** Semantic alias, name, or id of the page's exact owning board. */
+	board: string;
+	/** Also require the page's onLoad node to exist on that same board. */
+	requireOnLoadEvent?: boolean;
+}
+
 export interface FlowPilotE2ECaseRequirements {
 	minFlowScriptNonWhitespaceChars: number;
 	/** Guards the compact-output contract. The minimum is only a truncation check, not a target. */
@@ -69,8 +83,15 @@ export interface FlowPilotE2ECaseRequirements {
 	requireSuccessfulCompilerReceipt: boolean;
 	validateReferenceIntegrity: boolean;
 	requiredSemanticTableAliases: readonly string[];
+	/**
+	 * Database aliases that must be opened by canonical FlowScript rather than resolved from the
+	 * setup-time table inventory. This preserves lazy stores whose schema depends on the first
+	 * runtime value, such as an embedding vector's model-specific width.
+	 */
+	requiredLazyDatabaseAliases: readonly string[];
 	requiredIdReferences: readonly FlowPilotE2ERequiredIdReference[];
 	requiredNodeCapabilities: readonly FlowPilotE2ERequiredNodeCapability[];
+	requiredPageBoardBindings: readonly FlowPilotE2ERequiredPageBoardBinding[];
 }
 
 export interface FlowPilotE2ECaseDefinition {
@@ -80,6 +101,11 @@ export interface FlowPilotE2ECaseDefinition {
 	appName: string;
 	prompt: string;
 	smoke: boolean;
+	/**
+	 * Wall clock the runner allows one turn of this case before abandoning it. Omission keeps the
+	 * default; only raise it for cases whose scope genuinely needs more than one board build.
+	 */
+	runTimeoutMs?: number;
 	requirements: FlowPilotE2ECaseRequirements;
 }
 
@@ -270,8 +296,16 @@ export interface FlowPilotE2ERunOptions {
 	/** Ordered case selection used by the CLI. */
 	caseIds?: readonly FlowPilotE2ECaseId[];
 	suite?: "smoke" | "full";
+	/** Benchmark model alias; omission keeps the default pinned model. */
+	modelKey?: FlowPilotE2EModelKey;
 	minFlowScriptNonWhitespaceChars?: number;
 	repeat?: number;
+	/**
+	 * Cases to keep in flight at once. The chat caps concurrent runs, so this is bounded by the
+	 * runner. Parallel runs and `failFast` are mutually exclusive: a fail-fast stop is only
+	 * meaningful when the next case has not started yet.
+	 */
+	concurrency?: number;
 	failFast?: boolean;
 }
 
@@ -293,6 +327,7 @@ export interface FlowPilotE2EArtifact {
 	schema: "flowpilot.app-creation-e2e-artifact/v1";
 	generatedAt: string;
 	durationMs: number;
+	requestedModelKey: FlowPilotE2EModelKey;
 	requestedModel: FlowPilotE2EModelConfig;
 	observedModel?: {
 		provider: string;
@@ -323,6 +358,7 @@ export interface FlowPilotE2ECliEnvelope {
 	durationMs: number;
 	selection: {
 		caseIds: readonly FlowPilotE2ECaseId[];
+		modelKey: FlowPilotE2EModelKey;
 		repeat: number;
 		minFlowScriptNonWhitespaceChars?: number;
 		failFast: boolean;

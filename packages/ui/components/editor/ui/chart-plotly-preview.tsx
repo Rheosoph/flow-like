@@ -3,7 +3,7 @@
 import { useTheme } from "next-themes";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import type { ChartInput } from "./chart-data-parser";
-import { toPlotlyData } from "./chart-data-parser";
+import { normalizePlotlyTitle, toPlotlyData } from "./chart-data-parser";
 
 interface PlotlyModule {
 	react: (
@@ -21,6 +21,12 @@ interface PlotlyChartPreviewProps {
 	height?: number;
 }
 
+function objectValue(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
 function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const plotlyRef = useRef<PlotlyModule | null>(null);
@@ -30,23 +36,17 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 	const { data, layout, config } = useMemo(() => {
 		const result = toPlotlyData(input);
 		const baseLayout = result.layout as Record<string, unknown>;
-		const currentFont = (baseLayout.font as Record<string, unknown>) || {};
-		const currentTitle = (baseLayout.title as Record<string, unknown>) || {};
-		const currentTitleFont =
-			(currentTitle.font as Record<string, unknown>) || {};
-		const currentLegend = (baseLayout.legend as Record<string, unknown>) || {};
-		const currentLegendFont =
-			(currentLegend.font as Record<string, unknown>) || {};
-		const currentXAxis = (baseLayout.xaxis as Record<string, unknown>) || {};
-		const currentXAxisTitle =
-			(currentXAxis.title as Record<string, unknown>) || {};
-		const currentXAxisTitleFont =
-			(currentXAxisTitle.font as Record<string, unknown>) || {};
-		const currentYAxis = (baseLayout.yaxis as Record<string, unknown>) || {};
-		const currentYAxisTitle =
-			(currentYAxis.title as Record<string, unknown>) || {};
-		const currentYAxisTitleFont =
-			(currentYAxisTitle.font as Record<string, unknown>) || {};
+		const currentFont = objectValue(baseLayout.font);
+		const currentTitle = normalizePlotlyTitle(baseLayout.title);
+		const currentTitleFont = objectValue(currentTitle.font);
+		const currentLegend = objectValue(baseLayout.legend);
+		const currentLegendFont = objectValue(currentLegend.font);
+		const currentXAxis = objectValue(baseLayout.xaxis);
+		const currentXAxisTitle = normalizePlotlyTitle(currentXAxis.title);
+		const currentXAxisTitleFont = objectValue(currentXAxisTitle.font);
+		const currentYAxis = objectValue(baseLayout.yaxis);
+		const currentYAxisTitle = normalizePlotlyTitle(currentYAxis.title);
+		const currentYAxisTitleFont = objectValue(currentYAxisTitle.font);
 
 		const legacyFontColor =
 			typeof currentFont.color === "string" && currentFont.color === "#888";
@@ -86,10 +86,8 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 				gridcolor: currentXAxis.gridcolor ?? themedBorderColor,
 				zerolinecolor: currentXAxis.zerolinecolor ?? themedBorderColor,
 				tickfont: {
-					...((currentXAxis.tickfont as Record<string, unknown>) || {}),
-					color:
-						((currentXAxis.tickfont as Record<string, unknown>) || {}).color ??
-						themedMutedColor,
+					...objectValue(currentXAxis.tickfont),
+					color: objectValue(currentXAxis.tickfont).color ?? themedMutedColor,
 				},
 				title: {
 					...currentXAxisTitle,
@@ -105,10 +103,8 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 				gridcolor: currentYAxis.gridcolor ?? themedBorderColor,
 				zerolinecolor: currentYAxis.zerolinecolor ?? themedBorderColor,
 				tickfont: {
-					...((currentYAxis.tickfont as Record<string, unknown>) || {}),
-					color:
-						((currentYAxis.tickfont as Record<string, unknown>) || {}).color ??
-						themedMutedColor,
+					...objectValue(currentYAxis.tickfont),
+					color: objectValue(currentYAxis.tickfont).color ?? themedMutedColor,
 				},
 				title: {
 					...currentYAxisTitle,
@@ -121,7 +117,7 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 		};
 
 		return result;
-	}, [input, height, resolvedTheme, isDark]);
+	}, [input, height, isDark]);
 
 	const handleResize = useCallback(() => {
 		if (!containerRef.current || !plotlyRef.current) return;
@@ -146,7 +142,7 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 				const Plotly = (PlotlyModule.default ||
 					PlotlyModule) as unknown as PlotlyModule;
 				plotlyRef.current = Plotly;
-				await Plotly.react(containerRef.current, data as any, layout, config);
+				await Plotly.react(containerRef.current, data, layout, config);
 			} catch (err) {
 				console.error("Failed to load/render Plotly chart:", err);
 			}
