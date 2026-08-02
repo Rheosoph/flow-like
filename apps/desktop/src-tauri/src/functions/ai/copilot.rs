@@ -3246,6 +3246,17 @@ pub async fn copilot_chat(
         let message = format!(
             "The {specialist} needs a tool-capable model (Claude Code, Codex, or GitHub Copilot). Select one of those FlowPilot models, then ask again."
         );
+        // A nested run is a delegated specialist call from the frontend tool bridge, which reports
+        // a resolved promise as `status: "ok"`. Returning Ok here would hand the orchestrator a
+        // capability notice shaped exactly like specialist findings, which it then relays — or
+        // rationalizes — as if the work had been done. Fail the call so the bridge reports an error,
+        // and say the failure is permanent: the model is otherwise told (by the prior-art and data
+        // rules) that this delegation is mandatory, and would spend its remaining rounds retrying.
+        if nested {
+            return Err(format!(
+                "{message} This is a permanent limitation of the selected model, not a transient failure — do not retry this tool in this run; continue without it and tell the user."
+            ));
+        }
         let _ = channel.send(message.clone());
         return Ok(UnifiedCopilotResponse {
             message,

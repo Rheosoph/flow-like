@@ -18,6 +18,10 @@ import {
 } from "react";
 import { cn } from "../../lib";
 import {
+	DEFAULT_SHORTCUTS,
+	createShortcutManager,
+} from "../../lib/builder/KeyboardShortcuts";
+import {
 	presignCanvasSettings,
 	presignPageAssets,
 } from "../../lib/presign-assets";
@@ -39,6 +43,7 @@ import type {
 	Surface,
 	SurfaceComponent,
 } from "../a2ui/types";
+import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import { Button } from "../ui/button";
 import {
@@ -104,6 +109,10 @@ export const CONTAINER_TYPES = new Set([
 
 // Root component ID constant
 export const ROOT_ID = "root";
+
+const BUILDER_DELETE_SHORTCUTS = DEFAULT_SHORTCUTS.filter(
+	(shortcut) => shortcut.action === "delete",
+);
 
 function isBackgroundClass(value: string | undefined): value is string {
 	return value?.startsWith("bg-") ?? false;
@@ -298,12 +307,30 @@ function WidgetBuilderContent({
 		addComponent,
 		updateComponent,
 		getComponent,
+		deleteComponents,
 		widgetRefs,
 		actionContext,
 		setCanvasSettings,
 	} = useBuilder();
 	const { activeId } = useBuilderDnd();
 	const isDragging = activeId !== null;
+
+	useEffect(() => {
+		const shortcutManager = createShortcutManager((_action, event) => {
+			event.stopPropagation();
+			if (event.repeat || mode !== "edit") return;
+
+			const selectedComponentIds = selection.componentIds.filter(
+				(id) => id !== ROOT_ID,
+			);
+			if (selectedComponentIds.length > 0) {
+				deleteComponents(selectedComponentIds);
+			}
+		}, BUILDER_DELETE_SHORTCUTS);
+
+		shortcutManager.bind();
+		return shortcutManager.unbind;
+	}, [deleteComponents, mode, selection.componentIds]);
 
 	// Ref for capturing screenshots of the canvas
 	const canvasContainerRef = useRef<HTMLDivElement>(null);
@@ -1217,6 +1244,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 				await execFn(appId, boardId, payload, false, undefined, (events) => {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
+							if (handleWidgetQueryMessage(evt.payload)) {
+								continue;
+							}
 							handleA2UIMessage(evt.payload as A2UIServerMessage);
 						}
 					}
@@ -1274,6 +1304,9 @@ function BuilderPreview({ surfaceId }: BuilderPreviewProps) {
 				await execFn(appId, boardId, payload, false, undefined, (events) => {
 					for (const evt of events) {
 						if (evt.event_type === "a2ui") {
+							if (handleWidgetQueryMessage(evt.payload)) {
+								continue;
+							}
 							handleA2UIMessage(evt.payload as A2UIServerMessage);
 						}
 					}

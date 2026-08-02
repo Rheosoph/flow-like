@@ -62,7 +62,7 @@ pub async fn upsert_page(
         .clone()
         .ok_or_else(|| ApiError::bad_request("page payload is missing `board_id`".to_string()))?;
 
-    // Resolve credentials and storage before taking advisory locks so lock holders never wait for
+    // Resolve credentials and storage before taking mutation locks so lock holders never wait for
     // another pooled database connection during app setup.
     let app = state
         .scoped_app(

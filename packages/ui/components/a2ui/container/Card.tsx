@@ -10,7 +10,7 @@ import {
 	CardTitle,
 	Card as ShadCard,
 } from "../../ui/card";
-import { useComponentActionTrigger } from "../ActionHandler";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -30,7 +30,7 @@ export function A2UICard({
 	renderChild,
 }: ComponentProps<CardComponent>) {
 	const { resolve } = useData();
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const title = useResolved<string>(component.title);
 	const description = useResolved<string>(component.description);
 	const footer = useResolved<string>(component.footer);
@@ -39,7 +39,7 @@ export function A2UICard({
 
 	const children = resolveChildSpecs(component.children, resolve);
 	const triggerCardAction = () => {
-		void triggerAction(component.actions);
+		void triggerEvent("click", component);
 	};
 	const handleClick = (event: MouseEvent<HTMLDivElement>) => {
 		const target = event.target;

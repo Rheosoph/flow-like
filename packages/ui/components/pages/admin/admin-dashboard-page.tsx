@@ -171,7 +171,7 @@ function StatCard({
 	href?: string;
 }) {
 	const inner = (
-		<Card className="transition-colors hover:border-primary/40">
+		<Card className="min-w-0 transition-colors hover:border-primary/40">
 			<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 				<CardTitle className="text-sm font-medium">{title}</CardTitle>
 				{icon}
@@ -2056,7 +2056,7 @@ function AiActConformityPreview({
 
 	return (
 		<div className="space-y-2 rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-3">
-			<div className="flex items-center justify-between gap-2">
+			<div className="flex flex-col items-start gap-2 min-[400px]:flex-row min-[400px]:items-center min-[400px]:justify-between">
 				<div className="flex items-center gap-2 text-sm font-medium">
 					<Scale className="h-4 w-4 text-indigo-500" />
 					EU AI Act Conformity
@@ -2428,11 +2428,11 @@ export function AdminDashboardPage({
 			: null;
 
 	return (
-		<main className="flex h-full min-h-0 w-full grow flex-col overflow-hidden bg-background">
-			<div className="flex-1 overflow-y-auto p-6">
-				<div className="mx-auto max-w-7xl space-y-6">
+		<main className="flex h-full min-h-0 min-w-0 w-full grow flex-col overflow-hidden bg-background">
+			<div className="min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-6">
+				<div className="mx-auto min-w-0 max-w-7xl space-y-4 sm:space-y-6">
 					<div>
-						<h1 className="text-3xl font-bold">Admin Dashboard</h1>
+						<h1 className="text-2xl font-bold sm:text-3xl">Admin Dashboard</h1>
 						<p className="text-muted-foreground">
 							Central hub for registry, publishing, usage, and learning content.
 						</p>

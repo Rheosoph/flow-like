@@ -79,3 +79,42 @@ echo "=== Testing Swift ===" && (cd wasm-node-swift && mise run test)
 echo "=== Testing Java ===" && (cd wasm-node-java && mise run test)
 echo "All template tests passed!"
 """
+
+[tasks."build:widgets"]
+description = "Build all widget framework-group templates"
+run = """
+echo "=== Building widget-react ===" && (cd widget-react && mise run build)
+echo "=== Building widget-preact ===" && (cd widget-preact && mise run build)
+echo "=== Building widget-svelte ===" && (cd widget-svelte && mise run build)
+echo "=== Building widget-vue ===" && (cd widget-vue && mise run build)
+echo "=== Building widget-solid ===" && (cd widget-solid && mise run build)
+echo "=== Building widget-lit ===" && (cd widget-lit && mise run build)
+echo "=== Building widget-vanilla ===" && (cd widget-vanilla && mise run build)
+echo "All widget templates built successfully!"
+"""
+
+[tasks."setup:widgets"]
+description = "Set up all widget template environments"
+run = """
+echo "=== Setting up widget-react ===" && (cd widget-react && mise run setup)
+echo "=== Setting up widget-preact ===" && (cd widget-preact && mise run setup)
+echo "=== Setting up widget-svelte ===" && (cd widget-svelte && mise run setup)
+echo "=== Setting up widget-vue ===" && (cd widget-vue && mise run setup)
+echo "=== Setting up widget-solid ===" && (cd widget-solid && mise run setup)
+echo "=== Setting up widget-lit ===" && (cd widget-lit && mise run setup)
+echo "=== Setting up widget-vanilla ===" && (cd widget-vanilla && mise run setup)
+echo "All widget templates set up!"
+"""
+
+[tasks."clean:widgets"]
+description = "Clean all widget template build artifacts"
+run = """
+(cd widget-react && mise run clean)
+(cd widget-preact && mise run clean)
+(cd widget-svelte && mise run clean)
+(cd widget-vue && mise run clean)
+(cd widget-solid && mise run clean)
+(cd widget-lit && mise run clean)
+(cd widget-vanilla && mise run clean)
+echo "All widget templates cleaned!"
+"""

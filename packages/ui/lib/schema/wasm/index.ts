@@ -1,3 +1,4 @@
+import type { WidgetContract } from "@flow-like/widget-sdk";
 import type { INodePermission } from "../flow/board";
 
 export interface PackageAuthor {
@@ -150,6 +151,23 @@ export interface PackageNodeEntry {
 	metadata: Record<string, unknown>;
 }
 
+/**
+ * Micro-frontend widget entry in a package manifest (manifest v2).
+ * Carries the full typed contract so previews and pin generation work from
+ * the manifest alone, without opening the widget bundle.
+ */
+export interface PackageWidgetEntry {
+	id: string;
+	name: string;
+	description: string;
+	/** Icon (base64 data URI or URL) */
+	icon?: string | null;
+	/** Preview thumbnail (base64 data URI or URL) */
+	thumbnail?: string | null;
+	contract: WidgetContract;
+	keywords?: string[];
+}
+
 export interface PackageManifest {
 	manifestVersion: number;
 	id: string;
@@ -167,6 +185,12 @@ export interface PackageManifest {
 	minFlowLikeVersion?: string;
 	wasmPath?: string;
 	wasmHash?: string;
+	/** Micro-frontend widgets shipped by this package (manifest v2) */
+	widgets?: PackageWidgetEntry[];
+	/** Widget bundle (`.flwb`) path relative to the manifest */
+	widgetBundlePath?: string;
+	/** SHA-256 hash of the widget bundle */
+	widgetBundleHash?: string;
 	metadata: Record<string, unknown>;
 }
 
@@ -204,6 +228,10 @@ export interface PackageVersion {
 	minFlowLikeVersion?: string;
 	releaseNotes?: string;
 	yanked: boolean;
+	/** Widget bundle (`.flwb`) sha256, when this version ships widgets */
+	widgetBundleHash?: string | null;
+	/** Widget bundle size in bytes, when this version ships widgets */
+	widgetBundleSize?: number | null;
 }
 
 export interface RegistryEntry {

@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import { appGlobalState, pageLocalState } from "../../lib/idb-storage";
 import { getCurrentPageContext } from "../../lib/page-context";
 import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
-import { IExecutionMode, type IBoard } from "../../lib/schema/flow/board";
+import { type IBoard, IExecutionMode } from "../../lib/schema/flow/board";
 import {
 	type BoardVersion,
 	resolveEventBoardVersion,
@@ -30,19 +30,31 @@ import {
 } from "../../state/backend-state/prerun-cache";
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { useRouteDialogSafe } from "./RouteDialogProvider";
-import { useWidgetInstance } from "./layout/A2UIWidgetInstance";
+import { resolveEventActions } from "./event-handlers";
+import {
+	resolveWidgetInstanceEventRoute,
+	useWidgetInstance,
+} from "./layout/A2UIWidgetInstance";
+import { collectMicroWidgetValueKeys } from "./micro-widget-host";
 import type {
 	A2UIClientMessage,
 	A2UIServerMessage,
 	Action,
+	EventHandlers,
 	SurfaceComponent,
 } from "./types";
+import { handleWidgetQueryMessage } from "./widget-query-handler";
 import { compactWorkflowPayload } from "./workflow-payload";
 
 export { compactWorkflowPayload } from "./workflow-payload";
 
 type ActionHandler = (message: A2UIClientMessage) => void;
 type A2UIMessageHandler = (message: A2UIServerMessage) => void;
+type ExecuteActionFn = (
+	action: Action | undefined,
+	triggeringComponentId?: string,
+	additionalContext?: Record<string, unknown>,
+) => Promise<void>;
 
 function toBoundValue(value: unknown): Record<string, unknown> {
 	if (typeof value === "boolean") return { literalBool: value };
@@ -134,12 +146,17 @@ function mergeStoredElementValues(
 		}
 	}
 
+	// Micro widget value mirrors are keyed "{instanceId}/values" (not prefixed
+	// with the surface id), so they need their own allowlist to survive the merge.
+	const microValueKeys = collectMicroWidgetValueKeys(components);
+
 	for (const [elementId, storedValue] of Object.entries(storedValues)) {
 		if (mergedElements[elementId] !== undefined) continue;
-		if (!elementId.startsWith(`${surfaceId}/`)) continue;
+		const isMicroValues = microValueKeys.has(elementId);
+		if (!isMicroValues && !elementId.startsWith(`${surfaceId}/`)) continue;
 
 		mergedElements[elementId] = {
-			id: elementId.slice(`${surfaceId}/`.length),
+			id: isMicroValues ? "values" : elementId.slice(`${surfaceId}/`.length),
 			component: { value: toBoundValue(storedValue) },
 		};
 	}
@@ -228,6 +245,7 @@ interface ActionContextValue {
 	) => void;
 	closeDialog?: (dialogId?: string) => void;
 	getElementValues: () => Record<string, unknown>;
+	setElementValue: (elementId: string, value: unknown) => void;
 	resolveTemporaryUploadTarget: (
 		action?: Action,
 	) => Promise<ITemporaryUploadExecutionTarget>;
@@ -297,6 +315,14 @@ export function ActionProvider({
 		return elementValuesRef.current;
 	}, []);
 
+	// Imperative setter for element values that bypasses the change-action
+	// wrapper. Used by micro widgets to mirror their `value:changed` state
+	// under the "{instanceId}/values" elements-payload key.
+	const setElementValue = useCallback((elementId: string, value: unknown) => {
+		if (!elementId) return;
+		elementValuesRef.current[elementId] = value;
+	}, []);
+
 	// Ref-counted set of components that are currently triggering an async action.
 	// Components consume this to render a loading state for the duration of their action.
 	const triggeringCountsRef = useRef<Map<string, number>>(new Map());
@@ -354,11 +380,7 @@ export function ActionProvider({
 
 			try {
 				const prerun = await prerunSwr(
-					prerunBoardKey(
-						effectiveAppId,
-						effectiveBoardId,
-						effectiveVersion,
-					),
+					prerunBoardKey(effectiveAppId, effectiveBoardId, effectiveVersion),
 					() =>
 						backend.boardState.prerunBoard!(
 							effectiveAppId,
@@ -621,6 +643,7 @@ export function ActionProvider({
 				openDialog,
 				closeDialog,
 				getElementValues,
+				setElementValue,
 				resolveTemporaryUploadTarget,
 				triggeringComponents,
 				markComponentTriggering,
@@ -663,6 +686,16 @@ export function useActionContext() {
 export function useOnAction() {
 	const context = useContext(ActionContext);
 	return context?.onAction;
+}
+
+/**
+ * Hook returning the imperative element-value setter from ActionContext.
+ * Micro widgets use it to publish their `value:changed` mirror under the
+ * `"{instanceId}/values"` key so payload-based reads (Get Element Value)
+ * stay coherent.
+ */
+export function useSetElementValue() {
+	return useContext(ActionContext)?.setElementValue;
 }
 
 /**
@@ -822,12 +855,51 @@ export function useComponentActionTrigger(componentId: string | undefined) {
 	);
 }
 
+export interface ComponentEventSource {
+	actions?: Action[];
+	eventHandlers?: EventHandlers;
+}
+
+export interface ComponentEventTriggerOptions {
+	/** Some newly exposed events had no legacy configured-action behavior. */
+	legacyFallback?: boolean;
+}
+
+/**
+ * Execute the ordered actions configured for a semantic component event.
+ * Exact/wildcard handlers override the legacy singleton `actions[0]` fallback.
+ */
+export function useComponentEventTrigger(componentId: string | undefined) {
+	const { executeAction } = useExecuteAction();
+
+	return useCallback(
+		async (
+			eventName: string,
+			component: ComponentEventSource,
+			context: Record<string, unknown> = {},
+			options: ComponentEventTriggerOptions = {},
+		) => {
+			const resolution = resolveEventActions(
+				component.eventHandlers,
+				eventName,
+				component.actions,
+				options.legacyFallback ?? true,
+			);
+			for (const action of resolution.actions) {
+				await executeAction(action, componentId, context);
+			}
+		},
+		[componentId, executeAction],
+	);
+}
+
 export function useExecuteAction() {
 	const router = useRouter();
 	const pathname = usePathname();
 	const backend = useBackend();
 	const executionService = useExecutionServiceOptional();
 	const widgetInstance = useWidgetInstance();
+	const executeActionRef = useRef<ExecuteActionFn | null>(null);
 	const {
 		onAction,
 		onA2UIMessage,
@@ -870,6 +942,10 @@ export function useExecuteAction() {
 				if (event.event_type === "a2ui") {
 					const message = event.payload as A2UIServerMessage;
 					console.log("[A2UI] A2UI message:", message);
+
+					if (handleWidgetQueryMessage(message)) {
+						continue;
+					}
 
 					// Handle navigation directly - ActionHandler handles this, don't duplicate in page-interface
 					if (message.type === "navigateTo") {
@@ -1434,9 +1510,25 @@ export function useExecuteAction() {
 							break;
 						}
 
-						// Look up the binding from the widget instance's action bindings
-						const binding = widgetInstance?.actionBindings[actionId];
-						if (!binding) {
+						const route = resolveWidgetInstanceEventRoute(
+							widgetInstance,
+							actionId,
+						);
+						if (route.kind === "actions") {
+							const executeNestedAction = executeActionRef.current;
+							if (executeNestedAction) {
+								for (const routedAction of route.actions) {
+									await executeNestedAction(
+										routedAction,
+										widgetInstance?.componentId ?? triggeringComponentId,
+										context,
+									);
+								}
+							}
+							break;
+						}
+
+						if (route.kind === "diagnostic") {
 							const available = Object.keys(
 								widgetInstance?.actionBindings ?? {},
 							);
@@ -1455,6 +1547,9 @@ export function useExecuteAction() {
 							);
 							break;
 						}
+
+						// Keep the classic binding execution path unchanged.
+						const binding = route.binding;
 
 						if (!("workflow" in binding)) {
 							console.warn(
@@ -1625,6 +1720,7 @@ export function useExecuteAction() {
 			markComponentTriggering,
 		],
 	);
+	executeActionRef.current = executeAction;
 
 	return { executeAction, isPreviewMode: isPreviewMode ?? false };
 }

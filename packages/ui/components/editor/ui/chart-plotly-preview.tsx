@@ -1,7 +1,7 @@
 "use client";
 
-import { useTheme } from "next-themes";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getPlotlyChartLayout, useChartTokens } from "../../../lib/chart-theme";
 import type { ChartInput } from "./chart-data-parser";
 import { normalizePlotlyTitle, toPlotlyData } from "./chart-data-parser";
 
@@ -30,8 +30,8 @@ function objectValue(value: unknown): Record<string, unknown> {
 function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const plotlyRef = useRef<PlotlyModule | null>(null);
-	const { resolvedTheme } = useTheme();
-	const isDark = resolvedTheme === "dark";
+	const [themeNode, setThemeNode] = useState<HTMLDivElement | null>(null);
+	const tokens = useChartTokens(themeNode);
 
 	const { data, layout, config } = useMemo(() => {
 		const result = toPlotlyData(input);
@@ -51,15 +51,18 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 		const legacyFontColor =
 			typeof currentFont.color === "string" && currentFont.color === "#888";
 
-		const themedFontColor = isDark ? "#f3f4f6" : "#111827";
-		const themedMutedColor = isDark ? "#9ca3af" : "#6b7280";
-		const themedBorderColor = isDark ? "#374151" : "#d1d5db";
+		const themed = getPlotlyChartLayout(tokens);
+		const themedFontColor = tokens.text;
+		const themedMutedColor = tokens.textMuted;
+		const themedBorderColor = tokens.grid;
 
 		result.layout = {
 			...baseLayout,
 			height: input.config.height || height,
 			paper_bgcolor: baseLayout.paper_bgcolor ?? "transparent",
 			plot_bgcolor: baseLayout.plot_bgcolor ?? "transparent",
+			colorway: baseLayout.colorway ?? themed.colorway,
+			hoverlabel: baseLayout.hoverlabel ?? themed.hoverlabel,
 			font: {
 				...currentFont,
 				color: legacyFontColor
@@ -117,7 +120,7 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 		};
 
 		return result;
-	}, [input, height, isDark]);
+	}, [input, height, tokens]);
 
 	const handleResize = useCallback(() => {
 		if (!containerRef.current || !plotlyRef.current) return;
@@ -152,11 +155,19 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 
 		return () => {
 			mounted = false;
-			if (containerRef.current && plotlyRef.current) {
-				plotlyRef.current.purge(containerRef.current);
-			}
 		};
 	}, [data, layout, config]);
+
+	// Purge on unmount only — tearing the plot down between renders would also
+	// discard the pan and zoom the user has applied.
+	useEffect(() => {
+		const container = containerRef.current;
+		return () => {
+			if (container && plotlyRef.current) {
+				plotlyRef.current.purge(container);
+			}
+		};
+	}, []);
 
 	// Handle resize
 	useEffect(() => {
@@ -172,12 +183,20 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 		};
 	}, [handleResize]);
 
+	// The theme node stays outside the graph div: Plotly writes its own classes
+	// and inline styles onto the node it renders into, which the token observer
+	// would otherwise read back as a theme change.
 	return (
 		<div
-			ref={containerRef}
-			className="w-full min-h-0 rounded-md overflow-hidden"
+			ref={setThemeNode}
+			className="w-full min-h-0"
 			style={{ height: input.config.height || height }}
-		/>
+		>
+			<div
+				ref={containerRef}
+				className="h-full w-full rounded-md overflow-hidden"
+			/>
+		</div>
 	);
 }
 

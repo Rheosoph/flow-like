@@ -257,7 +257,8 @@ impl RuntimeCredentials {
 
     #[instrument(skip(self, state), level = "debug")]
     pub async fn to_state(&self, state: AppState) -> Result<FlowLikeState> {
-        match self {
+        let package_widget_source = state.wasm_registry.clone();
+        let flow_state = match self {
             #[cfg(feature = "aws")]
             RuntimeCredentials::Aws(aws) => aws.to_state(state).await,
             #[cfg(feature = "azure")]
@@ -267,7 +268,15 @@ impl RuntimeCredentials {
             #[cfg(feature = "r2")]
             RuntimeCredentials::R2(r2) => r2.to_state(state).await,
             RuntimeCredentials::Mixed(mixed) => mixed.to_state(state).await,
+        }?;
+
+        if let Some(package_widget_source) = package_widget_source {
+            flow_state
+                .register_package_widget_source(package_widget_source)
+                .await;
         }
+
+        Ok(flow_state)
     }
 
     #[instrument(skip(self), level = "debug")]

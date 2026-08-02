@@ -35,6 +35,7 @@ export const COMPONENT_BASE_PROPS = [
 	"style",
 	"children",
 	"actions",
+	"eventHandlers",
 	"hidden",
 ] as const satisfies readonly (keyof ComponentBase)[];
 
@@ -609,6 +610,17 @@ export const COMPONENT_PROPS = {
 		"exposedPropValues",
 		"actionBindings",
 		"styleOverride",
+	],
+	microWidgetInstance: [
+		"instanceId",
+		"packageId",
+		"widgetId",
+		"packageVersion",
+		"bundleHash",
+		"contract",
+		"props",
+		"preview",
+		"actionBindings",
 	],
 } as const satisfies {
 	[K in A2UIComponentType]: readonly PropsOf<K>[];

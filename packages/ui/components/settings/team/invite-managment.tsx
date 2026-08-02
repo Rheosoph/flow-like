@@ -2,27 +2,28 @@
 
 import { useDebounce } from "@uidotdev/usehooks";
 import {
-	Clock,
-	Copy,
-	ExternalLink,
+	ClockIcon,
+	CopyIcon,
+	ExternalLinkIcon,
 	Link,
 	LinkIcon,
 	Mail,
 	MailIcon,
-	MoreVertical,
-	Plus,
+	MoreVerticalIcon,
+	PlusIcon,
 	RefreshCw,
+	SearchIcon,
 	Settings,
-	Trash2,
+	Trash2Icon,
 	User,
-	UserCheck,
-	UserPlus,
+	UserCheckIcon,
 	UserPlus2Icon,
+	UserPlusIcon,
 	UserX,
 	Users,
 	UsersIcon,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { type ReactNode, useCallback, useState } from "react";
 import { toast } from "sonner";
 import {
 	AlertDialog,
@@ -38,11 +39,6 @@ import {
 	AvatarFallback,
 	AvatarImage,
 	Button,
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
 	Dialog,
 	DialogContent,
 	DialogDescription,
@@ -63,26 +59,207 @@ import {
 	useHub,
 	useInvoke,
 } from "../../../";
+import {
+	SectionHeading,
+	TEAM_ACTION_GRADIENT,
+	TEAM_ROW_META,
+	TEAM_ROW_TITLE,
+	TeamCallout,
+	TeamHint,
+	TeamRowActions,
+	TeamRowIcon,
+	TeamSection,
+	teamRowClass,
+} from "./team-shared";
 
-export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
+export function InviteUserDialog({
+	appId,
+	trigger,
+}: Readonly<{ appId: string; trigger: ReactNode }>) {
 	const backend = useBackend();
-	const links = useInvoke(backend.teamState.getInviteLinks, backend.teamState, [
-		appId,
-	]);
 	const [message, setMessage] = useState("");
 	const [invitee, setInvitee] = useState("");
 	const inviteeSearch = useDebounce(invitee, 500);
 	const [showInviteDialog, setShowInviteDialog] = useState(false);
-	const [showCreateLinkDialog, setShowCreateLinkDialog] = useState(false);
-	const [newLinkName, setNewLinkName] = useState("");
-	const [newLinkMaxUses, setNewLinkMaxUses] = useState<string>("");
-	const { hub } = useHub();
 
 	const userSearch = useInvoke(
 		backend.userState.searchUsers,
 		backend.userState,
 		[inviteeSearch],
 		inviteeSearch.length > 0,
+	);
+
+	return (
+		<Dialog open={showInviteDialog} onOpenChange={setShowInviteDialog}>
+			<DialogTrigger asChild>{trigger}</DialogTrigger>
+			<DialogContent className="sm:max-w-md">
+				<DialogHeader className="space-y-3">
+					<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
+						<UserPlus2Icon className="h-6 w-6 text-primary" />
+					</div>
+					<DialogTitle className="text-center text-xl">
+						Invite New Member
+					</DialogTitle>
+					<DialogDescription className="text-center">
+						Search for users and send them an invitation to join your team
+					</DialogDescription>
+				</DialogHeader>
+
+				<div className="space-y-4 py-4">
+					<div className="space-y-2">
+						<Label htmlFor="usernameOrEmail" className="text-sm font-medium">
+							Username or Email
+						</Label>
+						<div className="relative">
+							<Input
+								id="usernameOrEmail"
+								placeholder="Search by username or email..."
+								value={invitee}
+								onChange={(e) => setInvitee(e.target.value)}
+								className="pl-10"
+							/>
+							<User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+						</div>
+					</div>
+
+					<div className="space-y-2">
+						<Label htmlFor="inviteMessage" className="text-sm font-medium">
+							Personal Message
+						</Label>
+						<Textarea
+							id="inviteMessage"
+							placeholder="Add a personal message to your invitation (optional)"
+							value={message}
+							onChange={(e) => setMessage(e.target.value)}
+							className="min-h-20 resize-none"
+						/>
+					</div>
+
+					{inviteeSearch.length > 0 && (
+						<div className="space-y-3">
+							<Separator />
+
+							{userSearch.isFetching && (
+								<div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
+									<RefreshCw className="h-4 w-4 animate-spin" />
+									<span className="text-sm">Searching for users...</span>
+								</div>
+							)}
+
+							{!userSearch.isFetching &&
+								userSearch.data &&
+								userSearch.data.length > 0 && (
+									<div className="space-y-2">
+										<h4 className="text-sm font-medium text-foreground">
+											Search Results
+										</h4>
+										<div className="max-h-48 space-y-2 overflow-y-auto pr-2">
+											{userSearch.data.map((user) => (
+												<div
+													key={user.id}
+													className="group flex items-center justify-between rounded-lg border bg-card p-3 transition-colors hover:bg-accent/50"
+												>
+													<div className="flex items-center gap-3">
+														<Avatar className="h-9 w-9">
+															<AvatarImage
+																src={user.avatar_url}
+																alt={user.name ?? user.username ?? user.email}
+															/>
+															<AvatarFallback className="bg-primary/10 text-primary">
+																{(user.name ?? user.username ?? user.email)
+																	?.charAt(0)
+																	.toUpperCase()}
+															</AvatarFallback>
+														</Avatar>
+														<div className="min-w-0 flex-1">
+															<p className="truncate text-sm font-medium">
+																{user.name ?? user.username ?? user.email}
+															</p>
+															{user.username && user.email && user.name && (
+																<p className="truncate text-xs text-muted-foreground">
+																	@{user.username}
+																</p>
+															)}
+														</div>
+													</div>
+													<Button
+														size="sm"
+														onClick={async () => {
+															try {
+																await backend.teamState.inviteUser(
+																	appId,
+																	user.id,
+																	message,
+																);
+																toast.success(
+																	`Invitation sent to ${user.name ?? user.username ?? user.email}!`,
+																);
+																setShowInviteDialog(false);
+																setInvitee("");
+																setMessage("");
+															} catch (error) {
+																console.error(error);
+																toast.error(
+																	"Failed to send invite. Please try again.",
+																);
+															}
+														}}
+														className="h-8 gap-1.5 text-xs"
+													>
+														<Mail className="h-3 w-3" />
+														Invite
+													</Button>
+												</div>
+											))}
+										</div>
+									</div>
+								)}
+
+							{!userSearch.isFetching &&
+								inviteeSearch.length > 0 &&
+								(!userSearch.data || userSearch.data.length === 0) && (
+									<div className="flex flex-col items-center gap-2 py-8 text-center">
+										<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
+											<UserX className="h-6 w-6 text-muted-foreground" />
+										</div>
+										<div className="space-y-1">
+											<p className="text-sm font-medium">No users found</p>
+											<p className="text-xs text-muted-foreground">
+												Try searching with a different username or email
+											</p>
+										</div>
+									</div>
+								)}
+						</div>
+					)}
+
+					{inviteeSearch.length === 0 && (
+						<div className="flex flex-col items-center gap-2 py-6 text-center text-muted-foreground">
+							<Users className="h-8 w-8" />
+							<p className="text-sm">Start typing to search for users</p>
+						</div>
+					)}
+				</div>
+			</DialogContent>
+		</Dialog>
+	);
+}
+
+export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
+	const backend = useBackend();
+	const links = useInvoke(backend.teamState.getInviteLinks, backend.teamState, [
+		appId,
+	]);
+	const [showCreateLinkDialog, setShowCreateLinkDialog] = useState(false);
+	const [newLinkName, setNewLinkName] = useState("");
+	const [newLinkMaxUses, setNewLinkMaxUses] = useState<string>("");
+	const { hub } = useHub();
+
+	const host = hub?.app ?? "app.flow-like.com";
+
+	const webLink = useCallback(
+		(token: string) => `https://${host}/join?appId=${appId}&token=${token}`,
+		[host, appId],
 	);
 
 	const copyInviteLink = (token: string) => {
@@ -92,7 +269,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 
 	const createInviteLink = useCallback(async () => {
 		let maxUses: number | undefined = Number.parseInt(newLinkMaxUses);
-		if (isNaN(maxUses) || maxUses <= 0) {
+		if (Number.isNaN(maxUses) || maxUses <= 0) {
 			maxUses = -1; // Allow unlimited uses if not specified
 		}
 
@@ -102,7 +279,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 		setShowCreateLinkDialog(false);
 		toast.success("New invite link created!");
 		await links.refetch();
-	}, [appId, newLinkName, newLinkMaxUses, backend]);
+	}, [appId, newLinkName, newLinkMaxUses, backend, links.refetch]);
 
 	const deleteInviteLink = useCallback(
 		async (id: string) => {
@@ -113,215 +290,46 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 	);
 
 	return (
-		<div className="grid gap-6 md:grid-cols-2 w-full pr-2">
-			{/* Direct Invite Card - moved to top */}
-			<Card className="md:col-span-2">
-				<CardHeader>
-					<CardTitle className="flex items-center gap-2">
-						<UserPlus className="w-5 h-5" />
-						Direct Invite
-					</CardTitle>
-					<CardDescription>Send a direct invitation to a user</CardDescription>
-				</CardHeader>
-				<CardContent>
-					<Dialog open={showInviteDialog} onOpenChange={setShowInviteDialog}>
-						<DialogTrigger asChild>
-							<Button className="w-full bg-linear-to-r from-primary to-tertiary hover:from-primary/50 hover:to-tertiary/50">
-								<UserPlus2Icon className="w-4 h-4 mr-2" />
-								Invite User
-							</Button>
-						</DialogTrigger>
-						<DialogContent className="sm:max-w-md">
-							<DialogHeader className="space-y-3">
-								<div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-									<UserPlus2Icon className="h-6 w-6 text-primary" />
-								</div>
-								<DialogTitle className="text-center text-xl">
-									Invite New Member
-								</DialogTitle>
-								<DialogDescription className="text-center">
-									Search for users and send them an invitation to join your team
-								</DialogDescription>
-							</DialogHeader>
+		<div className="space-y-8">
+			<TeamSection>
+				<SectionHeading
+					icon={UserPlusIcon}
+					title="Invite someone directly"
+					description="Search a Flow-Like account and send it an invitation with a note."
+					actions={
+						<InviteUserDialog
+							appId={appId}
+							trigger={
+								<Button size="sm" className={TEAM_ACTION_GRADIENT}>
+									<UserPlusIcon className="size-4" />
+									Invite people
+								</Button>
+							}
+						/>
+					}
+				/>
+				<TeamCallout icon={SearchIcon}>
+					Matching accounts show up as you type a username or email — pick the
+					right one and it gets the invitation straight away. Add a personal
+					message and it travels with the invite.
+				</TeamCallout>
+			</TeamSection>
 
-							<div className="space-y-6 py-4">
-								<div className="space-y-2">
-									<Label
-										htmlFor="usernameOrEmail"
-										className="text-sm font-medium"
-									>
-										Username or Email
-									</Label>
-									<div className="relative">
-										<Input
-											id="usernameOrEmail"
-											placeholder="Search by username or email..."
-											value={invitee}
-											onChange={(e) => setInvitee(e.target.value)}
-											className="pl-10"
-										/>
-										<User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-									</div>
-								</div>
-
-								<div className="space-y-2">
-									<Label
-										htmlFor="inviteMessage"
-										className="text-sm font-medium"
-									>
-										Personal Message
-									</Label>
-									<Textarea
-										id="inviteMessage"
-										placeholder="Add a personal message to your invitation (optional)"
-										value={message}
-										onChange={(e) => setMessage(e.target.value)}
-										className="min-h-[80px] resize-none"
-									/>
-								</div>
-
-								{/* Search Results */}
-								{inviteeSearch.length > 0 && (
-									<div className="space-y-3">
-										<Separator />
-
-										{userSearch.isFetching && (
-											<div className="flex items-center justify-center gap-2 py-8 text-muted-foreground">
-												<RefreshCw className="h-4 w-4 animate-spin" />
-												<span className="text-sm">Searching for users...</span>
-											</div>
-										)}
-
-										{!userSearch.isFetching &&
-											userSearch.data &&
-											userSearch.data.length > 0 && (
-												<div className="space-y-2">
-													<h4 className="text-sm font-medium text-foreground">
-														Search Results
-													</h4>
-													<div className="max-h-48 space-y-2 overflow-y-auto pr-2">
-														{userSearch.data.map((user) => (
-															<div
-																key={user.id}
-																className="group flex items-center justify-between rounded-lg border bg-card p-3 transition-colors hover:bg-accent/50"
-															>
-																<div className="flex items-center gap-3">
-																	<Avatar className="h-9 w-9">
-																		<AvatarImage
-																			src={user.avatar_url}
-																			alt={
-																				user.name ?? user.username ?? user.email
-																			}
-																		/>
-																		<AvatarFallback className="bg-primary/10 text-primary">
-																			{(
-																				user.name ??
-																				user.username ??
-																				user.email
-																			)
-																				?.charAt(0)
-																				.toUpperCase()}
-																		</AvatarFallback>
-																	</Avatar>
-																	<div className="min-w-0 flex-1">
-																		<p className="truncate text-sm font-medium">
-																			{user.name ?? user.username ?? user.email}
-																		</p>
-																		{user.username &&
-																			user.email &&
-																			user.name && (
-																				<p className="truncate text-xs text-muted-foreground">
-																					@{user.username}
-																				</p>
-																			)}
-																	</div>
-																</div>
-																<Button
-																	size="sm"
-																	onClick={async () => {
-																		try {
-																			await backend.teamState.inviteUser(
-																				appId,
-																				user.id,
-																				message,
-																			);
-																			toast.success(
-																				`Invitation sent to ${user.name ?? user.username ?? user.email}!`,
-																			);
-																			setShowInviteDialog(false);
-																			setInvitee("");
-																			setMessage("");
-																		} catch (error) {
-																			console.error(error);
-																			toast.error(
-																				`Failed to send invite. Please try again.`,
-																			);
-																		}
-																	}}
-																	className="h-8 gap-1.5 text-xs"
-																>
-																	<Mail className="h-3 w-3" />
-																	Invite
-																</Button>
-															</div>
-														))}
-													</div>
-												</div>
-											)}
-
-										{!userSearch.isFetching &&
-											inviteeSearch.length > 0 &&
-											(!userSearch.data || userSearch.data.length === 0) && (
-												<div className="flex flex-col items-center gap-2 py-8 text-center">
-													<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-														<UserX className="h-6 w-6 text-muted-foreground" />
-													</div>
-													<div className="space-y-1">
-														<p className="text-sm font-medium">
-															No users found
-														</p>
-														<p className="text-xs text-muted-foreground">
-															Try searching with a different username or email
-														</p>
-													</div>
-												</div>
-											)}
-									</div>
-								)}
-
-								{inviteeSearch.length === 0 && (
-									<div className="flex flex-col items-center gap-2 py-6 text-center text-muted-foreground">
-										<Users className="h-8 w-8" />
-										<p className="text-sm">Start typing to search for users</p>
-									</div>
-								)}
-							</div>
-						</DialogContent>
-					</Dialog>
-				</CardContent>
-			</Card>
-
-			{/* Invite Links Management - moved to bottom */}
-			<Card className="md:col-span-2">
-				<CardHeader>
-					<div className="flex items-center justify-between">
-						<div>
-							<CardTitle className="flex items-center gap-2">
-								<Link className="w-5 h-5" />
-								Invite Links
-							</CardTitle>
-							<CardDescription>
-								Create and manage invite links for your team
-							</CardDescription>
-						</div>
+			<TeamSection>
+				<SectionHeading
+					icon={LinkIcon}
+					title="Invite links"
+					count={links.data?.length ?? 0}
+					description="Shareable links that add whoever opens them. Cap the uses, or leave them open."
+					actions={
 						<Dialog
 							open={showCreateLinkDialog}
 							onOpenChange={setShowCreateLinkDialog}
 						>
 							<DialogTrigger asChild>
-								<Button>
-									<Plus className="w-4 h-4 mr-2" />
-									Create Link
+								<Button variant="outline" size="sm">
+									<PlusIcon className="size-4" />
+									New link
 								</Button>
 							</DialogTrigger>
 							<DialogContent className="sm:max-w-md">
@@ -338,7 +346,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 									</DialogDescription>
 								</DialogHeader>
 
-								<div className="space-y-6 py-4">
+								<div className="space-y-4 py-4">
 									<div className="space-y-2">
 										<Label htmlFor="linkName" className="text-sm font-medium">
 											Link Name
@@ -392,142 +400,155 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 										onClick={createInviteLink}
 										disabled={!newLinkName.trim()}
 									>
-										<Plus className="w-4 h-4 mr-2" />
 										Create Link
 									</Button>
 								</DialogFooter>
 							</DialogContent>
 						</Dialog>
-					</div>
-				</CardHeader>
-				<CardContent className="space-y-4">
-					{(links.data?.length ?? 0) === 0 && (
-						<EmptyState
-							className="w-full flex grow min-w-fill flex-col max-w-full"
-							title="No Invite Links"
-							description="Create Invite Links to share your project"
-							icons={[UsersIcon, LinkIcon, MailIcon]}
-						/>
-					)}
-					{(links.data?.length ?? 0) !== 0 &&
-						links.data?.map((link) => (
-							<div key={link.id} className="border rounded-lg p-4 space-y-3">
-								<div className="flex items-start justify-between">
-									<div className="space-y-1">
-										<h4 className="font-medium">{link.name}</h4>
-										<div className="flex items-center gap-4 text-sm text-muted-foreground">
-											<span className="flex items-center gap-1">
-												<UserCheck className="w-4 h-4" />
-												{link.count_joined} joined
-											</span>
-											{(link.max_uses ?? 0) > 0 && (
-												<span>Max: {link.max_uses}</span>
-											)}
-											<span className="flex items-center gap-1">
-												<Clock className="w-4 h-4" />
-												{new Date(
-													Date.parse(link.created_at),
-												).toLocaleDateString()}
-											</span>
-										</div>
-									</div>
-									<DropdownMenu>
-										<DropdownMenuTrigger asChild>
-											<Button variant="ghost" size="sm">
-												<MoreVertical className="w-4 h-4" />
-											</Button>
-										</DropdownMenuTrigger>
-										<DropdownMenuContent align="end">
-											<DropdownMenuItem
-												onClick={() =>
-													copyInviteLink(
-														`https://${hub?.app ?? "app.flow-like.com"}/join?appId=${appId}&token=${link.token}`,
-													)
-												}
-											>
-												<ExternalLink className="w-4 h-4 mr-2" />
-												Copy Web Link
-											</DropdownMenuItem>
-											<DropdownMenuItem
-												onClick={() =>
-													copyInviteLink(
-														`flow-like://join?appId=${appId}&token=${link.token}`,
-													)
-												}
-											>
-												<Copy className="w-4 h-4 mr-2" />
-												Copy Desktop Link
-											</DropdownMenuItem>
-											<AlertDialog>
-												<AlertDialogTrigger asChild>
-													<DropdownMenuItem
-														onSelect={(e) => e.preventDefault()}
-													>
-														<Trash2 className="w-4 h-4 mr-2" />
-														Delete
-													</DropdownMenuItem>
-												</AlertDialogTrigger>
-												<AlertDialogContent>
-													<AlertDialogHeader>
-														<AlertDialogTitle>
-															Delete Invite Link
-														</AlertDialogTitle>
-														<AlertDialogDescription>
-															Are you sure you want to delete &quot;{link.name}
-															&quot;? This action cannot be undone and the link
-															will no longer work.
-														</AlertDialogDescription>
-													</AlertDialogHeader>
-													<AlertDialogFooter>
-														<AlertDialogCancel>Cancel</AlertDialogCancel>
-														<AlertDialogAction
-															onClick={() => deleteInviteLink(link.id)}
-														>
-															Delete
-														</AlertDialogAction>
-													</AlertDialogFooter>
-												</AlertDialogContent>
-											</AlertDialog>
-										</DropdownMenuContent>
-									</DropdownMenu>
-								</div>
-								<div className="flex gap-2">
-									<Input
-										value={`https://${hub?.app ?? "app.flow-like.com"}/join?appId=${appId}&token=${link.token}`}
-										readOnly
-										className="font-mono text-sm"
-									/>
-									<Button
-										onClick={() =>
-											copyInviteLink(
-												`https://${hub?.app ?? "app.flow-like.com"}/join?appId=${appId}&token=${link.token}`,
-											)
-										}
-										variant="outline"
-										size="sm"
-									>
-										<Copy className="w-4 h-4" />
-									</Button>
-								</div>
-								{link.max_uses > 0 && (
-									<div className="flex items-center gap-2">
-										<div className="flex-1 bg-muted rounded-full h-2">
-											<div
-												className="bg-primary h-2 rounded-full transition-all"
-												style={{
-													width: `${Math.min((link.count_joined / link.max_uses) * 100, 100)}%`,
-												}}
-											/>
-										</div>
-										<span className="text-xs text-muted-foreground">
-											{link.count_joined}/{link.max_uses}
+					}
+				/>
+
+				{(links.data?.length ?? 0) === 0 ? (
+					<EmptyState
+						className="max-w-full"
+						title="No Invite Links"
+						description="Create Invite Links to share your project"
+						icons={[UsersIcon, LinkIcon, MailIcon]}
+					/>
+				) : (
+					<div className="flex flex-col gap-2">
+						{links.data?.map((link) => (
+							<div key={link.id} className={teamRowClass({ align: "start" })}>
+								<TeamRowIcon icon={LinkIcon} className="mt-0.5" />
+								<div className="min-w-0 flex-1">
+									<div className={TEAM_ROW_TITLE}>{link.name}</div>
+									<div className={TEAM_ROW_META}>
+										<span className="flex items-center gap-1">
+											<UserCheckIcon className="size-3.5" />
+											{link.count_joined} joined
+										</span>
+										<span>
+											{link.max_uses > 0 ? `of ${link.max_uses}` : "no limit"}
+										</span>
+										<span className="flex items-center gap-1">
+											<ClockIcon className="size-3.5" />
+											{new Date(
+												Date.parse(link.created_at),
+											).toLocaleDateString()}
+										</span>
+										<span className="max-w-[18ch] truncate font-mono">
+											{link.token}
 										</span>
 									</div>
-								)}
+
+									{link.max_uses > 0 && (
+										<div className="mt-2 flex items-center gap-2">
+											<div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+												<div
+													className="h-full rounded-full bg-linear-to-r from-primary to-tertiary transition-all"
+													style={{
+														width: `${Math.min((link.count_joined / link.max_uses) * 100, 100)}%`,
+													}}
+												/>
+											</div>
+											<span className="text-[11px] tabular-nums text-muted-foreground">
+												{link.count_joined}/{link.max_uses}
+											</span>
+										</div>
+									)}
+
+									<div className="mt-2 flex items-center gap-2">
+										<Input
+											value={webLink(link.token)}
+											readOnly
+											className="h-8 font-mono text-xs"
+										/>
+										<TeamRowActions always>
+											<Button
+												onClick={() => copyInviteLink(webLink(link.token))}
+												variant="outline"
+												size="icon"
+												className="size-8"
+												aria-label="Copy invite link"
+											>
+												<CopyIcon className="size-4" />
+											</Button>
+											<DropdownMenu>
+												<DropdownMenuTrigger asChild>
+													<Button
+														variant="ghost"
+														size="icon"
+														className="size-8"
+														aria-label="Invite link options"
+													>
+														<MoreVerticalIcon className="size-4" />
+													</Button>
+												</DropdownMenuTrigger>
+												<DropdownMenuContent align="end">
+													<DropdownMenuItem
+														onClick={() => copyInviteLink(webLink(link.token))}
+													>
+														<ExternalLinkIcon className="size-4" />
+														Copy Web Link
+													</DropdownMenuItem>
+													<DropdownMenuItem
+														onClick={() =>
+															copyInviteLink(
+																`flow-like://join?appId=${appId}&token=${link.token}`,
+															)
+														}
+													>
+														<CopyIcon className="size-4" />
+														Copy Desktop Link
+													</DropdownMenuItem>
+													<AlertDialog>
+														<AlertDialogTrigger asChild>
+															<DropdownMenuItem
+																variant="destructive"
+																onSelect={(e) => e.preventDefault()}
+															>
+																<Trash2Icon className="size-4" />
+																Delete
+															</DropdownMenuItem>
+														</AlertDialogTrigger>
+														<AlertDialogContent>
+															<AlertDialogHeader>
+																<AlertDialogTitle>
+																	Delete Invite Link
+																</AlertDialogTitle>
+																<AlertDialogDescription>
+																	Are you sure you want to delete &quot;
+																	{link.name}
+																	&quot;? This action cannot be undone and the
+																	link will no longer work.
+																</AlertDialogDescription>
+															</AlertDialogHeader>
+															<AlertDialogFooter>
+																<AlertDialogCancel>Cancel</AlertDialogCancel>
+																<AlertDialogAction
+																	onClick={() => deleteInviteLink(link.id)}
+																	className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+																>
+																	Delete
+																</AlertDialogAction>
+															</AlertDialogFooter>
+														</AlertDialogContent>
+													</AlertDialog>
+												</DropdownMenuContent>
+											</DropdownMenu>
+										</TeamRowActions>
+									</div>
+								</div>
 							</div>
 						))}
-				</CardContent>
-			</Card>
+					</div>
+				)}
+
+				<TeamHint>
+					Every link copies either as a web address or as a flow-like:// link
+					that opens straight in the desktop app.
+				</TeamHint>
+			</TeamSection>
 		</div>
 	);
 }

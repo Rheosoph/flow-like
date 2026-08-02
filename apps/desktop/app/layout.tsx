@@ -13,6 +13,7 @@ import "@flow-like/flow-like-ui/global.css";
 import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
 import { GlobalChatOverlay } from "@flow-like/flow-like-ui/components/global-chat/global-chat-overlay";
 import { GlobalToolBridge } from "@flow-like/flow-like-ui/components/global-chat/global-tool-bridge";
+import { GlobalUpgradeDialog } from "@flow-like/flow-like-ui/components/upgrade/upgrade-dialog";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
 import { createIDBPersister } from "@flow-like/flow-like-ui/lib/persister";
@@ -222,6 +223,7 @@ export default function RootLayout({
 																			<GlobalToolBridge />
 																			<GlobalChatOverlay />
 																			<FlowPilotBubbleButton />
+																			<GlobalUpgradeDialog />
 																		</TelemetryProvider>
 																	</SpotlightWrapper>
 																</ExecutionEngineProviderComponent>

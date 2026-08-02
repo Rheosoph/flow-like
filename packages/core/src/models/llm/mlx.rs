@@ -596,7 +596,6 @@ mod apple {
             ) -> c_int;
             fn flow_like_mlx_cancel(request_id: *const c_char);
             fn flow_like_mlx_unload(model_directory: *const c_char);
-            fn flow_like_mlx_clear_cache();
         }
 
         struct CallbackContext {
@@ -694,7 +693,6 @@ mod apple {
             fn unload(&self) {
                 unsafe {
                     flow_like_mlx_unload(self.model_directory.as_ptr());
-                    flow_like_mlx_clear_cache();
                 }
             }
         }
@@ -744,7 +742,7 @@ mod apple {
 
     pub struct MlxModel {
         bit: Bit,
-        _runtime: MlxRuntime,
+        _runtime: Arc<MlxRuntime>,
         model: Arc<MlxProviderModel>,
         pub port: u16,
     }
@@ -843,7 +841,7 @@ mod apple {
                 transport: transport.clone(),
             };
             let (port, server) = start_proxy(proxy_state).await?;
-            let runtime = MlxRuntime { server, transport };
+            let runtime = Arc::new(MlxRuntime { server, transport });
 
             let mut provider = bit.try_to_provider().ok_or_else(|| {
                 flow_like_types::anyhow!("Failed to read the MLX provider configuration")
@@ -856,7 +854,15 @@ mod apple {
                 .get_or_insert_default()
                 .entry("max_kv_size".to_string())
                 .or_insert_with(|| json!(default_max_kv_size(bit, execution_settings)));
-            let model = Arc::new(MlxProviderModel::new(&provider, port, &bearer_token).await?);
+            let model = Arc::new(
+                MlxProviderModel::new_with_keepalive(
+                    &provider,
+                    port,
+                    &bearer_token,
+                    runtime.clone(),
+                )
+                .await?,
+            );
 
             Ok(Self {
                 bit: bit.clone(),

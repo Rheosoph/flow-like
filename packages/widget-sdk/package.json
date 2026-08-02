@@ -1,0 +1,37 @@
+{
+	"name": "@flow-like/widget-sdk",
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Flow-Like micro widget SDK: typed contracts, flw/1 host bridge, and framework adapters.",
+	"license": "MIT",
+	"exports": {
+		".": "./src/index.ts",
+		"./react": "./src/react.ts",
+		"./vanilla": "./src/vanilla.ts",
+		"./protocol": "./src/protocol.ts",
+		"./validate": "./src/validate.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "bun test"
+	},
+	"dependencies": {
+		"nanostores": "^1.0.1"
+	},
+	"devDependencies": {
+		"@nanostores/react": "^1.0.0",
+		"typescript": "^5.7.3"
+	},
+	"peerDependencies": {
+		"@nanostores/react": ">=0.8.0",
+		"react": ">=18"
+	},
+	"peerDependenciesMeta": {
+		"@nanostores/react": {
+			"optional": true
+		},
+		"react": {
+			"optional": true
+		}
+	}
+}

@@ -441,6 +441,7 @@ export function CronJobConfig({
 	onConfigUpdate,
 	hub,
 	canExecuteLocally,
+	section,
 }: IConfigInterfaceProps) {
 	const browserTZ =
 		typeof Intl !== "undefined"
@@ -595,18 +596,24 @@ export function CronJobConfig({
 	const scheduledFor = config?.scheduled_for ?? null;
 	const alreadyHappened = isPastInTZ(scheduledFor, timezone);
 
+	// The events surface renders one section at a time; anywhere else (and for
+	// any section this component doesn't know) it renders whole.
+	const shows = (id: string) => !section || section === id;
+
 	return (
 		<div className="w-full space-y-6">
-			<div className="space-y-1">
-				<h3 className="text-lg font-semibold">Cron Job</h3>
-				<p className="text-sm text-muted-foreground">
-					One-time schedule or recurring cron. Stored as simple strings; your
-					Rust runtime resolves timezone and UTC safely.
-				</p>
-			</div>
+			{!section && (
+				<div className="space-y-1">
+					<h3 className="text-lg font-semibold">Cron Job</h3>
+					<p className="text-sm text-muted-foreground">
+						One-time schedule or recurring cron. Stored as simple strings; your
+						Rust runtime resolves timezone and UTC safely.
+					</p>
+				</div>
+			)}
 
 			{/* Execution Target */}
-			{supportsBoth && (
+			{shows("runtime") && supportsBoth && (
 				<div className="space-y-2">
 					<Label htmlFor="sink_execution">Execution Target</Label>
 					<Select
@@ -650,312 +657,322 @@ export function CronJobConfig({
 				</div>
 			)}
 
-			{/* Mode */}
-			<div className="space-y-2">
-				<Label>Scheduling Mode</Label>
-				<RadioGroup
-					value={mode}
-					onValueChange={handleModeChange}
-					className="flex gap-6"
-				>
-					<div className="flex items-center space-x-2">
-						<RadioGroupItem
-							value="one_time"
-							id="mode_one_time"
-							disabled={!isEditing}
-						/>
-						<Label htmlFor="mode_one_time">One-time (scheduled)</Label>
-					</div>
-					<div className="flex items-center space-x-2">
-						<RadioGroupItem
-							value="recurring"
-							id="mode_recurring"
-							disabled={!isEditing}
-						/>
-						<Label htmlFor="mode_recurring">Recurring (cron)</Label>
-					</div>
-				</RadioGroup>
-			</div>
-
-			{/* Timezone */}
-			<div className="space-y-2">
-				<Label htmlFor="cron_tz">Timezone</Label>
-				<div className="flex gap-2">
-					<Popover open={tzOpen} onOpenChange={setTzOpen}>
-						<PopoverTrigger asChild>
-							<Button
-								type="button"
-								variant="outline"
-								role="combobox"
-								aria-expanded={tzOpen}
-								className={cn(
-									"flex-1 justify-between",
-									!tzValid && timezone && "border-destructive",
-								)}
-								disabled={!isEditing}
-							>
-								{timezone || "Select timezone..."}
-								<ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-							</Button>
-						</PopoverTrigger>
-						<PopoverContent className="w-75 p-0">
-							<Command shouldFilter={false}>
-								<CommandInput
-									placeholder="Search timezone..."
-									value={tzSearch}
-									onValueChange={setTzSearch}
+			{shows("schedule") && (
+				<>
+					{/* Mode */}
+					<div className="space-y-2">
+						<Label>Scheduling Mode</Label>
+						<RadioGroup
+							value={mode}
+							onValueChange={handleModeChange}
+							className="flex gap-6"
+						>
+							<div className="flex items-center space-x-2">
+								<RadioGroupItem
+									value="one_time"
+									id="mode_one_time"
+									disabled={!isEditing}
 								/>
-								<CommandList>
-									<CommandEmpty>No timezone found.</CommandEmpty>
-									<CommandGroup>
-										{IANA_TIMEZONES.filter((tz) =>
-											tz.toLowerCase().includes(tzSearch.toLowerCase()),
-										)
-											.slice(0, 50)
-											.map((tz) => (
-												<CommandItem
-													key={tz}
-													value={tz}
-													onSelect={() => {
-														setValue("timezone", tz);
-														setTzOpen(false);
-														setTzSearch("");
-													}}
-												>
-													<CheckIcon
-														className={cn(
-															"mr-2 h-4 w-4",
-															timezone === tz ? "opacity-100" : "opacity-0",
-														)}
-													/>
-													{tz}
-												</CommandItem>
-											))}
-									</CommandGroup>
-								</CommandList>
-							</Command>
-						</PopoverContent>
-					</Popover>
-					<Button
-						type="button"
-						variant="secondary"
-						onClick={() =>
-							setValue(
-								"timezone",
-								Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-							)
-						}
-						disabled={!isEditing}
-					>
-						Use my timezone
-					</Button>
-				</div>
-				{!tzValid && timezone && (
-					<p className="text-sm text-destructive">
-						Unknown timezone. Please select a valid IANA timezone.
-					</p>
-				)}
-			</div>
+								<Label htmlFor="mode_one_time">One-time (scheduled)</Label>
+							</div>
+							<div className="flex items-center space-x-2">
+								<RadioGroupItem
+									value="recurring"
+									id="mode_recurring"
+									disabled={!isEditing}
+								/>
+								<Label htmlFor="mode_recurring">Recurring (cron)</Label>
+							</div>
+						</RadioGroup>
+					</div>
 
-			<Separator />
-
-			{/* ONE-TIME */}
-			{mode === "one_time" && (
-				<div className="space-y-4">
-					<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-						<div className="space-y-2">
-							<Label>Date</Label>
-							<Popover>
+					{/* Timezone */}
+					<div className="space-y-2">
+						<Label htmlFor="cron_tz">Timezone</Label>
+						<div className="flex gap-2">
+							<Popover open={tzOpen} onOpenChange={setTzOpen}>
 								<PopoverTrigger asChild>
 									<Button
 										type="button"
 										variant="outline"
-										className="w-full justify-start"
+										role="combobox"
+										aria-expanded={tzOpen}
+										className={cn(
+											"flex-1 justify-between",
+											!tzValid && timezone && "border-destructive",
+										)}
 										disabled={!isEditing}
 									>
-										{scheduledFor?.date ?? "Pick a date"}
+										{timezone || "Select timezone..."}
+										<ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
 									</Button>
 								</PopoverTrigger>
-								<PopoverContent className="p-0">
-									<Calendar
-										mode="single"
-										selected={dateValue}
-										onSelect={(d: Date | undefined) => setDateValue(d)}
-										initialFocus
-									/>
+								<PopoverContent className="w-75 p-0">
+									<Command shouldFilter={false}>
+										<CommandInput
+											placeholder="Search timezone..."
+											value={tzSearch}
+											onValueChange={setTzSearch}
+										/>
+										<CommandList>
+											<CommandEmpty>No timezone found.</CommandEmpty>
+											<CommandGroup>
+												{IANA_TIMEZONES.filter((tz) =>
+													tz.toLowerCase().includes(tzSearch.toLowerCase()),
+												)
+													.slice(0, 50)
+													.map((tz) => (
+														<CommandItem
+															key={tz}
+															value={tz}
+															onSelect={() => {
+																setValue("timezone", tz);
+																setTzOpen(false);
+																setTzSearch("");
+															}}
+														>
+															<CheckIcon
+																className={cn(
+																	"mr-2 h-4 w-4",
+																	timezone === tz ? "opacity-100" : "opacity-0",
+																)}
+															/>
+															{tz}
+														</CommandItem>
+													))}
+											</CommandGroup>
+										</CommandList>
+									</Command>
 								</PopoverContent>
 							</Popover>
-							<p className="text-sm text-muted-foreground">
-								Select the calendar day.
-							</p>
-						</div>
-
-						<div className="space-y-2">
-							<Label htmlFor="cron_time">Time</Label>
-							<Input
-								id="cron_time"
-								type="time"
-								value={timeValue}
-								onChange={(e) => setTimeValue(e.target.value)}
+							<Button
+								type="button"
+								variant="secondary"
+								onClick={() =>
+									setValue(
+										"timezone",
+										Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+									)
+								}
 								disabled={!isEditing}
-							/>
-							<p className="text-sm text-muted-foreground">
-								24-hour format (HH:MM).
+							>
+								Use my timezone
+							</Button>
+						</div>
+						{!tzValid && timezone && (
+							<p className="text-sm text-destructive">
+								Unknown timezone. Please select a valid IANA timezone.
 							</p>
-						</div>
-					</div>
-
-					{/* Preview + past/future */}
-					<div className="space-y-2">
-						<Label>Scheduled (local)</Label>
-						<div className="flex items-center gap-2">
-							<div className="flex-1 h-10 rounded-md border border-input bg-muted px-3 py-2 text-sm flex items-center">
-								{formatLocalDisplay(scheduledFor, timezone)}
-							</div>
-							{alreadyHappened === true && (
-								<Badge variant="destructive">In the past</Badge>
-							)}
-							{alreadyHappened === false && <Badge>Upcoming</Badge>}
-						</div>
-						{alreadyHappened === true && (
-							<Alert variant="destructive" className="mt-2">
-								<AlertTitle>Already happened</AlertTitle>
-								<AlertDescription>
-									This time is in the past for <strong>{timezone}</strong>.
-									Please pick a future time.
-								</AlertDescription>
-							</Alert>
-						)}
-					</div>
-				</div>
-			)}
-
-			{/* RECURRING */}
-			{mode === "recurring" && (
-				<div className="space-y-4">
-					<div className="space-y-2">
-						<Label htmlFor="cron_expression">Cron Expression</Label>
-						<Input
-							id="cron_expression"
-							value={expression}
-							onChange={(e) => setValue("expression", e.target.value)}
-							placeholder="0 */5 * * * *"
-							disabled={!isEditing}
-							aria-invalid={!isCronValid || remoteCronUnsupportedSeconds != null}
-							className={cn(
-								(!isCronValid || remoteCronUnsupportedSeconds != null) &&
-									"border-destructive",
-							)}
-						/>
-						<p className="text-sm text-muted-foreground">
-							6-field cron (<code>sec min hour dom mon dow</code>) or 5-field (
-							<code>min hour dom mon dow</code>). Timezone applied:{" "}
-							<strong>{timezone}</strong>.
-						</p>
-						{remoteCronUnsupportedSeconds && (
-							<Alert variant="destructive">
-								<AlertTitle>Remote cron is minute-precision only</AlertTitle>
-								<AlertDescription>
-									{effectiveExecution === "HYBRID"
-										? "Hybrid execution still registers this schedule remotely. "
-										: "Remote execution uses EventBridge Scheduler. "}
-									Use 5-field cron, or keep the seconds field at <strong>0</strong>{" "}
-									or <strong>*</strong>. Current seconds field:{" "}
-									<strong>{remoteCronUnsupportedSeconds}</strong>. Switch to local
-									execution if you need sub-minute schedules.
-								</AlertDescription>
-							</Alert>
 						)}
 					</div>
 
-					<div className="space-y-2">
-						<Label>Quick presets</Label>
-						<div className="flex flex-wrap gap-2">
-							{QUICK_CRON_PRESETS.map((p) => (
-								<Button
-									key={p.value}
-									type="button"
-									variant="secondary"
-									size="sm"
-									onClick={() => setValue("expression", p.value)}
-									disabled={!isEditing}
-								>
-									{p.label}
-								</Button>
-							))}
-						</div>
-					</div>
-
-					<GuidedCronBuilder
-						disabled={!isEditing}
-						value={expression}
-						onChange={(expr) => setValue("expression", expr)}
-					/>
-
-					<div className="space-y-2">
-						<Label>Readable</Label>
-						<div className="h-10 rounded-md border border-input bg-muted px-3 py-2 text-sm flex items-center">
-							{isCronValid ? cronHuman || "—" : "Invalid cron expression"}
-						</div>
-
-						<div className="space-y-2">
-							<Label>Next runs (preview)</Label>
-							{isCronValid ? (
-								<ul className="text-sm text-muted-foreground list-disc pl-5">
-									{cronNextRuns.map((iso, i) => {
-										const d = new Date(iso);
-										return (
-											<li key={i}>
-												{new Intl.DateTimeFormat("en-GB", {
-													timeZone: timezone,
-													year: "numeric",
-													month: "short",
-													day: "2-digit",
-													hour: "2-digit",
-													minute: "2-digit",
-													hour12: false,
-													timeZoneName: "short",
-												}).format(d)}{" "}
-												({iso})
-											</li>
-										);
-									})}
-								</ul>
-							) : (
-								<Alert variant="destructive">
-									<AlertTitle>Invalid cron</AlertTitle>
-									<AlertDescription>
-										Adjust the expression to see upcoming runs.
-									</AlertDescription>
-								</Alert>
-							)}
-						</div>
-					</div>
-				</div>
-			)}
-
-			{/* Last fired */}
-			{config?.last_fired && (
-				<>
 					<Separator />
-					<div className="flex items-center gap-2 text-sm text-muted-foreground">
-						<Clock className="h-4 w-4" />
-						<span>
-							Last ran <strong>{formatRelativeTime(config.last_fired)}</strong>
-							{" — "}
-							{new Intl.DateTimeFormat("en-GB", {
-								timeZone: timezone,
-								year: "numeric",
-								month: "short",
-								day: "2-digit",
-								hour: "2-digit",
-								minute: "2-digit",
-								second: "2-digit",
-								hour12: false,
-								timeZoneName: "short",
-							}).format(new Date(config.last_fired))}
-						</span>
-					</div>
+
+					{/* ONE-TIME */}
+					{mode === "one_time" && (
+						<div className="space-y-4">
+							<div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+								<div className="space-y-2">
+									<Label>Date</Label>
+									<Popover>
+										<PopoverTrigger asChild>
+											<Button
+												type="button"
+												variant="outline"
+												className="w-full justify-start"
+												disabled={!isEditing}
+											>
+												{scheduledFor?.date ?? "Pick a date"}
+											</Button>
+										</PopoverTrigger>
+										<PopoverContent className="p-0">
+											<Calendar
+												mode="single"
+												selected={dateValue}
+												onSelect={(d: Date | undefined) => setDateValue(d)}
+												initialFocus
+											/>
+										</PopoverContent>
+									</Popover>
+									<p className="text-sm text-muted-foreground">
+										Select the calendar day.
+									</p>
+								</div>
+
+								<div className="space-y-2">
+									<Label htmlFor="cron_time">Time</Label>
+									<Input
+										id="cron_time"
+										type="time"
+										value={timeValue}
+										onChange={(e) => setTimeValue(e.target.value)}
+										disabled={!isEditing}
+									/>
+									<p className="text-sm text-muted-foreground">
+										24-hour format (HH:MM).
+									</p>
+								</div>
+							</div>
+
+							{/* Preview + past/future */}
+							<div className="space-y-2">
+								<Label>Scheduled (local)</Label>
+								<div className="flex items-center gap-2">
+									<div className="flex-1 h-10 rounded-md border border-input bg-muted px-3 py-2 text-sm flex items-center">
+										{formatLocalDisplay(scheduledFor, timezone)}
+									</div>
+									{alreadyHappened === true && (
+										<Badge variant="destructive">In the past</Badge>
+									)}
+									{alreadyHappened === false && <Badge>Upcoming</Badge>}
+								</div>
+								{alreadyHappened === true && (
+									<Alert variant="destructive" className="mt-2">
+										<AlertTitle>Already happened</AlertTitle>
+										<AlertDescription>
+											This time is in the past for <strong>{timezone}</strong>.
+											Please pick a future time.
+										</AlertDescription>
+									</Alert>
+								)}
+							</div>
+						</div>
+					)}
+
+					{/* RECURRING */}
+					{mode === "recurring" && (
+						<div className="space-y-4">
+							<div className="space-y-2">
+								<Label htmlFor="cron_expression">Cron Expression</Label>
+								<Input
+									id="cron_expression"
+									value={expression}
+									onChange={(e) => setValue("expression", e.target.value)}
+									placeholder="0 */5 * * * *"
+									disabled={!isEditing}
+									aria-invalid={
+										!isCronValid || remoteCronUnsupportedSeconds != null
+									}
+									className={cn(
+										(!isCronValid || remoteCronUnsupportedSeconds != null) &&
+											"border-destructive",
+									)}
+								/>
+								<p className="text-sm text-muted-foreground">
+									6-field cron (<code>sec min hour dom mon dow</code>) or
+									5-field (<code>min hour dom mon dow</code>). Timezone applied:{" "}
+									<strong>{timezone}</strong>.
+								</p>
+								{remoteCronUnsupportedSeconds && (
+									<Alert variant="destructive">
+										<AlertTitle>
+											Remote cron is minute-precision only
+										</AlertTitle>
+										<AlertDescription>
+											{effectiveExecution === "HYBRID"
+												? "Hybrid execution still registers this schedule remotely. "
+												: "Remote execution uses EventBridge Scheduler. "}
+											Use 5-field cron, or keep the seconds field at{" "}
+											<strong>0</strong> or <strong>*</strong>. Current seconds
+											field: <strong>{remoteCronUnsupportedSeconds}</strong>.
+											Switch to local execution if you need sub-minute
+											schedules.
+										</AlertDescription>
+									</Alert>
+								)}
+							</div>
+
+							<div className="space-y-2">
+								<Label>Quick presets</Label>
+								<div className="flex flex-wrap gap-2">
+									{QUICK_CRON_PRESETS.map((p) => (
+										<Button
+											key={p.value}
+											type="button"
+											variant="secondary"
+											size="sm"
+											onClick={() => setValue("expression", p.value)}
+											disabled={!isEditing}
+										>
+											{p.label}
+										</Button>
+									))}
+								</div>
+							</div>
+
+							<GuidedCronBuilder
+								disabled={!isEditing}
+								value={expression}
+								onChange={(expr) => setValue("expression", expr)}
+							/>
+
+							<div className="space-y-2">
+								<Label>Readable</Label>
+								<div className="h-10 rounded-md border border-input bg-muted px-3 py-2 text-sm flex items-center">
+									{isCronValid ? cronHuman || "—" : "Invalid cron expression"}
+								</div>
+
+								<div className="space-y-2">
+									<Label>Next runs (preview)</Label>
+									{isCronValid ? (
+										<ul className="text-sm text-muted-foreground list-disc pl-5">
+											{cronNextRuns.map((iso, i) => {
+												const d = new Date(iso);
+												return (
+													<li key={i}>
+														{new Intl.DateTimeFormat("en-GB", {
+															timeZone: timezone,
+															year: "numeric",
+															month: "short",
+															day: "2-digit",
+															hour: "2-digit",
+															minute: "2-digit",
+															hour12: false,
+															timeZoneName: "short",
+														}).format(d)}{" "}
+														({iso})
+													</li>
+												);
+											})}
+										</ul>
+									) : (
+										<Alert variant="destructive">
+											<AlertTitle>Invalid cron</AlertTitle>
+											<AlertDescription>
+												Adjust the expression to see upcoming runs.
+											</AlertDescription>
+										</Alert>
+									)}
+								</div>
+							</div>
+						</div>
+					)}
+
+					{/* Last fired */}
+					{config?.last_fired && (
+						<>
+							<Separator />
+							<div className="flex items-center gap-2 text-sm text-muted-foreground">
+								<Clock className="h-4 w-4" />
+								<span>
+									Last ran{" "}
+									<strong>{formatRelativeTime(config.last_fired)}</strong>
+									{" — "}
+									{new Intl.DateTimeFormat("en-GB", {
+										timeZone: timezone,
+										year: "numeric",
+										month: "short",
+										day: "2-digit",
+										hour: "2-digit",
+										minute: "2-digit",
+										second: "2-digit",
+										hour12: false,
+										timeZoneName: "short",
+									}).format(new Date(config.last_fired))}
+								</span>
+							</div>
+						</>
+					)}
 				</>
 			)}
 		</div>

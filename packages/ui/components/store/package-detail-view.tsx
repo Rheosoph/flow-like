@@ -29,6 +29,11 @@ import {
 import { useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
+import { getErrorMessage } from "../../lib/error-message";
+import {
+	readManifestWidgetBundleHash,
+	readManifestWidgets,
+} from "../../lib/package-widgets";
 import {
 	isMaintainer,
 	isOwner,
@@ -36,8 +41,8 @@ import {
 import {
 	type PackageMeta,
 	type PackageReview,
-	type PackageVersion,
 	PackageStatus,
+	type PackageVersion,
 	type RegistryEntry,
 } from "../../lib/schema/wasm";
 import { useBackend } from "../../state/backend-state";
@@ -62,6 +67,7 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	EmptyState,
 	RelativeTime,
 	Skeleton,
 	Tabs,
@@ -78,6 +84,7 @@ import { PackageAccessTab } from "./package-access-tab";
 import { PackageMetaTab } from "./package-meta-tab";
 import { PackageReviewsTab } from "./package-reviews-tab";
 import { PackageUsersContainer } from "./package-users-container";
+import { WidgetCardGrid } from "./widget-card";
 
 function PermissionBadge({
 	label,
@@ -393,6 +400,8 @@ function PublicationRequestCard({
 export interface PackageDetailViewProps {
 	pkg: RegistryEntry | null | undefined;
 	isLoading: boolean;
+	loadError?: unknown;
+	onRetry?: () => void;
 	installedVersion: string | null | undefined;
 	onBack: () => void;
 	onInstall: (version?: string) => void;
@@ -418,6 +427,8 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 	const {
 		pkg,
 		isLoading,
+		loadError,
+		onRetry,
 		installedVersion,
 		onBack,
 		onInstall,
@@ -508,7 +519,7 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 		enabled: !!profile.data && !!pkg?.id && !!fetcher,
 	});
 
-	if (isLoading || !pkg) {
+	if (isLoading) {
 		return (
 			<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
 				<div className="mx-auto w-full max-w-5xl space-y-6">
@@ -522,7 +533,40 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 		);
 	}
 
+	if (!pkg) {
+		const actions: { label: string; onClick: () => void }[] = [
+			{ label: "Back to packages", onClick: onBack },
+		];
+		if (onRetry) actions.unshift({ label: "Try again", onClick: onRetry });
+
+		return (
+			<main className="flex-col flex grow max-h-full p-6 overflow-auto min-h-0 w-full">
+				<div className="mx-auto w-full max-w-5xl space-y-6">
+					<Button variant="ghost" size="sm" onClick={onBack} className="gap-2">
+						<ArrowLeft className="h-4 w-4" />
+						Back
+					</Button>
+					<div className="flex justify-center">
+						<EmptyState
+							icons={[Package]}
+							title={
+								loadError ? "Couldn't load this package" : "Package not found"
+							}
+							description={
+								loadError
+									? `${getErrorMessage(loadError)} — check your connection, or sign in if the package is private.`
+									: "This package doesn't exist, is no longer published, or you don't have access to it."
+							}
+							action={actions}
+						/>
+					</div>
+				</div>
+			</main>
+		);
+	}
+
 	const manifest = pkg.manifest;
+	const widgets = readManifestWidgets(manifest);
 	const canManagePublication =
 		currentUserPermission != null &&
 		isMaintainer(currentUserPermission) &&
@@ -537,6 +581,10 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 				v.status !== PackageStatus.Rejected &&
 				v.status !== PackageStatus.Disabled,
 		)?.version ?? pkg.versions[0]?.version;
+	const widgetBundleHash =
+		readManifestWidgetBundleHash(manifest) ??
+		pkg.versions.find((v) => v.version === latestVersion)?.widgetBundleHash ??
+		undefined;
 	const canInstallForReview =
 		canManagePublication &&
 		!!latestVersion &&
@@ -770,6 +818,11 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 						<TabsTrigger value="nodes">
 							Nodes ({pkg.nodes?.length ?? 0})
 						</TabsTrigger>
+						{widgets.length > 0 && (
+							<TabsTrigger value="widgets">
+								Widgets ({widgets.length})
+							</TabsTrigger>
+						)}
 						<TabsTrigger value="permissions">Permissions</TabsTrigger>
 						<TabsTrigger value="versions">
 							Versions ({pkg.versions.length})
@@ -1138,6 +1191,17 @@ export function PackageDetailView(props: PackageDetailViewProps) {
 							</div>
 						)}
 					</TabsContent>
+
+					{widgets.length > 0 && (
+						<TabsContent value="widgets" className="space-y-4">
+							<WidgetCardGrid
+								widgets={widgets}
+								packageId={pkg.id}
+								packageVersion={latestVersion}
+								bundleHash={widgetBundleHash}
+							/>
+						</TabsContent>
+					)}
 
 					<TabsContent value="permissions" className="space-y-4">
 						<Card>

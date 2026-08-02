@@ -1,5 +1,7 @@
 // A2UI runtime JSON definitions. Deprecated fields keep older Rust payloads readable.
 
+import type { WidgetContract } from "@flow-like/widget-sdk";
+
 export interface SelectOption {
 	value: string;
 	label: string;
@@ -17,6 +19,8 @@ export interface Action {
 	name: string;
 	context: Record<string, unknown>;
 }
+
+export type EventHandlers = Record<string, Action[]>;
 
 export type Children =
 	| { explicitList: string[] }
@@ -263,6 +267,8 @@ export interface ComponentBase {
 	style?: Style;
 	children?: Children;
 	actions?: Action[];
+	/** Ordered actions bound to named component events. Legacy `actions` remains the fallback. */
+	eventHandlers?: EventHandlers;
 	hidden?: BoundValue | boolean;
 }
 
@@ -1643,6 +1649,32 @@ export interface WidgetInstanceComponent extends ComponentBase {
 	style?: Style;
 }
 
+// Micro Widget Instance Component - a package-shipped widget rendered inside a
+// sandboxed iframe (flw/1 host bridge). Self-contained: contract + props are
+// embedded, so instances replay from component data alone (chat parity).
+export interface MicroWidgetInstanceComponent extends ComponentBase {
+	type: "microWidgetInstance";
+	/** Unique instance id — also the elements-payload key prefix for `{instanceId}/values`. */
+	instanceId: string;
+	/** Package that ships the widget bundle. */
+	packageId: string;
+	/** Widget id inside the bundle. */
+	widgetId: string;
+	/** Package version, used for web (CDN/registry) serving. */
+	packageVersion: string;
+	/** sha256 hex of the widget bundle, used for desktop (flow-widget://) serving. */
+	bundleHash?: string | null;
+	/** Embedded typed contract (inputs/events/queries/sizing). */
+	contract?: WidgetContract | null;
+	/** Current input props, patched via typed element updates. */
+	props?: Record<string, unknown>;
+	/** Preview mode: events are ignored and the widget's emit is a no-op. */
+	preview?: boolean;
+	/** Bindings from contract event names to page workflows (same as widgetInstance). */
+	actionBindings?: Record<string, unknown>;
+	style?: Style;
+}
+
 // All component types union
 export type A2UIComponent =
 	| RowComponent
@@ -1715,7 +1747,8 @@ export type A2UIComponent =
 	| GeoMapComponent
 	| CalendarComponent
 	| GanttComponent
-	| WidgetInstanceComponent;
+	| WidgetInstanceComponent
+	| MicroWidgetInstanceComponent;
 
 // Surface and data model
 export interface DataEntry {
@@ -1773,6 +1806,14 @@ export type A2UIServerMessage =
 	| {
 			type: "requestElements";
 			elementIds: string[];
+	  }
+	| {
+			type: "widgetQuery";
+			requestId: string;
+			instanceId: string;
+			query: string;
+			args?: unknown;
+			timeoutMs: number;
 	  }
 	| {
 			type: "showScreen";

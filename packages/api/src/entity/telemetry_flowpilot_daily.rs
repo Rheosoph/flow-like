@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct Model {
     #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
     pub id: String,
+    #[sea_orm(unique)]
     pub day: DateTime,
     #[sea_orm(column_name = "runsStarted")]
     pub runs_started: i64,

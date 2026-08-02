@@ -1,0 +1,48 @@
+---
+import "@flow-like/flow-like-ui/global.css";
+import Layout from "../layouts/Layout.astro";
+---
+
+<Layout>
+    <div class="flex flex-col items-center justify-center h-screen gap-4 px-6 text-center">
+        <h1>Signed out</h1>
+        <p id="hint" class="text-sm text-gray-500">Returning you to Flow-Like.</p>
+        <a
+            id="deeplink"
+            class="inline-flex items-center justify-center rounded-md bg-primary px-6 py-3 font-medium text-primary-foreground transition-opacity hover:opacity-90"
+            href="flow-like://logout"
+        >
+            Open Flow-Like
+        </a>
+    </div>
+    <script>
+        (function () {
+            try {
+                // The identity provider lands here after sign-out. Only the custom scheme is
+                // registered for this path, so it is both the automatic and the manual target.
+                var search = new URLSearchParams(window.location.search);
+                var qs = search.toString();
+                var schemeLink = "flow-like://logout" + (qs ? "?" + qs : "");
+
+                var link = document.getElementById("deeplink");
+                if (link) link.setAttribute("href", schemeLink);
+
+                var leftPage = false;
+                window.addEventListener("pagehide", function () { leftPage = true; }, { once: true });
+                document.addEventListener("visibilitychange", function () {
+                    if (document.visibilityState === "hidden") {
+                        leftPage = true;
+                    }
+                });
+
+                window.location.replace(schemeLink);
+
+                window.setTimeout(function () {
+                    if (leftPage || document.visibilityState === "hidden") return;
+                    var hint = document.getElementById("hint");
+                    if (hint) hint.textContent = "Tap the button below to return to the app.";
+                }, 1200);
+            } catch (_) { /* noop */ }
+        })();
+    </script>
+</Layout>

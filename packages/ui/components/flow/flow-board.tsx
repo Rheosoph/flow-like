@@ -163,6 +163,7 @@ import {
 import { type INode, IVariableType } from "../../lib/schema/flow/node";
 import type { IPin } from "../../lib/schema/flow/pin";
 import type { ILayer } from "../../lib/schema/flow/run";
+import { buildTemplateCopyPasteCommand } from "../../lib/template-copy-paste";
 import { convertJsonToUint8Array } from "../../lib/uint8";
 import {
 	type AssistantBoardSurface,
@@ -1052,11 +1053,9 @@ export function FlowBoard({
 					return;
 				}
 
-				// Convert template nodes to the format expected by copyPasteCommand
 				const templateNodes = Object.values(templateBoard.nodes);
 				const templateComments = Object.values(templateBoard.comments);
 				const templateLayers = Object.values(templateBoard.layers);
-				const templateVariables = Object.values(templateBoard.variables);
 
 				if (
 					templateNodes.length === 0 &&
@@ -1067,22 +1066,9 @@ export function FlowBoard({
 					return;
 				}
 
-				// Create a copy-paste command to insert template contents
-				const command = {
-					command_type: "CopyPaste" as const,
-					original_nodes: templateNodes,
-					original_comments: templateComments,
-					original_layers: templateLayers,
-					original_variables: templateVariables,
-					new_nodes: [],
-					new_comments: [],
-					new_layers: [],
-					current_layer: currentLayer,
-					offset: [100, 100, 0],
-					old_mouse: undefined,
-				};
-
-				await executeCommand(command as any);
+				await executeCommand(
+					buildTemplateCopyPasteCommand(templateBoard, currentLayer),
+				);
 				setTemplateSelectorOpen(false);
 			} catch (error) {
 				console.error("Failed to apply template:", error);

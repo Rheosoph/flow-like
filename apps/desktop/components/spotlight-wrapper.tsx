@@ -6,6 +6,7 @@ import {
 	type ProjectQuickLink,
 	type SpotlightItem,
 	SpotlightProvider,
+	handleUpgradeRequiredError,
 	nowSystemTime,
 	useBackend,
 	useFeatures,
@@ -630,7 +631,13 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 				return { appId: app.id, boardId };
 			} catch (error) {
 				console.error("Failed to create project:", error);
-				toast.error("Failed to create project");
+				if (handleUpgradeRequiredError(error, "project-limit")) {
+					useSpotlightStore.getState().close();
+				} else {
+					toast.error(
+						error instanceof Error ? error.message : "Failed to create project",
+					);
+				}
 				return null;
 			}
 		},

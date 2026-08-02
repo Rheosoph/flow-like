@@ -34,6 +34,7 @@ import { useInvalidateInvoke, useInvoke } from "../../../hooks/index";
 import { useIsMobile } from "../../../hooks/use-mobile";
 import { Bit } from "../../../lib/bit/bit";
 import { filterHostableLlmModels } from "../../../lib/bit/local-model-filter";
+import { isMlxModelBit } from "../../../lib/bit/mlx-model-pack";
 import type { IBit } from "../../../lib/schema/bit/bit";
 import { IBitTypes } from "../../../lib/schema/bit/bit";
 import type { ILlmParameters } from "../../../lib/schema/bit/bit/llm-parameters";
@@ -139,6 +140,9 @@ const capabilityIcons: Record<string, CapabilityInfo> = {
 const LLM_LIKE_TYPES = new Set([IBitTypes.Llm, IBitTypes.Vlm]);
 
 function isHostedModel(bit: IBit): boolean {
+	// An MLX root looks artifact-free but downloads its inline manifest locally,
+	// so it is never hosted — and never runnable in the browser.
+	if (isMlxModelBit(bit)) return false;
 	return (
 		(bit.dependencies?.length ?? 0) === 0 &&
 		((bit.size ?? 0) === 0 || !bit.download_link)

@@ -181,17 +181,21 @@ const DEFAULT_SHORTCUTS: KeyboardShortcut[] = [
 
 export type ShortcutHandler = (action: string, event: KeyboardEvent) => void;
 
+export function isEditableKeyboardTarget(target: EventTarget | null): boolean {
+	const element = target as HTMLElement | null;
+	return Boolean(
+		element?.closest?.(
+			'input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="searchbox"], [role="combobox"], [role="spinbutton"]',
+		),
+	);
+}
+
 export function createShortcutManager(
 	handler: ShortcutHandler,
 	shortcuts = DEFAULT_SHORTCUTS,
 ) {
 	const handleKeyDown = (event: KeyboardEvent) => {
-		const target = event.target as HTMLElement;
-		if (
-			target.tagName === "INPUT" ||
-			target.tagName === "TEXTAREA" ||
-			target.isContentEditable
-		) {
+		if (event.defaultPrevented || isEditableKeyboardTarget(event.target)) {
 			return;
 		}
 

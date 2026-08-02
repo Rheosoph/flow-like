@@ -2,7 +2,7 @@
 
 import { BrainCircuit, ChevronDown, ChevronUp } from "lucide-react";
 import { Suspense, lazy, useMemo, useState } from "react";
-import { Button } from "../../ui/button";
+import { cn } from "../../../lib";
 
 const TextEditor = lazy(() =>
 	import("../../ui/text-editor").then((m) => ({ default: m.TextEditor })),
@@ -109,85 +109,67 @@ export function ReasoningViewer({
 	}
 
 	return (
-		<div
-			className={
-				compact
-					? "rounded-lg overflow-hidden bg-muted/20"
-					: "mt-2 border rounded-lg overflow-hidden bg-muted/30"
-			}
-		>
+		<div className={compact ? "" : "mt-2"}>
 			<button
+				type="button"
 				onClick={handleExpand}
-				className={
-					compact
-						? "w-full flex items-center justify-between p-2 hover:bg-muted/30 transition-colors"
-						: "w-full flex items-center justify-between p-3 hover:bg-muted/50 transition-colors"
-				}
+				aria-expanded={isExpanded}
+				className="flex w-full items-center gap-2 rounded-md py-1 text-left text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 			>
-				<div className="flex items-center gap-2">
-					<BrainCircuit
-						className={
-							compact ? "w-3 h-3 text-primary" : "w-4 h-4 text-primary"
-						}
-					/>
-					<span
-						className={compact ? "text-xs font-medium" : "text-sm font-medium"}
-					>
-						Reasoning
-					</span>
-				</div>
-				<Button
-					variant="ghost"
-					size="sm"
-					className="h-6 w-6 p-0"
-					onClick={(e) => {
-						e.stopPropagation();
-						handleExpand();
-					}}
+				<BrainCircuit className={compact ? "size-3" : "size-3.5"} />
+				<span
+					className={cn("font-medium", compact ? "text-[11px]" : "text-xs")}
 				>
-					{isExpanded ? (
-						<ChevronUp className="w-4 h-4" />
-					) : (
-						<ChevronDown className="w-4 h-4" />
-					)}
-				</Button>
+					Reasoning
+				</span>
+				{isExpanded ? (
+					<ChevronUp className="size-3.5" />
+				) : (
+					<ChevronDown className="size-3.5" />
+				)}
 			</button>
 
 			{isExpanded && shouldRender && (
-				<div className={compact ? "" : "border-t"}>
+				<div
+					className={cn(
+						"overflow-y-auto scroll-smooth border-l pl-3",
+						compact ? "mt-1 ml-1 max-h-50" : "mt-1.5 ml-1 max-h-75",
+					)}
+					style={{
+						borderColor: "var(--fl-chat-rule, var(--border))",
+						containIntrinsicSize: compact ? "200px" : "300px",
+						contentVisibility: "auto",
+						maxWidth: "var(--fl-chat-measure, 38rem)",
+					}}
+				>
 					<div
-						className={
-							compact
-								? "max-h-50 overflow-y-auto scroll-smooth"
-								: "max-h-75 overflow-y-auto scroll-smooth"
-						}
+						className="py-0.5 text-muted-foreground italic"
 						style={{
-							containIntrinsicSize: compact ? "200px" : "300px",
-							contentVisibility: "auto",
+							fontFamily: "var(--fl-chat-prose-font)",
+							fontSize: compact ? "0.8125rem" : "0.875rem",
+							lineHeight: 1.65,
 						}}
 					>
-						<div className={compact ? "p-2 text-xs" : "p-3 text-sm"}>
-							<Suspense
-								fallback={
-									<div className="flex items-center justify-center py-4 text-muted-foreground">
-										<div className="animate-pulse">Loading...</div>
-									</div>
-								}
-							>
-								{renderPlainText ? (
-									<div className="whitespace-normal wrap-break-word leading-relaxed text-foreground/90">
-										{displayReasoning}
-									</div>
-								) : (
-									<TextEditor
-										initialContent={displayReasoning}
-										isMarkdown={true}
-										editable={false}
-										minimal={true}
-									/>
-								)}
-							</Suspense>
-						</div>
+						<Suspense
+							fallback={
+								<div className="flex items-center justify-center py-4 text-muted-foreground">
+									<div className="animate-pulse">Loading…</div>
+								</div>
+							}
+						>
+							{renderPlainText ? (
+								<div className="whitespace-normal wrap-break-word">
+									{displayReasoning}
+								</div>
+							) : (
+								<TextEditor
+									initialContent={displayReasoning}
+									isMarkdown={true}
+									editable={false}
+									minimal={true}
+								/>
+							)}
+						</Suspense>
 					</div>
 				</div>
 			)}

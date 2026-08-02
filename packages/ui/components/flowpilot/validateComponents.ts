@@ -19,6 +19,7 @@ import {
 } from "../a2ui/semantic-box-tags";
 import { normalizeSurfaceComponentForPersistence } from "../a2ui/style-normalization";
 import type {
+	Action,
 	BoundValue,
 	CanvasSettings,
 	SurfaceComponent,
@@ -38,7 +39,7 @@ const RUNTIME_ONLY_PROPS: Partial<
 };
 
 /** Which props a given component type accepts (excluding the shared base:
- *  `type`, `id`, `style`, `children`, `actions`, `hidden`). Derived from the
+ *  `type`, `id`, `style`, `children`, `actions`, `eventHandlers`, `hidden`). Derived from the
  *  compile-time-checked manifest so it cannot drift from a2ui/types.ts. */
 export const KNOWN_PROPS: Record<
 	string,
@@ -170,6 +171,9 @@ function defaultRequiredProp(type: string, prop: string): unknown {
 const MAX_COMPONENTS = 120;
 const MAX_COMPONENT_ID_CHARS = 120;
 const MAX_BOUND_STRING_CHARS = 8_000;
+const MAX_EVENT_HANDLERS = 64;
+const MAX_EVENT_NAME_CHARS = 128;
+const MAX_ACTIONS_PER_EVENT = 20;
 
 // ---------------------------------------------------------------------------
 // BoundValue coercion
@@ -317,6 +321,91 @@ function validateChildren(
 }
 
 // ---------------------------------------------------------------------------
+// Named event handler validation
+// ---------------------------------------------------------------------------
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function sanitizeEventHandlers(
+	value: unknown,
+	componentId: string,
+	warnings: string[],
+): Record<string, Action[]> | undefined {
+	if (!isPlainObject(value)) {
+		warnings.push(`${componentId}: removed invalid eventHandlers map`);
+		return undefined;
+	}
+
+	const entries = Object.entries(value);
+	if (entries.length > MAX_EVENT_HANDLERS) {
+		warnings.push(
+			`${componentId}: only the first ${MAX_EVENT_HANDLERS} event handlers were kept`,
+		);
+	}
+
+	const sanitized: [string, Action[]][] = [];
+	for (const [eventName, rawActions] of entries.slice(0, MAX_EVENT_HANDLERS)) {
+		if (
+			eventName.trim().length === 0 ||
+			eventName.length > MAX_EVENT_NAME_CHARS
+		) {
+			warnings.push(`${componentId}: removed invalid event handler name`);
+			continue;
+		}
+		if (!Array.isArray(rawActions)) {
+			warnings.push(
+				`${componentId}: eventHandlers.${eventName} must be an action array`,
+			);
+			continue;
+		}
+		if (rawActions.length > MAX_ACTIONS_PER_EVENT) {
+			warnings.push(
+				`${componentId}: eventHandlers.${eventName} was limited to ${MAX_ACTIONS_PER_EVENT} actions`,
+			);
+		}
+
+		const actions: Action[] = [];
+		for (const [index, rawAction] of rawActions
+			.slice(0, MAX_ACTIONS_PER_EVENT)
+			.entries()) {
+			if (!isPlainObject(rawAction)) {
+				warnings.push(
+					`${componentId}: removed invalid eventHandlers.${eventName}[${index}]`,
+				);
+				continue;
+			}
+
+			const name = rawAction.name;
+			const context = rawAction.context;
+			if (typeof name !== "string" || name.trim().length === 0) {
+				warnings.push(
+					`${componentId}: eventHandlers.${eventName}[${index}].name must be a non-empty string`,
+				);
+				continue;
+			}
+			if (!isPlainObject(context)) {
+				warnings.push(
+					`${componentId}: eventHandlers.${eventName}[${index}].context must be an object`,
+				);
+				continue;
+			}
+
+			actions.push({ name, context: { ...context } });
+		}
+
+		// An authored empty list explicitly suppresses legacy fallback. Do not turn
+		// a non-empty but wholly invalid list into that meaningful state.
+		if (rawActions.length === 0 || actions.length > 0) {
+			sanitized.push([eventName, actions]);
+		}
+	}
+
+	return Object.fromEntries(sanitized);
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -393,8 +482,14 @@ export function validateComponents(
 		for (const [key, value] of Object.entries(rawComponent)) {
 			if (key === "type" || key === "id" || key === "children") continue; // handled separately
 			if (BASE_PROPS.has(key)) {
-				// Base props (style, actions, hidden) pass through verbatim.
-				cleaned[key] = value;
+				// Legacy actions pass through verbatim. Named handlers are additive but
+				// structurally validated before they can suppress the legacy fallback.
+				if (key === "eventHandlers") {
+					const handlers = sanitizeEventHandlers(value, componentId, warnings);
+					if (handlers !== undefined) cleaned[key] = handlers;
+				} else {
+					cleaned[key] = value;
+				}
 				continue;
 			}
 

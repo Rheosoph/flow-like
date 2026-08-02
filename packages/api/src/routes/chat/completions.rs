@@ -217,7 +217,10 @@ async fn enforce_tier(
             user_tier,
             tier
         );
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::payment_required(format!(
+            "This model requires the {} tier, which is not included in your plan.",
+            tier
+        )));
     }
     Ok(())
 }

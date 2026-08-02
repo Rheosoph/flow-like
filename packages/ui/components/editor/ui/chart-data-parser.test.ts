@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	hasRenderableNivoData,
 	normalizePlotlyTitle,
 	parseChartData,
 	toNivoData,
@@ -115,5 +116,141 @@ Q2,16,21`,
 			x: 0.5,
 		});
 		expect(normalizePlotlyTitle(null)).toEqual({});
+	});
+});
+
+describe("continuous colour scales", () => {
+	test("wraps a heatmap scheme in the sequential config Nivo requires", () => {
+		const input = parseChartData(
+			`type: heatmap
+colors: blues
+---
+region,q1,q2
+North,12,18`,
+			"nivo",
+		);
+
+		expect(toNivoData(input).props.colors).toEqual({
+			type: "sequential",
+			scheme: "blues",
+		});
+	});
+
+	test("reduces a heatmap colour list to the two stops a sequential scale takes", () => {
+		const input = parseChartData(
+			`type: heatmap
+colors: [#001, #445, #eef]
+---
+region,q1,q2
+North,12,18`,
+			"nivo",
+		);
+
+		expect(toNivoData(input).props.colors).toEqual({
+			type: "sequential",
+			colors: ["#001", "#eef"],
+		});
+	});
+
+	test("keeps categorical palettes on charts that use ordinal colours", () => {
+		const input = parseChartData(
+			`type: bar
+colors: [#001, #445, #eef]
+---
+quarter,revenue
+Q1,120`,
+			"nivo",
+		);
+
+		expect(toNivoData(input).props.colors).toEqual(["#001", "#445", "#eef"]);
+	});
+
+	test("drops a categorical colour array from a JSON heatmap block", () => {
+		const input = parseChartData(
+			JSON.stringify({
+				chartType: "heatmap",
+				colors: ["#001", "#445"],
+				data: [{ id: "North", data: [{ x: "q1", y: 12 }] }],
+			}),
+			"nivo",
+		);
+
+		expect(toNivoData(input).props.colors).toEqual({
+			type: "sequential",
+			colors: ["#001", "#445"],
+		});
+	});
+
+	test("leaves a valid continuous config on a JSON heatmap block untouched", () => {
+		const input = parseChartData(
+			JSON.stringify({
+				chartType: "heatmap",
+				colors: { type: "diverging", scheme: "red_blue" },
+				data: [{ id: "North", data: [{ x: "q1", y: 12 }] }],
+			}),
+			"nivo",
+		);
+
+		expect(toNivoData(input).props.colors).toEqual({
+			type: "diverging",
+			scheme: "red_blue",
+		});
+	});
+});
+
+describe("renderable chart data", () => {
+	test("rejects a series whose points have not streamed in yet", () => {
+		const input = parseChartData(
+			`type: line
+---
+month,revenue`,
+			"nivo",
+		);
+
+		const result = toNivoData(input);
+		expect(result.data).toEqual([{ id: "revenue", data: [] }]);
+		expect(hasRenderableNivoData(result.data)).toBe(false);
+	});
+
+	test("rejects a series with no plottable value", () => {
+		const input = parseChartData(
+			`type: line
+---
+month,revenue
+Jan,n/a`,
+			"nivo",
+		);
+
+		const result = toNivoData(input);
+		expect(result.data).toEqual([
+			{ id: "revenue", data: [{ x: "Jan", y: null }] },
+		]);
+		expect(hasRenderableNivoData(result.data)).toBe(false);
+	});
+
+	test("accepts a series once one point carries a value", () => {
+		const input = parseChartData(
+			`type: line
+---
+month,revenue
+Jan,n/a
+Feb,18`,
+			"nivo",
+		);
+
+		expect(hasRenderableNivoData(toNivoData(input).data)).toBe(true);
+	});
+
+	test("accepts flat item lists and rejects empty ones", () => {
+		expect(hasRenderableNivoData([{ quarter: "Q1", revenue: 12 }])).toBe(true);
+		expect(hasRenderableNivoData([])).toBe(false);
+		expect(hasRenderableNivoData(null)).toBe(false);
+	});
+
+	test("rejects a node graph with no nodes", () => {
+		expect(hasRenderableNivoData({ nodes: [], links: [] })).toBe(false);
+		expect(hasRenderableNivoData({ nodes: [{ id: "a" }], links: [] })).toBe(
+			true,
+		);
 	});
 });

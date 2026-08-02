@@ -1,147 +1,290 @@
 "use client";
 
-import { Blocks, Clock, Key, UserPlus, Users } from "lucide-react";
-import { useSearchParams } from "next/navigation";
-import { useState } from "react";
 import {
-	Badge,
-	Tabs,
-	TabsContent,
-	TabsList,
-	TabsTrigger,
-	useBackend,
-	useInvoke,
-} from "../../../";
+	BellIcon,
+	BlocksIcon,
+	ClockIcon,
+	KeyIcon,
+	LinkIcon,
+	type LucideIcon,
+	ShieldIcon,
+	UserPlusIcon,
+	UsersIcon,
+} from "lucide-react";
+import { useSearchParams } from "next/navigation";
+import { useMemo, useState } from "react";
+import { cn } from "../../../lib/utils";
+import { Button } from "../../ui/button";
 import { AppConnectionManagement } from "./app-connection-management";
-import { InviteManagement } from "./invite-managment";
+import { InviteManagement, InviteUserDialog } from "./invite-managment";
 import { TeamJoinManagement } from "./join-management";
+import {
+	CountPill,
+	TEAM_ACTION_GRADIENT,
+	type TeamSectionKey,
+	useTeamOverview,
+} from "./team-shared";
 import { TechnicalUserManagement } from "./technical-user-management";
 import { UserManagement } from "./user-managements";
 
-interface JoinRequest {
-	id: string;
-	name: string;
-	email: string;
-	avatar?: string;
-	requestedAt: string;
-	message?: string;
+interface RailItem {
+	key: TeamSectionKey;
+	label: string;
+	icon: LucideIcon;
+	count: number;
+	attention?: boolean;
 }
 
 export function TeamManagementPage() {
 	const searchParams = useSearchParams();
-	const appId = searchParams.get("id");
-	const [showRequestQueue] = useState(true); // This would be determined by project type
-	const backend = useBackend();
-	const connections = useInvoke(
-		backend.teamState.getAppConnections,
-		backend.teamState,
-		[appId ?? ""],
-		typeof appId === "string",
+	const appId = searchParams.get("id") ?? "";
+	const [section, setSection] = useState<TeamSectionKey>("members");
+	const overview = useTeamOverview(appId);
+
+	const rail = useMemo<readonly RailItem[][]>(
+		() => [
+			[
+				{
+					key: "members",
+					label: "People",
+					icon: UsersIcon,
+					count: overview.memberCount,
+				},
+				{
+					key: "requests",
+					label: "Join requests",
+					icon: ClockIcon,
+					count: overview.joinRequestCount,
+					attention: overview.joinRequestCount > 0,
+				},
+				{
+					key: "invites",
+					label: "Invites & links",
+					icon: LinkIcon,
+					count: overview.inviteLinkCount,
+				},
+			],
+			[
+				{
+					key: "keys",
+					label: "API keys",
+					icon: KeyIcon,
+					count: overview.apiKeyCount,
+				},
+				{
+					key: "connections",
+					label: "Connected apps",
+					icon: BlocksIcon,
+					count: overview.connectedAppCount + overview.pendingAppRequestCount,
+					attention: overview.pendingAppRequestCount > 0,
+				},
+			],
+		],
+		[overview],
 	);
-	const pendingAppRequests =
-		connections.data?.incoming.filter(
-			(connection) => connection.status === "PENDING",
-		).length ?? 0;
+
+	if (!appId) {
+		return (
+			<div className="p-10 text-center text-muted-foreground">
+				No app selected.
+			</div>
+		);
+	}
+
 	return (
-		<div className="container mx-auto p-6 space-y-8 flex flex-col overflow-hidden h-full grow">
-			{/* Header */}
-			<div className="flex items-center justify-between">
-				<div>
-					<h1 className="text-4xl font-bold bg-linear-to-r from-primary to-tertiary bg-clip-text text-transparent">
-						Access &amp; Relationships
-					</h1>
-					<p className="text-muted-foreground mt-2">
-						People and connected apps — in one place
+		<div className="flex flex-col gap-5 pb-8">
+			<header className="flex flex-wrap items-start justify-between gap-4">
+				<div className="min-w-0">
+					<h1 className="text-xl font-semibold tracking-tight">Access</h1>
+					<p className="mt-0.5 text-sm text-muted-foreground">
+						Who and what can reach this app.
 					</p>
 				</div>
-				<div className="flex items-center gap-3">
-					<Badge variant="secondary" className="px-3 py-1">
-						<Users className="w-4 h-4 mr-1" />0 members
-					</Badge>
+				<div className="flex shrink-0 items-center gap-2">
+					<Button variant="outline" asChild>
+						<a href={`/library/config/roles?id=${appId}`}>
+							<ShieldIcon className="size-4" />
+							Roles
+						</a>
+					</Button>
+					<InviteUserDialog
+						appId={appId}
+						trigger={
+							<Button className={TEAM_ACTION_GRADIENT}>
+								<UserPlusIcon className="size-4" />
+								Invite people
+							</Button>
+						}
+					/>
 				</div>
+			</header>
+
+			<div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
+				<StatTile
+					icon={UsersIcon}
+					label="People"
+					value={`${overview.memberCount}${overview.memberCountExact ? "" : "+"}`}
+					note={`${overview.editorCount} can edit · ${overview.viewerCount} read-only`}
+					onClick={() => setSection("members")}
+				/>
+				<StatTile
+					icon={BellIcon}
+					label="Needs review"
+					value={overview.needsReviewCount}
+					note={
+						overview.needsReviewCount === 0
+							? "Nothing waiting"
+							: `${overview.joinRequestCount} people · ${overview.pendingAppRequestCount} apps`
+					}
+					attention={overview.needsReviewCount > 0}
+					onClick={() =>
+						setSection(
+							overview.joinRequestCount > 0 ? "requests" : "connections",
+						)
+					}
+				/>
+				<StatTile
+					icon={KeyIcon}
+					label="API keys"
+					value={overview.apiKeyCount}
+					note={
+						overview.expiredKeyCount > 0
+							? `${overview.expiredKeyCount} expired`
+							: "All valid"
+					}
+					onClick={() => setSection("keys")}
+				/>
+				<StatTile
+					icon={BlocksIcon}
+					label="Connected apps"
+					value={overview.connectedAppCount}
+					note={
+						overview.pendingAppRequestCount > 0
+							? `${overview.pendingAppRequestCount} awaiting approval`
+							: "No pending requests"
+					}
+					onClick={() => setSection("connections")}
+				/>
 			</div>
 
-			<Tabs
-				defaultValue="members"
-				className="space-y-6 flex flex-col flex-1 min-h-0"
-			>
-				<TabsList
-					className={`grid w-full shrink-0 ${
-						showRequestQueue ? "grid-cols-5" : "grid-cols-4"
-					}`}
+			<div className="grid items-start gap-6 md:grid-cols-[212px_minmax(0,1fr)]">
+				<nav
+					aria-label="Access sections"
+					className="flex gap-1 overflow-x-auto md:sticky md:top-0 md:flex-col md:overflow-visible"
 				>
-					<TabsTrigger value="members" className="flex items-center gap-2">
-						<Users className="w-4 h-4" />
-						Team Members
-					</TabsTrigger>
-					<TabsTrigger value="invite" className="flex items-center gap-2">
-						<UserPlus className="w-4 h-4" />
-						Invite & Access
-					</TabsTrigger>
-					<TabsTrigger value="api-keys" className="flex items-center gap-2">
-						<Key className="w-4 h-4" />
-						API Keys
-					</TabsTrigger>
-					{showRequestQueue && (
-						<TabsTrigger value="requests" className="flex items-center gap-2">
-							<Clock className="w-4 h-4" />
-							Join Requests
-						</TabsTrigger>
+					{rail.map((group, index) => (
+						<div
+							key={group[0].key}
+							className="flex gap-1 md:flex-col md:gap-0.5"
+						>
+							<span
+								className={cn(
+									"hidden px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground md:block",
+									index === 0 ? "pt-0" : "pt-3",
+								)}
+							>
+								{index === 0 ? "People" : "Machines"}
+							</span>
+							{group.map((item) => (
+								<RailButton
+									key={item.key}
+									item={item}
+									active={section === item.key}
+									onSelect={() => setSection(item.key)}
+								/>
+							))}
+						</div>
+					))}
+				</nav>
+
+				<div className="min-w-0">
+					{section === "members" && <UserManagement appId={appId} />}
+					{section === "requests" && <TeamJoinManagement appId={appId} />}
+					{section === "invites" && <InviteManagement appId={appId} />}
+					{section === "keys" && <TechnicalUserManagement appId={appId} />}
+					{section === "connections" && (
+						<AppConnectionManagement appId={appId} />
 					)}
-					<TabsTrigger value="apps" className="flex items-center gap-2">
-						<Blocks className="w-4 h-4" />
-						Connections
-						{pendingAppRequests > 0 && (
-							<Badge variant="secondary" className="px-1.5">
-								{pendingAppRequests}
-							</Badge>
-						)}
-					</TabsTrigger>
-				</TabsList>
-
-				{/* Team Members Tab */}
-				{appId && (
-					<TabsContent value="members" className="flex-1 min-h-0">
-						<div className="h-full overflow-y-auto">
-							<UserManagement appId={appId} />
-						</div>
-					</TabsContent>
-				)}
-
-				{/* Invite & Access Tab */}
-				{appId && (
-					<TabsContent value="invite" className="flex-1 min-h-0">
-						<div className="h-full overflow-y-auto">
-							<InviteManagement appId={appId} />
-						</div>
-					</TabsContent>
-				)}
-
-				{/* API Keys Tab */}
-				{appId && (
-					<TabsContent value="api-keys" className="flex-1 min-h-0">
-						<div className="h-full overflow-y-auto">
-							<TechnicalUserManagement appId={appId} />
-						</div>
-					</TabsContent>
-				)}
-
-				{/* Join Requests Tab */}
-				{showRequestQueue && appId && (
-					<TabsContent value="requests" className="flex-1 min-h-0">
-						<TeamJoinManagement appId={appId} />
-					</TabsContent>
-				)}
-
-				{/* Connections Tab */}
-				{appId && (
-					<TabsContent value="apps" className="flex-1 min-h-0">
-						<div className="h-full overflow-y-auto">
-							<AppConnectionManagement appId={appId} />
-						</div>
-					</TabsContent>
-				)}
-			</Tabs>
+				</div>
+			</div>
 		</div>
+	);
+}
+
+function RailButton({
+	item,
+	active,
+	onSelect,
+}: Readonly<{ item: RailItem; active: boolean; onSelect: () => void }>) {
+	const Icon = item.icon;
+	return (
+		<button
+			type="button"
+			onClick={onSelect}
+			aria-current={active}
+			className={cn(
+				"flex shrink-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors",
+				active
+					? "bg-primary/10 font-medium text-primary shadow-[inset_2px_0_0_var(--primary)]"
+					: "text-muted-foreground hover:bg-muted hover:text-foreground",
+			)}
+		>
+			<Icon className="size-4 shrink-0" />
+			<span className="flex-1 whitespace-nowrap md:whitespace-normal">
+				{item.label}
+			</span>
+			<CountPill
+				value={item.count}
+				tone={item.attention ? "attention" : "neutral"}
+			/>
+		</button>
+	);
+}
+
+function StatTile({
+	icon: Icon,
+	label,
+	value,
+	note,
+	attention = false,
+	onClick,
+}: Readonly<{
+	icon: LucideIcon;
+	label: string;
+	value: string | number;
+	note: string;
+	attention?: boolean;
+	onClick: () => void;
+}>) {
+	return (
+		<button
+			type="button"
+			onClick={onClick}
+			className={cn(
+				"flex flex-col items-start gap-0.5 rounded-xl border px-3.5 py-3 text-left transition-colors",
+				attention
+					? "border-primary/45 bg-primary/5 hover:border-primary hover:bg-primary/10"
+					: "border-border/60 bg-card hover:border-border hover:bg-muted/40",
+			)}
+		>
+			<span
+				className={cn(
+					"flex items-center gap-1.5 text-xs",
+					attention ? "text-primary" : "text-muted-foreground",
+				)}
+			>
+				<Icon className="size-3.5" />
+				{label}
+			</span>
+			<span
+				className={cn(
+					"text-2xl font-semibold tabular-nums tracking-tight",
+					attention && "text-primary",
+				)}
+			>
+				{value}
+			</span>
+			<span className="text-[11px] text-muted-foreground">{note}</span>
+		</button>
 	);
 }

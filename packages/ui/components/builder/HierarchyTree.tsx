@@ -642,7 +642,16 @@ function TreeNode({
 										: undefined;
 									return widgetDef?.name ?? "Widget";
 								})()
-							: node.type}
+							: node.type === "microWidgetInstance"
+								? (() => {
+										const comp = components.get(node.id);
+										const widgetId = comp
+											? (comp.component as unknown as { widgetId?: string })
+													.widgetId
+											: undefined;
+										return widgetId ?? "Package Widget";
+									})()
+								: node.type}
 					</span>
 
 					{/* Container indicator */}

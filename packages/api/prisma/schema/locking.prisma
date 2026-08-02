@@ -1,0 +1,8 @@
+/// Durable coordination rows for operations whose source of truth lives outside SQL.
+///
+/// Rows are intentionally unreferenced and retained: a transaction updates one row to hold a
+/// database-native write intent while it mutates canonical board files or computes a score.
+model MutationLock {
+  id        BigInt   @id
+  updatedAt DateTime @default(now()) @updatedAt
+}

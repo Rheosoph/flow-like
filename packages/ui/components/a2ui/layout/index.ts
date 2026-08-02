@@ -7,6 +7,7 @@ export { A2UIAspectRatio } from "./AspectRatio";
 export { A2UIOverlay } from "./Overlay";
 export { A2UIAbsolute } from "./Absolute";
 export { A2UIWidgetInstance } from "./A2UIWidgetInstance";
+export { A2UIMicroWidget } from "./A2UIMicroWidget";
 export { A2UIBox } from "./Box";
 export { A2UICenter } from "./Center";
 export { A2UISpacer } from "./Spacer";

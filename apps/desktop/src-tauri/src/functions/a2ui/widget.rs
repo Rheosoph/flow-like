@@ -198,3 +198,15 @@ pub async fn push_widget_meta(
     app.push_widget_meta(&widget_id, language, metadata).await?;
     Ok(())
 }
+
+/// Deliver a micro-widget query result from a live surface back to the run
+/// awaiting it. Returns false when the request already timed out, was
+/// answered by another surface, or is unknown.
+#[tauri::command(async)]
+pub async fn respond_widget_query(
+    _handler: AppHandle,
+    request_id: String,
+    response: flow_like_types::Value,
+) -> Result<bool, TauriFunctionError> {
+    Ok(flow_like_types::frontend_request::resolve_frontend_request(&request_id, response).await)
+}

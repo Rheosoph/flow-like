@@ -8,9 +8,9 @@ import {
 	type FlowIrCommitDisposition,
 	type FlowIrCommitDispositionResult,
 	type FlowIrCommitToken,
+	IAppVisibility,
 	type IApplyFlowIrCommitResponse,
 	type IApplyFlowScriptResponse,
-	IAppVisibility,
 	type IBoard,
 	type IBoardState,
 	type ICheckFlowScriptReconcileResponse,
@@ -49,9 +49,9 @@ import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
 import { flowIrCommitDeliveryId } from "@flow-like/flow-like-ui/lib/flowpilot/board-edit-job-delivery";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
+import { createId } from "@paralleldrive/cuid2";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
-import { createId } from "@paralleldrive/cuid2";
 import { isObject } from "lodash-es";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
@@ -70,18 +70,18 @@ import {
 	getRemoteBoardSkipReason,
 	shouldApplyRemoteBoard,
 } from "./board-merge";
+import { mergeBoardOffThread } from "./board-sync";
 import {
 	CommandSyncPayloadTooLargeError,
 	type CommandSyncRemoteIdentity,
 	OFFLINE_SYNC_COMMAND_MAX_AGE_MS,
-	chunkLegacyCommandsForRecovery,
 	chunkCommandsForSync,
+	chunkLegacyCommandsForRecovery,
 	commandSyncHasPendingMutation,
-	evaluateCommandSyncRemoteIdentity,
 	evaluateBoardLineage,
+	evaluateCommandSyncRemoteIdentity,
 	systemTimeToNanos,
 } from "./command-sync";
-import { mergeBoardOffThread } from "./board-sync";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
 
 interface DiffEntry {
@@ -1782,6 +1782,7 @@ export class BoardState implements IBoardState {
 		const boardUpdate = await fetcher<{
 			id: string;
 			updated_at?: IBoard["updated_at"];
+			board?: IBoard | null;
 		}>(
 			this.backend.profile,
 			`apps/${appId}/board/${boardId}`,
@@ -1808,13 +1809,44 @@ export class BoardState implements IBoardState {
 		// remote sync ran in the background. A create_app -> flowpilot_board sequence interpreted that
 		// empty snapshot as "no board", created a duplicate board, and could then hit a propagation 404.
 		try {
+			// Template instantiation remaps node and pin IDs and applies catalog schema migrations on
+			// the server. Instantiating the template a second time in the native cache would generate a
+			// different graph; the next command would then address a local node ID that the API cannot
+			// find. New APIs return the exact instantiated board; retain a checked GET for older servers.
+			let authoritativeBoard =
+				boardUpdate.board?.id === boardId ? boardUpdate.board : undefined;
+			if (template && !authoritativeBoard) {
+				try {
+					const fetchedBoard = await fetcher<IBoard>(
+						this.backend.profile,
+						`apps/${appId}/board/${boardId}`,
+						{ method: "GET" },
+						this.backend.auth,
+					);
+					if (fetchedBoard?.id === boardId) {
+						authoritativeBoard = fetchedBoard;
+					} else {
+						console.warn(
+							"Authoritative board read returned no matching board; caching an empty ID-safe placeholder",
+							{ boardId },
+						);
+					}
+				} catch (error) {
+					console.warn(
+						"Failed to read the authoritative instantiated board; caching an empty ID-safe placeholder",
+						error,
+					);
+				}
+			}
 			// Older deployed APIs return only `{ id }`. Use an intentionally old revision for that
 			// compatibility path so the transient readiness cache can never outrank the authoritative
 			// remote board during the next sync.
-			const authoritativeUpdatedAt = boardUpdate.updated_at ?? {
-				secs_since_epoch: 0,
-				nanos_since_epoch: 0,
-			};
+			const authoritativeUpdatedAt = authoritativeBoard
+				? (authoritativeBoard.updated_at ?? boardUpdate.updated_at)
+				: {
+						secs_since_epoch: 0,
+						nanos_since_epoch: 0,
+					};
 			await invoke("upsert_board", {
 				appId,
 				boardId,
@@ -1823,14 +1855,20 @@ export class BoardState implements IBoardState {
 				logLevel,
 				stage,
 				executionMode,
-				template,
+				boardData: authoritativeBoard,
+				// Never instantiate an online template locally: even the fallback cache must not invent
+				// node IDs that are absent from the authoritative server graph.
+				template: undefined,
 				authoritativeUpdatedAt,
 			});
 			// Only advance the lineage once the local cache holds this revision;
 			// otherwise a refused remote echo could block cache recovery.
-			if (boardUpdate.updated_at) {
+			const appliedUpdatedAt = authoritativeBoard
+				? (authoritativeBoard.updated_at ?? boardUpdate.updated_at)
+				: undefined;
+			if (authoritativeBoard && appliedUpdatedAt) {
 				await this.recordAppliedRemoteLineage(appId, boardId, {
-					updated_at: boardUpdate.updated_at,
+					updated_at: appliedUpdatedAt,
 				});
 			}
 		} catch (error) {
@@ -2534,6 +2572,16 @@ export class BoardState implements IBoardState {
 			"check_flowscript_reconcile",
 			{ appId, boardId, flowscript },
 		);
+	}
+
+	async respondWidgetQuery(
+		requestId: string,
+		response: { ok: boolean; value?: unknown; error?: string },
+	): Promise<boolean> {
+		return await invoke<boolean>("respond_widget_query", {
+			requestId,
+			response,
+		});
 	}
 
 	async getExecutionElements(

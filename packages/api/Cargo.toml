@@ -23,6 +23,7 @@ uuid.workspace = true
 flow-like-sinks.workspace = true
 flow-like-secrets.workspace = true
 flow-like-wasm = { workspace = true, features = ["openapi"] }
+tempfile = "3"
 serde_json.workspace = true
 base64.workspace = true
 jsonwebtoken.workspace = true

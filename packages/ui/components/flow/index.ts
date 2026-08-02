@@ -8,6 +8,7 @@ export * from "./variables/runtime-variable-editor";
 export * from "./variables/components";
 export * from "./flow-copilot";
 export * from "./flow-library";
+export * from "./flows-overview";
 export * from "./runtime-variables-prompt";
 export {
 	PackageUpdateBanner,

@@ -156,6 +156,37 @@ final class RequestMappingTests: XCTestCase {
         XCTAssertEqual(parameters.maxKVSize, 1024)
     }
 
+    func testGenerationParametersUseSafePlatformPrefillDefault() throws {
+        let request = try decodeRequest(
+            """
+            {
+              "messages": [{"role": "user", "content": "hello"}]
+            }
+            """
+        )
+        let parameters = try FlowLikeMLXRequestMapper.makeGenerationParameters(request)
+
+        #if os(iOS)
+            XCTAssertEqual(parameters.prefillStepSize, 128)
+        #else
+            XCTAssertNil(parameters.prefillStepSize)
+        #endif
+    }
+
+    func testGenerationParametersHonorExplicitPrefillStepSize() throws {
+        let request = try decodeRequest(
+            """
+            {
+              "messages": [{"role": "user", "content": "hello"}],
+              "prefill_step_size": 256
+            }
+            """
+        )
+        let parameters = try FlowLikeMLXRequestMapper.makeGenerationParameters(request)
+
+        XCTAssertEqual(parameters.prefillStepSize, 256)
+    }
+
     private func decodeRequest(_ json: String) throws -> OpenAIChatCompletionRequest {
         try JSONDecoder().decode(
             OpenAIChatCompletionRequest.self,

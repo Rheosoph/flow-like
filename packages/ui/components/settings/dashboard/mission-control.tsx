@@ -128,7 +128,7 @@ export function MissionControl({
 
 	return (
 		<div className="space-y-4">
-			<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+			<div className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 lg:grid-cols-4">
 				<MetricTile
 					label="Runs · 24h"
 					icon={PlayCircleIcon}
@@ -289,7 +289,7 @@ export function MissionControl({
 							<EmptyHint>No runs recorded yet.</EmptyHint>
 						) : (
 							<div className="space-y-0.5">
-								{runs.recent.map((run) => (
+								{runs.recent.slice(0, 8).map((run) => (
 									<div
 										key={run.runId}
 										className={cn(

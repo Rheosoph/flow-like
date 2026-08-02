@@ -14,6 +14,7 @@ import {
 	User,
 } from "lucide-react";
 import type { ReactNode } from "react";
+import type { PackageWidgetEntry } from "../../lib/schema/wasm";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
@@ -26,6 +27,7 @@ import {
 import { RelativeTime } from "../ui/relative-time";
 import { Skeleton } from "../ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import { WidgetCardGrid } from "./widget-card";
 
 export interface PackageManifestUI {
 	name: string;
@@ -41,6 +43,10 @@ export interface PackageManifestUI {
 		process: boolean;
 		ffi: boolean;
 	};
+	/** Micro-frontend widgets shipped by this package (manifest v2) */
+	widgets?: PackageWidgetEntry[];
+	/** Widget bundle sha256 for desktop preview serving */
+	widgetBundleHash?: string;
 }
 
 export interface PackageVersionUI {
@@ -51,6 +57,8 @@ export interface PackageVersionUI {
 }
 
 export interface PackageDataUI {
+	/** Package id — needed (with a version) for live widget previews */
+	id?: string;
 	manifest: PackageManifestUI;
 	nodes: Array<{
 		id: string;
@@ -145,6 +153,7 @@ export function PackageDetailUI({
 		pkg.versions.find((v) => !v.yanked)?.version ?? pkg.versions[0]?.version;
 	const isInstalled = !!installedVersion;
 	const hasUpdate = isInstalled && installedVersion !== latestVersion;
+	const widgets = manifest.widgets ?? [];
 
 	return (
 		<main className="flex flex-col grow max-h-full min-h-0 overflow-auto p-6 w-full">
@@ -240,6 +249,11 @@ export function PackageDetailUI({
 					<TabsList className="h-auto flex-wrap justify-start">
 						<TabsTrigger value="overview">Overview</TabsTrigger>
 						<TabsTrigger value="nodes">Nodes ({pkg.nodes.length})</TabsTrigger>
+						{widgets.length > 0 && (
+							<TabsTrigger value="widgets">
+								Widgets ({widgets.length})
+							</TabsTrigger>
+						)}
 						<TabsTrigger value="permissions">Permissions</TabsTrigger>
 						<TabsTrigger value="versions">
 							Versions ({pkg.versions.length})
@@ -366,6 +380,17 @@ export function PackageDetailUI({
 							</div>
 						)}
 					</TabsContent>
+
+					{widgets.length > 0 && (
+						<TabsContent value="widgets">
+							<WidgetCardGrid
+								widgets={widgets}
+								packageId={pkg.id}
+								packageVersion={latestVersion}
+								bundleHash={manifest.widgetBundleHash}
+							/>
+						</TabsContent>
+					)}
 
 					<TabsContent value="permissions">
 						<Card>

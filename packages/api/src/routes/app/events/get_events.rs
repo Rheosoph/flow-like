@@ -12,7 +12,7 @@ use axum::{
 };
 use flow_like::flow::event::Event;
 
-use super::db::{filter_event_secrets, get_events_for_app};
+use super::db::{filter_event_secrets, get_events_for_app, get_events_with_fallback};
 
 #[tracing::instrument(name = "GET /apps/{app_id}/events", skip(state, user))]
 #[utoipa::path(
@@ -41,8 +41,14 @@ pub async fn get_events(
 ) -> Result<Json<Vec<Event>>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ListEvents);
 
-    // Use database lookup instead of bucket
-    let events = get_events_for_app(&state.db, &app_id).await?;
+    // Prefer the database mirror, but recover legacy/interrupted-sync apps when
+    // the mirror is empty. The fallback also backfills rows for future reads.
+    let mut events = get_events_for_app(&state.db, &app_id).await?;
+    if events.is_empty() {
+        let principal_id = permission.identifier();
+        let app = state.master_app(&principal_id, &app_id, &state).await?;
+        events = get_events_with_fallback(&state.db, &app).await?;
+    }
 
     // Filter out secret variable values from all events
     let mut events: Vec<Event> = events

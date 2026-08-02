@@ -15,8 +15,8 @@ use flow_like::flow::event::{
 };
 use flow_like_types::anyhow;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
-    QueryOrder,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    EntityTrait, QueryFilter, QueryOrder, TransactionTrait,
 };
 use serde_json::json;
 
@@ -238,17 +238,29 @@ pub fn db_model_to_event(model: event::Model) -> flow_like_types::Result<CoreEve
 }
 
 /// Sync an event to the database (upsert)
-pub async fn sync_event_to_db(
-    db: &DatabaseConnection,
+pub async fn sync_event_to_db<C>(
+    db: &C,
     app_id: &str,
     event: &CoreEvent,
-) -> flow_like_types::Result<()> {
+) -> flow_like_types::Result<()>
+where
+    C: ConnectionTrait,
+{
     let model = event_to_db_model(app_id, event);
 
     // Try to find existing
     let existing = event::Entity::find_by_id(&event.id).one(db).await?;
 
-    if existing.is_some() {
+    if let Some(existing) = existing {
+        if existing.app_id != app_id {
+            tracing::error!(
+                event_id = %event.id,
+                requested_app_id = %app_id,
+                existing_app_id = %existing.app_id,
+                "Refusing to reassign an event database row across apps"
+            );
+            return Err(anyhow!("Event ID collision while synchronizing event"));
+        }
         model.update(db).await?;
     } else {
         model.insert(db).await?;
@@ -770,20 +782,44 @@ pub async fn get_events_with_fallback(
         return Ok(db_events);
     }
 
-    // DB is empty, load from bucket using event IDs and sync
-    let mut bucket_events = Vec::new();
+    // Load and validate the complete artifact set before changing the mirror.
+    // This prevents one unreadable artifact from leaving a partial DB snapshot
+    // that subsequent reads would incorrectly treat as authoritative.
+    let mut bucket_events = Vec::with_capacity(app.events.len());
     for event_id in &app.events {
-        match app.get_event(event_id, None).await {
-            Ok(event) => {
-                if let Err(e) = sync_event_to_db(db, &app.id, &event).await {
-                    tracing::warn!("Failed to sync event {} to DB: {}", event.id, e);
-                }
-                bucket_events.push(event);
-            }
-            Err(e) => {
-                tracing::warn!("Failed to load event {} from bucket: {}", event_id, e);
-            }
+        let event = app.get_event(event_id, None).await?;
+        if event.id != *event_id {
+            tracing::error!(
+                expected_event_id = %event_id,
+                artifact_event_id = %event.id,
+                app_id = %app.id,
+                "Event artifact ID does not match its manifest entry"
+            );
+            return Err(anyhow!("Event artifact ID mismatch"));
         }
+        bucket_events.push(event);
+    }
+
+    // Commit the mirror backfill atomically. The complete bucket result is
+    // still safe to serve when a transient DB write fails; rollback keeps the
+    // next request eligible to retry the repair.
+    let transaction = db.begin().await?;
+    let mut sync_error = None;
+    for event in &bucket_events {
+        if let Err(error) = sync_event_to_db(&transaction, &app.id, event).await {
+            sync_error = Some(error);
+            break;
+        }
+    }
+    if let Some(error) = sync_error {
+        transaction.rollback().await?;
+        tracing::warn!(
+            app_id = %app.id,
+            %error,
+            "Failed to backfill event database mirror; transaction rolled back"
+        );
+    } else {
+        transaction.commit().await?;
     }
 
     Ok(bucket_events)

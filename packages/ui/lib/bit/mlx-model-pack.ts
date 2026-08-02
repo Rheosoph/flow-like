@@ -3,6 +3,19 @@ import { type IBit, IBitTypes } from "../schema";
 type MlxAsset = Pick<IBit, "download_link" | "file_name">;
 type MlxDependencyRef = Pick<IBit, "hub" | "id">;
 
+/**
+ * Mirrors `Bit::is_mlx_model` in core. An MLX root carries no `download_link`
+ * of its own — its artifacts come from the inline Hugging Face manifest that
+ * the backend materializes in `Bit::pack`. Treating it like a hosted/proxied
+ * model would skip the download entirely.
+ */
+export function isMlxModelBit(bit: Pick<IBit, "type" | "parameters">): boolean {
+	if (bit.type !== IBitTypes.Llm && bit.type !== IBitTypes.Vlm) return false;
+	const provider = (bit.parameters as { provider?: { provider_name?: string } })
+		?.provider;
+	return provider?.provider_name?.toLowerCase() === "mlx";
+}
+
 /** Returns a validation message when an MLX dependency target is unsafe. */
 export function mlxAssetPathError(fileName: string): string | undefined {
 	if (!fileName) return "Stored path is required";

@@ -275,7 +275,7 @@ pub struct WasmSecurityConfig {
     pub limits: WasmLimits,
     /// Granted capabilities
     pub capabilities: WasmCapabilities,
-    /// Allow WASI (file system, env vars, etc.)
+    /// Allow general WASI integration. This never implies host environment inheritance.
     pub allow_wasi: bool,
     /// Allow networking through WASI
     pub allow_wasi_network: bool,
@@ -365,12 +365,13 @@ impl WasmSecurityConfig {
             };
         }
 
-        let has_network = caps.intersects(WasmCapabilities::NETWORK_ALL);
         Self {
             limits: WasmLimits::default(),
             capabilities: caps,
             allow_wasi: false,
-            allow_wasi_network: has_network,
+            // Individual network capabilities are enforced independently.
+            // This flag remains an explicit grant-all override.
+            allow_wasi_network: false,
             allowed_hosts: None,
         }
     }

@@ -31,18 +31,6 @@ import { useFrontendRuntimeToolExecutor } from "../../hooks/use-frontend-runtime
 import { IBitTypes, filterHostableLlmModels, isFreeLlmModel } from "../../lib";
 import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-capability-session";
 import { flowPilotCommandApplyDiagnostics } from "../../lib/flowpilot-command-apply";
-import { buildFlowPilotBoardContextAugmentation } from "../../lib/flowpilot/board-context-manifest";
-import {
-	classifyAgentBackendError,
-	formatAgentBackendDiagnostic,
-	shouldPersistAgentBackendDiagnostic,
-} from "../../lib/flowpilot/agent-backend-diagnostics";
-import {
-	DIRECT_FLOWPILOT_BOARD_EDIT_REQUEST_PREFIX,
-	boardEditJobResolutionHistoryMode,
-	deliverBoardEditJobReceipt,
-	isDirectFlowPilotBoardEditJob,
-} from "../../lib/flowpilot/board-edit-job-delivery";
 import {
 	type IFlowPilotConversation,
 	addMessage,
@@ -51,10 +39,26 @@ import {
 	updateConversation,
 	updateMessage,
 } from "../../lib/flowpilot-db";
+import {
+	classifyAgentBackendError,
+	formatAgentBackendDiagnostic,
+	shouldPersistAgentBackendDiagnostic,
+} from "../../lib/flowpilot/agent-backend-diagnostics";
+import { buildFlowPilotBoardContextAugmentation } from "../../lib/flowpilot/board-context-manifest";
+import {
+	DIRECT_FLOWPILOT_BOARD_EDIT_REQUEST_PREFIX,
+	boardEditJobResolutionHistoryMode,
+	deliverBoardEditJobReceipt,
+	isDirectFlowPilotBoardEditJob,
+} from "../../lib/flowpilot/board-edit-job-delivery";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import { toolEndPlanStepStatus } from "../../state/global-chat/copilot-stream-steps";
 
+import {
+	ChatAiDisclosure,
+	FLOWPILOT_AI_DISCLOSURE,
+} from "../interfaces/chat-default/ai-disclosure";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import {
@@ -80,7 +84,6 @@ import {
 import { ScrollArea } from "../ui/scroll-area";
 import { Textarea } from "../ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-
 import { ContextNodes } from "./ContextNodes";
 import { HistoryPanel } from "./HistoryPanel";
 import { MessageContent } from "./MessageContent";
@@ -110,7 +113,6 @@ import {
 	type FrontendToolRequestLease,
 } from "./frontend-tool-request-guard";
 import { FlowPilotGenerationMetricsRun } from "./generation-metrics";
-import { flowPilotPanelConversationId } from "./panel-conversation-scope";
 import { buildBudgetedHistory } from "./history-budget";
 import {
 	InlineFlowScriptPreview,
@@ -120,6 +122,7 @@ import {
 	resolveDisplayedFlowScriptPreview,
 	resolveLiveFlowScriptPreviewForMessage,
 } from "./inline-flowscript-preview";
+import { flowPilotPanelConversationId } from "./panel-conversation-scope";
 import {
 	type ProviderModelPickerProvider,
 	ProviderModelReasoningPicker,
@@ -4105,6 +4108,9 @@ function FlowPilotImpl({
 									)}
 								</Button>
 							)}
+						</div>
+						<div className="mt-2">
+							<ChatAiDisclosure text={FLOWPILOT_AI_DISCLOSURE} />
 						</div>
 					</div>
 				</section>

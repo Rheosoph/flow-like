@@ -53,6 +53,7 @@ import {
 	Code2,
 	ExternalLink,
 	FolderOpen,
+	LayoutTemplate,
 	Loader2,
 	Lock,
 	Package,
@@ -374,6 +375,23 @@ function ProjectCard({
 							</Link>
 						</TooltipTrigger>
 						<TooltipContent>Debug &amp; Test</TooltipContent>
+					</Tooltip>
+
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Link
+								href={`/developer/test-widget?project=${encodeURIComponent(project.path)}`}
+							>
+								<Button
+									size="icon"
+									variant="ghost"
+									className="h-6 w-6 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+								>
+									<LayoutTemplate className="h-3 w-3" />
+								</Button>
+							</Link>
+						</TooltipTrigger>
+						<TooltipContent>Test Widgets</TooltipContent>
 					</Tooltip>
 
 					<Tooltip>

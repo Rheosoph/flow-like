@@ -8,6 +8,7 @@ mod state;
 #[cfg(desktop)]
 mod tray;
 pub mod utils;
+mod widget_protocol;
 
 // Stub for tray_update_state on non-desktop platforms
 #[cfg(not(desktop))]
@@ -439,6 +440,19 @@ pub fn run() {
     let (http_client, refetch_rx) = HTTPClient::new();
     let state = FlowLikeState::new(config, http_client);
     let state_ref = Arc::new(state);
+    let registry_state = Arc::new(Mutex::new(None));
+
+    // Package widgets are resolved from installed package manifests; without
+    // this source the widget provider only ever sees project widgets.
+    let widget_source_state = state_ref.clone();
+    let widget_source_registry = registry_state.clone();
+    tauri::async_runtime::spawn(async move {
+        widget_source_state
+            .register_package_widget_source(Arc::new(functions::registry::RegistryWidgetSource(
+                widget_source_registry,
+            )))
+            .await;
+    });
 
     let initialized_state = state_ref.clone();
     tauri::async_runtime::spawn(async move {
@@ -548,10 +562,12 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_single_instance::init(handle_instance));
     }
 
+    builder = widget_protocol::register(builder);
+
     builder = builder
         .manage(state::TauriSettingsState(settings_state.clone()))
         .manage(state::TauriFlowLikeState(state_ref.clone()))
-        .manage(state::TauriRegistryState(Arc::new(Mutex::new(None))))
+        .manage(state::TauriRegistryState(registry_state))
         .manage(state::TauriWasmEngineState(shared_wasm_engine))
         .manage(state::TauriRecordingState::new())
         .plugin(tauri_plugin_http::init())
@@ -921,6 +937,7 @@ pub fn run() {
         )))
         .invoke_handler(tauri::generate_handler![
             update,
+            deeplink::deeplink_replay_pending,
             functions::file::get_path_meta,
             functions::ai::invoke::stream_chat_completion,
             functions::ai::invoke::chat_completion,
@@ -1125,6 +1142,7 @@ pub fn run() {
             functions::a2ui::widget::close_widget,
             functions::a2ui::widget::get_widget_meta,
             functions::a2ui::widget::push_widget_meta,
+            functions::a2ui::widget::respond_widget_query,
             functions::a2ui::page::get_pages,
             functions::a2ui::page::get_page,
             functions::a2ui::page::get_page_by_route,
@@ -1160,6 +1178,8 @@ pub fn run() {
             functions::developer::developer_inspect_node,
             functions::developer::developer_inspect_package,
             functions::developer::developer_find_publish_wasm,
+            functions::developer::developer_find_publish_artifacts,
+            functions::developer::developer_prepare_widget_preview,
             functions::developer::developer_read_manifest,
             functions::developer::developer_run_node,
             functions::developer::developer_load_into_catalog,

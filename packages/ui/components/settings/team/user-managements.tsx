@@ -2,15 +2,15 @@
 
 import {
 	CrownIcon,
-	Filter,
-	MoreVertical,
-	Search,
-	Settings,
-	Trash2,
-	UserX,
-	Users,
+	FilterIcon,
+	MoreVerticalIcon,
+	SettingsIcon,
+	ShieldIcon,
+	Trash2Icon,
+	UserXIcon,
+	UsersIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
 	AlertDialog,
@@ -26,11 +26,6 @@ import {
 	AvatarFallback,
 	AvatarImage,
 	Button,
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
 	Dialog,
 	DialogContent,
 	DialogDescription,
@@ -41,25 +36,37 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
+	EmptyState,
 	type IBackendRole,
 	type IMember,
-	Input,
 	Label,
 	RolePermissions,
-	ScrollArea,
 	Select,
 	SelectContent,
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-	Separator,
 	Skeleton,
 	useBackend,
 	useInfiniteInvoke,
 	useInvalidateInvoke,
 	useInvoke,
 } from "../../../";
+import {
+	SectionHeading,
+	StatusChip,
+	TEAM_ROW_HANDLE,
+	TEAM_ROW_META,
+	TEAM_ROW_TITLE,
+	TeamHint,
+	TeamRowActions,
+	TeamSearchInput,
+	TeamSection,
+	TeamToolbar,
+	teamRowClass,
+} from "./team-shared";
 
 export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 	const backend = useBackend();
@@ -68,6 +75,7 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 		hasNextPage,
 		fetchNextPage,
 		isFetchingNextPage,
+		isLoading: isLoadingTeam,
 	} = useInfiniteInvoke(backend.teamState.getTeam, backend.teamState, [appId]);
 	const roles = useInvoke(backend.roleState.getRoles, backend.roleState, [
 		appId,
@@ -75,110 +83,181 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 
 	const [searchQuery, setSearchQuery] = useState("");
 	const [roleFilter, setRoleFilter] = useState<string>("all");
+	const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
+
+	const members = useMemo(() => team?.pages.flat() ?? [], [team]);
+	const roleList = roles.data?.[1];
 
 	const filteredTeam = useMemo(() => {
-		if (!team) return [];
-		return team.pages.flat();
-	}, [team, searchQuery, roleFilter]);
+		if (roleFilter === "all") return members;
+		return members.filter((member) => member.role_id === roleFilter);
+	}, [members, roleFilter]);
+
+	const reportMatch = useCallback((memberId: string, matches: boolean) => {
+		setHiddenIds((previous) => {
+			if (matches === !previous.has(memberId)) return previous;
+			const next = new Set(previous);
+			if (matches) next.delete(memberId);
+			else next.add(memberId);
+			return next;
+		});
+	}, []);
+
+	const searchTerm = searchQuery.trim();
+
+	const visibleCount = useMemo(
+		() =>
+			searchTerm.length === 0
+				? filteredTeam.length
+				: filteredTeam.filter((member) => !hiddenIds.has(member.id)).length,
+		[filteredTeam, hiddenIds, searchTerm],
+	);
+
+	const isFiltering = searchTerm.length > 0 || roleFilter !== "all";
+	const isInitialLoading = isLoadingTeam || roleList === undefined;
 
 	return (
-		<Card className="h-full flex flex-col">
-			<CardHeader className="shrink-0">
-				<CardTitle className="flex items-center gap-2">
-					<Users className="w-5 h-5" />
-					Team Members
-				</CardTitle>
-				<CardDescription>
-					Manage roles and permissions for your team members
-				</CardDescription>
+		<TeamSection>
+			<SectionHeading
+				icon={UsersIcon}
+				title="People with access"
+				count={members.length}
+				description="Everyone who can open this app. Roles decide what they can change."
+			/>
 
-				{/* Search and Filter Controls */}
-				<div className="flex items-center gap-3 pt-4">
-					<div className="relative flex-1">
-						<Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground w-4 h-4" />
-						<Input
-							placeholder="Search team members..."
-							value={searchQuery}
-							onChange={(e) => setSearchQuery(e.target.value)}
-							className="pl-10"
-						/>
-					</div>
-					<Select value={roleFilter} onValueChange={setRoleFilter}>
-						<SelectTrigger className="w-[140px]">
-							<Filter className="w-4 h-4 mr-2" />
-							<SelectValue placeholder="Filter by role" />
-						</SelectTrigger>
-						<SelectContent>
-							<SelectItem value="all">All Roles</SelectItem>
-							{roles.data?.[1].map((role) => (
-								<SelectItem key={role.id} value={role.id}>
-									{role.name}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
-				</div>
-			</CardHeader>
+			<TeamToolbar>
+				<TeamSearchInput
+					value={searchQuery}
+					onChange={setSearchQuery}
+					placeholder="Search by name or handle…"
+				/>
+				<Select value={roleFilter} onValueChange={setRoleFilter}>
+					<SelectTrigger className="h-9 w-40">
+						<FilterIcon className="size-4 text-muted-foreground" />
+						<SelectValue placeholder="Filter by role" />
+					</SelectTrigger>
+					<SelectContent>
+						<SelectItem value="all">All roles</SelectItem>
+						{roleList?.map((role) => (
+							<SelectItem key={role.id} value={role.id}>
+								{role.name}
+							</SelectItem>
+						))}
+					</SelectContent>
+				</Select>
+			</TeamToolbar>
 
-			<CardContent className="flex-1 min-h-0 p-0">
-				<ScrollArea className="h-full px-6 pb-6">
-					<div className="space-y-2">
-						{filteredTeam.length === 0 || !roles.data ? (
-							<div className="text-center py-8">
-								<UserX className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
-								<h3 className="text-lg font-semibold">No members found</h3>
-								<p className="text-muted-foreground">
-									{searchQuery || roleFilter !== "all"
+			<div className="flex flex-col gap-2">
+				{isInitialLoading ? (
+					<>
+						<MemberRowSkeleton />
+						<MemberRowSkeleton />
+						<MemberRowSkeleton />
+					</>
+				) : (
+					<>
+						{filteredTeam.map((member) => (
+							<Member
+								key={member.id}
+								member={member}
+								roles={roleList ?? []}
+								searchQuery={searchQuery}
+								onMatchChange={reportMatch}
+							/>
+						))}
+
+						{visibleCount === 0 && (
+							<EmptyState
+								className="max-w-full"
+								title="No members found"
+								description={
+									isFiltering
 										? "Try adjusting your search or filter criteria"
-										: "No team members have been added yet"}
-								</p>
-							</div>
-						) : (
-							filteredTeam.map((member) => {
-								return (
-									<Member
-										key={member.id}
-										member={member}
-										roles={roles.data?.[1]}
-									/>
-								);
-							})
+										: "No team members have been added yet"
+								}
+								icons={[UserXIcon]}
+							/>
 						)}
-						{hasNextPage && (
-							<Button
-								variant="outline"
-								className="w-full mt-4"
-								onClick={() => fetchNextPage()}
-								disabled={isFetchingNextPage}
-							>
-								{isFetchingNextPage ? "Loading..." : "Load More Members"}
-							</Button>
-						)}
-					</div>
-				</ScrollArea>
-			</CardContent>
-		</Card>
+					</>
+				)}
+
+				{hasNextPage && (
+					<Button
+						variant="outline"
+						className="w-full"
+						onClick={() => fetchNextPage()}
+						disabled={isFetchingNextPage}
+					>
+						{isFetchingNextPage ? "Loading..." : "Load More Members"}
+					</Button>
+				)}
+			</div>
+
+			{members.length > 0 && (
+				<TeamHint>
+					{`Showing ${visibleCount} of ${members.length} loaded ${
+						members.length === 1 ? "member" : "members"
+					}${hasNextPage ? " · more can be loaded" : ""}`}
+				</TeamHint>
+			)}
+		</TeamSection>
+	);
+}
+
+function MemberRowSkeleton() {
+	return (
+		<div className={teamRowClass()}>
+			<Skeleton className="size-9 shrink-0 rounded-full" />
+			<div className="min-w-0 flex-1 space-y-2">
+				<Skeleton className="h-4 w-45" />
+				<Skeleton className="h-3 w-30" />
+			</div>
+		</div>
 	);
 }
 
 function Member({
 	member,
 	roles,
-}: Readonly<{ member: IMember; roles: IBackendRole[] }>) {
+	searchQuery,
+	onMatchChange,
+}: Readonly<{
+	member: IMember;
+	roles: IBackendRole[];
+	searchQuery: string;
+	onMatchChange: (memberId: string, matches: boolean) => void;
+}>) {
 	const invalidate = useInvalidateInvoke();
 	const userRole = roles.find((role) => role.id === member.role_id);
 	const permission = new RolePermissions(userRole?.permissions ?? 0);
+	const isOwner = permission.contains(RolePermissions.Owner);
 	const backend = useBackend();
 	const user = useInvoke(backend.userState.lookupUser, backend.userState, [
 		member.user_id,
 	]);
 	const userData = user.data;
-	const RoleIcon = permission.contains(RolePermissions.Owner) ? (
-		<CrownIcon className="w-3 h-3 text-muted-foreground" />
-	) : null;
 
 	const [isChangeRoleOpen, setIsChangeRoleOpen] = useState(false);
 	const [selectedRoleId, setSelectedRoleId] = useState(member.role_id);
+
+	const matches = useMemo(() => {
+		const query = searchQuery.trim().toLowerCase();
+		if (query.length === 0) return true;
+		if (!userData) return true;
+		return [
+			userData?.name,
+			userData?.preferred_username,
+			userData?.username,
+			userData?.email,
+			userRole?.name,
+		]
+			.filter((value): value is string => Boolean(value))
+			.some((value) => value.toLowerCase().includes(query));
+	}, [searchQuery, userData, userRole]);
+
+	useEffect(() => {
+		onMatchChange(member.id, matches);
+	}, [member.id, matches, onMatchChange]);
 
 	const handleChangeRole = useCallback(
 		async (roleId: string) => {
@@ -192,7 +271,7 @@ function Member({
 			invalidate(backend.teamState.getTeam, [userRole.app_id]);
 			setIsChangeRoleOpen(false);
 		},
-		[member.id, backend, userRole, invalidate],
+		[member.role_id, member.user_id, backend, userRole, invalidate],
 	);
 
 	const handleRemoveMember = useCallback(async () => {
@@ -202,13 +281,11 @@ function Member({
 		toast.success(
 			`${userData?.username ?? "User"} has been removed from the team.`,
 		);
-	}, [member.id, backend, userRole, userData, invalidate]);
+	}, [member.user_id, backend, userRole, userData, invalidate]);
 
-	if (!userData) {
-		return (
-			<Skeleton className="h-10 w-full flex items-center gap-3 p-2 py-1.5 border rounded-md" />
-		);
-	}
+	if (!matches) return null;
+
+	if (!userData) return <MemberRowSkeleton />;
 
 	const evaluatedName =
 		userData.name ??
@@ -216,61 +293,59 @@ function Member({
 		userData.username ??
 		userData.email ??
 		"Unknown User";
+	const handle =
+		userData.preferred_username ?? userData.username ?? userData.email;
+	const roleName = userRole?.name ?? "No Role Assigned";
 
 	return (
-		<div className="flex items-center justify-between p-2 py-1.5 border rounded-md hover:bg-muted/50 transition-colors">
-			<div className="flex items-center gap-3 min-w-0 flex-1">
-				<Avatar className="w-8 h-8 shrink-0">
-					<AvatarImage src={user.data.avatar_url} />
-					<AvatarFallback className={`text-foreground text-xs`}>
-						{evaluatedName
-							.split(" ")
-							.map((n) => n[0])
-							.join("")}
-					</AvatarFallback>
-				</Avatar>
-				<div className="min-w-0 flex-1">
-					<div className="flex items-center gap-2">
-						<a href={`/profile?sub=${userData.id}`}>
-							<h3 className="font-medium text-sm truncate hover:underline">
-								{evaluatedName}
-							</h3>
-						</a>
-						<span className="text-xs text-muted-foreground">
-							@
-							{userData.preferred_username ??
-								userData.username ??
-								userData.email}
-						</span>
-					</div>
-					<div className="flex items-center gap-1">
-						{RoleIcon}
-						<span className="text-xs text-muted-foreground capitalize">
-							{userRole?.name ?? "No Role Assigned"}
-						</span>
-					</div>
+		<div className={teamRowClass()}>
+			<Avatar className="size-9 shrink-0">
+				<AvatarImage src={userData.avatar_url} alt={evaluatedName} />
+				<AvatarFallback className="text-[11px] font-semibold text-foreground">
+					{evaluatedName
+						.split(" ")
+						.map((n) => n[0])
+						.join("")}
+				</AvatarFallback>
+			</Avatar>
+
+			<div className="min-w-0 flex-1">
+				<div className={TEAM_ROW_TITLE}>
+					<a
+						href={`/profile?sub=${userData.id}`}
+						className="truncate hover:underline"
+					>
+						{evaluatedName}
+					</a>
+					{handle && <span className={TEAM_ROW_HANDLE}>@{handle}</span>}
+				</div>
+				<div className={TEAM_ROW_META}>
+					{isOwner ? (
+						<StatusChip tone="owner" icon={CrownIcon}>
+							{roleName}
+						</StatusChip>
+					) : (
+						<StatusChip icon={ShieldIcon}>{roleName}</StatusChip>
+					)}
 				</div>
 			</div>
 
-			<div className="flex items-center gap-2 shrink-0">
-				{!permission.contains(RolePermissions.Owner) && (
+			{!isOwner && (
+				<TeamRowActions>
 					<DropdownMenu>
 						<DropdownMenuTrigger asChild>
-							<Button variant="ghost" size="sm" className="h-6 w-6 p-0">
-								<MoreVertical className="w-3 h-3" />
+							<Button variant="ghost" size="icon" className="size-8">
+								<MoreVerticalIcon className="size-4" />
 							</Button>
 						</DropdownMenuTrigger>
-						<DropdownMenuContent align="end" className="w-40">
+						<DropdownMenuContent align="end">
 							<Dialog
 								open={isChangeRoleOpen}
 								onOpenChange={setIsChangeRoleOpen}
 							>
 								<DialogTrigger asChild>
-									<DropdownMenuItem
-										onSelect={(e) => e.preventDefault()}
-										className="text-xs"
-									>
-										<Settings className="w-3 h-3 mr-2" />
+									<DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+										<SettingsIcon className="size-4" />
 										Change Role
 									</DropdownMenuItem>
 								</DialogTrigger>
@@ -320,14 +395,14 @@ function Member({
 									</DialogFooter>
 								</DialogContent>
 							</Dialog>
-							<Separator />
+							<DropdownMenuSeparator />
 							<AlertDialog>
 								<AlertDialogTrigger asChild>
 									<DropdownMenuItem
+										variant="destructive"
 										onSelect={(e) => e.preventDefault()}
-										className="text-destructive-foreground bg-destructive text-xs"
 									>
-										<Trash2 className="w-3 h-3 mr-2" />
+										<Trash2Icon className="size-4" />
 										Remove
 									</DropdownMenuItem>
 								</AlertDialogTrigger>
@@ -342,7 +417,7 @@ function Member({
 									<AlertDialogFooter>
 										<AlertDialogCancel>Cancel</AlertDialogCancel>
 										<AlertDialogAction
-											className="bg-red-600 hover:bg-red-700"
+											className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
 											onClick={handleRemoveMember}
 										>
 											Remove
@@ -352,8 +427,8 @@ function Member({
 							</AlertDialog>
 						</DropdownMenuContent>
 					</DropdownMenu>
-				)}
-			</div>
+				</TeamRowActions>
+			)}
 		</div>
 	);
 }

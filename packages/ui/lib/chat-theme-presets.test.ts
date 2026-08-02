@@ -1,11 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { safeScopedCss } from "./css-utils";
 import {
 	CHAT_THEME_PRESETS,
 	CUSTOM_CHAT_THEME_VALUE,
 	DEFAULT_CHAT_THEME_CSS,
 	resolveChatThemePreset,
 } from "./chat-theme-presets";
+import { safeScopedCss } from "./css-utils";
 
 describe("chat theme presets", () => {
 	test("exposes unique preset ids and a canonical default", () => {

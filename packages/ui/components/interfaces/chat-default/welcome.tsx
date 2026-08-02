@@ -2,8 +2,10 @@
 
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { IEvent, IEventPayloadChat } from "../../../lib";
+import { DEFAULT_CHAT_EXAMPLE_MESSAGES } from "../../../lib/chat-appearance";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
+import { ChatEmptyOrb } from "./chat-empty-orb";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
@@ -14,16 +16,7 @@ interface ChatWelcomeProps {
 	isSending?: boolean;
 }
 
-const defaultExamples: string[] = [
-	"Help me brainstorm ideas for a new project",
-	"Explain how machine learning works",
-	"Help me debug this code issue",
-	"What's the latest in technology?",
-	"Write a professional email",
-	"Create a workout plan",
-	"Explain quantum computing",
-	"Help with meal planning",
-];
+const defaultExamples: readonly string[] = DEFAULT_CHAT_EXAMPLE_MESSAGES;
 
 export function ChatWelcome({
 	onSendMessage,
@@ -39,9 +32,9 @@ export function ChatWelcome({
 	const voiceEnabled = isVoiceEnabled(voiceConfig);
 
 	const handleVoiceModeSend = useCallback(
-		(audioFile: File) => {
+		(content: string, audioFile?: File) => {
 			setVoiceModeOpen(false);
-			onSendMessage("", [audioFile]);
+			void onSendMessage(content, undefined, undefined, audioFile);
 		},
 		[onSendMessage],
 	);
@@ -263,16 +256,23 @@ export function ChatWelcome({
 						maxWidth: "min(var(--fl-chat-content-width, 64rem), 40rem)",
 					}}
 				>
-					{/* Header */}
-					<div className="space-y-2 text-center" data-fl-chat-welcome-header>
-						<h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-							{event.name}
-						</h1>
-						{description && (
-							<p className="line-clamp-2 text-base text-muted-foreground">
-								{description}
-							</p>
-						)}
+					{/* The mark carries the invitation; the app's own name stays as the
+					    single line of context a user needs to know where they are. */}
+					<div
+						className="flex flex-col items-center gap-3"
+						data-fl-chat-welcome-header
+					>
+						<ChatEmptyOrb size={168} />
+						<div className="space-y-1 text-center">
+							<h1 className="text-base font-semibold tracking-tight">
+								{event.name}
+							</h1>
+							{description && (
+								<p className="line-clamp-2 text-sm text-muted-foreground">
+									{description}
+								</p>
+							)}
+						</div>
 					</div>
 
 					<div className="mx-auto max-w-2xl space-y-3">
@@ -288,6 +288,7 @@ export function ChatWelcome({
 							audioInput={voiceEnabled}
 							voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
 							voiceInvoke={voiceConfig.invoke}
+							voiceMaxDuration={voiceConfig.maxDuration}
 							onVoiceModeToggle={
 								voiceEnabled && voiceConfig.invoke === "auto"
 									? () => setVoiceModeOpen(true)

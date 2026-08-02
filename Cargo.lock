@@ -7813,6 +7813,7 @@ dependencies = [
  "sysinfo 0.37.2",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
  "url",
  "utoipa",
@@ -7882,6 +7883,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "sourcemap",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tower 0.5.3",
@@ -8649,6 +8651,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -8660,6 +8663,7 @@ dependencies = [
  "wasmtime-wasi",
  "wasmtime-wasi-http",
  "wat",
+ "zip 8.5.1",
 ]
 
 [[package]]

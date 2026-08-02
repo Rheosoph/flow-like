@@ -82,7 +82,14 @@ model WasmPackage {
   wasmHash String
   wasmSize BigInt
 
+  /// Widget bundle (.flwb) sha256 hash — set when the package ships widgets
+  widgetBundleHash String?
+  /// Widget bundle size in bytes
+  widgetBundleSize BigInt?
+
   nodes       Json
+  /// PackageWidgetEntry[] from the manifest, persisted like nodes
+  widgets     Json @default("[]")
   permissions Json
 
   readme String?
@@ -132,7 +139,14 @@ model WasmPackageVersion {
   wasmHash String
   wasmSize BigInt
 
-  nodes Json @default("[]")
+  /// Widget bundle (.flwb) sha256 hash — set when the version ships widgets
+  widgetBundleHash String?
+  /// Widget bundle size in bytes
+  widgetBundleSize BigInt?
+
+  nodes   Json @default("[]")
+  /// PackageWidgetEntry[] from the manifest, persisted like nodes
+  widgets Json @default("[]")
 
   releaseNotes       String?
   minFlowLikeVersion String?

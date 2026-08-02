@@ -2,7 +2,7 @@
 
 import { cn } from "../../../lib/utils";
 import { Input } from "../../ui/input";
-import { useComponentActionTrigger, useOnAction } from "../ActionHandler";
+import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -27,7 +27,7 @@ export function A2UIDateTimeInput({
 	surfaceId,
 }: ComponentProps<DateTimeInputComponent>) {
 	const onAction = useOnAction();
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const value = useResolved<string>(component.value);
 	const disabled = useResolved<boolean>(component.disabled);
 	const mode = useResolved<string>(component.mode) ?? "date";
@@ -49,7 +49,7 @@ export function A2UIDateTimeInput({
 				context: { value: newValue },
 			});
 		}
-		void triggerAction(component.actions, { value: newValue });
+		void triggerEvent("change", component, { value: newValue });
 	};
 
 	const inputType = inputTypeMap[mode] ?? "date";

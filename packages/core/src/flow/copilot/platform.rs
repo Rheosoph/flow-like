@@ -45,8 +45,8 @@ use super::stream::{
 };
 use super::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL,
-    OPEN_URL_TOOL, find_global_tool_spec, global_assistant_tool_specs, public_web_tool_specs,
-    resolve_tool_effect, spec_arg_str,
+    OPEN_URL_TOOL, PlatformToolSpec, RESEARCH_AGENT_TOOL, find_global_tool_spec,
+    global_assistant_tool_specs, public_web_tool_specs, resolve_tool_effect, spec_arg_str,
 };
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
@@ -479,14 +479,8 @@ impl PlatformCopilot {
             system_prompt.push_str(&memory.prompt_sections(&user_prompt).await);
         }
 
-        // The public-web tools moved off the shared orchestrator set and onto the Research scope,
-        // which only the tool-driven backends can host. This rig loop cannot spawn a nested scope,
-        // and it already implements the search/open/archive handlers inline below — so it keeps them
-        // directly. Dropping them here would remove web research from the Bits backend outright
-        // rather than relocating it.
-        let tool_definitions: Vec<_> = global_assistant_tool_specs(memory.is_some())
+        let tool_definitions: Vec<_> = platform_loop_tool_specs(memory.is_some())
             .into_iter()
-            .chain(public_web_tool_specs())
             .map(|spec| spec.to_tool_definition())
             .collect();
 
@@ -1135,6 +1129,24 @@ fn web_call_budget_error(tool: &str, code: &str, message: &str, retryable: bool)
     .to_string()
 }
 
+/// Tools advertised to the rig/Bits platform loop.
+///
+/// The public-web tools moved off the shared orchestrator set and onto the Research scope, which
+/// only the tool-driven backends can host. This loop cannot spawn a nested scope, and it already
+/// implements the search/open/archive handlers inline — so it keeps them directly; dropping them
+/// here would remove web research from the Bits backend outright rather than relocating it. For the
+/// same reason `research_agent` must NOT be advertised: delegating it would open a Research scope
+/// this backend cannot run, and the host's capability notice would come back to the orchestrator
+/// looking exactly like research findings. The prompt variant paired with this set is
+/// [`WebResearchCapability::Inline`](super::assistant::WebResearchCapability).
+fn platform_loop_tool_specs(memory_enabled: bool) -> Vec<PlatformToolSpec> {
+    global_assistant_tool_specs(memory_enabled)
+        .into_iter()
+        .filter(|spec| spec.name != RESEARCH_AGENT_TOOL)
+        .chain(public_web_tool_specs())
+        .collect()
+}
+
 fn is_public_web_tool(name: &str) -> bool {
     matches!(
         name,
@@ -1649,6 +1661,21 @@ fn search_query_contains_likely_secret(query: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// This loop researches the web itself. Advertising the delegating specialist as well makes the
+    /// model hand every web question to a Research scope this backend cannot start.
+    #[test]
+    fn platform_loop_holds_web_tools_and_hides_the_research_specialist() {
+        let names: Vec<&str> = platform_loop_tool_specs(true)
+            .iter()
+            .map(|spec| spec.name)
+            .collect();
+        assert!(!names.contains(&RESEARCH_AGENT_TOOL));
+        assert!(names.contains(&INTERNET_SEARCH_TOOL));
+        assert!(names.contains(&OPEN_URL_TOOL));
+        assert!(names.contains(&ARCHIVE_LOOKUP_TOOL));
+        assert!(names.contains(&MEMORY_SEARCH_TOOL));
+    }
 
     #[test]
     fn citation_allowlist_is_sorted_deduplicated_and_requires_opened_urls() {

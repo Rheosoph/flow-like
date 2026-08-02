@@ -3906,12 +3906,22 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
     }
 }
 
-const BASE_PROPS: &[&str] = &["type", "id", "style", "children", "actions", "hidden"];
+const BASE_PROPS: &[&str] = &[
+    "type",
+    "id",
+    "style",
+    "children",
+    "actions",
+    "eventHandlers",
+    "hidden",
+];
 const MAX_UI_COMPONENTS: usize = 120;
 const MAX_UI_COMPONENT_ID_CHARS: usize = 120;
 const MAX_UI_CUSTOM_CSS_CHARS: usize = 12_000;
 const MAX_UI_STYLE_STRING_CHARS: usize = 1_000;
 const MAX_UI_ACTIONS: usize = 20;
+const MAX_UI_EVENT_HANDLERS: usize = 64;
+const MAX_UI_EVENT_NAME_CHARS: usize = 128;
 
 /// Validate an array of components and return (validated_components, errors)
 fn validate_ui_components(
@@ -4110,7 +4120,10 @@ fn validate_ui_components(
             validate_style_value(id, "component.style", style, &mut errors);
         }
         if let Some(actions) = component.get("actions") {
-            validate_actions_value(id, actions, &mut errors);
+            validate_actions_value(id, "actions", actions, &mut errors);
+        }
+        if let Some(event_handlers) = component.get("eventHandlers") {
+            validate_event_handlers_value(id, event_handlers, &mut errors);
         }
 
         let mut component_refs = Vec::new();
@@ -4343,15 +4356,62 @@ fn validate_style_strings(component_id: &str, path: &str, value: &Value, errors:
     }
 }
 
-fn validate_actions_value(component_id: &str, actions: &Value, errors: &mut Vec<String>) {
+fn validate_event_handlers_value(
+    component_id: &str,
+    event_handlers: &Value,
+    errors: &mut Vec<String>,
+) {
+    let Some(event_handlers) = event_handlers.as_object() else {
+        errors.push(format!("{}: eventHandlers must be an object", component_id));
+        return;
+    };
+
+    if event_handlers.len() > MAX_UI_EVENT_HANDLERS {
+        errors.push(format!(
+            "{}: eventHandlers is limited to {MAX_UI_EVENT_HANDLERS} entries",
+            component_id
+        ));
+    }
+
+    for (event_name, actions) in event_handlers {
+        if event_name.trim().is_empty() {
+            errors.push(format!(
+                "{}: eventHandlers keys must be non-empty strings",
+                component_id
+            ));
+            continue;
+        }
+        if event_name.chars().count() > MAX_UI_EVENT_NAME_CHARS {
+            errors.push(format!(
+                "{}: eventHandlers key '{}' is too long; maximum is {MAX_UI_EVENT_NAME_CHARS} characters",
+                component_id, event_name
+            ));
+            continue;
+        }
+
+        validate_actions_value(
+            component_id,
+            &format!("eventHandlers.{event_name}"),
+            actions,
+            errors,
+        );
+    }
+}
+
+fn validate_actions_value(
+    component_id: &str,
+    path: &str,
+    actions: &Value,
+    errors: &mut Vec<String>,
+) {
     let Some(actions) = actions.as_array() else {
-        errors.push(format!("{}: actions must be an array", component_id));
+        errors.push(format!("{}: {path} must be an array", component_id));
         return;
     };
 
     if actions.len() > MAX_UI_ACTIONS {
         errors.push(format!(
-            "{}: actions is limited to {MAX_UI_ACTIONS} entries",
+            "{}: {path} is limited to {MAX_UI_ACTIONS} entries",
             component_id
         ));
     }
@@ -4359,8 +4419,8 @@ fn validate_actions_value(component_id: &str, actions: &Value, errors: &mut Vec<
     for (index, action) in actions.iter().enumerate() {
         let Some(action_obj) = action.as_object() else {
             errors.push(format!(
-                "{}: actions[{index}] must be an object",
-                component_id
+                "{}: {path}[{index}] must be an object",
+                component_id,
             ));
             continue;
         };
@@ -4368,8 +4428,8 @@ fn validate_actions_value(component_id: &str, actions: &Value, errors: &mut Vec<
         for key in action_obj.keys() {
             if !matches!(key.as_str(), "name" | "context") {
                 errors.push(format!(
-                    "{}: unknown action prop 'actions[{index}].{}'",
-                    component_id, key
+                    "{}: unknown action prop '{path}[{index}].{}'",
+                    component_id, key,
                 ));
             }
         }
@@ -4377,20 +4437,20 @@ fn validate_actions_value(component_id: &str, actions: &Value, errors: &mut Vec<
         match action_obj.get("name").and_then(Value::as_str) {
             Some(name) if !name.trim().is_empty() => {}
             _ => errors.push(format!(
-                "{}: actions[{index}].name must be a non-empty string",
-                component_id
+                "{}: {path}[{index}].name must be a non-empty string",
+                component_id,
             )),
         }
 
         match action_obj.get("context") {
             Some(Value::Object(_)) => {}
             Some(_) => errors.push(format!(
-                "{}: actions[{index}].context must be an object",
-                component_id
+                "{}: {path}[{index}].context must be an object",
+                component_id,
             )),
             None => errors.push(format!(
-                "{}: actions[{index}].context is required",
-                component_id
+                "{}: {path}[{index}].context is required",
+                component_id,
             )),
         }
     }
@@ -5933,5 +5993,81 @@ mod tests {
                 "'{comp_type}' rejects props it declares as known: {unknown_prop_errors:?}"
             );
         }
+    }
+
+    #[test]
+    fn emit_ui_accepts_named_event_handlers_and_preserves_legacy_actions() {
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Open" },
+                "actions": [
+                    { "name": "workflow_event", "context": { "nodeId": "legacy" } }
+                ],
+                "eventHandlers": {
+                    "click": [
+                        { "name": "workflow_event", "context": { "nodeId": "new" } },
+                        { "name": "navigate_page", "context": { "route": "/details" } }
+                    ],
+                    "disabled": []
+                }
+            }
+        }]);
+
+        let (validated, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors.is_empty(),
+            "unexpected validation errors: {errors:?}"
+        );
+        assert_eq!(
+            validated[0]["component"]["actions"],
+            components[0]["component"]["actions"]
+        );
+        assert_eq!(
+            validated[0]["component"]["eventHandlers"],
+            components[0]["component"]["eventHandlers"]
+        );
+    }
+
+    #[test]
+    fn emit_ui_rejects_malformed_named_event_handlers() {
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Open" },
+                "eventHandlers": {
+                    "": [],
+                    "open": { "name": "workflow_event", "context": {} },
+                    "move": [
+                        { "name": "", "context": {} },
+                        { "name": "workflow_event" }
+                    ]
+                }
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers keys must be non-empty"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers.open must be an array"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers.move[0].name"))
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers.move[1].context"))
+        );
     }
 }

@@ -187,6 +187,7 @@ export class TauriBackend implements IBackendState {
 
 	pushProfile(profile: IProfile) {
 		this.profile = profile;
+		this.refreshRemoteCatalogQueries();
 	}
 
 	pushAuthContext(auth: AuthContextProps) {
@@ -198,10 +199,42 @@ export class TauriBackend implements IBackendState {
 			?.catch((e) =>
 				console.warn("[RegistryAuth] Failed to set auth token:", e),
 			);
+		this.refreshRemoteCatalogQueries();
 	}
 
 	pushQueryClient(queryClient: QueryClient) {
 		this.queryClient = queryClient;
+		this.refreshRemoteCatalogQueries();
+	}
+
+	private refreshRemoteCatalogQueries() {
+		if (
+			!this.queryClient ||
+			!this.profile ||
+			!this.auth ||
+			this.auth.isLoading
+		) {
+			return;
+		}
+
+		// /use can mount while native auth/profile bootstrap is still in progress.
+		// Its local-only result is otherwise cached under the force-refresh key and
+		// remains fresh after the backend becomes capable of remote synchronization.
+		void Promise.all([
+			this.queryClient.invalidateQueries({
+				queryKey: [this.routeState.getRoutes.name || "backendFn"],
+				refetchType: "active",
+			}),
+			this.queryClient.invalidateQueries({
+				queryKey: [this.eventState.getEvents.name || "backendFn"],
+				refetchType: "active",
+			}),
+		]).catch((error) => {
+			console.warn(
+				"[CatalogSync] Failed to refresh routes/events after auth bootstrap:",
+				error,
+			);
+		});
 	}
 
 	async isOffline(appId: string): Promise<boolean> {
@@ -599,11 +632,14 @@ export function TauriProvider({
 		}
 	}, [backend, queryClient]);
 
-	// Listen for catalog-updated events from the backend to refresh the node catalog
+	// Registry changes can also change dynamic pins on already-open boards.
+	// Native refreshes those cached boards before emitting this event; invalidate
+	// both query families so the editor picks up the refreshed contracts.
 	useEffect(() => {
 		const unlisten = listen("catalog-updated", () => {
 			queryClient.invalidateQueries({ queryKey: ["getCatalog"] });
 			queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes"] });
+			queryClient.invalidateQueries({ queryKey: ["getBoard"] });
 		});
 		return () => {
 			unlisten.then((fn) => fn());
@@ -619,6 +655,8 @@ export function TauriProvider({
 			.then(() => {
 				queryClient.invalidateQueries({ queryKey: ["getCatalog"] });
 				queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes"] });
+				// The event listener may still be attaching during startup.
+				queryClient.invalidateQueries({ queryKey: ["getBoard"] });
 			})
 			.catch((e: unknown) => {
 				console.warn("Registry init (eager):", e);

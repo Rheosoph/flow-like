@@ -23,12 +23,14 @@ import { Label } from "../../ui/label";
 import { Textarea } from "../../ui/textarea";
 import {
 	useActionContext,
+	useComponentEventTrigger,
 	useExecuteAction,
 	useIsComponentTriggering,
 } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { resolveEventActions } from "../event-handlers";
 import type { BoundValue, FeedbackComponent } from "../types";
 
 type FeedbackMode = "icon" | "compact" | "segmented" | "rating" | "extended";
@@ -133,6 +135,7 @@ export function A2UIFeedback({
 	const [storedFeedback, setStoredFeedback] =
 		useState<StoredFeedbackSelection | null>(null);
 	const { executeAction, isPreviewMode } = useExecuteAction();
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const { appId, eventId, surfaceId = "" } = useActionContext();
 	const isTriggering = useIsComponentTriggering(componentId);
 	const pathname = usePathname() ?? "/";
@@ -197,7 +200,6 @@ export function A2UIFeedback({
 		useResolved<boolean>(component.includePageHash) ?? false;
 	const successMessage =
 		useResolved<string>(component.successMessage) ?? "Thanks for the feedback.";
-	const configuredAction = component.actions?.[0];
 	const feedbackStoragePageId = useMemo(
 		() => getPageContextStorageId(pathname, search),
 		[pathname, search],
@@ -270,14 +272,22 @@ export function A2UIFeedback({
 				includePageHash,
 				successMessage,
 			};
-			await executeAction(
-				configuredAction ?? {
-					name: "submit_feedback",
-					context: feedbackContext,
-				},
-				componentId,
-				configuredAction ? feedbackContext : {},
+			const actionResolution = resolveEventActions(
+				component.eventHandlers,
+				"submit",
+				component.actions,
 			);
+			if (actionResolution.source === "none") {
+				await executeAction(
+					{
+						name: "submit_feedback",
+						context: feedbackContext,
+					},
+					componentId,
+				);
+			} else {
+				await triggerEvent("submit", component, feedbackContext);
+			}
 
 			if (!appId || !eventId || !isPreviewMode) return true;
 

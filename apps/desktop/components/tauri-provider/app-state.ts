@@ -174,6 +174,11 @@ export class AppState implements IAppState {
 		template?: IBoard,
 	): Promise<IApp> {
 		let appId: string | undefined;
+		if (online && !this.backend.profile) {
+			throw new Error(
+				"Cannot create an online project yet — your profile is still loading. Please try again in a moment.",
+			);
+		}
 		if (online && this.backend.profile) {
 			const app: IApp = await put(
 				this.backend.profile,

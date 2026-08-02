@@ -14,7 +14,10 @@ import {
 } from "../../ui/select";
 import { Textarea } from "../../ui/textarea";
 
-const kinds: ReadonlyArray<{ readonly value: ChallengeKind; readonly label: string }> = [
+const kinds: ReadonlyArray<{
+	readonly value: ChallengeKind;
+	readonly label: string;
+}> = [
 	{ value: "SINGLE_CHOICE", label: "Single choice" },
 	{ value: "MULTIPLE_CHOICE", label: "Multiple choice" },
 	{ value: "BOARD_RIDDLE", label: "Board riddle" },
@@ -143,9 +146,7 @@ export function ChallengeEditor({
 						<Label>Explanation (shown after a correct answer)</Label>
 						<Textarea
 							value={value.explanation ?? ""}
-							onChange={(e) =>
-								patch("explanation", e.target.value || null)
-							}
+							onChange={(e) => patch("explanation", e.target.value || null)}
 							rows={2}
 						/>
 					</div>
@@ -194,7 +195,8 @@ function ChoicePayloadEditor({
 }) {
 	const options = useMemo(
 		() =>
-			(payload.options as Array<{ id: string; label: string }> | undefined) ?? [],
+			(payload.options as Array<{ id: string; label: string }> | undefined) ??
+			[],
 		[payload.options],
 	);
 	const correct = useMemo(
@@ -295,7 +297,10 @@ function ExecuteNodePayloadEditor({
 	readonly onChange: (next: Record<string, unknown>) => void;
 }) {
 	const requiredPackages = JSON.stringify(
-		payload.requiredPackages ?? payload.required_packages ?? payload.packages ?? [],
+		payload.requiredPackages ??
+			payload.required_packages ??
+			payload.packages ??
+			[],
 		null,
 		2,
 	);
@@ -367,8 +372,9 @@ function BoardRiddlePayloadEditor({
 	readonly onChange: (next: Record<string, unknown>) => void;
 }) {
 	const predicates =
-		(payload.predicates as Array<{ op: string; args: unknown[] }> | undefined) ??
-		[];
+		(payload.predicates as
+			| Array<{ op: string; args: unknown[] }>
+			| undefined) ?? [];
 	const setPredicates = (next: typeof predicates) =>
 		onChange({ ...payload, predicates: next });
 
@@ -401,10 +407,7 @@ function BoardRiddlePayloadEditor({
 					size="sm"
 					variant="outline"
 					onClick={() =>
-						setPredicates([
-							...predicates,
-							{ op: "requires_nodes", args: [] },
-						])
+						setPredicates([...predicates, { op: "requires_nodes", args: [] }])
 					}
 				>
 					Add predicate
@@ -453,7 +456,9 @@ function BoardRiddlePayloadEditor({
 							type="button"
 							variant="ghost"
 							size="sm"
-							onClick={() => setPredicates(predicates.filter((_, j) => j !== i))}
+							onClick={() =>
+								setPredicates(predicates.filter((_, j) => j !== i))
+							}
 						>
 							Remove
 						</Button>

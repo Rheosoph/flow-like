@@ -10,6 +10,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import { appsDB } from "../../lib/apps-db";
+import { withWidgetName } from "../../lib/widget-metadata";
 import type { TauriBackend } from "../tauri-provider";
 
 export class WidgetState implements IWidgetState {
@@ -95,7 +96,7 @@ export class WidgetState implements IWidgetState {
 			} catch {
 				metadata = undefined;
 			}
-			result.push([appId, widget.id, metadata]);
+			result.push([appId, widget.id, withWidgetName(metadata, widget)]);
 		}
 		return result;
 	}
@@ -140,12 +141,22 @@ export class WidgetState implements IWidgetState {
 				}),
 			);
 
+			const localById = new Map(localWidgets.map((w) => [w.id, w]));
+
 			const result: [string, string, IMetadata | undefined][] = [];
 			for (const [, widgetId, metadata] of remoteList) {
-				result.push([appId, widgetId, metadata]);
+				result.push([
+					appId,
+					widgetId,
+					withWidgetName(metadata, localById.get(widgetId)),
+				]);
 			}
 			for (let i = 0; i < localOnly.length; i++) {
-				result.push([appId, localOnly[i].id, localOnlyMeta[i]]);
+				result.push([
+					appId,
+					localOnly[i].id,
+					withWidgetName(localOnlyMeta[i], localOnly[i]),
+				]);
 			}
 
 			const syncTask = (async () => {

@@ -404,6 +404,11 @@ pub struct FlowLikeState {
     pub widget_registry: Arc<DashMap<String, crate::a2ui::widget::Widget>>,
     #[cfg(feature = "flow-runtime")]
     pub page_registry: Arc<DashMap<String, crate::a2ui::widget::Page>>,
+
+    /// Host-registered source resolving micro widgets from the manifests of
+    /// packages added to an app (see `a2ui::micro_widget::WidgetProvider`).
+    pub package_widget_source:
+        Arc<RwLock<Option<Arc<dyn crate::a2ui::micro_widget::PackageWidgetSource>>>>,
 }
 
 impl FlowLikeState {
@@ -435,6 +440,8 @@ impl FlowLikeState {
             widget_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             page_registry: Arc::new(DashMap::new()),
+
+            package_widget_source: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -467,7 +474,24 @@ impl FlowLikeState {
             widget_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             page_registry: Arc::new(DashMap::new()),
+
+            package_widget_source: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Register the host implementation resolving package widgets for apps.
+    pub async fn register_package_widget_source(
+        &self,
+        source: Arc<dyn crate::a2ui::micro_widget::PackageWidgetSource>,
+    ) {
+        let mut guard = self.package_widget_source.write().await;
+        *guard = Some(source);
+    }
+
+    pub async fn package_widget_source(
+        &self,
+    ) -> Option<Arc<dyn crate::a2ui::micro_widget::PackageWidgetSource>> {
+        self.package_widget_source.read().await.clone()
     }
 
     #[cfg(feature = "bit")]
@@ -511,6 +535,8 @@ impl FlowLikeState {
             widget_registry: Arc::new(DashMap::new()),
             #[cfg(feature = "flow-runtime")]
             page_registry: Arc::new(DashMap::new()),
+
+            package_widget_source: self.package_widget_source.clone(),
         }
     }
 

@@ -7,6 +7,7 @@ import {
 	CopyIcon,
 	EditIcon,
 	MessageSquareIcon,
+	PaperclipIcon,
 	ThumbsDownIcon,
 	ThumbsUpIcon,
 } from "lucide-react";
@@ -44,6 +45,9 @@ import { buildInlineSegments } from "./inline-segments";
 import { MessageWidgets } from "./message-widgets";
 import { InlineStepGroup, PlanSteps } from "./plan-steps";
 import { UsageStats } from "./usage-stats";
+
+/** Lines of a sent message shown before it collapses behind "Show more". */
+const COLLAPSED_ASK_LINES = 6;
 
 function ThinkingIndicator() {
 	return (
@@ -436,9 +440,12 @@ const AttachmentSection = ({
 	}, []);
 
 	return (
-		<>
+		<div
+			className="flex flex-col gap-2"
+			style={{ maxWidth: "var(--fl-chat-measure, 38rem)" }}
+		>
 			{visibleAudio.length > 0 && (
-				<div className="mt-2 max-w-md">
+				<div className="mt-2">
 					{visibleAudio.map((file) => (
 						<FilePreview key={file.url} file={file} onClick={onFileClick} />
 					))}
@@ -448,7 +455,7 @@ const AttachmentSection = ({
 			{visibleImages.length > 0 && (
 				<div
 					className={cn(
-						"mt-2 grid gap-1.5 max-w-md",
+						"mt-2 grid gap-2",
 						getImageGridClassName(visibleImages.length),
 					)}
 				>
@@ -465,7 +472,7 @@ const AttachmentSection = ({
 			)}
 
 			{visibleVideo.length > 0 && (
-				<div className="mt-2 max-w-md">
+				<div className="mt-2">
 					{visibleVideo.map((file) => (
 						<FilePreview key={file.url} file={file} onClick={onFileClick} />
 					))}
@@ -473,28 +480,38 @@ const AttachmentSection = ({
 			)}
 
 			{visibleDocuments.length > 0 && (
-				<div className="mt-2 flex flex-col gap-2 max-w-md">
+				<div className="mt-2 flex flex-col gap-1.5">
 					{visibleDocuments.map((file) => (
 						<button
 							key={file.url}
+							type="button"
 							onClick={() => onFileClick(file)}
-							className="flex flex-col gap-1 p-3 rounded-lg border bg-muted/30 hover:bg-muted/50 transition-colors text-left"
+							className="group flex flex-col gap-1.5 rounded-xl border bg-transparent px-3.5 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+							style={{ borderColor: "var(--fl-chat-rule, var(--border))" }}
 						>
 							<div className="flex items-center gap-2">
-								<Badge variant="outline" className="text-xs capitalize">
-									{file.type}
-								</Badge>
-								<span className="text-sm font-medium truncate flex-1">
+								<PaperclipIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
+								<span className="min-w-0 flex-1 truncate text-sm font-medium">
 									{file.name}
 								</span>
+								<span className="shrink-0 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
+									{file.type}
+								</span>
 								{file.pageNumber !== undefined && (
-									<Badge variant="secondary" className="text-xs">
-										Page {file.pageNumber}
+									<Badge variant="secondary" className="shrink-0 text-[10px]">
+										p.{file.pageNumber}
 									</Badge>
 								)}
 							</div>
 							{file.previewText && (
-								<p className="text-xs text-muted-foreground line-clamp-2">
+								<p
+									className="line-clamp-2 text-muted-foreground"
+									style={{
+										fontFamily: "var(--fl-chat-prose-font)",
+										fontSize: "0.8125rem",
+										lineHeight: 1.55,
+									}}
+								>
 									{file.previewText}
 								</p>
 							)}
@@ -502,7 +519,7 @@ const AttachmentSection = ({
 					))}
 				</div>
 			)}
-		</>
+		</div>
 	);
 };
 
@@ -526,8 +543,9 @@ export const MessageComponent = memo(
 		const [dialogSelectedFile, setDialogSelectedFile] =
 			useState<ProcessedAttachment | null>(null);
 		const contentRef = useRef<HTMLDivElement>(null);
-
-		const maxCollapsedHeight = "4rem";
+		const [collapsedMaxHeight, setCollapsedMaxHeight] = useState(
+			COLLAPSED_ASK_LINES * 22,
+		);
 
 		const getDisplayFileName = useCallback((name: string) => {
 			try {
@@ -621,25 +639,25 @@ export const MessageComponent = memo(
 			);
 		}, [processedAttachments]);
 
+		// A long paste should not push the answer off screen. The cap is measured
+		// from the rendered line height rather than assumed, and the observer stays
+		// attached so the toggle disappears again if the content shrinks.
 		useEffect(() => {
-			if (!isUser || !contentRef.current) return;
-
+			if (!isUser) return;
 			const el = contentRef.current;
-			const maxHeight = Number.parseFloat(maxCollapsedHeight) * 16;
+			if (!el) return;
 
-			if (el.scrollHeight > maxHeight) {
-				setShowToggle(true);
-				return;
-			}
+			const evaluate = () => {
+				const lineHeight =
+					Number.parseFloat(window.getComputedStyle(el).lineHeight) || 22;
+				const cap = Math.round(lineHeight * COLLAPSED_ASK_LINES);
+				setCollapsedMaxHeight(cap);
+				setShowToggle(el.scrollHeight > cap + 4);
+			};
 
-			const observer = new ResizeObserver(() => {
-				if (el.scrollHeight > maxHeight) {
-					setShowToggle(true);
-					observer.disconnect();
-				}
-			});
+			evaluate();
+			const observer = new ResizeObserver(evaluate);
 			observer.observe(el);
-
 			return () => observer.disconnect();
 		}, [message.inner, isUser]);
 
@@ -811,29 +829,42 @@ export const MessageComponent = memo(
 		return (
 			<>
 				<div
-					className={cn(
-						"flex w-full flex-col gap-1 transition-all duration-300 ease-in-out",
-						isUser ? "items-end" : "items-start",
-					)}
-					style={{ maxWidth: "var(--fl-chat-content-width, 64rem)" }}
+					className="flex w-full flex-col items-start gap-1 transition-all duration-300 ease-in-out"
+					style={{
+						maxWidth:
+							"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+					}}
 				>
 					<div
 						className={cn(
-							"p-4 pt-2 whitespace-break-spaces transition-all duration-300 ease-in-out",
+							"whitespace-break-spaces transition-all duration-300 ease-in-out",
 							compactUserActions && "relative",
-							isUser ? "max-w-3xl" : "w-full max-w-full pb-0",
+							isUser
+								? "w-full border-l-2 py-2 pr-4 pl-3.5"
+								: "w-full max-w-full p-4 pt-2 pb-0",
 						)}
 						data-fl-chat-message={isUser ? "user" : "assistant"}
 						style={{
 							backgroundColor: isUser
-								? "var(--fl-chat-user-message-background, var(--muted))"
+								? "var(--fl-chat-ask-background, transparent)"
 								: "var(--fl-chat-ai-message-background, var(--background))",
-							borderRadius: "var(--fl-chat-message-radius, 0.75rem)",
+							borderLeftColor: isUser
+								? "var(--fl-chat-ask-rule, var(--primary))"
+								: undefined,
+							borderRadius: isUser
+								? "0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0"
+								: "var(--fl-chat-message-radius, 0.75rem)",
 							color: isUser
 								? "var(--fl-chat-user-message-foreground, var(--foreground))"
 								: "var(--fl-chat-ai-message-foreground, var(--foreground))",
+							maxWidth: isUser ? "var(--fl-chat-measure, 38rem)" : undefined,
 						}}
 					>
+						{isUser && (
+							<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+								Asked
+							</span>
+						)}
 						{!isUser && !inlineSegments && planSteps.length > 0 && (
 							<PlanSteps
 								steps={planSteps}
@@ -844,13 +875,21 @@ export const MessageComponent = memo(
 						<div
 							ref={contentRef}
 							className={cn(
-								"text-sm leading-relaxed whitespace-break-spaces text-wrap max-w-full w-full",
+								"w-full max-w-full whitespace-break-spaces text-wrap text-sm leading-relaxed",
 								compactUserActions && "pr-10",
-								isUser && !isExpanded && "overflow-hidden",
+								isUser && showToggle && !isExpanded && "overflow-hidden",
 							)}
 							style={
-								isUser && !isExpanded
-									? { maxHeight: maxCollapsedHeight }
+								// Only clamp + fade a message that genuinely overflows. Applying
+								// the mask unconditionally faded every short question.
+								isUser && showToggle && !isExpanded
+									? {
+											maxHeight: collapsedMaxHeight,
+											WebkitMaskImage:
+												"linear-gradient(to bottom, #000 calc(100% - 2rem), transparent)",
+											maskImage:
+												"linear-gradient(to bottom, #000 calc(100% - 2rem), transparent)",
+										}
 									: undefined
 							}
 						>
@@ -873,19 +912,23 @@ export const MessageComponent = memo(
 														: undefined
 												}
 												loading={loading && index === liveSegmentIndex}
+												// …but every group stays expanded until the whole
+												// turn settles, or finished groups fold away one by
+												// one mid-stream and the run looks frozen.
+												turnActive={loading}
 											/>
 										) : loading && index === lastTextSegmentIndex ? (
-											<StreamingTextEditor
-												key={segment.key}
-												content={segment.text ?? ""}
-											/>
+											<div key={segment.key} data-fl-chat-prose>
+												<StreamingTextEditor content={segment.text ?? ""} />
+											</div>
 										) : (
-											<TextEditor
-												key={segment.key}
-												initialContent={segment.text ?? ""}
-												isMarkdown={true}
-												editable={false}
-											/>
+											<div key={segment.key} data-fl-chat-prose>
+												<TextEditor
+													initialContent={segment.text ?? ""}
+													isMarkdown={true}
+													editable={false}
+												/>
+											</div>
 										),
 									)}
 									{loading &&
@@ -896,13 +939,23 @@ export const MessageComponent = memo(
 							) : loading && !isUser && messageContent.text === "" ? (
 								<ThinkingIndicator />
 							) : loading && !isUser && messageContent.text !== "" ? (
-								<StreamingTextEditor content={messageContent.text} />
-							) : (
+								<div data-fl-chat-prose>
+									<StreamingTextEditor content={messageContent.text} />
+								</div>
+							) : isUser ? (
 								<TextEditor
 									initialContent={messageContent.text}
 									isMarkdown={true}
 									editable={false}
 								/>
+							) : (
+								<div data-fl-chat-prose>
+									<TextEditor
+										initialContent={messageContent.text}
+										isMarkdown={true}
+										editable={false}
+									/>
+								</div>
 							)}
 						</div>{" "}
 						{isUser && showToggle && (
@@ -910,16 +963,16 @@ export const MessageComponent = memo(
 								variant="ghost"
 								size="sm"
 								onClick={() => setIsExpanded(!isExpanded)}
-								className="h-auto p-0 text-xs text-foreground hover:text-foreground/80 mt-1"
+								className="-ml-1 mt-1 h-auto gap-1 p-1 text-xs text-muted-foreground hover:text-foreground"
 							>
 								{isExpanded ? (
 									<>
-										<ChevronUp className="w-3 h-3 mr-1" />
+										<ChevronUp className="w-3 h-3" />
 										Show less
 									</>
 								) : (
 									<>
-										<ChevronDown className="w-3 h-3 mr-1" />
+										<ChevronDown className="w-3 h-3" />
 										Show more
 									</>
 								)}

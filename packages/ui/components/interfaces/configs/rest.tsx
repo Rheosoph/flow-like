@@ -222,6 +222,7 @@ export function RestConfig({
 	onConfigUpdate,
 	eventId,
 	appId,
+	section,
 }: IConfigInterfaceProps) {
 	useEffect(() => {
 		if (!(config as RestSink)?.sink_type) {
@@ -306,7 +307,11 @@ export function RestConfig({
 		setSetupBusy(true);
 		try {
 			if (appId && eventId && backend.eventState.setupEvent) {
-				const response = await backend.eventState.setupEvent(appId, eventId, true);
+				const response = await backend.eventState.setupEvent(
+					appId,
+					eventId,
+					true,
+				);
 				toast.success(
 					`Setup refreshed (${response.registrations_written} registrations)`,
 				);
@@ -391,191 +396,204 @@ export function RestConfig({
 		}
 	};
 
+	// The events surface renders one section at a time; anywhere else (and for
+	// any section this component doesn't know) it renders whole.
+	const shows = (id: string) => !section || section === id;
+
 	return (
 		<div className="w-full space-y-4">
-			<Alert>
-				<Globe className="h-4 w-4" />
-				<AlertTitle className="flex items-center gap-2">
-					REST API Server
-					<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
-						<Cloud className="h-3 w-3" /> Remote only
-					</span>
-				</AlertTitle>
-				<AlertDescription>
-					Spins up a remote REST API server. Endpoints, methods, authentication
-					and request schemas are declared inside the workflow board. The server
-					is mounted at <code>/r/&#123;event_id&#125;</code>.
-				</AlertDescription>
-			</Alert>
+			{shows("server") && (
+				<>
+					<Alert>
+						<Globe className="h-4 w-4" />
+						<AlertTitle className="flex items-center gap-2">
+							REST API Server
+							<span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
+								<Cloud className="h-3 w-3" /> Remote only
+							</span>
+						</AlertTitle>
+						<AlertDescription>
+							Spins up a remote REST API server. Endpoints, methods,
+							authentication and request schemas are declared inside the
+							workflow board. The server is mounted at{" "}
+							<code>/r/&#123;event_id&#125;</code>.
+						</AlertDescription>
+					</Alert>
 
-			{endpointUrl && openApiUrl ? (
-				<div className="space-y-3 rounded-md border bg-muted/30 p-3">
-					<div className="space-y-1.5">
-						<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-							Base URL
-						</Label>
-						<div className="flex items-center gap-2">
-							<Input
-								readOnly
-								value={endpointUrl}
-								className="font-mono text-xs"
-							/>
-							<Button
-								type="button"
-								size="icon"
-								variant="outline"
-								onClick={() => copy("base", endpointUrl)}
-								title="Copy"
-							>
-								{copied === "base" ? (
-									<Check className="h-4 w-4" />
-								) : (
-									<Copy className="h-4 w-4" />
-								)}
-							</Button>
-						</div>
-					</div>
-					<div className="space-y-1.5">
-						<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-							OpenAPI Spec
-						</Label>
-						<div className="flex items-center gap-2">
-							<Input
-								readOnly
-								value={openApiUrl}
-								className="font-mono text-xs"
-							/>
-							<Button
-								type="button"
-								size="icon"
-								variant="outline"
-								onClick={() => copy("openapi", openApiUrl)}
-								title="Copy"
-							>
-								{copied === "openapi" ? (
-									<Check className="h-4 w-4" />
-								) : (
-									<Copy className="h-4 w-4" />
-								)}
-							</Button>
-						</div>
-					</div>
-					{openApiUiUrl && (
-						<div className="space-y-1.5">
-							<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-								OpenAPI UI
-							</Label>
-							<div className="flex items-center gap-2">
-								<Input
-									readOnly
-									value={openApiUiUrl}
-									className="font-mono text-xs"
-								/>
-								<Button
-									type="button"
-									size="icon"
-									variant="outline"
-									onClick={() => copy("openapi-ui", openApiUiUrl)}
-									title="Copy"
-								>
-									{copied === "openapi-ui" ? (
-										<Check className="h-4 w-4" />
-									) : (
-										<Copy className="h-4 w-4" />
-									)}
-								</Button>
+					{endpointUrl && openApiUrl ? (
+						<div className="space-y-3 rounded-md border bg-muted/30 p-3">
+							<div className="space-y-1.5">
+								<Label className="text-xs uppercase tracking-wide text-muted-foreground">
+									Base URL
+								</Label>
+								<div className="flex items-center gap-2">
+									<Input
+										readOnly
+										value={endpointUrl}
+										className="font-mono text-xs"
+									/>
+									<Button
+										type="button"
+										size="icon"
+										variant="outline"
+										onClick={() => copy("base", endpointUrl)}
+										title="Copy"
+									>
+										{copied === "base" ? (
+											<Check className="h-4 w-4" />
+										) : (
+											<Copy className="h-4 w-4" />
+										)}
+									</Button>
+								</div>
 							</div>
+							<div className="space-y-1.5">
+								<Label className="text-xs uppercase tracking-wide text-muted-foreground">
+									OpenAPI Spec
+								</Label>
+								<div className="flex items-center gap-2">
+									<Input
+										readOnly
+										value={openApiUrl}
+										className="font-mono text-xs"
+									/>
+									<Button
+										type="button"
+										size="icon"
+										variant="outline"
+										onClick={() => copy("openapi", openApiUrl)}
+										title="Copy"
+									>
+										{copied === "openapi" ? (
+											<Check className="h-4 w-4" />
+										) : (
+											<Copy className="h-4 w-4" />
+										)}
+									</Button>
+								</div>
+							</div>
+							{openApiUiUrl && (
+								<div className="space-y-1.5">
+									<Label className="text-xs uppercase tracking-wide text-muted-foreground">
+										OpenAPI UI
+									</Label>
+									<div className="flex items-center gap-2">
+										<Input
+											readOnly
+											value={openApiUiUrl}
+											className="font-mono text-xs"
+										/>
+										<Button
+											type="button"
+											size="icon"
+											variant="outline"
+											onClick={() => copy("openapi-ui", openApiUiUrl)}
+											title="Copy"
+										>
+											{copied === "openapi-ui" ? (
+												<Check className="h-4 w-4" />
+											) : (
+												<Copy className="h-4 w-4" />
+											)}
+										</Button>
+									</div>
+								</div>
+							)}
+						</div>
+					) : (
+						<p className="text-xs text-muted-foreground rounded-md border border-dashed p-3">
+							Save the event to see its endpoint URL.
+						</p>
+					)}
+
+					{eventId && appId && backend.eventState.listEventAliases && (
+						<div className="space-y-3 rounded-md border bg-card p-3">
+							<div className="space-y-1">
+								<Label className="text-xs uppercase tracking-wide text-muted-foreground">
+									Public Alias
+								</Label>
+								<div className="flex items-center gap-2">
+									<div className="shrink-0 rounded-md border bg-muted px-2 py-2 font-mono text-xs text-muted-foreground">
+										{baseUrl}/r/
+									</div>
+									<Input
+										value={aliasInput}
+										onChange={(event) => {
+											setAliasError(null);
+											setAliasInput(event.target.value);
+										}}
+										placeholder="my-api"
+										className="font-mono text-xs"
+										disabled={aliasBusy}
+									/>
+									<Button
+										type="button"
+										variant="outline"
+										onClick={saveAlias}
+										disabled={
+											aliasBusy ||
+											!backend.eventState.upsertEventAlias ||
+											!aliasInput.trim() ||
+											aliasInput.trim().toLowerCase() === currentAlias
+										}
+									>
+										{aliasBusy ? (
+											<Loader2 className="h-4 w-4 animate-spin" />
+										) : (
+											<Check className="h-4 w-4" />
+										)}
+										Save
+									</Button>
+									<Button
+										type="button"
+										size="icon"
+										variant="ghost"
+										onClick={deleteAlias}
+										disabled={
+											aliasBusy ||
+											!currentAlias ||
+											!backend.eventState.deleteEventAlias
+										}
+										title="Remove alias"
+									>
+										<Trash2 className="h-4 w-4" />
+									</Button>
+								</div>
+							</div>
+							{aliasUrl && (
+								<div className="flex items-center gap-2">
+									<Input
+										readOnly
+										value={aliasUrl}
+										className="font-mono text-xs"
+									/>
+									<Button
+										type="button"
+										size="icon"
+										variant="outline"
+										onClick={() => copy("alias", aliasUrl)}
+										title="Copy"
+									>
+										{copied === "alias" ? (
+											<Check className="h-4 w-4" />
+										) : (
+											<Copy className="h-4 w-4" />
+										)}
+									</Button>
+								</div>
+							)}
+							{aliasError && (
+								<div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">
+									<AlertCircle className="h-3 w-3 shrink-0" />
+									<span className="truncate">{aliasError}</span>
+								</div>
+							)}
 						</div>
 					)}
-				</div>
-			) : (
-				<p className="text-xs text-muted-foreground rounded-md border border-dashed p-3">
-					Save the event to see its endpoint URL.
-				</p>
+				</>
 			)}
 
-			{eventId && appId && backend.eventState.listEventAliases && (
-				<div className="space-y-3 rounded-md border bg-card p-3">
-					<div className="space-y-1">
-						<Label className="text-xs uppercase tracking-wide text-muted-foreground">
-							Public Alias
-						</Label>
-						<div className="flex items-center gap-2">
-							<div className="shrink-0 rounded-md border bg-muted px-2 py-2 font-mono text-xs text-muted-foreground">
-								{baseUrl}/r/
-							</div>
-							<Input
-								value={aliasInput}
-								onChange={(event) => {
-									setAliasError(null);
-									setAliasInput(event.target.value);
-								}}
-								placeholder="my-api"
-								className="font-mono text-xs"
-								disabled={aliasBusy}
-							/>
-							<Button
-								type="button"
-								variant="outline"
-								onClick={saveAlias}
-								disabled={
-									aliasBusy ||
-									!backend.eventState.upsertEventAlias ||
-									!aliasInput.trim() ||
-									aliasInput.trim().toLowerCase() === currentAlias
-								}
-							>
-								{aliasBusy ? (
-									<Loader2 className="h-4 w-4 animate-spin" />
-								) : (
-									<Check className="h-4 w-4" />
-								)}
-								Save
-							</Button>
-							<Button
-								type="button"
-								size="icon"
-								variant="ghost"
-								onClick={deleteAlias}
-								disabled={
-									aliasBusy ||
-									!currentAlias ||
-									!backend.eventState.deleteEventAlias
-								}
-								title="Remove alias"
-							>
-								<Trash2 className="h-4 w-4" />
-							</Button>
-						</div>
-					</div>
-					{aliasUrl && (
-						<div className="flex items-center gap-2">
-							<Input readOnly value={aliasUrl} className="font-mono text-xs" />
-							<Button
-								type="button"
-								size="icon"
-								variant="outline"
-								onClick={() => copy("alias", aliasUrl)}
-								title="Copy"
-							>
-								{copied === "alias" ? (
-									<Check className="h-4 w-4" />
-								) : (
-									<Copy className="h-4 w-4" />
-								)}
-							</Button>
-						</div>
-					)}
-					{aliasError && (
-						<div className="flex items-center gap-2 rounded-md border border-destructive/50 bg-destructive/10 p-2 text-xs text-destructive">
-							<AlertCircle className="h-3 w-3 shrink-0" />
-							<span className="truncate">{aliasError}</span>
-						</div>
-					)}
-				</div>
-			)}
-
-			{eventId && appId && (
+			{shows("routes") && eventId && appId && (
 				<SetupConfigPanel
 					version={registrationData?.event_version ?? null}
 					auths={authRows}
@@ -587,7 +605,7 @@ export function RestConfig({
 				/>
 			)}
 
-			{eventId && appId && (
+			{shows("routes") && eventId && appId && (
 				<RegistrationsPanel
 					title="Registered Routes"
 					emptyHint="Setup runs automatically when you save this event. Routes will appear here once the workflow has declared its endpoints."

@@ -180,6 +180,16 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		return map;
 	}, [updates.data]);
 
+	const invalidatePackageQueries = useCallback(() => {
+		queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
+		queryClient.invalidateQueries({
+			queryKey: ["app", appId, "package-updates"],
+		});
+		queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
+		queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
+		queryClient.invalidateQueries({ queryKey: ["app-package-widgets", appId] });
+	}, [queryClient, appId]);
+
 	const addPackage = useMutation({
 		mutationFn: async (req: AddAppPackageRequest) => {
 			if (isOffline.data && backend.appState.addPackage) {
@@ -191,9 +201,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		},
 		onSuccess: () => {
 			toast.success("Package added");
-			queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
-			queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
-			queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
+			invalidatePackageQueries();
 		},
 		onError: (err: Error) =>
 			toast.error(`Failed to add package: ${err.message}`),
@@ -213,9 +221,7 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		},
 		onSuccess: () => {
 			toast.success("Package removed");
-			queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
-			queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
-			queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
+			invalidatePackageQueries();
 		},
 		onError: (err: Error) =>
 			toast.error(`Failed to remove package: ${err.message}`),
@@ -274,15 +280,6 @@ export function AppPackagesPage({ appId }: AppPackagesPageProps) {
 		},
 		[backend.apiState, profile.data, appId],
 	);
-
-	const invalidatePackageQueries = useCallback(() => {
-		queryClient.invalidateQueries({ queryKey: ["app", appId, "packages"] });
-		queryClient.invalidateQueries({
-			queryKey: ["app", appId, "package-updates"],
-		});
-		queryClient.invalidateQueries({ queryKey: ["app-catalog-nodes", appId] });
-		queryClient.invalidateQueries({ queryKey: ["getCatalog", appId] });
-	}, [queryClient, appId]);
 
 	const applyUpdate = useMutation({
 		mutationFn: ({ pkgId, version }: { pkgId: string; version: string }) =>

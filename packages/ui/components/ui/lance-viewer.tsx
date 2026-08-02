@@ -1622,7 +1622,10 @@ const SchemaDialog: React.FC<{
 
 	const handleAddColumn = async () => {
 		if (!onAddColumn || !newColumnName) return;
-		const expression = buildAddColumnExpression(newColumnType, newColumnDefault);
+		const expression = buildAddColumnExpression(
+			newColumnType,
+			newColumnDefault,
+		);
 		if (!expression) return;
 		setProcessing(true);
 		try {

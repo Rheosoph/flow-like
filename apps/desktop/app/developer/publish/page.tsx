@@ -1,8 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
-import { readFile } from "@tauri-apps/plugin-fs";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import {
 	Badge,
 	Button,
@@ -27,7 +24,13 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
-import type { PackageInspection } from "@flow-like/flow-like-ui/lib/schema/developer";
+import type {
+	PackageInspection,
+	PublishArtifacts,
+} from "@flow-like/flow-like-ui/lib/schema/developer";
+import { invoke } from "@tauri-apps/api/core";
+import { readFile } from "@tauri-apps/plugin-fs";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import {
 	AlertTriangle,
 	ArrowLeft,
@@ -35,6 +38,7 @@ import {
 	ChevronRight,
 	Github,
 	Globe,
+	LayoutTemplate,
 	Loader2,
 	Package,
 	RefreshCw,
@@ -75,6 +79,32 @@ interface PublishFormData {
 }
 
 type PublishStep = "manifest" | "permissions" | "review";
+
+async function sha256Hex(data: Uint8Array): Promise<string> {
+	const copy = new Uint8Array(data);
+	const digest = await crypto.subtle.digest("SHA-256", copy.buffer);
+	return Array.from(new Uint8Array(digest))
+		.map((byte) => byte.toString(16).padStart(2, "0"))
+		.join("");
+}
+
+async function uploadArtifact(
+	uploadUrl: string,
+	bytes: Uint8Array<ArrayBuffer>,
+	label: string,
+): Promise<void> {
+	const response = await tauriFetch(uploadUrl, {
+		method: "PUT",
+		headers: { "Content-Type": "application/octet-stream" },
+		body: bytes,
+	});
+	if (!response.ok) {
+		const errorBody = await response.text().catch(() => "<no response body>");
+		throw new Error(
+			`${label} upload failed (${response.status} ${response.statusText}): ${errorBody}`,
+		);
+	}
+}
 
 function bumpPatch(version: string): string {
 	const parts = version.split(".");
@@ -331,45 +361,53 @@ function DeveloperPublishPageContent() {
 		if (!profile.data || !inspection) return;
 		setPublishing(true);
 		try {
-			// Use release-mode wasm detection for publish
-			const publishWasmPath = await invoke<string>(
-				"developer_find_publish_wasm",
+			// Release-mode artifact detection: root node.wasm / widgets.flwb first,
+			// then the legacy wasm lookups.
+			const artifacts = await invoke<PublishArtifacts>(
+				"developer_find_publish_artifacts",
 				{
 					projectPath,
 				},
 			);
 
-			const { upload_url } = await post<{
+			const uploadTargets = await post<{
 				upload_url: string;
 				expires_in_secs: number;
+				widget_bundle_upload_url?: string;
 			}>(
 				profile.data.hub_profile,
 				"registry/upload-url",
 				{
 					id: formData.id,
 					version: formData.version,
+					widget_bundle: !!artifacts.widgetBundle,
 				},
 				auth,
 			);
 
-			const wasmBytes = await readFile(publishWasmPath);
-			const uploadResponse = await tauriFetch(upload_url, {
-				method: "PUT",
-				headers: { "Content-Type": "application/octet-stream" },
-				body: wasmBytes,
-			});
+			if (artifacts.wasm) {
+				const wasmBytes = await readFile(artifacts.wasm);
+				await uploadArtifact(uploadTargets.upload_url, wasmBytes, "WASM");
+			}
 
-			if (!uploadResponse.ok) {
-				const uploadErrorBody = await uploadResponse
-					.text()
-					.catch(() => "<no response body>");
-				throw new Error(
-					`WASM upload failed (${uploadResponse.status} ${uploadResponse.statusText}): ${uploadErrorBody}`,
+			let widgetBundleHash: string | undefined;
+			if (artifacts.widgetBundle) {
+				if (!uploadTargets.widget_bundle_upload_url) {
+					throw new Error(
+						"The registry did not provide a widget bundle upload URL",
+					);
+				}
+				const bundleBytes = await readFile(artifacts.widgetBundle);
+				widgetBundleHash = await sha256Hex(bundleBytes);
+				await uploadArtifact(
+					uploadTargets.widget_bundle_upload_url,
+					bundleBytes,
+					"Widget bundle",
 				);
 			}
 
 			const manifest: PackageManifest = {
-				manifestVersion: 1,
+				manifestVersion: 2,
 				id: formData.id,
 				name: formData.name,
 				version: formData.version,
@@ -421,6 +459,21 @@ function DeveloperPublishPageContent() {
 				metadata: inspection.manifest?.metadata ?? {},
 			};
 
+			// Widget entries bypass toSnakeCaseKeys: the contract is camelCase on
+			// the wire (Rust WidgetContract serde) and input/event keys are user
+			// data — deep key rewriting would corrupt both.
+			const manifestWire = {
+				...(toSnakeCaseKeys(manifest) as Record<string, unknown>),
+				widgets: inspection.widgets.map((widget) => ({
+					id: widget.id,
+					name: widget.name,
+					description: widget.description,
+					contract: widget.contract,
+					keywords: [],
+				})),
+				widget_bundle_hash: widgetBundleHash,
+			};
+
 			const response = await post<{
 				success: boolean;
 				package_id: string;
@@ -430,7 +483,7 @@ function DeveloperPublishPageContent() {
 				profile.data.hub_profile,
 				"registry/publish",
 				{
-					manifest: toSnakeCaseKeys(manifest),
+					manifest: manifestWire,
 				},
 				auth,
 			);
@@ -544,7 +597,8 @@ function DeveloperPublishPageContent() {
 						Publish Package
 					</h1>
 					<p className="text-muted-foreground">
-						Publish your local node package as a private project to the registry
+						Publish your local package (nodes and widgets) as a private project
+						to the registry
 					</p>
 				</div>
 
@@ -1043,6 +1097,39 @@ function DeveloperPublishPageContent() {
 									</div>
 								)}
 
+								{inspection && inspection.widgets.length > 0 && (
+									<div className="rounded-lg border p-4 space-y-3">
+										<h4 className="font-medium text-sm flex items-center gap-2">
+											<LayoutTemplate className="h-4 w-4" />
+											{inspection.widgets.length} Widget(s)
+										</h4>
+										<div className="space-y-2">
+											{inspection.widgets.map((widget) => (
+												<div
+													key={widget.id}
+													className="flex items-start justify-between gap-3"
+												>
+													<div className="min-w-0">
+														<p className="text-sm font-medium">{widget.name}</p>
+														{widget.description && (
+															<p className="text-xs text-muted-foreground line-clamp-1">
+																{widget.description}
+															</p>
+														)}
+													</div>
+													<Badge
+														variant="outline"
+														className="text-[10px] font-normal shrink-0"
+													>
+														{widget.inputCount} inputs · {widget.eventCount}{" "}
+														events · {widget.queryCount} queries
+													</Badge>
+												</div>
+											))}
+										</div>
+									</div>
+								)}
+
 								<div className="rounded-lg border p-4 space-y-2">
 									<h4 className="font-medium flex items-center gap-2">
 										<Shield className="h-4 w-4" />
@@ -1088,7 +1175,7 @@ function DeveloperPublishPageContent() {
 									</div>
 								</div>
 
-								{!inspection?.wasmPath && (
+								{!inspection?.wasmPath && !inspection?.widgets.length && (
 									<div className="rounded-lg bg-destructive/10 border border-destructive/20 p-4">
 										<div className="flex items-start gap-2">
 											<AlertTriangle className="h-5 w-5 text-destructive mt-0.5" />
@@ -1097,7 +1184,7 @@ function DeveloperPublishPageContent() {
 													Build Required
 												</h4>
 												<p className="text-sm text-muted-foreground mt-1">
-													No compiled WASM found. Run{" "}
+													No compiled WASM or widget bundle found. Run{" "}
 													<code>mise run build</code> in your project directory
 													before publishing.
 												</p>
@@ -1138,7 +1225,10 @@ function DeveloperPublishPageContent() {
 						{step === "review" ? (
 							<Button
 								onClick={handlePublish}
-								disabled={publishing || !inspection?.wasmPath}
+								disabled={
+									publishing ||
+									(!inspection?.wasmPath && !inspection?.widgets.length)
+								}
 							>
 								{publishing ? (
 									<>

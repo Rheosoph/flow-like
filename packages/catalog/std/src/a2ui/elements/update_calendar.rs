@@ -81,6 +81,49 @@ fn operation_options() -> PinOptions {
         .build()
 }
 
+/// Reapply operation-owned schemas without recreating pins, so template pins keep their IDs and
+/// connections while still picking up the latest generated schema.
+fn refresh_dynamic_schemas(node: &mut Node, operation: &str) {
+    match operation {
+        "Set Events" | "Add Events" | "Get Events" => {
+            for pin in node.pins.values_mut().filter(|pin| pin.name == "events") {
+                pin.set_schema::<CalendarEvent>();
+            }
+        }
+        "Add Event" => {
+            for pin in node.pins.values_mut().filter(|pin| pin.name == "event") {
+                pin.set_schema::<CalendarEvent>();
+            }
+        }
+        "Update Event" => {
+            for pin in node.pins.values_mut().filter(|pin| pin.name == "event") {
+                pin.set_schema::<CalendarEventUpdate>();
+            }
+        }
+        "Update Events" => {
+            for pin in node.pins.values_mut().filter(|pin| pin.name == "events") {
+                pin.set_schema::<CalendarEventUpdate>();
+            }
+        }
+        "Set Config" | "Get Config" => {
+            for pin in node.pins.values_mut().filter(|pin| pin.name == "config") {
+                pin.set_schema::<CalendarConfig>();
+            }
+        }
+        "Diff Events" => {
+            let schema_pins = ["previous", "created", "updated", "deleted", "current"];
+            for pin in node
+                .pins
+                .values_mut()
+                .filter(|pin| schema_pins.contains(&pin.name.as_str()))
+            {
+                pin.set_schema::<CalendarEvent>();
+            }
+        }
+        _ => {}
+    }
+}
+
 impl UpdateCalendar {
     pub fn new() -> Self {
         Self
@@ -528,5 +571,60 @@ impl NodeLogic for UpdateCalendar {
             }
             _ => {}
         }
+
+        refresh_dynamic_schemas(node, &operation);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn refreshes_existing_update_events_schema_without_replacing_pin() {
+        let mut node = UpdateCalendar::new().get_node();
+        let pin = node
+            .get_pin_mut_by_name("events")
+            .expect("catalog node should contain the events pin");
+        let original_id = pin.id.clone();
+        pin.friendly_name = "Event Patches".to_string();
+        pin.schema = Some(r#"{"type":"object","title":"stale"}"#.to_string());
+        let mut expected = pin.clone();
+        expected.set_schema::<CalendarEventUpdate>();
+
+        refresh_dynamic_schemas(&mut node, "Update Events");
+
+        let refreshed = node.get_pin_by_name("events").unwrap();
+        assert_eq!(refreshed.id, original_id);
+        assert_eq!(refreshed.schema, expected.schema);
+    }
+
+    #[test]
+    fn refreshes_every_legacy_add_event_pin() {
+        let mut node = UpdateCalendar::new().get_node();
+        let first_id = {
+            let pin = node.add_input_pin("event", "Event", "", VariableType::Struct);
+            pin.schema = Some("stale-one".to_string());
+            pin.id.clone()
+        };
+        let second_id = {
+            let pin = node.add_input_pin("event", "Event", "", VariableType::Struct);
+            pin.schema = Some("stale-two".to_string());
+            pin.id.clone()
+        };
+        let mut expected = node.get_pin_by_name("event").unwrap().clone();
+        expected.set_schema::<CalendarEvent>();
+
+        refresh_dynamic_schemas(&mut node, "Add Event");
+
+        let refreshed: Vec<_> = node
+            .pins
+            .values()
+            .filter(|pin| pin.name == "event")
+            .collect();
+        assert_eq!(refreshed.len(), 2);
+        assert!(refreshed.iter().all(|pin| pin.schema == expected.schema));
+        assert!(refreshed.iter().any(|pin| pin.id == first_id));
+        assert!(refreshed.iter().any(|pin| pin.id == second_id));
     }
 }

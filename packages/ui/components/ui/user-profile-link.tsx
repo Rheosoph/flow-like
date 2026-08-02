@@ -1,6 +1,12 @@
 "use client";
 
-import { ArrowUpRight, CalendarDays, IdCard, Mail, UserRound } from "lucide-react";
+import {
+	ArrowUpRight,
+	CalendarDays,
+	IdCard,
+	Mail,
+	UserRound,
+} from "lucide-react";
 import { useMemo } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib/utils";
@@ -155,9 +161,7 @@ export function UserProfileLink({
 					{showAvatar && (
 						<Avatar className={cn("h-4 w-4", avatarClassName)}>
 							<AvatarImage src={resolvedAvatar} alt={label} />
-							<AvatarFallback className="text-[8px]">
-								{initials}
-							</AvatarFallback>
+							<AvatarFallback className="text-[8px]">{initials}</AvatarFallback>
 						</Avatar>
 					)}
 					{lookup.isLoading ? (

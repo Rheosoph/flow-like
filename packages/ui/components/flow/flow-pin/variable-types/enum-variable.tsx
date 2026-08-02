@@ -6,6 +6,7 @@ import {
 	SelectItem,
 	SelectLabel,
 	SelectTrigger,
+	SelectValue,
 } from "../../../../components/ui/select";
 import type { IPin } from "../../../../lib/schema/flow/pin";
 import {
@@ -20,7 +21,7 @@ export function EnumVariable({
 }: Readonly<{
 	pin: IPin;
 	value: number[] | undefined | null;
-	setValue: (value: any) => void;
+	setValue: (value: unknown) => void;
 }>) {
 	return (
 		<div
@@ -38,9 +39,7 @@ export function EnumVariable({
 					size="sm"
 					className="!w-fit !max-w-fit p-0 border-0 text-xs !bg-card text-nowrap text-start max-h-fit h-4 gap-0.5 flex-row items-center"
 				>
-					<small className="text-nowrap text-start text-[10px] !m-0 w-fit">
-						{parseUint8ArrayToJson(value)}
-					</small>
+					<SelectValue placeholder={`Select ${pin.friendly_name}`} />
 					<ChevronDown className="size-2 min-w-2 min-h-2 text-card-foreground" />
 				</SelectTrigger>
 				<SelectContent>

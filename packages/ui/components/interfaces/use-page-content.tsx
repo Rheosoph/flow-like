@@ -17,7 +17,8 @@ import type { IEvent } from "../../lib/schema/flow/event";
 import { useSetQueryParams } from "../../lib/set-query-params";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
-import type { IPage } from "../../state/backend-state/page-state";
+import type { IBoardState } from "../../state/backend-state/board-state";
+import type { IPage, IPageState } from "../../state/backend-state/page-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
 import type { ISettingsProfile } from "../../types";
 import { LoadingScreen } from "../ui/loading-screen";
@@ -45,6 +46,31 @@ export interface UsePageContentProps {
 	}) => void;
 }
 
+/**
+ * Page files are indexed through their board on native clients. Wait for the
+ * existing force-fresh board sync before asking the native backend for the
+ * page so a fresh install cannot observe the board halfway through syncing.
+ *
+ * A failed board sync must not prevent page-state's own local/remote fallback
+ * from running (and web pages do not require a local board at all).
+ */
+export async function loadPageAfterBoardSync(
+	boardState: Pick<IBoardState, "getBoard">,
+	pageState: Pick<IPageState, "getPage">,
+	appId: string,
+	pageId: string,
+	boardId?: string,
+	boardVersion?: [number, number, number],
+): Promise<IPage> {
+	if (boardId) {
+		await boardState
+			.getBoard(appId, boardId, boardVersion, true)
+			.catch(() => undefined);
+	}
+
+	return pageState.getPage(appId, pageId, boardId);
+}
+
 export function UsePageContent({
 	eventConfig,
 	notFound,
@@ -59,6 +85,7 @@ export function UsePageContent({
 	const router = useRouter();
 	const auth = useAuth();
 	const hasAccessToken = Boolean(auth.user?.access_token);
+	const shouldWaitForPageBoardSync = backend.capabilities().canExecuteLocally;
 
 	const appId = appIdProp ?? searchParams.get("id");
 	const routePath = routePathProp ?? searchParams.get("route") ?? "/";
@@ -454,6 +481,13 @@ export function UsePageContent({
 			? `${appId}:${pageEventId}:${pageId}:${pageBoardId ?? ""}:${pageBoardVersion?.join(".") ?? "latest"}`
 			: "";
 	const isPagePending = Boolean(pageKey && resolvedPageKey !== pageKey);
+	// Auth/profile initialization can refresh the same route/event objects after
+	// an early native page read failed. Use the query generation to retry even
+	// when every page key field remains unchanged.
+	const catalogDataUpdatedAt = Math.max(
+		routes.dataUpdatedAt,
+		events.dataUpdatedAt,
+	);
 
 	// --- Pre-sync board for the active event ---
 	// On fresh installs the board file may not exist locally yet.
@@ -461,7 +495,12 @@ export function UsePageContent({
 	// persisted before the user triggers their first execution.
 	useEffect(() => {
 		const target = activeEvent;
-		if (!appId || !target?.board_id) return;
+		if (
+			!appId ||
+			!target?.board_id ||
+			(target.default_page_id && shouldWaitForPageBoardSync)
+		)
+			return;
 		backend.boardState
 			.getBoard(
 				appId,
@@ -470,7 +509,7 @@ export function UsePageContent({
 				true,
 			)
 			.catch(() => {});
-	}, [appId, activeEvent, backend.boardState]);
+	}, [appId, activeEvent, shouldWaitForPageBoardSync, backend.boardState]);
 
 	// --- Event switching ---
 
@@ -503,6 +542,9 @@ export function UsePageContent({
 	// --- Page loading ---
 
 	useEffect(() => {
+		// This read intentionally makes a successful catalog refresh retry a page
+		// lookup whose route/event identity did not otherwise change.
+		void catalogDataUpdatedAt;
 		if (!appId || !pageId) {
 			setPageData(null);
 			setResolvedPageKey("");
@@ -521,11 +563,16 @@ export function UsePageContent({
 
 		const loadPage = async () => {
 			try {
-				const page = await backend.pageState.getPage(
-					appId,
-					pageId,
-					pageBoardId,
-				);
+				const page = shouldWaitForPageBoardSync
+					? await loadPageAfterBoardSync(
+							backend.boardState,
+							backend.pageState,
+							appId,
+							pageId,
+							pageBoardId,
+							pageBoardVersion,
+						)
+					: await backend.pageState.getPage(appId, pageId, pageBoardId);
 				if (!cancelled) {
 					setPageData(page);
 				}
@@ -554,6 +601,10 @@ export function UsePageContent({
 		isRoutePending,
 		routeLoading,
 		isDirectEventPending,
+		pageBoardVersion,
+		catalogDataUpdatedAt,
+		shouldWaitForPageBoardSync,
+		backend.boardState,
 		backend.pageState,
 	]);
 

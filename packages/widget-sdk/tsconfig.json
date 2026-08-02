@@ -1,0 +1,16 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"skipLibCheck": true,
+		"declaration": true,
+		"noEmit": true,
+		"jsx": "react-jsx",
+		"types": ["bun-types"]
+	},
+	"include": ["src", "tests"]
+}

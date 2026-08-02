@@ -108,6 +108,12 @@ export interface IBoardState {
 		skipConsentCheck?: boolean,
 	): Promise<ILogMetadata | undefined>;
 
+	/** Deliver a live micro-widget query result to the run awaiting it. */
+	respondWidgetQuery?(
+		requestId: string,
+		response: { ok: boolean; value?: unknown; error?: string },
+	): Promise<boolean>;
+
 	executeBoardRemote?(
 		appId: string,
 		boardId: string,

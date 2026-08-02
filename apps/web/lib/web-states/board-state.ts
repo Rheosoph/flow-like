@@ -137,6 +137,23 @@ export class WebBoardState implements IBoardState {
 		}
 	}
 
+	async respondWidgetQuery(
+		requestId: string,
+		response: { ok: boolean; value?: unknown; error?: string },
+	): Promise<boolean> {
+		try {
+			const result = await apiPost<{ accepted: boolean }>(
+				`widget-query/${requestId}/respond`,
+				response,
+				this.backend.auth,
+			);
+			return result.accepted;
+		} catch (error) {
+			console.warn("[WebBoardState] respondWidgetQuery failed", error);
+			return false;
+		}
+	}
+
 	async getCatalog(appId: string): Promise<INode[]> {
 		try {
 			return await apiGet<INode[]>(`apps/${appId}/nodes`, this.backend.auth);
@@ -817,7 +834,10 @@ export class WebBoardState implements IBoardState {
 		appId?: string,
 	): Promise<UnifiedCopilotResponse> {
 		const contextAppId =
-			appId ?? toolContext?.appId ?? actionContext?.app_id ?? runContext?.app_id;
+			appId ??
+			toolContext?.appId ??
+			actionContext?.app_id ??
+			runContext?.app_id;
 		const contextBoardId =
 			toolContext?.boardId ?? board?.id ?? runContext?.board_id;
 		if (contextAppId && contextBoardId) {

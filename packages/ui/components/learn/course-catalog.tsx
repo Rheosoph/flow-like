@@ -256,8 +256,8 @@ export function CourseCatalog({
 								)}
 							</h1>
 							<p className="max-w-xl text-sm leading-6 text-muted-foreground">
-								Short, practical lessons paired with real apps. Build
-								something useful and keep your momentum visible.
+								Short, practical lessons paired with real apps. Build something
+								useful and keep your momentum visible.
 							</p>
 						</div>
 					</div>

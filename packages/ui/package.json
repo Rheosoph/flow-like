@@ -3,6 +3,7 @@
 	"type": "module",
 	"dependencies": {
 		"@ai-sdk/react": "^1.2.12",
+		"@flow-like/widget-sdk": "workspace:*",
 		"@ariakit/react": "^0.4.17",
 		"@dnd-kit/core": "^6.3.1",
 		"@dnd-kit/sortable": "^10.0.0",

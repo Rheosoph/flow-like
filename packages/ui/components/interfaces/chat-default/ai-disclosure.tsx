@@ -3,24 +3,18 @@
 import { BotIcon } from "lucide-react";
 import { resolveChatAiDisclosure } from "../../../lib/chat-appearance";
 
+export const FLOWPILOT_AI_DISCLOSURE =
+	"FlowPilot is an AI assistant. Responses may be inaccurate—check important information.";
+
 export function ChatAiDisclosure({ text }: Readonly<{ text?: string | null }>) {
 	return (
 		<div
-			className="mx-auto flex w-full max-w-sm items-start gap-2 rounded-xl px-3 py-2 text-left text-[11px] leading-4 sm:w-fit sm:max-w-full sm:items-center sm:gap-1.5 sm:rounded-full sm:py-1 sm:text-center sm:text-xs sm:leading-normal"
+			className="mx-auto flex w-full items-center justify-center gap-1.5 px-3 text-center text-[11px] leading-4 text-muted-foreground"
 			data-fl-chat-ai-disclosure
 			role="note"
-			style={{
-				backgroundColor: "var(--fl-chat-disclosure-background, var(--muted))",
-				color: "var(--fl-chat-disclosure-foreground, var(--foreground))",
-			}}
 		>
-			<BotIcon
-				aria-hidden="true"
-				className="mt-px h-3.5 w-3.5 shrink-0 sm:mt-0"
-			/>
-			<span className="min-w-0 flex-1 text-balance sm:flex-none">
-				{resolveChatAiDisclosure(text)}
-			</span>
+			<BotIcon aria-hidden="true" className="size-3 shrink-0 opacity-70" />
+			<span className="text-balance">{resolveChatAiDisclosure(text)}</span>
 		</div>
 	);
 }

@@ -24,7 +24,7 @@ use jsonwebtoken::{
 };
 use sea_orm::{
     ConnectOptions, ConnectionTrait, Database, DatabaseBackend, DatabaseConnection,
-    DatabaseTransaction, Statement, TransactionTrait,
+    DatabaseTransaction, IsolationLevel, Statement, TransactionTrait,
 };
 use std::{
     collections::HashMap,
@@ -64,15 +64,20 @@ pub(crate) fn board_mutation_lock_key(app_id: &str, board_id: &str) -> String {
     format!("{}\u{1f}{}", app_id.trim(), board_id.trim())
 }
 
-/// Stable 64-bit PostgreSQL advisory-lock key for one canonical app board.
-///
-/// The domain separator keeps this lock namespace independent from other advisory-lock users in
-/// the same database. A full-width digest also avoids PostgreSQL `hashtext`'s 32-bit collision
-/// rate while preserving the app+board scoping used by the process-local mutex.
-pub(crate) fn board_mutation_advisory_key(app_id: &str, board_id: &str) -> i64 {
+const ENSURE_MUTATION_LOCK_SQL: &str =
+    r#"INSERT INTO "MutationLock" ("id") VALUES ($1) ON CONFLICT ("id") DO NOTHING"#;
+const ACQUIRE_MUTATION_LOCK_SQL: &str =
+    r#"UPDATE "MutationLock" SET "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $1"#;
+
+fn scoped_mutation_lock_id(domain: &[u8], parts: &[&str]) -> i64 {
     let mut hasher = blake3::Hasher::new();
-    hasher.update(b"flow-like.board-mutation/v1\0");
-    hasher.update(board_mutation_lock_key(app_id, board_id).as_bytes());
+    hasher.update(b"flow-like.mutation-lock/v1\0");
+    hasher.update(&(domain.len() as u64).to_be_bytes());
+    hasher.update(domain);
+    for part in parts {
+        hasher.update(&(part.len() as u64).to_be_bytes());
+        hasher.update(part.as_bytes());
+    }
     let digest = hasher.finalize();
     i64::from_be_bytes(
         digest.as_bytes()[..8]
@@ -81,11 +86,57 @@ pub(crate) fn board_mutation_advisory_key(app_id: &str, board_id: &str) -> i64 {
     )
 }
 
+/// Stable database-lock id for one canonical app board.
+pub(crate) fn board_mutation_lock_id(app_id: &str, board_id: &str) -> i64 {
+    scoped_mutation_lock_id(b"board", &[app_id.trim(), board_id.trim()])
+}
+
+/// Stable database-lock id for one learner's challenge scores.
+///
+/// The aggregate leaderboard total is per learner, so different challenges for the same learner
+/// must share a lane as well as duplicate submissions for one challenge.
+pub(crate) fn course_attempt_lock_id(user_id: &str) -> i64 {
+    scoped_mutation_lock_id(b"course-attempt-user", &[user_id])
+}
+
+async fn ensure_mutation_lock<C: ConnectionTrait>(
+    connection: &C,
+    lock_id: i64,
+) -> std::result::Result<(), sea_orm::DbErr> {
+    connection
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            ENSURE_MUTATION_LOCK_SQL,
+            [lock_id.into()],
+        ))
+        .await?;
+    Ok(())
+}
+
+async fn acquire_mutation_lock<C: ConnectionTrait>(
+    connection: &C,
+    lock_id: i64,
+) -> std::result::Result<(), sea_orm::DbErr> {
+    let result = connection
+        .execute(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            ACQUIRE_MUTATION_LOCK_SQL,
+            [lock_id.into()],
+        ))
+        .await?;
+    if result.rows_affected() != 1 {
+        return Err(sea_orm::DbErr::RecordNotFound(format!(
+            "mutation lock row {lock_id} disappeared before acquisition"
+        )));
+    }
+    Ok(())
+}
+
 /// Holds both serialization layers for a canonical board mutation.
 ///
-/// Dropping the transaction releases PostgreSQL's transaction-scoped advisory lock. Call
-/// [`Self::release`] when a normal path wants to commit the otherwise read-free lock transaction
-/// explicitly; error and early-return paths can safely rely on drop/rollback.
+/// Dropping the transaction releases the database write intent. Call [`Self::release`] when a
+/// normal path wants to commit work performed through [`Self::connection`]; error and early-return
+/// paths can safely rely on drop/rollback.
 pub(crate) struct BoardMutationGuard {
     _locals: Vec<flow_like_types::tokio::sync::OwnedMutexGuard<()>>,
     transaction: Option<DatabaseTransaction>,
@@ -101,7 +152,7 @@ impl BoardMutationGuard {
     /// Add another canonical board to this guard without opening a second transaction.
     ///
     /// Page mutations first lock the globally unique page id, then add its owning board. Keeping
-    /// both advisory locks on one transaction prevents concurrent cross-board page-id claims
+    /// both database lock rows on one transaction prevents concurrent cross-board page-id claims
     /// without consuming two pooled database connections per request.
     pub(crate) async fn acquire_additional_board(
         &mut self,
@@ -113,13 +164,9 @@ impl BoardMutationGuard {
             .board_mutation_lock(app_id, board_id)
             .lock_owned()
             .await;
-        self.connection()
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                "SELECT pg_advisory_xact_lock($1)",
-                [board_mutation_advisory_key(app_id, board_id).into()],
-            ))
-            .await?;
+        let lock_id = board_mutation_lock_id(app_id, board_id);
+        ensure_mutation_lock(self.connection(), lock_id).await?;
+        acquire_mutation_lock(self.connection(), lock_id).await?;
         self._locals.push(local);
         Ok(())
     }
@@ -196,7 +243,7 @@ pub struct State {
     pub flow_ir_draft_stores:
         moka::sync::Cache<String, Arc<flow_like::flow::copilot::FlowIrDraftStore>>,
     /// Process-local half of canonical app+board serialization. `board_mutation_guard` pairs each
-    /// mutex with a PostgreSQL advisory lock so API replicas enter the same mutation lane.
+    /// mutex with a database lock row so API replicas enter the same mutation lane.
     board_mutation_locks:
         parking_lot::Mutex<HashMap<String, Weak<flow_like_types::tokio::sync::Mutex<()>>>>,
     pub content_bucket: Arc<FlowLikeStore>,
@@ -259,11 +306,31 @@ impl State {
         lock
     }
 
+    /// Open a transaction and acquire one durable, database-backed mutation lock.
+    ///
+    /// The lock row is created outside the transaction so rollback-only board mutations do not
+    /// remove it. `READ COMMITTED` gives CockroachDB durable locking reads/write intents and avoids
+    /// its retry-prone default `SERIALIZABLE` behavior for this mutex-only transaction; it also
+    /// matches PostgreSQL's default isolation.
+    pub(crate) async fn mutation_transaction(
+        &self,
+        lock_id: i64,
+    ) -> std::result::Result<DatabaseTransaction, sea_orm::DbErr> {
+        ensure_mutation_lock(&self.db, lock_id).await?;
+        let transaction = self
+            .db
+            .begin_with_config(Some(IsolationLevel::ReadCommitted), None)
+            .await?;
+        acquire_mutation_lock(&transaction, lock_id).await?;
+        Ok(transaction)
+    }
+
     /// Serialize one board writer both within this process and across API replicas.
     ///
     /// The local mutex is acquired first to avoid spending a database connection on same-process
-    /// waiters. The PostgreSQL transaction remains open solely to retain its advisory lock for the
-    /// guard's lifetime; canonical board bytes continue to be read and written through storage.
+    /// waiters. The database transaction remains open solely to retain its lock-row write intent
+    /// for the guard's lifetime; canonical board bytes continue to be read and written through
+    /// storage.
     pub(crate) async fn board_mutation_guard(
         &self,
         app_id: &str,
@@ -273,13 +340,8 @@ impl State {
             .board_mutation_lock(app_id, board_id)
             .lock_owned()
             .await;
-        let transaction = self.db.begin().await?;
-        transaction
-            .execute(Statement::from_sql_and_values(
-                DatabaseBackend::Postgres,
-                "SELECT pg_advisory_xact_lock($1)",
-                [board_mutation_advisory_key(app_id, board_id).into()],
-            ))
+        let transaction = self
+            .mutation_transaction(board_mutation_lock_id(app_id, board_id))
             .await?;
 
         Ok(BoardMutationGuard {
@@ -959,7 +1021,10 @@ fn decoding_key_for_algorithm(alg: &AlgorithmParameters) -> flow_like_types::Res
 
 #[cfg(test)]
 mod tests {
-    use super::{board_mutation_advisory_key, board_mutation_lock_key, flow_ir_draft_store_key};
+    use super::{
+        ACQUIRE_MUTATION_LOCK_SQL, ENSURE_MUTATION_LOCK_SQL, board_mutation_lock_id,
+        board_mutation_lock_key, course_attempt_lock_id, flow_ir_draft_store_key,
+    };
 
     #[test]
     fn retained_flow_ir_key_is_scoped_by_user_app_and_board() {
@@ -986,16 +1051,36 @@ mod tests {
         );
 
         assert_eq!(
-            board_mutation_advisory_key("app", "board"),
-            board_mutation_advisory_key(" app ", " board ")
+            board_mutation_lock_id("app", "board"),
+            board_mutation_lock_id(" app ", " board ")
         );
         assert_ne!(
-            board_mutation_advisory_key("app", "board"),
-            board_mutation_advisory_key("other", "board")
+            board_mutation_lock_id("app", "board"),
+            board_mutation_lock_id("other", "board")
         );
         assert_ne!(
-            board_mutation_advisory_key("app", "board"),
-            board_mutation_advisory_key("app", "other")
+            board_mutation_lock_id("app", "board"),
+            board_mutation_lock_id("app", "other")
         );
+    }
+
+    #[test]
+    fn mutation_lock_namespaces_do_not_overlap() {
+        assert_ne!(
+            board_mutation_lock_id("user", "challenge"),
+            course_attempt_lock_id("user")
+        );
+        assert_ne!(
+            course_attempt_lock_id("user"),
+            course_attempt_lock_id("other")
+        );
+    }
+
+    #[test]
+    fn mutation_lock_sql_uses_portable_row_writes() {
+        assert!(ENSURE_MUTATION_LOCK_SQL.contains("ON CONFLICT"));
+        assert!(ACQUIRE_MUTATION_LOCK_SQL.starts_with("UPDATE"));
+        assert!(!ENSURE_MUTATION_LOCK_SQL.contains("pg_advisory"));
+        assert!(!ACQUIRE_MUTATION_LOCK_SQL.contains("pg_advisory"));
     }
 }

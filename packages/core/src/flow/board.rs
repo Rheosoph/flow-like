@@ -544,6 +544,26 @@ impl Board {
         self.hash = Some(hasher.finalize64());
     }
 
+    /// Recompute catalog-derived node schemas for an already-open board.
+    ///
+    /// Hosts call this when their node/widget registry becomes available or is
+    /// replaced after the board was loaded. The refresh is deliberately
+    /// in-memory only: it must not make the board look user-edited or persist
+    /// schema-only changes behind the user's back.
+    pub async fn refresh_node_definitions(&mut self, state: Arc<FlowLikeState>) {
+        let updated_at = self.updated_at;
+        let hash = self.hash;
+
+        // A registry replacement can also replace NodeLogic implementations.
+        // Do not let the board's per-node logic cache pin it to the old one.
+        self.logic_nodes.clear();
+        self.node_updates(state).await;
+        self.cleanup();
+
+        self.updated_at = updated_at;
+        self.hash = hash;
+    }
+
     async fn node_updates(&mut self, state: Arc<FlowLikeState>) {
         let registry = state.node_registry().clone();
         let registry = registry.read().await;
@@ -2194,6 +2214,55 @@ mod tests {
         let http_client = HTTPClient::new_without_refetch();
         let flow_like_state = crate::state::FlowLikeState::new(config, http_client);
         Arc::new(flow_like_state)
+    }
+
+    struct RefreshDefinitionLogic {
+        label: &'static str,
+    }
+
+    #[flow_like_types::async_trait]
+    impl crate::flow::node::NodeLogic for RefreshDefinitionLogic {
+        fn get_node(&self) -> crate::flow::node::Node {
+            crate::flow::node::Node::new("refresh_definition_test", self.label, "", "test")
+        }
+
+        async fn run(
+            &self,
+            _: &mut crate::flow::execution::context::ExecutionContext,
+        ) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut crate::flow::node::Node, _: &super::Board) {
+            node.friendly_name = self.label.to_string();
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_node_definitions_uses_current_registry_without_marking_board_dirty() {
+        use crate::flow::node::NodeLogic;
+
+        let state = flow_state().await;
+        let old_logic: Arc<dyn NodeLogic> = Arc::new(RefreshDefinitionLogic { label: "Old logic" });
+        let new_logic: Arc<dyn NodeLogic> = Arc::new(RefreshDefinitionLogic { label: "New logic" });
+
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        let node = old_logic.get_node();
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        board
+            .logic_nodes
+            .insert("refresh_definition_test".to_string(), old_logic);
+
+        state.node_registry().write().await.push_node(new_logic);
+        let updated_at = board.updated_at;
+        board.hash = Some(0xdead_beef);
+
+        board.refresh_node_definitions(state).await;
+
+        assert_eq!(board.nodes[&node_id].friendly_name, "New logic");
+        assert_eq!(board.updated_at, updated_at);
+        assert_eq!(board.hash, Some(0xdead_beef));
     }
 
     #[tokio::test]

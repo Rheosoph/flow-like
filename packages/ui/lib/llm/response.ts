@@ -1,5 +1,5 @@
 import type { Nullable } from "../schema/auto-import";
-import { IContentType, type IContent, type IRole } from "../schema/llm/history";
+import { type IContent, IContentType, type IRole } from "../schema/llm/history";
 import type {
 	IChoice,
 	ICompletionTokenDetails,

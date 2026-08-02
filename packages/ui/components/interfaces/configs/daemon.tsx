@@ -45,8 +45,13 @@ export function DaemonConfig({
 	config,
 	onConfigUpdate,
 	isEditing,
+	section,
 }: IConfigInterfaceProps) {
-	const current = { ...DEFAULTS, ...(config as DaemonSink), sink_type: "daemon" };
+	const current = {
+		...DEFAULTS,
+		...(config as DaemonSink),
+		sink_type: "daemon",
+	};
 
 	const setValue = (key: keyof DaemonSink, value: unknown) => {
 		onConfigUpdate?.({
@@ -77,67 +82,80 @@ export function DaemonConfig({
 		</div>
 	);
 
+	// The events surface renders one section at a time; anywhere else (and for
+	// any section this component doesn't know) it renders whole.
+	const shows = (id: string) => !section || section === id;
+
 	return (
 		<div className="w-full space-y-4">
-			<div className="space-y-2">
-				<Label htmlFor="daemon_restart_policy">Restart Policy</Label>
-				<Select
-					value={current.restart_policy}
-					onValueChange={(value) =>
-						setValue("restart_policy", value as DaemonRestartPolicy)
-					}
-					disabled={!isEditing}
-				>
-					<SelectTrigger id="daemon_restart_policy" className="w-full">
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						<SelectItem value="on_failure">On Failure</SelectItem>
-						<SelectItem value="always">Always</SelectItem>
-						<SelectItem value="never">Never</SelectItem>
-					</SelectContent>
-				</Select>
-			</div>
+			{shows("supervision") && (
+				<div className="space-y-2">
+					<Label htmlFor="daemon_restart_policy">Restart Policy</Label>
+					<Select
+						value={current.restart_policy}
+						onValueChange={(value) =>
+							setValue("restart_policy", value as DaemonRestartPolicy)
+						}
+						disabled={!isEditing}
+					>
+						<SelectTrigger id="daemon_restart_policy" className="w-full">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							<SelectItem value="on_failure">On Failure</SelectItem>
+							<SelectItem value="always">Always</SelectItem>
+							<SelectItem value="never">Never</SelectItem>
+						</SelectContent>
+					</Select>
+				</div>
+			)}
 
-			<div className="grid gap-4 md:grid-cols-2">
-				{numberInput(
-					"min_restart_delay_ms",
-					"Min Restart Delay (ms)",
-					DEFAULTS.min_restart_delay_ms,
-					100,
-				)}
-				{numberInput(
-					"max_restart_delay_ms",
-					"Max Restart Delay (ms)",
-					DEFAULTS.max_restart_delay_ms,
-					100,
-				)}
-				{numberInput(
-					"board_poll_interval_ms",
-					"Board Poll Interval (ms)",
-					DEFAULTS.board_poll_interval_ms,
-					500,
-				)}
-				{numberInput(
-					"log_flush_interval_ms",
-					"Log Flush Interval (ms)",
-					DEFAULTS.log_flush_interval_ms,
-					500,
-				)}
-				{numberInput(
-					"log_batch_size",
-					"Log Batch Size",
-					DEFAULTS.log_batch_size,
-					1,
-					1,
-				)}
-				{numberInput(
-					"healthy_reset_ms",
-					"Healthy Reset Window (ms)",
-					DEFAULTS.healthy_reset_ms,
-					1000,
-				)}
-			</div>
+			{shows("supervision") && (
+				<div className="grid gap-4 md:grid-cols-2">
+					{numberInput(
+						"min_restart_delay_ms",
+						"Min Restart Delay (ms)",
+						DEFAULTS.min_restart_delay_ms,
+						100,
+					)}
+					{numberInput(
+						"max_restart_delay_ms",
+						"Max Restart Delay (ms)",
+						DEFAULTS.max_restart_delay_ms,
+						100,
+					)}
+					{numberInput(
+						"healthy_reset_ms",
+						"Healthy Reset Window (ms)",
+						DEFAULTS.healthy_reset_ms,
+						1000,
+					)}
+				</div>
+			)}
+
+			{shows("logging") && (
+				<div className="grid gap-4 md:grid-cols-2">
+					{numberInput(
+						"board_poll_interval_ms",
+						"Board Poll Interval (ms)",
+						DEFAULTS.board_poll_interval_ms,
+						500,
+					)}
+					{numberInput(
+						"log_flush_interval_ms",
+						"Log Flush Interval (ms)",
+						DEFAULTS.log_flush_interval_ms,
+						500,
+					)}
+					{numberInput(
+						"log_batch_size",
+						"Log Batch Size",
+						DEFAULTS.log_batch_size,
+						1,
+						1,
+					)}
+				</div>
+			)}
 		</div>
 	);
 }

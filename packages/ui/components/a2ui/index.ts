@@ -11,11 +11,30 @@ export {
 	ActionProvider,
 	useActions,
 	useComponentActionTrigger,
+	useComponentEventTrigger,
 	useExecuteAction,
 	useIsComponentTriggering,
 	useMarkComponentTriggering,
 	useOnAction,
+	useSetElementValue,
 } from "./ActionHandler";
+export {
+	firstEventAction,
+	resolveEventActions,
+	WILDCARD_EVENT,
+} from "./event-handlers";
+export {
+	microWidgetHasInstance,
+	microWidgetQuery,
+	microWidgetValuesKey,
+} from "./micro-widget-host";
+export {
+	handleWidgetQueryMessage,
+	parseWidgetQueryMessage,
+	setWidgetQueryResponder,
+	type WidgetQueryResponder,
+	type WidgetQueryResponse,
+} from "./widget-query-handler";
 export {
 	WidgetActionProvider,
 	useWidgetActions,
@@ -61,6 +80,7 @@ export type {
 	BoundValue,
 	Style,
 	Action,
+	EventHandlers,
 	Widget,
 	Page,
 	DataEntry,
@@ -73,6 +93,7 @@ export type {
 	WorkflowBinding,
 	CommandBinding,
 	WidgetRef,
+	MicroWidgetInstanceComponent,
 	// Component types
 	RowComponent,
 	ColumnComponent,

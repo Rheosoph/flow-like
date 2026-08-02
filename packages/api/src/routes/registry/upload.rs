@@ -12,23 +12,30 @@ use utoipa::ToSchema;
 pub struct UploadUrlRequest {
     pub id: String,
     pub version: String,
+    /// Also request an upload slot for the widget bundle (`.flwb`)
+    #[serde(default)]
+    pub widget_bundle: bool,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 pub struct UploadUrlResponse {
     pub upload_url: String,
     pub expires_in_secs: u64,
+    /// Presigned PUT URL for the widget bundle (present when requested)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_upload_url: Option<String>,
 }
 
 /// POST /registry/upload-url
-/// Get a presigned PUT URL for uploading a WASM binary to temporary storage.
+/// Get presigned PUT URLs for uploading package artifacts (WASM binary and,
+/// when requested, the widget bundle) to temporary storage.
 #[utoipa::path(
     post,
     path = "/registry/upload-url",
     tag = "registry",
     request_body = UploadUrlRequest,
     responses(
-        (status = 200, description = "Presigned upload URL", body = UploadUrlResponse),
+        (status = 200, description = "Presigned upload URLs for the package artifacts", body = UploadUrlResponse),
         (status = 400, description = "Invalid request"),
         (status = 401, description = "Authentication required"),
         (status = 503, description = "WASM registry not configured")
@@ -64,8 +71,29 @@ pub async fn get_upload_url(
         .await
         .map_err(|e| ApiError::internal(format!("Failed to generate upload URL: {}", e)))?;
 
+    let widget_bundle_upload_url = if request.widget_bundle {
+        let bundle_tmp_path = format!(
+            "tmp/widget-bundles/{}/{}/{}.flwb",
+            sub, request.id, request.version
+        );
+        Some(
+            registry
+                .get_upload_url(&bundle_tmp_path)
+                .await
+                .map_err(|e| {
+                    ApiError::internal(format!(
+                        "Failed to generate widget bundle upload URL: {}",
+                        e
+                    ))
+                })?,
+        )
+    } else {
+        None
+    };
+
     Ok(Json(UploadUrlResponse {
         upload_url,
         expires_in_secs: 3600,
+        widget_bundle_upload_url,
     }))
 }

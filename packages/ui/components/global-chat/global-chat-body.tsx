@@ -59,6 +59,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../index";
+import { cn } from "../../lib";
 import { getApiOrigin } from "../../lib/api-url";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { isTauri } from "../../lib/platform";
@@ -106,12 +107,14 @@ import {
 	isAgentBackendProvider,
 	normalizeAIProvider,
 } from "../flowpilot/types";
+import { FLOWPILOT_AI_DISCLOSURE } from "../interfaces/chat-default/ai-disclosure";
 import { fileToAttachment } from "../interfaces/chat-default/attachment";
 import {
 	Chat,
 	type IChatConcurrency,
 	type IChatRef,
 } from "../interfaces/chat-default/chat";
+import { ChatEmptyOrb } from "../interfaces/chat-default/chat-empty-orb";
 import { ChatWidgetExecutionProvider } from "../interfaces/chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
@@ -164,6 +167,7 @@ const EMPTY_SUGGESTIONS: Array<{
 const MEMORY_OFF = "__off__";
 const GLOBAL_CHAT_CONFIG = {
 	allow_file_upload: true,
+	ai_disclosure: FLOWPILOT_AI_DISCLOSURE,
 	tools: [] as string[],
 };
 
@@ -1009,7 +1013,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					onValueChange={handleEmbeddingChange}
 				>
 					<SelectTrigger
-						className="h-9 md:h-7 data-[size=default]:h-9 md:data-[size=default]:h-7 min-w-0 max-w-36 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						className="h-9 md:h-7 data-[size=default]:h-9 md:data-[size=default]:h-7 min-w-0 max-w-36 shrink-0 gap-1.5 rounded-lg border-transparent bg-transparent px-2 text-xs shadow-none outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 						title="Profile memory embedding model"
 					>
 						<BrainIcon className="size-3.5 mr-1 text-muted-foreground shrink-0" />
@@ -1084,10 +1088,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		<Popover open={pickerOpen} onOpenChange={setPickerOpen}>
 			<PopoverTrigger asChild>
 				<Button
-					variant="outline"
+					variant="ghost"
 					size="sm"
 					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${reasoningEffortOptions.length > 0 ? ` · ${currentReasoningEffortName}` : ""}${selectedModelIsFree ? " · Free model may be too limited for complete app creation" : ""}`}
-					className="h-9 md:h-7 shrink-0 gap-1.5 px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+					className="h-9 md:h-7 shrink-0 gap-1.5 rounded-lg px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 				>
 					<CurrentProviderIcon className="size-3.5 shrink-0 text-primary" />
 					<span className="max-w-28 truncate">
@@ -1229,25 +1233,28 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			onKeyDownCapture={handlePageInteraction}
 			className="flex flex-col flex-1 min-h-0 w-full h-full"
 		>
-			<header className="flex items-center gap-1.5 px-3 py-2 border-b border-border/50 shrink-0">
+			<header
+				className="fl-chat-chrome flex shrink-0 items-center gap-1.5 px-3 py-2"
+				data-chrome-pinned={isStreaming ? "true" : "false"}
+			>
 				<div className="flex flex-1 min-w-0 items-center gap-1.5 overflow-x-auto no-scrollbar">
 					{providerModelPicker}
 					{memoryPicker}
 					{memoryModels.length > 0 && profileId && (
 						<Button
 							type="button"
-							variant="outline"
+							variant="ghost"
 							size="icon"
 							onClick={() => setMemoryManagerOpen(true)}
 							title="Review & manage saved memories"
-							className="size-9 md:size-7 shrink-0 outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+							className="size-9 md:size-7 shrink-0 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 						>
 							<SettingsIcon className="size-3.5 shrink-0 text-muted-foreground" />
 						</Button>
 					)}
 					<Button
 						type="button"
-						variant={autoMode ? "default" : "outline"}
+						variant="ghost"
 						size="sm"
 						aria-pressed={autoMode}
 						onClick={() => setAutoMode(!autoMode)}
@@ -1256,7 +1263,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								? "Auto mode on — tools run and changes apply without asking, including destructive ones. Only board-item deletion still asks."
 								: "Auto mode off — the assistant asks before acting"
 						}
-						className="h-9 md:h-7 shrink-0 gap-1.5 px-2.5 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						className={cn(
+							"h-9 md:h-7 shrink-0 gap-1.5 rounded-lg px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0",
+							autoMode && "bg-primary/12 text-primary hover:bg-primary/18",
+						)}
 					>
 						<ZapIcon className="size-3.5 shrink-0" />
 						Auto
@@ -1374,31 +1384,26 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						} ${showWorkspace && !canSideBySide ? "hidden" : ""}`}
 					>
 						{showEmptyState && (
-							<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center gap-5 px-6 text-center">
-								<span className="flex size-16 items-center justify-center rounded-[1.25rem] bg-linear-to-br from-primary/25 via-primary/10 to-purple-600/20 text-primary shadow-xl shadow-primary/25 ring-1 ring-primary/15">
-									<SparklesIcon className="size-8" />
-								</span>
-								<div className="space-y-1.5">
-									<h2 className="text-xl font-semibold tracking-tight">
-										Chat with FlowPilot
-									</h2>
-									<p className="mx-auto max-w-xs text-sm text-muted-foreground">
-										Ask anything — or let it create apps, open the store, and
-										talk to your apps for you.
-									</p>
-								</div>
-								<div className="pointer-events-auto flex flex-wrap items-center justify-center gap-2">
+							<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center gap-7 px-6">
+								<ChatEmptyOrb size={240} />
+								<div className="pointer-events-auto flex flex-wrap items-center justify-center gap-3">
 									{EMPTY_SUGGESTIONS.map(({ label, icon: Icon, prompt }) => (
-										<Button
+										<button
 											key={label}
-											variant="outline"
-											size="sm"
-											className="h-10 md:h-8 gap-1.5 rounded-full border-border/60 bg-background/80 text-xs text-foreground/80 outline-none transition-all hover:border-primary/40 hover:bg-primary/10 hover:text-primary hover:shadow-sm focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0 motion-safe:hover:-translate-y-px"
+											type="button"
+											aria-label={label}
+											title={label}
 											onClick={() => void handleSendMessage(prompt)}
+											className="group relative flex size-12 items-center justify-center rounded-2xl border text-muted-foreground outline-none transition-all hover:border-primary/45 hover:bg-background hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/40 motion-safe:hover:-translate-y-0.5"
+											style={{
+												borderColor: "var(--fl-chat-rule, var(--border))",
+											}}
 										>
-											<Icon className="size-3.5" />
-											{label}
-										</Button>
+											<Icon className="size-5" />
+											<span className="pointer-events-none absolute top-full mt-2 whitespace-nowrap text-[11px] font-medium text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+												{label}
+											</span>
+										</button>
 									))}
 								</div>
 							</div>
@@ -1418,6 +1423,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								config={GLOBAL_CHAT_CONFIG}
 								activeInteractions={activeInteractions}
 								onRespondToInteraction={handleRespondToInteraction}
+								showAiDisclosure
 								inlinePrompt={
 									toolPrompt ? (
 										<InlineToolPrompt key={toolPrompt.id} prompt={toolPrompt} />

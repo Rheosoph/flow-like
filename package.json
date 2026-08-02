@@ -15,7 +15,8 @@
 		"packages/*",
 		"packages/dexie-tauri-adapter/*",
 		"apps/*",
-		"libs/*/*"
+		"libs/*/*",
+		"examples/*/widgets/*"
 	],
 	"overrides": {
 		"@astrojs/cloudflare": "13.5.1",

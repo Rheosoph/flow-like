@@ -3,6 +3,8 @@ export interface IHub {
 	authentication?: null | IAuthentication;
 	cdn?: null | string;
 	contact: IContact;
+	/** Upgrade / conversion experience configuration */
+	conversion?: IConversionConfig;
 	default_user_plan?: null | string;
 	description: string;
 	domain: string;
@@ -26,6 +28,48 @@ export interface IHub {
 	supported_sinks?: ISupportedSinks | null;
 	thumbnail?: null | string;
 	tiers: { [key: string]: IUserTier };
+	[property: string]: any;
+}
+
+/**
+ * Decides what users see when they hit a plan limit: a self-service upgrade
+ * flow (consumer) or a "contact us" card (enterprise deployments).
+ */
+export type IConversionMode = "consumer" | "enterprise";
+
+/** Marketing metadata for a tier, keyed by tier id in `IConversionConfig`. */
+export interface ITierDisplay {
+	/** Name shown instead of the raw tier key (e.g. "Starter" for FREE) */
+	display_name?: null | string;
+	/** One-line value proposition under the tier name */
+	tagline?: null | string;
+	/** Curated feature bullets shown in addition to the derived limit facts */
+	features?: string[];
+	/** Marks the recommended tier — gets the "Most popular" treatment */
+	highlight?: boolean;
+	/** Badge text overriding the default highlight label */
+	badge?: null | string;
+	[property: string]: any;
+}
+
+/** Upgrade / conversion experience configuration */
+export interface IConversionConfig {
+	/** When false, plan-limit errors surface as plain messages without the upgrade dialog */
+	enabled?: boolean;
+	mode?: IConversionMode;
+	/** Headline override for the upgrade dialog */
+	headline?: null | string;
+	/** Supporting line under the headline */
+	subheadline?: null | string;
+	/**
+	 * Contact used in enterprise mode and for the enterprise tier CTA;
+	 * falls back to the hub contact when unset
+	 */
+	contact?: null | IContact;
+	/** Custom message shown on the enterprise contact card */
+	contact_message?: null | string;
+	/** Per-tier marketing metadata keyed by tier id (FREE, PREMIUM, ...) */
+	tier_display?: { [key: string]: ITierDisplay };
 	[property: string]: any;
 }
 

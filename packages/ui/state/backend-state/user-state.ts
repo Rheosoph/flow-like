@@ -45,6 +45,11 @@ export interface IPriceInfo {
 
 export interface ITierInfo {
 	name: string;
+	display_name?: string;
+	tagline?: string;
+	features?: string[];
+	highlight?: boolean;
+	badge?: string;
 	product_id?: string;
 	max_non_visible_projects: number;
 	max_remote_executions: number;
@@ -57,9 +62,21 @@ export interface ITierInfo {
 	contact_url?: string;
 }
 
+export interface IConversionInfo {
+	enabled: boolean;
+	mode: "consumer" | "enterprise" | string;
+	headline?: string;
+	subheadline?: string;
+	contact_name: string;
+	contact_email: string;
+	contact_url: string;
+	contact_message?: string;
+}
+
 export interface IPricingResponse {
 	current_tier: string;
 	tiers: Record<string, ITierInfo>;
+	conversion?: IConversionInfo;
 }
 
 export interface ISubscribeRequest {

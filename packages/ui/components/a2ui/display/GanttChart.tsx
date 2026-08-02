@@ -38,7 +38,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { Badge, Button, Input } from "../../ui/index";
 import {
-	useComponentActionTrigger,
+	useComponentEventTrigger,
 	useIsComponentTriggering,
 } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
@@ -149,7 +149,7 @@ export function A2UIGantt({
 	const gridRef = useRef<HTMLDivElement>(null);
 	// Suppresses the click that follows a >3px drag.
 	const movedRef = useRef(false);
-	const trigger = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
 
 	const rawTasks = useResolved<unknown>(component.tasks);
@@ -241,9 +241,9 @@ export function A2UIGantt({
 
 	const fire = useCallback(
 		(interaction: string, extra: Record<string, unknown>) => {
-			void trigger(component.actions, { interaction, ...extra });
+			void triggerEvent(interaction, component, { interaction, ...extra });
 		},
-		[trigger, component.actions],
+		[triggerEvent, component],
 	);
 
 	// Visible (non-collapsed-descendant) tasks in stable order.

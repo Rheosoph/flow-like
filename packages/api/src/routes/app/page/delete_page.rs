@@ -42,7 +42,7 @@ pub async fn delete_page(
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::WriteBoards);
     let sub = permission.sub()?;
 
-    // Resolve credentials and storage before taking advisory locks so lock holders never wait for
+    // Resolve credentials and storage before taking mutation locks so lock holders never wait for
     // another pooled database connection during app setup.
     let app = state
         .scoped_app(

@@ -3,6 +3,7 @@
 import { Loader2, Mic, Trash2 } from "lucide-react";
 import {
 	type MouseEvent as ReactMouseEvent,
+	type PointerEvent as ReactPointerEvent,
 	useCallback,
 	useEffect,
 	useMemo,
@@ -32,13 +33,14 @@ import {
 } from "../../voice";
 import {
 	useActionContext,
-	useComponentActionTrigger,
+	useComponentEventTrigger,
 	useIsComponentTriggering,
 	useOnAction,
 } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { firstEventAction } from "../event-handlers";
 import type { BoundValue, VoiceInputComponent } from "../types";
 
 interface VoiceData {
@@ -56,6 +58,8 @@ interface VoiceData {
 
 /** Trailing buffer so a manual/hold stop doesn't clip the user's last words. */
 const STOP_DELAY_MS = 700;
+const MICROPHONE_BLOCKED_MESSAGE =
+	"Microphone access was blocked. Allow it in your browser's site settings and, if this page is embedded, allow microphone access on the host page.";
 
 function toStoredVoice(voice: VoiceData): VoiceData {
 	const { uploading: _u, uploadError: _e, ...stored } = voice;
@@ -80,6 +84,42 @@ function formatFileSize(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function errorName(error: unknown): string | undefined {
+	if (typeof error !== "object" || error === null || !("name" in error)) {
+		return undefined;
+	}
+	return typeof error.name === "string" ? error.name : undefined;
+}
+
+function speechErrorCode(error: unknown): string | undefined {
+	if (typeof error !== "object" || error === null || !("error" in error)) {
+		return undefined;
+	}
+	return typeof error.error === "string" ? error.error : undefined;
+}
+
+function voiceCaptureErrorMessage(error: unknown): string {
+	switch (errorName(error)) {
+		case "NotAllowedError":
+		case "SecurityError":
+			return MICROPHONE_BLOCKED_MESSAGE;
+		case "NotFoundError":
+			return "No microphone was found. Connect or enable a microphone and try again.";
+		case "NotReadableError":
+		case "AbortError":
+			return "The microphone is unavailable. Close other apps using it and try again.";
+		default:
+			return "Microphone access failed. Check your browser and system permissions, then try again.";
+	}
+}
+
+function unsupportedVoiceCaptureMessage(): string {
+	if (typeof window !== "undefined" && window.isSecureContext === false) {
+		return "Voice recording requires HTTPS or localhost.";
+	}
+	return "Voice recording is not supported in this browser or embedded page.";
+}
+
 export function A2UIVoiceInput({
 	component,
 	style,
@@ -87,7 +127,7 @@ export function A2UIVoiceInput({
 	surfaceId,
 }: ComponentProps<VoiceInputComponent>) {
 	const onAction = useOnAction();
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
 	const backend = useBackend();
 	const { appId, resolveTemporaryUploadTarget } = useActionContext();
@@ -95,7 +135,7 @@ export function A2UIVoiceInput({
 
 	const value = useResolved<VoiceData>(component.value);
 	const disabled = useResolved<boolean>(component.disabled);
-	const error = useResolved<boolean>(component.error);
+	const error = useResolved<boolean | string>(component.error);
 	const label = useResolved<string>(component.label);
 	const helperText = useResolved<string>(component.helperText);
 	const maxDuration = useResolved<number>(component.maxDuration) ?? 300;
@@ -129,12 +169,18 @@ export function A2UIVoiceInput({
 	const [localVoice, setLocalVoice] = useState<VoiceData | null>(null);
 	const [isUploading, setIsUploading] = useState(false);
 	const [hover, setHover] = useState(false);
+	const [mounted, setMounted] = useState(false);
+	const [captureError, setCaptureError] = useState<string | null>(null);
+	const [speechFailed, setSpeechFailed] = useState(false);
 	const [localUrl, setLocalUrl] = useState<string | null>(null);
 	const localUrlRef = useRef<string | null>(null);
 	const uploadOperationRef = useRef(0);
+	const previousModeRef = useRef(mode);
 	const [dismissedResponse, setDismissedResponse] = useState<string | null>(
 		null,
 	);
+
+	useEffect(() => setMounted(true), []);
 
 	const replaceLocalUrl = useCallback((file: File | null) => {
 		if (localUrlRef.current) URL.revokeObjectURL(localUrlRef.current);
@@ -181,7 +227,11 @@ export function A2UIVoiceInput({
 			setIsUploading(true);
 			try {
 				const executionTarget = await resolveTemporaryUploadTarget?.(
-					component.actions?.[0],
+					firstEventAction(
+						component.eventHandlers,
+						"change",
+						component.actions,
+					),
 				);
 				if (uploadOperationRef.current !== operationId) return;
 				const temporaryFile = (await backend.helperState.fileToTemporaryFile?.(
@@ -222,7 +272,7 @@ export function A2UIVoiceInput({
 						duration,
 					},
 				});
-				await triggerAction(component.actions, {
+				await triggerEvent("change", component, {
 					signedUrls: temporaryFile.url,
 					duration,
 				});
@@ -239,7 +289,7 @@ export function A2UIVoiceInput({
 		[
 			appId,
 			backend.helperState,
-			component.actions,
+			component,
 			component.value,
 			componentId,
 			onAction,
@@ -247,7 +297,7 @@ export function A2UIVoiceInput({
 			resolveTemporaryUploadTarget,
 			setByPath,
 			surfaceId,
-			triggerAction,
+			triggerEvent,
 		],
 	);
 
@@ -274,16 +324,16 @@ export function A2UIVoiceInput({
 				timestamp: Date.now(),
 				context: { value: voiceData, transcript: trimmed },
 			});
-			await triggerAction(component.actions, { transcript: trimmed });
+			await triggerEvent("change", component, { transcript: trimmed });
 		},
 		[
-			component.actions,
+			component,
 			component.value,
 			componentId,
 			onAction,
 			setByPath,
 			surfaceId,
-			triggerAction,
+			triggerEvent,
 		],
 	);
 
@@ -291,27 +341,85 @@ export function A2UIVoiceInput({
 		maxDuration,
 		stopDelay: STOP_DELAY_MS,
 		onComplete: (file, duration) => {
+			setCaptureError(null);
 			void handleRecorded(file, duration);
+		},
+		onError: (captureFailure) => {
+			console.error("[voiceInput] Error accessing microphone:", captureFailure);
+			setCaptureError(voiceCaptureErrorMessage(captureFailure));
+		},
+		onStartCancelled: () => {
+			if (invoke === "hold") {
+				setCaptureError("Microphone is ready. Hold again to record.");
+			}
 		},
 	});
 	const speech = useSpeechRecognition({
 		onEnd: (text) => {
+			if (!text.trim()) {
+				setCaptureError("No speech was detected. Try again.");
+				return;
+			}
+			setCaptureError(null);
 			void handleTranscript(text);
+		},
+		onError: (speechFailure) => {
+			console.error("[voiceInput] Error recognizing speech:", speechFailure);
+			const code = speechErrorCode(speechFailure);
+			if (code === "aborted") return;
+			if (code === "no-speech") {
+				setCaptureError("No speech was detected. Try again.");
+				return;
+			}
+			if (code === "not-allowed") {
+				setCaptureError(MICROPHONE_BLOCKED_MESSAGE);
+				return;
+			}
+			if (code === "audio-capture") {
+				setCaptureError(
+					"No microphone was found. Connect or enable a microphone and try again.",
+				);
+				return;
+			}
+			setSpeechFailed(true);
+			setCaptureError(
+				recorder.isSupported
+					? "Speech recognition is unavailable. Tap again to record audio instead."
+					: "Speech recognition is unavailable, and this browser cannot record audio.",
+			);
 		},
 	});
 
 	const effectiveMode: VoiceMode =
-		mode === "stt" && speech.isSupported ? "stt" : "record";
+		mode === "stt" && mounted && speech.isSupported && !speechFailed
+			? "stt"
+			: "record";
 
 	useEffect(() => {
-		if (mode === "stt" && !speech.isSupported) {
+		if (previousModeRef.current === mode) return;
+		previousModeRef.current = mode;
+		speech.cancel();
+		recorder.cancel();
+		setSpeechFailed(false);
+		setCaptureError(null);
+	}, [mode, recorder.cancel, speech.cancel]);
+
+	useEffect(() => {
+		if (!disabled) return;
+		speech.cancel();
+		recorder.cancel();
+		setCaptureError(null);
+	}, [disabled, recorder.cancel, speech.cancel]);
+
+	useEffect(() => {
+		if (mounted && mode === "stt" && !speech.isSupported) {
 			console.warn(
 				"[voiceInput] STT requested but the Web Speech API is unavailable here " +
 					"(common in desktop/Tauri webviews); falling back to audio recording. " +
 					"Transcribe the recording in the flow instead.",
 			);
 		}
-	}, [mode, speech.isSupported]);
+	}, [mounted, mode, speech.isSupported]);
 
 	const capturing =
 		effectiveMode === "stt" ? speech.isListening : recorder.isRecording;
@@ -329,6 +437,7 @@ export function A2UIVoiceInput({
 
 	const beginCapture = useCallback(() => {
 		if (disabled) return;
+		setCaptureError(null);
 		uploadOperationRef.current += 1;
 		setIsUploading(false);
 		setLocalVoice(null);
@@ -338,6 +447,10 @@ export function A2UIVoiceInput({
 			speech.reset();
 			speech.start();
 		} else {
+			if (!recorder.isSupported) {
+				setCaptureError(unsupportedVoiceCaptureMessage());
+				return;
+			}
 			void recorder.start();
 		}
 	}, [disabled, effectiveMode, speech, recorder, replaceLocalUrl]);
@@ -362,6 +475,7 @@ export function A2UIVoiceInput({
 		(executeConfiguredAction: boolean) => {
 			uploadOperationRef.current += 1;
 			setIsUploading(false);
+			setCaptureError(null);
 			setLocalVoice(null);
 			replaceLocalUrl(null);
 			setDismissedResponse(responseMediaRef.current);
@@ -377,7 +491,7 @@ export function A2UIVoiceInput({
 				context: { value: null },
 			});
 			if (executeConfiguredAction) {
-				void triggerAction(component.actions, {
+				void triggerEvent("change", component, {
 					signedUrls: null,
 					transcript: null,
 					duration: 0,
@@ -385,14 +499,14 @@ export function A2UIVoiceInput({
 			}
 		},
 		[
-			component.actions,
+			component,
 			component.value,
 			componentId,
 			onAction,
 			replaceLocalUrl,
 			setByPath,
 			surfaceId,
-			triggerAction,
+			triggerEvent,
 		],
 	);
 
@@ -415,9 +529,22 @@ export function A2UIVoiceInput({
 		};
 	}, [surfaceId, componentId, clearRecording]);
 
-	const supported =
+	const captureSupported =
 		effectiveMode === "stt" ? speech.isSupported : recorder.isSupported;
+	// Browser capability checks differ between SSR and hydration. Treat support as
+	// unknown until mount so the server and first client render stay identical.
+	const supported = !mounted || captureSupported;
 	const blocked = disabled || !supported;
+	const capabilityError =
+		mounted && !disabled && !captureSupported
+			? unsupportedVoiceCaptureMessage()
+			: null;
+	const validationError = error
+		? typeof error === "string"
+			? error
+			: "Recording error"
+		: null;
+	const visibleError = validationError ?? captureError ?? capabilityError;
 
 	const visualState: VoiceVisualState = capturing
 		? "recording"
@@ -426,22 +553,40 @@ export function A2UIVoiceInput({
 			: "idle";
 
 	const Visualizer = useMemo(() => getVoiceVisualizer(variant), [variant]);
+	const releasePointerCapture = (
+		event: ReactPointerEvent<HTMLButtonElement>,
+	) => {
+		if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+			event.currentTarget.releasePointerCapture(event.pointerId);
+		}
+	};
 
 	const interactionProps =
 		invoke === "hold"
 			? {
-					onPointerEnter: () => recorder.prewarm(),
-					onPointerDown: () => beginCapture(),
-					onPointerUp: () => endCapture(),
-					onPointerLeave: () => {
-						if (capturing) endCapture();
+					onPointerEnter: () => {
+						if (effectiveMode === "record") recorder.prewarm();
+					},
+					onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => {
+						event.currentTarget.setPointerCapture?.(event.pointerId);
+						beginCapture();
+					},
+					onPointerUp: (event: ReactPointerEvent<HTMLButtonElement>) => {
+						releasePointerCapture(event);
+						endCapture();
+					},
+					onPointerCancel: (event: ReactPointerEvent<HTMLButtonElement>) => {
+						releasePointerCapture(event);
+						endCapture();
 					},
 					// Suppress the mobile long-press context menu / selection magnifier,
 					// which otherwise interrupts the hold-to-record pointer flow.
 					onContextMenu: (e: ReactMouseEvent) => e.preventDefault(),
 				}
 			: {
-					onPointerEnter: () => recorder.prewarm(),
+					onPointerEnter: () => {
+						if (effectiveMode === "record") recorder.prewarm();
+					},
 					onClick: () => (capturing ? endCapture() : beginCapture()),
 				};
 
@@ -481,8 +626,8 @@ export function A2UIVoiceInput({
 						: display
 							? "border-primary/30 bg-linear-to-b from-primary/5 to-transparent"
 							: "border-border bg-background hover:border-primary/30",
-					error && "border-destructive",
-					blocked && "pointer-events-none opacity-50",
+					visibleError && "border-destructive",
+					disabled && "pointer-events-none opacity-50",
 				)}
 			>
 				<div className="flex min-h-40 flex-col items-center justify-center p-6">
@@ -600,7 +745,10 @@ export function A2UIVoiceInput({
 							<button
 								type="button"
 								disabled={blocked}
-								className="group flex select-none flex-col items-center gap-3 focus:outline-none"
+								className={cn(
+									"group flex select-none flex-col items-center gap-3 focus:outline-none",
+									blocked && "cursor-not-allowed opacity-50",
+								)}
 								onMouseEnter={() => setHover(true)}
 								onMouseLeave={() => setHover(false)}
 								{...interactionProps}
@@ -636,12 +784,12 @@ export function A2UIVoiceInput({
 				</div>
 			</div>
 
-			{helperText && !error && (
+			{helperText && !visibleError && (
 				<p className="text-xs text-muted-foreground">{helperText}</p>
 			)}
-			{error && (
-				<p className="text-xs text-destructive">
-					{typeof error === "string" ? error : "Recording error"}
+			{visibleError && (
+				<p className="text-xs text-destructive" role="alert">
+					{visibleError}
 				</p>
 			)}
 		</div>

@@ -33,9 +33,7 @@ function normalizeQueryParamList(
 				.split(",")
 				.map((part) => part.trim())
 				.filter(Boolean);
-	const normalized = values
-		.map((part) => part.trim())
-		.filter(Boolean);
+	const normalized = values.map((part) => part.trim()).filter(Boolean);
 
 	return normalized.length > 0 ? new Set(normalized) : null;
 }

@@ -2,14 +2,47 @@ use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriRegistryState, TauriSettingsState, TauriWasmEngineState},
 };
+use flow_like::a2ui::micro_widget::{PackageWidgetRef, PackageWidgetSource};
 use flow_like::flow::node::NodeLogic;
+use flow_like_types::sync::Mutex;
 use flow_like_wasm::{
     client::RegistryClient,
     registry::{CachedPackage, InstalledPackage, RegistryConfig, SearchFilters, SearchResults},
 };
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::AppHandle;
+
+/// Bridges the widget provider to whichever registry client is installed right
+/// now. `registry_init` replaces the client, so registering a clone once at
+/// startup would leave the provider resolving against a stale snapshot.
+pub struct RegistryWidgetSource(pub Arc<Mutex<Option<RegistryClient>>>);
+
+#[flow_like_types::async_trait]
+impl PackageWidgetSource for RegistryWidgetSource {
+    async fn list_widgets(
+        &self,
+        packages: &HashMap<String, String>,
+    ) -> flow_like_types::Result<Vec<PackageWidgetRef>> {
+        // Clone out of the guard: the lock must not be held across the lookup.
+        let client = { self.0.lock().await.clone() };
+        match client {
+            Some(client) => client.list_widgets(packages).await,
+            None => Ok(Vec::new()),
+        }
+    }
+}
+
+/// Cache dir backing `RegistryConfig` — also the root of the content-addressed
+/// widget store (`widgets/{package_id}/{bundle_hash}`) served by the
+/// `flow-widget://` protocol. Single derivation point: keep both consumers here.
+pub(crate) fn wasm_registry_cache_dir(project_dir: &std::path::Path) -> std::path::PathBuf {
+    project_dir
+        .parent()
+        .unwrap_or(project_dir)
+        .join("wasm_registry_cache")
+}
 
 /// Get the registry client with the auth token refreshed on the stored instance.
 /// This ensures every API-calling command uses a fresh token and the stored
@@ -47,6 +80,30 @@ fn clear_package_status(app_handle: &AppHandle, package_id: &str) {
 fn log_registry_package_error(command: &str, package_id: &str, error: &impl std::fmt::Display) {
     println!("{} failed for {}: {}", command, package_id, error);
     tracing::error!(command, package_id = %package_id, error = %error, "Registry package command failed");
+}
+
+/// Re-run derived node schemas for boards that were opened before the package
+/// registry became ready. Keep the cached Board instances themselves: evicting
+/// them here could discard in-memory edits that have not reached storage yet.
+async fn refresh_open_board_definitions(
+    app_handle: &AppHandle,
+) -> Result<usize, TauriFunctionError> {
+    let flow_state = TauriFlowLikeState::construct(app_handle).await?;
+    let boards = flow_state
+        .board_registry()
+        .iter()
+        .map(|entry| entry.value().clone())
+        .collect::<Vec<_>>();
+
+    for board in &boards {
+        board
+            .lock()
+            .await
+            .refresh_node_definitions(flow_state.clone())
+            .await;
+    }
+
+    Ok(boards.len())
 }
 
 /// Rebuild the global node registry from scratch: builtin catalog nodes +
@@ -111,7 +168,16 @@ async fn rebuild_node_registry(
         registry.node_registry = Arc::new(inner);
     }
 
+    // Catalog replacements can alter both static schemas and dynamic widget
+    // contracts. Refresh the native Board cache before telling React Query to
+    // fetch those boards again.
     if emit_catalog_updated {
+        if let Err(e) = refresh_open_board_definitions(app_handle).await {
+            tracing::warn!(
+                "Failed to refresh open boards after registry rebuild: {:?}",
+                e
+            );
+        }
         super::developer::emit_catalog_updated(app_handle);
     }
 
@@ -143,6 +209,13 @@ async fn load_installed_package_nodes(
                 .into_iter()
                 .map(|node| Arc::new(node) as Arc<dyn NodeLogic>)
                 .collect(),
+        );
+    }
+
+    if let Err(e) = refresh_open_board_definitions(app_handle).await {
+        tracing::warn!(
+            "Failed to refresh open boards after package install: {:?}",
+            e
         );
     }
 
@@ -441,11 +514,7 @@ pub async fn registry_init(
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let settings_guard = settings.lock().await;
 
-    let cache_dir = settings_guard
-        .project_dir
-        .parent()
-        .unwrap_or(&settings_guard.project_dir)
-        .join("wasm_registry_cache");
+    let cache_dir = wasm_registry_cache_dir(&settings_guard.project_dir);
 
     let default_registry = config
         .and_then(|c| c.registry_url)
@@ -482,11 +551,33 @@ pub async fn registry_init(
     *guard = Some(client);
     drop(guard);
 
-    if let Err(e) = rebuild_node_registry(&app_handle, true).await {
+    // Ensure this source is installed synchronously with registry readiness.
+    // The early startup registration in `run` is intentionally best-effort and
+    // may still be queued when a board opens.
+    let flow_state = TauriFlowLikeState::construct(&app_handle).await?;
+    flow_state
+        .register_package_widget_source(Arc::new(RegistryWidgetSource(state.0.clone())))
+        .await;
+
+    if let Err(e) = rebuild_node_registry(&app_handle, false).await {
         tracing::warn!("Failed to load WASM nodes during registry init: {:?}", e);
     }
 
     super::developer::register_all_developer_packages(&app_handle).await;
+
+    match refresh_open_board_definitions(&app_handle).await {
+        Ok(count) if count > 0 => {
+            tracing::debug!(count, "Refreshed open boards after registry initialization");
+        }
+        Ok(_) => {}
+        Err(e) => {
+            tracing::warn!("Failed to refresh open boards after registry init: {:?}", e);
+        }
+    }
+
+    // Emit only after open boards have recomputed their dynamic contracts, so
+    // the frontend cannot refetch the stale pre-registry snapshot.
+    super::developer::emit_catalog_updated(&app_handle);
 
     Ok(())
 }

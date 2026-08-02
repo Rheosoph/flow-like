@@ -102,10 +102,21 @@ export function StorePackageDetail({
 		} as RegistryEntry;
 	}, [packageData.data, localPackageData.data]);
 
+	// A deep link can mount this before the settings profile resolves; both remote queries are
+	// disabled until then, so without this the view would claim the package does not exist.
 	const resolvedLoading =
+		profile.isLoading ||
 		packageData.isLoading ||
 		(!packageData.data && !packageData.isError && packageData.isFetching) ||
 		(!packageData.data && localPackageData.isLoading);
+
+	const loadError = packageData.error ?? profile.error ?? null;
+
+	const handleRetry = useCallback(() => {
+		void profile.refetch();
+		void packageData.refetch();
+		void localPackageData.refetch();
+	}, [profile, packageData, localPackageData]);
 
 	const installedVersion = useQuery({
 		queryKey: ["installed-package", packageId],
@@ -175,6 +186,8 @@ export function StorePackageDetail({
 		<PackageDetailView
 			pkg={resolvedPkg}
 			isLoading={resolvedLoading}
+			loadError={loadError}
+			onRetry={handleRetry}
 			installedVersion={installedVersion.data}
 			onBack={onBack}
 			onInstall={handleInstall}

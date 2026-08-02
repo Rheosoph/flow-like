@@ -5,20 +5,33 @@ import {
 	TutorialDialog,
 	useBackend,
 } from "@flow-like/flow-like-ui";
-import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
 import { HeroSearchBarBubble } from "@flow-like/flow-like-ui/components/global-chat/hero-variants";
+import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { usePathname, useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTauriInvoke } from "../components/useInvoke";
 
 export default function Home() {
 	const backend = useBackend();
 	const router = useRouter();
+	const pathname = usePathname();
 	const [isCheckingProfiles, setIsCheckingProfiles] = useState(true);
 	const profiles = useTauriInvoke<Record<string, ISettingsProfile>>(
 		"get_profiles",
 		{},
 	);
+
+	// `checkProfiles` awaits a refetch; a deep link can navigate away in the meantime and the
+	// redirect below would clobber it. Read the live route instead of the render-time one.
+	const pathnameRef = useRef(pathname);
+	useEffect(() => {
+		pathnameRef.current = pathname;
+	});
+
+	const goToOnboarding = useCallback(() => {
+		if (pathnameRef.current !== "/") return;
+		router.replace("/onboarding");
+	}, [router]);
 
 	const checkProfiles = useCallback(async () => {
 		if (profiles.isLoading) return;
@@ -38,20 +51,20 @@ export default function Home() {
 				return;
 			}
 
-			router.replace("/onboarding");
+			goToOnboarding();
 			return;
 		}
 
 		if (profiles.isError) {
 			console.error("Failed to load profiles:", profiles.error);
-			router.replace("/onboarding");
+			goToOnboarding();
 		}
 	}, [
 		profiles.data,
 		profiles.isLoading,
 		profiles.isError,
 		profiles.error,
-		router,
+		goToOnboarding,
 	]);
 
 	useEffect(() => {
