@@ -242,6 +242,19 @@ function plotlyLegend(
 // CSV PARSING
 // ============================================================================
 
+const FENCE_LINE = /^\s*(?:`{3,}|~{3,})\s*\w*\s*$/;
+
+/**
+ * Drops fence markers that survived markdown deserialization — a leaked closing
+ * fence would otherwise parse as a data row and show up as an axis category.
+ */
+function stripFenceLines(content: string): string {
+	return content
+		.split("\n")
+		.filter((line) => !FENCE_LINE.test(line))
+		.join("\n");
+}
+
 /**
  * Parse CSV string into headers and rows
  */
@@ -464,6 +477,7 @@ export function csvToNivoScatter(data: CSVData): unknown[] {
 export function csvToPlotly(
 	data: CSVData,
 	chartType: string,
+	stacked?: boolean,
 ): { data: unknown[]; layout: Record<string, unknown> } {
 	const [xKey, ...yKeys] = data.headers;
 	const x = data.rows.map((row) => row[0]);
@@ -480,8 +494,12 @@ export function csvToPlotly(
 		};
 
 		if (chartType === "area") {
-			trace.fill = i === 0 ? "tozeroy" : "tonexty";
 			trace.mode = "lines";
+			// `tonexty` fills to the previous trace's raw values, which only reads
+			// as a stack when the series are already cumulative. `stackgroup` makes
+			// Plotly do the accumulation; unstacked areas each fill to zero.
+			if (stacked === false) trace.fill = "tozeroy";
+			else trace.stackgroup = "one";
 		}
 		if (chartType === "line") {
 			trace.mode = "lines+markers";
@@ -527,7 +545,7 @@ export function parseChartData(
 	content: string,
 	language: "nivo" | "plotly",
 ): ChartInput {
-	const trimmed = content.trim();
+	const trimmed = stripFenceLines(content).trim();
 
 	// Check if it's JSON mode
 	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
@@ -611,15 +629,15 @@ function sanitizeContinuousColors(
 	const colors = props.colors;
 	if (isContinuousColorConfig(colors)) return props;
 
-	const sanitized = { ...props };
+	// Omit rather than blank the key: `colors: undefined` would still override
+	// the renderer's default once the props are spread over it.
+	const { colors: _dropped, ...withoutColors } = props;
 	const normalized =
 		typeof colors === "string" || Array.isArray(colors)
 			? normalizeNivoColors(chartType, colors as string | string[])
 			: null;
 
-	if (normalized) sanitized.colors = normalized;
-	else delete sanitized.colors;
-	return sanitized;
+	return normalized ? { ...withoutColors, colors: normalized } : withoutColors;
 }
 
 function isRenderablePoint(point: unknown): boolean {
@@ -769,7 +787,7 @@ export function toPlotlyData(input: ChartInput): {
 	const chartType = input.config.type || "bar";
 	const csvData = input.csvData;
 	if (!csvData) throw new Error("CSV chart data is missing.");
-	const result = csvToPlotly(csvData, chartType);
+	const result = csvToPlotly(csvData, chartType, input.config.stacked);
 
 	// Apply config
 	const layout: Record<string, unknown> = {
@@ -836,8 +854,10 @@ export function toPlotlyData(input: ChartInput): {
 		layout,
 		config: {
 			responsive: true,
-			displayModeBar: true,
+			// Hover-only: a pinned toolbar covers the title and the top of the plot.
+			displayModeBar: "hover",
 			displaylogo: false,
+			modeBarButtonsToRemove: ["lasso2d", "select2d"],
 		},
 	};
 }

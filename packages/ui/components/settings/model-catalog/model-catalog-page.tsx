@@ -843,12 +843,15 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		</div>
 	);
 
+	// -m-4 cancels the settings shell padding so the sticky header spans the full
+	// width; the rows below re-add their own gutters.
 	return (
-		<main className="flex min-h-0 w-full flex-1 flex-col overflow-y-auto">
-			{/* Transparent + blur: the shell paints its own backdrop, so any tint clashes */}
-			<div className="sticky top-0 z-30 border-b border-border/40 backdrop-blur-xl">
+		<main className="-m-4 flex min-h-0 flex-1 flex-col overflow-y-auto">
+			{/* Opaque: WebKit disables backdrop-filter, so a blur-only header
+			    would let the cards scroll straight through it */}
+			<div className="sticky top-0 z-30 border-b border-border/60 bg-background">
 				<div
-					className={`mx-auto flex w-full max-w-[1240px] flex-wrap items-center gap-x-3 gap-y-2 pt-3 pb-2.5 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
+					className={`mx-auto flex w-full max-w-[1240px] flex-wrap items-center gap-x-3 gap-y-2 pt-4 pb-2.5 ${isMobile ? "px-4" : "px-4 sm:px-8"}`}
 				>
 					<div className="mr-auto flex min-w-0 items-center gap-2.5">
 						<span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-border bg-muted text-foreground/70">

@@ -201,6 +201,12 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 			margin: DEFAULT_MARGIN,
 			animate: input.config.animate !== false,
 		};
+		// Nivo derives labels from the mark colour and always darkens them, which
+		// is unreadable on a dark surface.
+		const labelTextColor = {
+			from: "color",
+			modifiers: [[isDark ? "brighter" : "darker", isDark ? 1.8 : 1.2]],
+		};
 
 		// Add chart-type specific defaults
 		switch (chartType) {
@@ -209,10 +215,7 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 					...baseProps,
 					padding: 0.3,
 					enableLabel: true,
-					labelTextColor: {
-						from: "color",
-						modifiers: [[isDark ? "brighter" : "darker", isDark ? 1.8 : 1.2]],
-					},
+					labelTextColor,
 					labelSkipWidth: 12,
 					labelSkipHeight: 12,
 					enableGridY: true,
@@ -282,13 +285,43 @@ function NivoChartPreview({ input, height = 350 }: NivoChartPreviewProps) {
 					direction: "vertical",
 					shapeBlending: 0.66,
 					borderWidth: 20,
-					labelColor: { from: "color", modifiers: [["darker", 3]] },
+					labelColor: labelTextColor,
+					...props,
+				};
+			case "sankey":
+				return {
+					...baseProps,
+					// Nivo blends links with `multiply`, which paints them into the
+					// background on a dark surface — the flows simply disappear.
+					linkBlendMode: "normal",
+					linkOpacity: isDark ? 0.35 : 0.45,
+					linkHoverOpacity: isDark ? 0.6 : 0.7,
+					enableLinkGradient: true,
+					nodeOpacity: 1,
+					nodeBorderWidth: 0,
+					labelTextColor: "var(--fl-chat-chart-text, #e8ebf0)",
+					...props,
+				};
+			case "treemap":
+			case "sunburst":
+			case "waffle":
+				return {
+					...baseProps,
+					labelTextColor,
 					...props,
 				};
 			default:
 				return { ...baseProps, ...props };
 		}
-	}, [data, chartType, props, input.config.animate, defaultTheme, isDark, tokens]);
+	}, [
+		data,
+		chartType,
+		props,
+		input.config.animate,
+		defaultTheme,
+		isDark,
+		tokens,
+	]);
 
 	if (loading) {
 		return (

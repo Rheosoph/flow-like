@@ -119,6 +119,64 @@ Q2,16,21`,
 	});
 });
 
+describe("Plotly rendering", () => {
+	test("ignores fence markers that leaked into the block content", () => {
+		const input = parseChartData(
+			`type: line
+---
+month,temp
+Jan,1
+Feb,2
+\`\`\``,
+			"plotly",
+		);
+
+		expect(input.csvData?.rows).toEqual([
+			["Jan", 1],
+			["Feb", 2],
+		]);
+		expect((toPlotlyData(input).data[0] as { x: unknown[] }).x).toEqual([
+			"Jan",
+			"Feb",
+		]);
+	});
+
+	test("stacks areas through Plotly rather than filling to the raw series", () => {
+		const input = parseChartData(
+			`type: area
+---
+month,social,organic
+Jan,10,50
+Feb,20,40`,
+			"plotly",
+		);
+
+		const traces = toPlotlyData(input).data as Record<string, unknown>[];
+		expect(traces.map((trace) => trace.stackgroup)).toEqual(["one", "one"]);
+		expect(traces.every((trace) => trace.fill === undefined)).toBe(true);
+	});
+
+	test("fills unstacked areas to zero instead of to the previous series", () => {
+		const input = parseChartData(
+			`type: area
+stacked: false
+---
+month,social,organic
+Jan,10,50`,
+			"plotly",
+		);
+
+		const traces = toPlotlyData(input).data as Record<string, unknown>[];
+		expect(traces.map((trace) => trace.fill)).toEqual(["tozeroy", "tozeroy"]);
+		expect(traces.every((trace) => trace.stackgroup === undefined)).toBe(true);
+	});
+
+	test("leaves the mode bar to hover so it cannot cover the title", () => {
+		const input = parseChartData("month,temp\nJan,1", "plotly");
+		expect(toPlotlyData(input).config.displayModeBar).toBe("hover");
+	});
+});
+
 describe("continuous colour scales", () => {
 	test("wraps a heatmap scheme in the sequential config Nivo requires", () => {
 		const input = parseChartData(

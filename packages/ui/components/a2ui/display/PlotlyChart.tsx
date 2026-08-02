@@ -74,7 +74,8 @@ function resolveDataSource(
 
 const DEFAULT_CONFIG = {
 	responsive: true,
-	displayModeBar: true,
+	// Hover-only: a pinned toolbar covers the title and the top of the plot.
+	displayModeBar: "hover",
 	displaylogo: false,
 };
 
@@ -302,6 +303,15 @@ export function A2UIPlotlyChart({
 		}, 100);
 	}, []);
 
+	// `useResolved` re-parses `literalJson` into fresh objects every render and
+	// `resolve` changes with the data store, so the payload identity churns even
+	// when nothing about the plot changed. Key the render on its serialized
+	// content instead — re-running `react` on every render fights the user's pan.
+	const payloadRef = useRef({ data, layout, config });
+	payloadRef.current = { data, layout, config };
+	const payloadKey = JSON.stringify(payloadRef.current);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: payloadKey is the stable identity of the plot payload
 	useEffect(() => {
 		let mounted = true;
 
@@ -315,11 +325,12 @@ export function A2UIPlotlyChart({
 
 			if (!mounted || !containerRef.current) return;
 
+			const payload = payloadRef.current;
 			await plotlyRef.current.react(
 				containerRef.current,
-				data as unknown[],
-				{ ...layout, autosize: true } as Record<string, unknown>,
-				config as Record<string, unknown>,
+				payload.data as unknown[],
+				{ ...payload.layout, autosize: true } as Record<string, unknown>,
+				payload.config as Record<string, unknown>,
 			);
 		};
 
@@ -331,7 +342,7 @@ export function A2UIPlotlyChart({
 				clearTimeout(resizeTimeoutRef.current);
 			}
 		};
-	}, [data, layout, config]);
+	}, [payloadKey]);
 
 	// Purge on unmount only — tearing the plot down between renders would also
 	// discard the pan and zoom the user has applied.

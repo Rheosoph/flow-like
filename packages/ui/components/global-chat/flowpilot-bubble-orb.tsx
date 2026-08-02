@@ -382,11 +382,11 @@ export const FlowPilotBubbleOrb = forwardRef<
 	},
 	forwardedRef,
 ) {
-	const hostRef = useForwardedRef(forwardedRef);
+	const [hostRef, setHostRef] = useForwardedRef(forwardedRef);
 
 	return (
 		<button
-			ref={hostRef}
+			ref={setHostRef}
 			type={type}
 			aria-label={ariaLabel}
 			className={cn(

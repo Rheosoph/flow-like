@@ -293,7 +293,7 @@ export function GlobalChatOverlay() {
 
 						<header
 							onDoubleClick={onTitleDoubleClick}
-							className="flex shrink-0 items-center justify-between border-b border-border/50 bg-linear-to-r from-primary/8 via-primary/3 to-transparent py-2 pl-5 pr-2"
+							className="flex shrink-0 items-center justify-between border-b border-border/50 bg-transparent py-2 pl-5 pr-2"
 						>
 							<div className="flex items-center gap-2 text-sm font-semibold tracking-tight">
 								<span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-primary/25 to-purple-600/20 text-primary ring-1 ring-primary/15">

@@ -24,8 +24,8 @@ describe("editor lowlight", () => {
 		const lowlight = createEditorLowlight();
 
 		expect(lowlight.registered("typescript")).toBe(true);
-		expect(lowlight.highlight("json", '{"a":1}').children.length).toBeGreaterThan(
-			0,
-		);
+		expect(
+			lowlight.highlight("json", '{"a":1}').children.length,
+		).toBeGreaterThan(0);
 	});
 });

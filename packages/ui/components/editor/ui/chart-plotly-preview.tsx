@@ -63,6 +63,7 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 			plot_bgcolor: baseLayout.plot_bgcolor ?? "transparent",
 			colorway: baseLayout.colorway ?? themed.colorway,
 			hoverlabel: baseLayout.hoverlabel ?? themed.hoverlabel,
+			modebar: baseLayout.modebar ?? themed.modebar,
 			font: {
 				...currentFont,
 				color: legacyFontColor
@@ -85,6 +86,9 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 			},
 			xaxis: {
 				...currentXAxis,
+				// Grows the margin to fit the labels instead of clipping the outermost
+				// tick against the plot edge.
+				automargin: currentXAxis.automargin ?? true,
 				linecolor: currentXAxis.linecolor ?? themedBorderColor,
 				gridcolor: currentXAxis.gridcolor ?? themedBorderColor,
 				zerolinecolor: currentXAxis.zerolinecolor ?? themedBorderColor,
@@ -102,6 +106,7 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 			},
 			yaxis: {
 				...currentYAxis,
+				automargin: currentYAxis.automargin ?? true,
 				linecolor: currentYAxis.linecolor ?? themedBorderColor,
 				gridcolor: currentYAxis.gridcolor ?? themedBorderColor,
 				zerolinecolor: currentYAxis.zerolinecolor ?? themedBorderColor,
@@ -131,6 +136,13 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 		}
 	}, []);
 
+	// Re-render the plot only when its serialized content changes: `react` resets
+	// the view, so an identity-only change would fight the user's pan and zoom.
+	const payloadRef = useRef({ data, layout, config });
+	payloadRef.current = { data, layout, config };
+	const payloadKey = JSON.stringify(payloadRef.current);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: payloadKey is the stable identity of the plot payload
 	useEffect(() => {
 		let mounted = true;
 
@@ -139,13 +151,19 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 
 			try {
 				const PlotlyModule = await import("plotly.js-dist-min");
-				if (!mounted) return;
+				if (!mounted || !containerRef.current) return;
 
 				// plotly.js-dist-min exports default as the Plotly object
 				const Plotly = (PlotlyModule.default ||
 					PlotlyModule) as unknown as PlotlyModule;
 				plotlyRef.current = Plotly;
-				await Plotly.react(containerRef.current, data, layout, config);
+				const payload = payloadRef.current;
+				await Plotly.react(
+					containerRef.current,
+					payload.data,
+					payload.layout,
+					payload.config,
+				);
 			} catch (err) {
 				console.error("Failed to load/render Plotly chart:", err);
 			}
@@ -156,7 +174,7 @@ function PlotlyChartPreview({ input, height = 350 }: PlotlyChartPreviewProps) {
 		return () => {
 			mounted = false;
 		};
-	}, [data, layout, config]);
+	}, [payloadKey]);
 
 	// Purge on unmount only — tearing the plot down between renders would also
 	// discard the pan and zoom the user has applied.

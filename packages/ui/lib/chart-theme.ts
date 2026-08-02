@@ -324,6 +324,14 @@ export function getPlotlyChartLayout(tokens: IChartTokens) {
 		xaxis: { ...axis },
 		yaxis: { ...axis },
 		legend: { font: { color: tokens.textMuted, size: 11 } },
+		// Vertical, so the toolbar runs down the right edge instead of sitting on
+		// top of a centred chart title.
+		modebar: {
+			orientation: "v",
+			bgcolor: "transparent",
+			color: tokens.textMuted,
+			activecolor: tokens.text,
+		},
 		hoverlabel: {
 			bgcolor: tokens.tooltipBackground,
 			bordercolor: tokens.tooltipBorder,
