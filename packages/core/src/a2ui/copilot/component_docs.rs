@@ -189,8 +189,11 @@ When a workflow must change what a component SHOWS, target the element directly:
 - chart: Push Data to Chart (`a2uiPushCsvToChart`), styled via `a2uiSetNivoConfig` /
   `a2uiSetChartLayout`
 - progress: Set Progress (`a2uiSetProgress`)
-Data Update (`a2uiDataUpdate`) is almost never the right node for display updates - reach for an
-element-level setter first and reserve it for a `$.data.*` binding no setter covers.
+- package widget: Instantiate Widget (`a2uiInstantiateWidget`) with the record's fields on its
+  generated `dyn*` inputs, pushed in with Push Child (`a2uiPushChild`); Update Widget Inputs
+  (`a2uiWidgetUpdateInputs`) to patch a mounted instance
+Data Update (`a2uiDataUpdate`) is never the right node for display updates - a `$.data.*` write is
+not observed by elements or widget instances, so use the setters and widget nodes above.
 
 "##;
 

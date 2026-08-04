@@ -134,21 +134,6 @@ export function buildFlowRows(
 	return unique.map((board) => buildFlowRow(board, events, pagesByBoard));
 }
 
-export function matchesQuery(row: IFlowRow, query: string): boolean {
-	if (!query) return true;
-	const haystack = [
-		row.board.name,
-		row.board.description,
-		row.board.stage,
-		row.versionLabel,
-		...row.pages.map((page) => page.name),
-		...row.bindings.map((event) => event.name),
-	]
-		.join(" ")
-		.toLowerCase();
-	return haystack.includes(query);
-}
-
 export const BAND_ORDER: IScoreBand[] = [
 	"flagged",
 	"watch",

@@ -32,6 +32,7 @@ import {
 	nowSystemTime,
 	useBackend,
 	useInvoke,
+	useSearch,
 	useSetQueryParams,
 } from "@flow-like/flow-like-ui";
 import {
@@ -73,15 +74,11 @@ export default function WidgetsPage() {
 		[appId],
 	);
 
-	const filteredWidgets = useMemo(() => {
-		if (!widgets.data) return [];
-		if (!searchTerm) return widgets.data;
-		return widgets.data.filter(
-			([, , meta]) =>
-				meta?.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-				meta?.description?.toLowerCase().includes(searchTerm.toLowerCase()),
-		);
-	}, [widgets.data, searchTerm]);
+	// widgets are [appId, widgetId, metadata] tuples
+	const filteredWidgets = useSearch(widgets.data, searchTerm, {
+		fields: ["2.name", "2.description", "2.long_description", "2.tags"],
+		boost: { "2.name": 3, "2.tags": 1.5 },
+	});
 
 	const handleCreateWidget = useCallback(async () => {
 		if (!appId || !newWidget.name.trim()) {

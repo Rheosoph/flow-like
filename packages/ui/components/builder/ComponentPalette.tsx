@@ -41,6 +41,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks";
+import { useSearch } from "../../hooks/use-search-index";
 import { cn } from "../../lib";
 import {
 	type AppPackageWidget,
@@ -652,21 +653,14 @@ export function ComponentPalette({
 		return names;
 	}, [apps]);
 
-	const filteredComponents = useMemo(() => {
-		if (!searchQuery.trim()) return COMPONENT_DEFINITIONS;
-		const query = searchQuery.toLowerCase();
-		return COMPONENT_DEFINITIONS.filter(
-			(c) =>
-				c.label.toLowerCase().includes(query) ||
-				c.type.toLowerCase().includes(query) ||
-				c.category.toLowerCase().includes(query) ||
-				c.description?.toLowerCase().includes(query),
-		);
-	}, [searchQuery]);
+	const filteredComponents = useSearch(COMPONENT_DEFINITIONS, searchQuery, {
+		fields: ["label", "type", "category", "description"],
+		boost: { label: 3, type: 2 },
+	});
 
-	const filteredWidgets = useMemo(() => {
+	const validWidgets = useMemo(() => {
 		if (!widgets || !showWidgets) return [];
-		const validWidgets = widgets.flatMap((widget) => {
+		return widgets.flatMap((widget) => {
 			const name = getWidgetDisplayName(widget);
 			if (!name) return [];
 
@@ -680,15 +674,12 @@ export function ComponentPalette({
 				},
 			];
 		});
-		if (!searchQuery.trim()) return validWidgets;
-		const query = searchQuery.toLowerCase();
-		return validWidgets.filter(
-			(w) =>
-				w.metadata.name.toLowerCase().includes(query) ||
-				w.metadata.description?.toLowerCase().includes(query) ||
-				w.metadata.tags?.some((tag) => tag.toLowerCase().includes(query)),
-		);
-	}, [widgets, searchQuery, showWidgets]);
+	}, [widgets, showWidgets]);
+
+	const filteredWidgets = useSearch(validWidgets, searchQuery, {
+		fields: ["metadata.name", "metadata.description", "metadata.tags"],
+		boost: { "metadata.name": 3, "metadata.tags": 1.5 },
+	});
 
 	const groupedWidgets = useMemo<GroupedWidgetProject[]>(() => {
 		const groups = new Map<string, IUserWidgetInfo[]>();

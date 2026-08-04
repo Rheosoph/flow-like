@@ -383,13 +383,18 @@ pub async fn redo_board(
     Ok(board.clone())
 }
 
+/// Returns the executed command followed by any node state `on_update` derived from it.
+///
+/// Dynamic pins are minted with fresh ids wherever they are derived, so an interactive edit that
+/// creates them must ship that node state with the batch — otherwise a later `ConnectPin` points at
+/// an id the Hub never minted and every remote delivery for the board fails permanently.
 #[tauri::command(async)]
 pub async fn execute_command(
     handler: AppHandle,
     app_id: String,
     board_id: String,
     command: GenericCommand,
-) -> Result<GenericCommand, TauriFunctionError> {
+) -> Result<Vec<GenericCommand>, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
     let store = TauriFlowLikeState::get_project_meta_store(&handler).await?;
     let app = App::load(app_id.clone(), flow_like_state.clone()).await?;
@@ -408,8 +413,8 @@ pub async fn execute_command(
     )
     .map_err(|error| TauriFunctionError::new(&error))?;
     let original_board = requires_remote_delivery.then(|| board.clone());
-    let command = match board.execute_command(command, flow_like_state).await {
-        Ok(command) => command,
+    let commands = match board.execute_commands(vec![command], flow_like_state).await {
+        Ok(commands) => commands,
         Err(error) => {
             if let Some(original_board) = original_board {
                 *board = original_board;
@@ -417,9 +422,7 @@ pub async fn execute_command(
             return Err(error.into());
         }
     };
-    if requires_remote_delivery
-        && let Err(error) = validate_remote_command_batch_size(std::slice::from_ref(&command))
-    {
+    if requires_remote_delivery && let Err(error) = validate_remote_command_batch_size(&commands) {
         if let Some(original_board) = original_board {
             *board = original_board;
         }
@@ -427,7 +430,7 @@ pub async fn execute_command(
     }
 
     save_board_with_rollback(&mut board, store, original_board).await?;
-    Ok(command)
+    Ok(commands)
 }
 
 #[tauri::command(async)]

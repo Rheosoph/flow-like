@@ -15,10 +15,10 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useMiniSearch } from "react-minisearch";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useIsMobile } from "../../hooks/use-mobile";
+import { useSearch } from "../../hooks/use-search-index";
 import { formatAppCategory } from "../../lib/app-category";
 import { IBitTypes } from "../../lib/schema/hub/bit-search-query";
 import type { IProfileApp } from "../../lib/schema/profile/profile";
@@ -283,28 +283,18 @@ export function LibraryPage({
 			.sort((a, b) => a.label.localeCompare(b.label));
 	}, [ungroupedItems, sortMode]);
 
-	const { addAll, removeAll, clearSearch, search, searchResults } =
-		useMiniSearch(itemsForDisplay, {
-			fields: [
-				"name",
-				"description",
-				"long_description",
-				"tags",
-				"category",
-				"id",
-			],
-		});
-
-	useEffect(() => {
-		if (itemsForDisplay.length > 0) {
-			removeAll();
-			addAll(itemsForDisplay);
-		}
-		return () => {
-			removeAll();
-			clearSearch();
-		};
-	}, [itemsForDisplay, removeAll, addAll, clearSearch]);
+	const searchResults = useSearch(itemsForDisplay, searchQuery, {
+		fields: [
+			"name",
+			"description",
+			"long_description",
+			"tags",
+			"use_case",
+			"app.primary_category",
+			"id",
+		],
+		boost: { name: 4, tags: 2, use_case: 1.5, description: 1 },
+	});
 
 	const menuActions = useMemo(
 		() => [...(extraMobileActions ?? []), <JoinInline key="join-inline" />],
@@ -472,19 +462,13 @@ export function LibraryPage({
 						<Input
 							placeholder="Search…"
 							value={searchQuery}
-							onChange={(e) => {
-								search(e.target.value);
-								setSearchQuery(e.target.value);
-							}}
+							onChange={(e) => setSearchQuery(e.target.value)}
 							className="pl-11 h-11 sm:h-10 rounded-full bg-muted/30 border-transparent focus:border-border/40 focus:bg-muted/50 transition-all text-sm"
 						/>
 						{searchQuery && (
 							<button
 								type="button"
-								onClick={() => {
-									setSearchQuery("");
-									clearSearch();
-								}}
+								onClick={() => setSearchQuery("")}
 								className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-foreground transition-colors"
 							>
 								<X className="h-4 w-4" />
@@ -580,7 +564,7 @@ export function LibraryPage({
 			>
 				{isSearching ? (
 					<SearchResults
-						items={(searchResults as LibraryItem[]) ?? []}
+						items={searchResults}
 						query={searchQuery}
 						onAppClick={handleAppClick}
 						settingsHref={appSettingsHref}

@@ -10,6 +10,7 @@ import {
 	TrashIcon,
 } from "lucide-react";
 import { type RefObject, useCallback, useState } from "react";
+import { useSearch } from "../../../hooks/use-search-index";
 import { Badge, Button, Input } from "../../ui";
 import type { ISidebarActions } from "../interfaces";
 import { chatDb } from "./chat-db";
@@ -39,9 +40,10 @@ export function ChatHistory({
 		[appId],
 	);
 
-	const filteredSessions = sessions?.filter((session) =>
-		session.summarization?.toLowerCase().includes(searchQuery.toLowerCase()),
-	);
+	const matchedSessions = useSearch(sessions, searchQuery, {
+		fields: ["summarization"],
+	});
+	const filteredSessions = sessions ? matchedSessions : undefined;
 
 	const handleNewChat = useCallback(() => {
 		const newSessionId = createId();

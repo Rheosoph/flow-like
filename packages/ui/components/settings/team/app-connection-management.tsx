@@ -59,6 +59,7 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
+	useSearch,
 } from "../../..";
 import type { IApp } from "../../../lib/schema/app/app";
 import type { IMetadata } from "../../../lib/schema/bit/bit";
@@ -657,19 +658,22 @@ function AppSearchPicker({
 		searchEnabled,
 	);
 
+	const ownCandidates = useMemo(
+		() => (ownApps.data ?? []).filter(([app]) => app.id !== currentAppId),
+		[ownApps.data, currentAppId],
+	);
+
+	// own apps are matched locally, the store search is served by the backend
+	const ownMatches = useSearch(ownCandidates, searchEnabled ? search : "", {
+		fields: ["0.id", "1.name", "1.description", "1.tags"],
+		boost: { "1.name": 3, "0.id": 2 },
+	});
+
 	const results = useMemo(() => {
 		if (!searchEnabled) return [];
-		const needle = search.toLowerCase();
 		const merged = new Map<string, [IApp, IMetadata | undefined]>();
 
-		for (const entry of ownApps.data ?? []) {
-			const [app, metadata] = entry;
-			if (app.id === currentAppId) continue;
-			const name = metadata?.name?.toLowerCase() ?? "";
-			if (app.id.toLowerCase().includes(needle) || name.includes(needle)) {
-				merged.set(app.id, entry);
-			}
-		}
+		for (const entry of ownMatches) merged.set(entry[0].id, entry);
 
 		for (const entry of storeSearch.data ?? []) {
 			const [app] = entry;
@@ -679,7 +683,7 @@ function AppSearchPicker({
 		}
 
 		return Array.from(merged.values());
-	}, [searchEnabled, search, ownApps.data, storeSearch.data, currentAppId]);
+	}, [searchEnabled, ownMatches, storeSearch.data, currentAppId]);
 
 	const isFetching = storeSearch.isFetching || ownApps.isFetching;
 

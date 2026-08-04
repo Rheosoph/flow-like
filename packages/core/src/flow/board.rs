@@ -14,6 +14,7 @@ use crate::{
     },
 };
 use commands::GenericCommand;
+use commands::nodes::update_node::UpdateNodeCommand;
 use flow_like_storage::object_store::{self, ObjectStore, UpdateVersion, path::Path};
 use flow_like_types::proto;
 use flow_like_types::{FromProto, ToProto, create_id, sync::Mutex};
@@ -269,6 +270,13 @@ fn execution_mode_marker(mode: &ExecutionMode) -> u8 {
         ExecutionMode::Remote => 1,
         ExecutionMode::Local => 2,
     }
+}
+
+/// Pin ids are the only part of a node another machine cannot re-derive: everything else
+/// `on_update` produces is a deterministic function of the board it already replayed.
+fn pin_ids_match(current: &Node, previous: &Node) -> bool {
+    current.pins.len() == previous.pins.len()
+        && current.pins.keys().all(|id| previous.pins.contains_key(id))
 }
 
 impl Board {
@@ -736,12 +744,79 @@ impl Board {
         Ok(command)
     }
 
+    /// Restate every node whose pin identities `on_update` derived rather than the batch itself.
+    ///
+    /// Pins minted inside `on_update` — function-call mirrors, `string_format` placeholders — are
+    /// allocated with `create_id()`, so any machine that re-derives them gets *different* ids. The
+    /// returned batch is not only local undo history: the desktop ships it to the Hub and replays it
+    /// there verbatim. A `ConnectPin` that targets such a pin therefore only resolves if the batch
+    /// also carries the node state that owns it.
+    ///
+    /// `on_update` implementations reconcile mirrored pins by name, so replaying explicit node state
+    /// makes the replayer adopt these ids instead of minting a second set.
+    fn derived_node_state_commands(
+        &self,
+        before: &HashMap<String, Node>,
+        executed: &[GenericCommand],
+    ) -> Vec<GenericCommand> {
+        let mut described = HashMap::<&str, &Node>::new();
+        for command in executed {
+            match command {
+                GenericCommand::AddNode(command) => {
+                    described.insert(command.node.id.as_str(), &command.node);
+                }
+                GenericCommand::UpdateNode(command) => {
+                    described.insert(command.node.id.as_str(), &command.node);
+                }
+                GenericCommand::CopyPaste(command) => {
+                    for node in &command.new_nodes {
+                        described.insert(node.id.as_str(), node);
+                    }
+                }
+                GenericCommand::UpsertLayer(command) => {
+                    for node in command.layer.nodes.values() {
+                        described.insert(node.id.as_str(), node);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut restated = self
+            .nodes
+            .iter()
+            .filter_map(|(node_id, current)| {
+                // `node_updates` runs `on_update` on every node, so a layer edit can re-mint pins on
+                // a node no command in this batch mentions.
+                let previous = described
+                    .get(node_id.as_str())
+                    .copied()
+                    .or_else(|| before.get(node_id))?;
+                if pin_ids_match(current, previous) {
+                    return None;
+                }
+                Some((
+                    node_id.clone(),
+                    GenericCommand::UpdateNode(UpdateNodeCommand {
+                        node: current.clone(),
+                        old_node: Some(previous.clone()),
+                    }),
+                ))
+            })
+            .collect::<Vec<_>>();
+        // Map iteration order is randomized, and the remote retry identity is a digest of the exact
+        // payload — an unstable order would turn every retry into an idempotency conflict.
+        restated.sort_by(|(left, _), (right, _)| left.cmp(right));
+        restated.into_iter().map(|(_, command)| command).collect()
+    }
+
     pub async fn execute_commands(
         &mut self,
         commands: Vec<GenericCommand>,
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Vec<GenericCommand>> {
         let mut commands = commands;
+        let nodes_before = self.nodes.clone();
         for index in 0..commands.len() {
             if let Err(error) = commands[index].validate(self, state.clone()).await {
                 let recovery_errors = self
@@ -781,6 +856,8 @@ impl Board {
         self.node_updates(state).await;
         self.cleanup();
         self.mark_changed();
+        let derived = self.derived_node_state_commands(&nodes_before, &commands);
+        commands.extend(derived);
         Ok(commands)
     }
 

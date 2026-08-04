@@ -13,6 +13,7 @@ import {
 	TooltipContent,
 	TooltipTrigger,
 	useBackend,
+	useSearch,
 } from "@flow-like/flow-like-ui";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import {
@@ -453,31 +454,31 @@ export default function InstalledPackagesPage() {
 
 	const updateMap = new Map(updates.map((u) => [u.packageId, u.latestVersion]));
 
-	const filteredPackages = installedPackages.filter((pkg) => {
-		if (!searchQuery) return true;
-		const query = searchQuery.toLowerCase();
-		return (
-			pkg.manifest.name.toLowerCase().includes(query) ||
-			pkg.manifest.description.toLowerCase().includes(query)
-		);
+	const filteredPackages = useSearch(installedPackages, searchQuery, {
+		fields: [
+			"manifest.name",
+			"manifest.id",
+			"manifest.description",
+			"manifest.keywords",
+			"manifest.authors",
+		],
+		boost: { "manifest.name": 3, "manifest.id": 2, "manifest.keywords": 1.5 },
 	});
 
-	const filteredLocalPackages = localPackages.filter((pkg) => {
-		if (!searchQuery) return true;
-		const query = searchQuery.toLowerCase();
-		return (
-			pkg.manifest.name.toLowerCase().includes(query) ||
-			pkg.manifest.description.toLowerCase().includes(query)
-		);
+	const filteredLocalPackages = useSearch(localPackages, searchQuery, {
+		fields: [
+			"manifest.name",
+			"manifest.id",
+			"manifest.description",
+			"manifest.keywords",
+			"manifest.authors",
+		],
+		boost: { "manifest.name": 3, "manifest.id": 2, "manifest.keywords": 1.5 },
 	});
 
-	const filteredOwnedPackages = ownedPackages.filter((pkg) => {
-		if (!searchQuery) return true;
-		const query = searchQuery.toLowerCase();
-		return (
-			pkg.name.toLowerCase().includes(query) ||
-			pkg.description.toLowerCase().includes(query)
-		);
+	const filteredOwnedPackages = useSearch(ownedPackages, searchQuery, {
+		fields: ["name", "id", "description", "keywords"],
+		boost: { name: 3, id: 2, keywords: 1.5 },
 	});
 
 	if (isInitializing) {

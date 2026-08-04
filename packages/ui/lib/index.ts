@@ -45,6 +45,7 @@ export * from "./presign-assets";
 export * from "./storage-url";
 export * from "./temporary-upload-cache";
 export * from "./css-utils";
+export * from "./search-index";
 export * from "./chat-appearance";
 export * from "./chat-theme-presets";
 export * from "./idb-cleanup";

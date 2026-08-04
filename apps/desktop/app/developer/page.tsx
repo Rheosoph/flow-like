@@ -24,6 +24,7 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
+	useSearch,
 } from "@flow-like/flow-like-ui";
 import {
 	Avatar,
@@ -504,16 +505,10 @@ export default function DeveloperPage() {
 		return () => clearInterval(interval);
 	}, []);
 
-	const filtered = useMemo(() => {
-		if (!search.trim()) return projects;
-		const q = search.toLowerCase();
-		return projects.filter(
-			(p) =>
-				p.name.toLowerCase().includes(q) ||
-				p.path.toLowerCase().includes(q) ||
-				p.language.toLowerCase().includes(q),
-		);
-	}, [projects, search]);
+	const filtered = useSearch(projects, search, {
+		fields: ["name", "path", "language"],
+		boost: { name: 3, path: 1.5 },
+	});
 
 	const handleAddExisting = async () => {
 		try {

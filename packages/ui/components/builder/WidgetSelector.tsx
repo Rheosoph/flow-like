@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useInvoke } from "../../hooks";
+import { useSearch } from "../../hooks/use-search-index";
 import { cn } from "../../lib";
 import { useBackend } from "../../state/backend-state";
 import type { IUserWidgetInfo } from "../../state/backend-state/user-state";
@@ -148,33 +149,49 @@ export function WidgetSelector({
 		return groupedWidgets.filter((g) => g.appId !== currentAppId);
 	}, [groupedWidgets, currentAppId]);
 
+	const matchedWidgets = useSearch(namedWidgets, searchQuery, {
+		fields: ["metadata.name", "metadata.description", "metadata.tags"],
+		boost: { "metadata.name": 3, "metadata.tags": 1.5 },
+	});
+
+	const matchedWidgetIds = useMemo(
+		() => new Set(matchedWidgets.map((w) => `${w.appId}:${w.widgetId}`)),
+		[matchedWidgets],
+	);
+
+	const isSearching = searchQuery.trim().length > 0;
+
 	const filteredCurrentWidgets = useMemo(() => {
-		if (!searchQuery.trim()) return currentAppWidgets;
-		const query = searchQuery.toLowerCase();
-		return currentAppWidgets.filter((w) => widgetMatchesSearch(w, query));
-	}, [currentAppWidgets, searchQuery]);
+		if (!isSearching) return currentAppWidgets;
+		return currentAppWidgets.filter((w) =>
+			matchedWidgetIds.has(`${w.appId}:${w.widgetId}`),
+		);
+	}, [currentAppWidgets, matchedWidgetIds, isSearching]);
 
-	const filteredOtherWidgets = useMemo(() => {
-		if (!searchQuery.trim()) return otherAppsWidgets;
-		const query = searchQuery.toLowerCase();
-		return otherAppsWidgets
-			.map((group) => ({
-				...group,
-				widgets: group.widgets.filter((w) => widgetMatchesSearch(w, query)),
-			}))
-			.filter((group) => group.widgets.length > 0);
-	}, [otherAppsWidgets, searchQuery]);
+	const filterGroups = useCallback(
+		(groups: GroupedWidgets[]) => {
+			if (!isSearching) return groups;
+			return groups
+				.map((group) => ({
+					...group,
+					widgets: group.widgets.filter((w) =>
+						matchedWidgetIds.has(`${w.appId}:${w.widgetId}`),
+					),
+				}))
+				.filter((group) => group.widgets.length > 0);
+		},
+		[matchedWidgetIds, isSearching],
+	);
 
-	const filteredGroupedWidgets = useMemo(() => {
-		if (!searchQuery.trim()) return groupedWidgets;
-		const query = searchQuery.toLowerCase();
-		return groupedWidgets
-			.map((group) => ({
-				...group,
-				widgets: group.widgets.filter((w) => widgetMatchesSearch(w, query)),
-			}))
-			.filter((group) => group.widgets.length > 0);
-	}, [groupedWidgets, searchQuery]);
+	const filteredOtherWidgets = useMemo(
+		() => filterGroups(otherAppsWidgets),
+		[otherAppsWidgets, filterGroups],
+	);
+
+	const filteredGroupedWidgets = useMemo(
+		() => filterGroups(groupedWidgets),
+		[groupedWidgets, filterGroups],
+	);
 
 	const setAppOpen = useCallback((appId: string, open: boolean) => {
 		setOpenApps((prev) => {
@@ -498,15 +515,6 @@ function getWidgetDisplayName(widget: IUserWidgetInfo): string | null {
 	if (!name || name === widget.widgetId) return null;
 
 	return name;
-}
-
-function widgetMatchesSearch(widget: IUserWidgetInfo, query: string): boolean {
-	return (
-		widget.metadata.name.toLowerCase().includes(query) ||
-		widget.metadata.description?.toLowerCase().includes(query) ||
-		widget.metadata.tags?.some((tag) => tag.toLowerCase().includes(query)) ||
-		false
-	);
 }
 
 function getProjectDisplayName(

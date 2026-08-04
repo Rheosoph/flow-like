@@ -35,6 +35,7 @@ import type { ComponentType } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { IOAuthConsentStore } from "../../../db/oauth-db";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
+import { useSearch } from "../../../hooks/use-search-index";
 import { describeEventEntry } from "../../../lib/event-entry";
 import { getEventTypeGlyph } from "../../../lib/event-sections";
 import { formatEventTypeLabel } from "../../../lib/event-type-label";
@@ -361,28 +362,46 @@ export function EventsOverview({
 		);
 	}, [rows]);
 
-	const visible = useMemo(() => {
-		const term = search.trim().toLowerCase();
-		return rows
-			.filter((row) => {
-				if (status !== "all" && row.status !== status) return false;
-				if (typeFilter.size > 0 && !typeFilter.has(row.event.event_type)) {
-					return false;
-				}
-				if (!term) return true;
-				const haystack = [
-					row.event.name,
-					row.event.description,
-					row.event.event_type,
+	// The board name and the entry summary are derived, so they get folded into
+	// an explicit haystack field the index can read.
+	const searchableRows = useMemo(
+		() =>
+			rows.map((row) => ({
+				row,
+				haystack: [
 					formatEventTypeLabel(row.event.event_type),
-					row.routePath ?? "",
 					row.entry?.text ?? "",
 					boardsMap.get(row.event.board_id) ?? "",
-				];
-				return haystack.some((value) => value.toLowerCase().includes(term));
-			})
-			.sort((a, b) => (a.event.priority ?? 0) - (b.event.priority ?? 0));
-	}, [rows, search, status, typeFilter, boardsMap]);
+				].join(" "),
+			})),
+		[rows, boardsMap],
+	);
+
+	const matchedRows = useSearch(searchableRows, search, {
+		fields: [
+			"row.event.name",
+			"row.event.description",
+			"row.event.event_type",
+			"row.routePath",
+			"haystack",
+		],
+		boost: { "row.event.name": 3 },
+	});
+
+	const visible = useMemo(
+		() =>
+			matchedRows
+				.map(({ row }) => row)
+				.filter((row) => {
+					if (status !== "all" && row.status !== status) return false;
+					if (typeFilter.size > 0 && !typeFilter.has(row.event.event_type)) {
+						return false;
+					}
+					return true;
+				})
+				.sort((a, b) => (a.event.priority ?? 0) - (b.event.priority ?? 0)),
+		[matchedRows, status, typeFilter],
+	);
 
 	const blocked = useMemo(() => rows.filter((row) => row.blocking), [rows]);
 

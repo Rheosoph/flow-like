@@ -5,7 +5,7 @@ import type { IEvent, IEventPayloadChat } from "../../../lib";
 import { DEFAULT_CHAT_EXAMPLE_MESSAGES } from "../../../lib/chat-appearance";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
-import { ChatEmptyOrb } from "./chat-empty-orb";
+import { ChatPlaceholder } from "./chat-placeholder";
 import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
@@ -14,6 +14,8 @@ interface ChatWelcomeProps {
 	event: IEvent;
 	config?: Partial<IEventPayloadChat>;
 	isSending?: boolean;
+	/** Needed to resolve a storage-backed placeholder image. */
+	appId?: string;
 }
 
 const defaultExamples: readonly string[] = DEFAULT_CHAT_EXAMPLE_MESSAGES;
@@ -23,6 +25,7 @@ export function ChatWelcome({
 	event,
 	config = {},
 	isSending = false,
+	appId,
 }: Readonly<ChatWelcomeProps>) {
 	const [currentMessage, setCurrentMessage] = useState("");
 	const [voiceModeOpen, setVoiceModeOpen] = useState(false);
@@ -262,7 +265,7 @@ export function ChatWelcome({
 						className="flex flex-col items-center gap-3"
 						data-fl-chat-welcome-header
 					>
-						<ChatEmptyOrb size={168} />
+						<ChatPlaceholder config={config} appId={appId} size={168} />
 						<div className="space-y-1 text-center">
 							<h1 className="text-base font-semibold tracking-tight">
 								{event.name}

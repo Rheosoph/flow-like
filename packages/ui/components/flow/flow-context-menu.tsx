@@ -354,7 +354,7 @@ export function FlowContextMenu({
 			storeFields: ["id"],
 			searchOptions: {
 				prefix: true,
-				fuzzy: true,
+				fuzzy: 0.2,
 				boost: {
 					name: 3,
 					friendly_name: 2,
@@ -384,7 +384,7 @@ export function FlowContextMenu({
 		return searchIndex.miniSearch
 			.search(filter, {
 				prefix: true,
-				fuzzy: true,
+				fuzzy: 0.2,
 			})
 			.map((result) => searchIndex.nodeMap.get(String(result.id)))
 			.filter((node): node is INode => node !== undefined);

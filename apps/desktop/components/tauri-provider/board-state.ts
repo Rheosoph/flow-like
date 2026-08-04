@@ -45,6 +45,7 @@ import {
 } from "@flow-like/flow-like-ui";
 import type { IJwks, IRealtimeAccess } from "@flow-like/flow-like-ui";
 import type { SurfaceComponent } from "@flow-like/flow-like-ui/components/a2ui/types";
+import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import { flowPilotDebugLog } from "@flow-like/flow-like-ui/lib/flowpilot-debug";
 import { flowIrCommitDeliveryId } from "@flow-like/flow-like-ui/lib/flowpilot/board-edit-job-delivery";
@@ -80,6 +81,8 @@ import {
 	commandSyncHasPendingMutation,
 	evaluateBoardLineage,
 	evaluateCommandSyncRemoteIdentity,
+	findUnresolvedPinReferences,
+	repairUnreplayableCommandBatch,
 	systemTimeToNanos,
 } from "./command-sync";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
@@ -96,6 +99,28 @@ const REMOTE_BOARD_APPLIED_EVENT = "flow:remote-board-applied";
 // outage) must surface as a single toast, not one per batch.
 const QUEUED_EDITS_TOAST_DEBOUNCE_MS = 15_000;
 let lastQueuedEditsToastAt = 0;
+
+interface OfflineSyncFailure {
+	status?: number;
+	message: string;
+}
+
+interface OfflineSyncDrainResult {
+	failed: boolean;
+	pushedBatches: number;
+	failure?: OfflineSyncFailure;
+}
+
+/**
+ * A stalled queue is only actionable if the user can tell an outage apart from a payload the
+ * server will never accept. Surface the transport's own status and message rather than a generic
+ * "sync incomplete".
+ */
+function describeOfflineSyncFailure(failure?: OfflineSyncFailure): string {
+	if (!failure) return "The server did not accept the queued edits.";
+	if (failure.status === undefined) return failure.message;
+	return `HTTP ${failure.status}: ${failure.message}`;
+}
 
 // Hub configuration cache
 let hubCache: IHub | undefined;
@@ -844,15 +869,13 @@ export class BoardState implements IBoardState {
 
 		const promise = injectDataFunction(
 			async () => {
-				const { failed: drainFailed } = await this.drainOfflineSyncQueue(
-					appId,
-					boardId,
-				);
+				const { failed: drainFailed, failure: drainFailure } =
+					await this.drainOfflineSyncQueue(appId, boardId);
 
 				if (drainFailed) {
 					// Local edits are not on the server yet. Applying the remote snapshot
 					// now would clobber them with a board that predates the queued batch.
-					this.notifyEditsQueued(appId, boardId);
+					this.notifyEditsQueued(appId, boardId, drainFailure);
 					return board;
 				}
 
@@ -1957,12 +1980,17 @@ export class BoardState implements IBoardState {
 		await this.recordAppliedRemoteLineage(appId, boardId, cachedBoard);
 	}
 
-	private notifyEditsQueued(appId: string, boardId: string): void {
+	private notifyEditsQueued(
+		appId: string,
+		boardId: string,
+		failure?: OfflineSyncFailure,
+	): void {
 		const now = Date.now();
 		if (now - lastQueuedEditsToastAt < QUEUED_EDITS_TOAST_DEBOUNCE_MS) return;
 		lastQueuedEditsToastAt = now;
 
 		toast.warning("Server sync is incomplete — your queued edits were kept.", {
+			description: describeOfflineSyncFailure(failure),
 			action: {
 				label: "Retry now",
 				onClick: () => {
@@ -1970,6 +1998,49 @@ export class BoardState implements IBoardState {
 				},
 			},
 		});
+	}
+
+	/**
+	 * Restate `on_update`-derived node state that a queued batch never captured.
+	 *
+	 * Batches authored before the apply planner shipped that state reference dynamic pin ids that
+	 * exist on no other machine, so the Hub rejects them permanently. The local board still holds
+	 * those ids, so the batch can be made replayable without losing or reordering a mutation.
+	 * Returns undefined when nothing needs repair or the local board cannot supply every pin.
+	 */
+	private async repairUnreplayableChunks(
+		appId: string,
+		boardId: string,
+		chunks: IGenericCommand[][],
+	): Promise<IGenericCommand[][] | undefined> {
+		const needsRepair = chunks.some(
+			(chunk) => findUnresolvedPinReferences(chunk).missing.size > 0,
+		);
+		if (!needsRepair) return undefined;
+
+		let localNodes: Record<string, INode>;
+		try {
+			const localBoard = await invoke<IBoard>("get_board", { appId, boardId });
+			localNodes = localBoard.nodes ?? {};
+		} catch (error) {
+			console.warn(
+				"Cannot repair a queued board batch without the local board:",
+				error,
+			);
+			return undefined;
+		}
+
+		const repaired = chunks.map(
+			(chunk) => repairUnreplayableCommandBatch(chunk, localNodes) ?? chunk,
+		);
+		if (repaired.every((chunk, index) => chunk === chunks[index])) {
+			return undefined;
+		}
+		console.warn(
+			"Restated derived node state so a queued board batch can be replayed remotely:",
+			{ appId, boardId },
+		);
+		return repaired;
 	}
 
 	/**
@@ -1981,7 +2052,7 @@ export class BoardState implements IBoardState {
 	private async drainOfflineSyncQueue(
 		appId: string,
 		boardId: string,
-	): Promise<{ failed: boolean; pushedBatches: number }> {
+	): Promise<OfflineSyncDrainResult> {
 		const key = `${appId}\u001f${boardId}`;
 		const active = this.offlineSyncDrains.get(key);
 		if (active) return await active;
@@ -1999,7 +2070,8 @@ export class BoardState implements IBoardState {
 	private async drainOfflineSyncQueueExclusive(
 		appId: string,
 		boardId: string,
-	): Promise<{ failed: boolean; pushedBatches: number }> {
+	): Promise<OfflineSyncDrainResult> {
+		let failure: OfflineSyncFailure | undefined;
 		const unsyncedCommands = await this.backend.getOfflineSyncCommands(
 			appId,
 			boardId,
@@ -2026,9 +2098,10 @@ export class BoardState implements IBoardState {
 		for (const commandSync of unsyncedCommands) {
 			const hasPendingMutation = commandSyncHasPendingMutation(commandSync);
 			if (hasPendingMutation && commandSync.remoteIdentityVersion !== 1) {
-				console.error(
-					"Refusing to replay an ownerless legacy board mutation without explicit account/Hub confirmation.",
-				);
+				const message =
+					"A queued edit from an older desktop version has no recorded account or Hub. Use Retry queued edits to confirm its owner.";
+				console.error(message);
+				failure = { message };
 				failed = true;
 				break;
 			}
@@ -2044,10 +2117,12 @@ export class BoardState implements IBoardState {
 					);
 					continue;
 				}
+				const message = `Queued edits belong to a different remote identity (${remoteIdentity.refusalReason}). Sign in to the original account and Hub.`;
 				console.error(
 					"Refusing to drain a board mutation through a different remote identity:",
 					remoteIdentity.refusalReason,
 				);
+				failure = { message };
 				failed = true;
 				break;
 			}
@@ -2067,6 +2142,7 @@ export class BoardState implements IBoardState {
 					commandSync.commandId,
 					blockedReason,
 				);
+				failure = { message: blockedReason };
 				failed = true;
 				break;
 			}
@@ -2075,6 +2151,7 @@ export class BoardState implements IBoardState {
 					"Board sync is blocked behind a payload that exceeds the command transport:",
 					commandSync.blockedReason,
 				);
+				failure = { message: commandSync.blockedReason };
 				failed = true;
 				break;
 			}
@@ -2153,6 +2230,23 @@ export class BoardState implements IBoardState {
 					);
 					continue;
 				}
+				// Only a batch the server has provably never seen may be rewritten: the durable
+				// receipt is keyed on the payload digest, so repairing a partially delivered batch
+				// would turn every later retry into an idempotency conflict.
+				if ((commandSync.chunkOffset ?? 0) === 0 && !commandSync.pendingReceiptAck) {
+					const repaired = await this.repairUnreplayableChunks(
+						appId,
+						boardId,
+						chunks,
+					);
+					if (repaired) {
+						await this.backend.repairOfflineSyncCommand(
+							commandSync.commandId,
+							repaired,
+						);
+						chunks = repaired;
+					}
+				}
 				const initialOffset = commandSync.chunkOffset ?? 0;
 				for (const [chunkIndex, chunk] of chunks.entries()) {
 					try {
@@ -2206,11 +2300,21 @@ export class BoardState implements IBoardState {
 				pushedBatches += 1;
 				console.log("Executed offline sync command:", commandSync.commandId);
 			} catch (e) {
-				// Keep the batch queued and stop: later batches must not overtake it.
+				// Keep the batch queued and stop: later batches must not overtake it. The reason is
+				// persisted first — a rejected payload and a dropped connection are indistinguishable
+				// from the queue alone, and only the former needs the user to act.
+				const status = e instanceof ApiResponseError ? e.status : undefined;
+				const message = getErrorMessage(e, "Unknown sync transport error");
 				console.warn(
 					"Failed to push offline sync command; keeping it queued:",
+					{ commandId: commandSync.commandId, status, message },
 					e,
 				);
+				await this.backend.recordOfflineSyncFailure(commandSync.commandId, {
+					status,
+					message,
+				});
+				failure = { status, message };
 				failed = true;
 				break;
 			}
@@ -2220,7 +2324,7 @@ export class BoardState implements IBoardState {
 			await this.recordLineageAfterPush(appId, boardId);
 		}
 
-		return { failed, pushedBatches };
+		return { failed, pushedBatches, failure };
 	}
 
 	async retryOfflineSync(
@@ -2292,7 +2396,7 @@ export class BoardState implements IBoardState {
 			}
 		}
 
-		const { failed, pushedBatches } = await this.drainOfflineSyncQueue(
+		const { failed, pushedBatches, failure } = await this.drainOfflineSyncQueue(
 			appId,
 			boardId,
 		);
@@ -2301,6 +2405,7 @@ export class BoardState implements IBoardState {
 		if (failed) {
 			toast.error(
 				`Sync retry failed — ${remainingBatches} edit ${remainingBatches === 1 ? "batch is" : "batches are"} still queued.`,
+				{ description: describeOfflineSyncFailure(failure) },
 			);
 		} else if (pushedBatches > 0) {
 			toast.success("Queued edits synced to the server.");
@@ -2390,7 +2495,10 @@ export class BoardState implements IBoardState {
 			!this.backend.auth ||
 			!this.backend.queryClient
 		) {
-			this.notifyEditsQueued(appId, boardId);
+			this.notifyEditsQueued(appId, boardId, {
+				message:
+					"The edit is journaled locally but no signed-in Hub destination is available yet.",
+			});
 			return { deliveryComplete: true };
 		}
 
@@ -2407,7 +2515,7 @@ export class BoardState implements IBoardState {
 			}
 		}
 		if (drain.failed) {
-			this.notifyEditsQueued(appId, boardId);
+			this.notifyEditsQueued(appId, boardId, drain.failure);
 		}
 		return { deliveryComplete: true };
 	}
@@ -2428,20 +2536,26 @@ export class BoardState implements IBoardState {
 				// and durably journaled again below.
 				chunkCommandsForSync([command]);
 			}
-			const executedCommand = await invoke<IGenericCommand>("execute_command", {
-				appId,
-				boardId,
-				command,
-			});
+			// The native side returns the executed command plus any node state `on_update` derived
+			// from it. All of it must reach the server as one batch, or a later ConnectPin will
+			// reference a dynamic pin id the Hub never minted.
+			const executedCommands = await invoke<IGenericCommand[]>(
+				"execute_command",
+				{
+					appId,
+					boardId,
+					command,
+				},
+			);
 
 			await this.syncExecutedCommandsToServer(
 				appId,
 				boardId,
-				[executedCommand],
+				executedCommands,
 				undefined,
 				remoteIdentity,
 			);
-			return executedCommand;
+			return executedCommands[0] ?? command;
 		});
 	}
 

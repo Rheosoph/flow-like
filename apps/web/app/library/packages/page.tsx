@@ -6,6 +6,7 @@ import {
 	useMutation,
 	useQuery,
 	useQueryClient,
+	useSearch,
 } from "@flow-like/flow-like-ui";
 import {
 	Avatar,
@@ -284,14 +285,15 @@ export default function InstalledPackagesPage() {
 		(availableUpdates.data ?? []).map((u) => [u.packageId, u.latestVersion]),
 	);
 
-	const filteredPackages = (installedPackages.data ?? []).filter((pkg) => {
-		if (!searchQuery) return true;
-		const query = searchQuery.toLowerCase();
-		return (
-			pkg.manifest.name.toLowerCase().includes(query) ||
-			pkg.manifest.description.toLowerCase().includes(query) ||
-			pkg.manifest.keywords.some((kw) => kw.toLowerCase().includes(query))
-		);
+	const filteredPackages = useSearch(installedPackages.data, searchQuery, {
+		fields: [
+			"manifest.name",
+			"manifest.id",
+			"manifest.description",
+			"manifest.keywords",
+			"manifest.authors",
+		],
+		boost: { "manifest.name": 3, "manifest.id": 2, "manifest.keywords": 1.5 },
 	});
 
 	const hasUpdates = (availableUpdates.data?.length ?? 0) > 0;

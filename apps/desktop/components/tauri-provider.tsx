@@ -385,6 +385,54 @@ export class TauriBackend implements IBackendState {
 		});
 	}
 
+	/**
+	 * Replace the payload of a queued batch that has never been delivered.
+	 *
+	 * Only used to restate `on_update`-derived node state a batch failed to capture, so the batch
+	 * becomes replayable on the Hub. The row keeps its id, sequence, idempotency key and remote
+	 * identity, so ordering and ownership are untouched; the caller must guarantee the server has
+	 * not seen this payload, because the durable receipt is keyed on its digest.
+	 */
+	async repairOfflineSyncCommand(
+		commandId: string,
+		chunks: IGenericCommand[][],
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing) return;
+			if ((existing.chunkOffset ?? 0) !== 0 || existing.pendingReceiptAck) {
+				return;
+			}
+			await offlineSyncDB.commands.put({
+				...existing,
+				chunks,
+				commands: undefined,
+			});
+		});
+	}
+
+	/**
+	 * Record why a delivery attempt failed. Purely diagnostic: the batch stays queued and ordered,
+	 * but the reason survives restarts so a permanently rejected payload is visible instead of
+	 * silently blocking every later edit for the same board.
+	 */
+	async recordOfflineSyncFailure(
+		commandId: string,
+		failure: { status?: number; message: string },
+	): Promise<void> {
+		await offlineSyncDB.transaction("rw", offlineSyncDB.commands, async () => {
+			const existing = await offlineSyncDB.commands.get(commandId);
+			if (!existing) return;
+			await offlineSyncDB.commands.put({
+				...existing,
+				lastFailureStatus: failure.status,
+				lastFailureMessage: failure.message.slice(0, 2000),
+				lastFailureAt: new Date(),
+				failedAttempts: (existing.failedAttempts ?? 0) + 1,
+			});
+		});
+	}
+
 	async bindLegacyOfflineSyncCommand(
 		commandId: string,
 		remoteIdentity: CommandSyncRemoteIdentity,

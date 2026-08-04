@@ -200,6 +200,14 @@ pub struct ChatEventParameters {
     pub custom_css: Option<String>,
     /// Background image URL or app storage path for the chat interface.
     pub background_image: Option<String>,
+    /// Mark shown on the empty chat: "none" | "planet" | "bubble" | "image".
+    /// Defaults to "planet".
+    pub placeholder_visual: Option<String>,
+    /// Which orb state the bubble placeholder rests in:
+    /// "idle" | "ready" | "thinking" | "working".
+    pub placeholder_bubble_state: Option<String>,
+    /// Image URL or app storage path for the "image" placeholder.
+    pub placeholder_image: Option<String>,
     /// Preferred chat color scheme: "system" | "light" | "dark".
     pub color_scheme: Option<String>,
     /// User-facing disclosure that the conversation is with an AI.

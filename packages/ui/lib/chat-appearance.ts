@@ -1,3 +1,8 @@
+import type {
+	IChatPlaceholderBubbleState,
+	IChatPlaceholderVisual,
+} from "./schema/flow/event-payload-chat";
+
 export type ChatColorScheme = "system" | "light" | "dark";
 
 export const DEFAULT_CHAT_AI_DISCLOSURE =
@@ -30,6 +35,70 @@ export const CHAT_COLOR_SCHEMES: ReadonlyArray<{
 
 export function resolveChatColorScheme(value: unknown): ChatColorScheme {
 	return value === "light" || value === "dark" ? value : "system";
+}
+
+export const CHAT_PLACEHOLDER_VISUALS: ReadonlyArray<{
+	value: IChatPlaceholderVisual;
+	label: string;
+	description: string;
+}> = [
+	{
+		value: "planet",
+		label: "Planet",
+		description:
+			"A slowly rotating point sphere that leans toward the pointer.",
+	},
+	{
+		value: "bubble",
+		label: "Bubble",
+		description: "The iridescent soap-film orb, resting in the state you pick.",
+	},
+	{
+		value: "image",
+		label: "Custom image",
+		description: "Your own square image — a logo or an assistant avatar.",
+	},
+	{
+		value: "none",
+		label: "None",
+		description: "No mark at all. The example prompts carry the empty state.",
+	},
+];
+
+/** Mirrors the orb's activity states, so the placeholder is a pose of the live mark. */
+export const CHAT_PLACEHOLDER_BUBBLE_STATES: ReadonlyArray<{
+	value: IChatPlaceholderBubbleState;
+	label: string;
+	description: string;
+}> = [
+	{ value: "idle", label: "Idle", description: "Resting, almost still." },
+	{ value: "ready", label: "Ready", description: "Awake and expectant." },
+	{
+		value: "thinking",
+		label: "Thinking",
+		description: "Churning, with three satellites in orbit.",
+	},
+	{
+		value: "working",
+		label: "Working",
+		description: "Turning, with a cog rim.",
+	},
+];
+
+export function resolveChatPlaceholderVisual(
+	value: unknown,
+): IChatPlaceholderVisual {
+	return CHAT_PLACEHOLDER_VISUALS.some((option) => option.value === value)
+		? (value as IChatPlaceholderVisual)
+		: "planet";
+}
+
+export function resolveChatPlaceholderBubbleState(
+	value: unknown,
+): IChatPlaceholderBubbleState {
+	return CHAT_PLACEHOLDER_BUBBLE_STATES.some((option) => option.value === value)
+		? (value as IChatPlaceholderBubbleState)
+		: "idle";
 }
 
 export function resolveChatAiDisclosure(value: unknown): string {

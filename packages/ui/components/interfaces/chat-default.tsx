@@ -1781,6 +1781,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						event={event}
 						config={config}
 						isSending={isSendingFromWelcome}
+						appId={appId}
 					/>
 				) : (
 					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>

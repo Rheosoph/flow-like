@@ -4,6 +4,7 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { SearchIcon, WorkflowIcon, XIcon } from "lucide-react";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
+import { useSearch } from "../../../hooks/use-search-index";
 import {
 	type IScoreCategory,
 	SCORE_CATEGORIES,
@@ -32,7 +33,6 @@ import {
 	buildRouteByPage,
 	groupIntoBands,
 	groupPagesByBoard,
-	matchesQuery,
 	sortRows,
 } from "./flows-overview-model";
 import {
@@ -218,11 +218,20 @@ export function FlowsOverviewPage({
 		[boards.data, eventList, pagesByBoard],
 	);
 
-	const normalizedQuery = query.trim().toLowerCase();
-	const bands = useMemo(() => {
-		const visible = rows.filter((row) => matchesQuery(row, normalizedQuery));
-		return groupIntoBands(sortRows(visible, sortDimension));
-	}, [rows, normalizedQuery, sortDimension]);
+	const matchedRows = useSearch(rows, query, {
+		fields: ["board.name", "board.description", "board.stage", "versionLabel"],
+		extract: (row) =>
+			[
+				...row.pages.map((page) => page.name),
+				...row.bindings.map((event) => event.name),
+			].join(" "),
+		boost: { "board.name": 3 },
+	});
+
+	const bands = useMemo(
+		() => groupIntoBands(sortRows(matchedRows, sortDimension)),
+		[matchedRows, sortDimension],
+	);
 
 	const visibleCount = useMemo(
 		() =>

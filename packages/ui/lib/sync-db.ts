@@ -25,6 +25,15 @@ export interface ICommandSync {
 	remoteHub?: string;
 	/** Server receipt to ACK before this row may advance or disappear. */
 	pendingReceiptAck?: string;
+	/**
+	 * Why the last delivery attempt failed. A queued mutation is never dropped, so this is the
+	 * only way a permanently rejected batch can be told apart from an offline one — without it a
+	 * poisoned batch wedges the whole board queue behind a generic "sync incomplete" toast.
+	 */
+	lastFailureStatus?: number;
+	lastFailureMessage?: string;
+	lastFailureAt?: Date;
+	failedAttempts?: number;
 	/** FlowPilot receipts remain server-durable while this tombstone suppresses native replay. */
 	deferReceiptAckUntilNativeTerminal?: boolean;
 	deferredReceiptAcks?: string[];

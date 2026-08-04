@@ -5,6 +5,7 @@ import { Plus, SearchIcon, Shield } from "lucide-react";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import { useInfiniteInvoke, useInvoke } from "../../../hooks/use-invoke";
+import { useSearch } from "../../../hooks/use-search-index";
 import { RolePermissions } from "../../../lib/permission/role-permission";
 import { useBackend } from "../../../state/backend-state";
 import type { IBackendRole } from "../../../state/backend-state/types";
@@ -68,16 +69,19 @@ export function RolesPage() {
 		return counts;
 	}, [team.data, team.isError]);
 
-	const { visibleRoles, defaultRoleId, knownAttributes } = useMemo(() => {
+	const allRoles = useMemo(() => {
 		const persisted = roles.data?.[1] ?? [];
-		const all = isNewRole && draft ? [...persisted, draft] : persisted;
-		const term = searchTerm.toLowerCase();
-		const filtered = all.filter(
-			(role) =>
-				role.name.toLowerCase().includes(term) ||
-				role.description.toLowerCase().includes(term),
-		);
-		const sorted = filtered.toSorted((a, b) => {
+		return isNewRole && draft ? [...persisted, draft] : persisted;
+	}, [roles.data, isNewRole, draft]);
+
+	const matchedRoles = useSearch(allRoles, searchTerm, {
+		fields: ["name", "description", "attributes"],
+		boost: { name: 3 },
+	});
+
+	const { visibleRoles, defaultRoleId, knownAttributes } = useMemo(() => {
+		const all = allRoles;
+		const sorted = matchedRoles.toSorted((a, b) => {
 			const permA = new RolePermissions(BigInt(a.permissions));
 			const permB = new RolePermissions(BigInt(b.permissions));
 			if (permA.contains(RolePermissions.Owner)) return -1;
@@ -93,7 +97,7 @@ export function RolesPage() {
 				...new Set(all.flatMap((role) => role.attributes ?? [])),
 			].toSorted(),
 		};
-	}, [roles.data, searchTerm, draft, isNewRole]);
+	}, [allRoles, matchedRoles, roles.data]);
 
 	const persistedRole = useMemo(
 		() => roles.data?.[1]?.find((role) => role.id === openRoleId),

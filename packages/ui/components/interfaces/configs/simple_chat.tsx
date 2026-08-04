@@ -3,8 +3,12 @@
 import { useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import {
+	CHAT_PLACEHOLDER_BUBBLE_STATES,
+	CHAT_PLACEHOLDER_VISUALS,
 	DEFAULT_CHAT_AI_DISCLOSURE,
 	DEFAULT_CHAT_EXAMPLE_MESSAGES,
+	resolveChatPlaceholderBubbleState,
+	resolveChatPlaceholderVisual,
 } from "../../../lib/chat-appearance";
 import {
 	CHAT_THEME_PRESETS,
@@ -111,6 +115,12 @@ export function SimpleChatConfig({
 	const selectedThemeValue = resolveChatThemePreset(config?.custom_css);
 	const selectedTheme = CHAT_THEME_PRESETS.find(
 		(theme) => theme.value === selectedThemeValue,
+	);
+	const placeholderVisual = resolveChatPlaceholderVisual(
+		config?.placeholder_visual,
+	);
+	const placeholderBubbleState = resolveChatPlaceholderBubbleState(
+		config?.placeholder_bubble_state,
 	);
 
 	const renderVoiceSelect = (
@@ -236,6 +246,84 @@ export function SimpleChatConfig({
 								chat opens.
 							</p>
 						</div>
+
+						<div className="space-y-2">
+							<Label>Empty Chat Mark</Label>
+							<Select
+								disabled={!isEditing}
+								value={placeholderVisual}
+								onValueChange={(value) => setValue("placeholder_visual", value)}
+							>
+								<SelectTrigger>
+									<SelectValue />
+								</SelectTrigger>
+								<SelectContent>
+									{CHAT_PLACEHOLDER_VISUALS.map((option) => (
+										<SelectItem key={option.value} value={option.value}>
+											{option.label}
+										</SelectItem>
+									))}
+								</SelectContent>
+							</Select>
+							<p className="text-sm text-muted-foreground">
+								{
+									CHAT_PLACEHOLDER_VISUALS.find(
+										(option) => option.value === placeholderVisual,
+									)?.description
+								}
+							</p>
+						</div>
+
+						{placeholderVisual === "bubble" && (
+							<div className="space-y-2">
+								<Label>Bubble State</Label>
+								<Select
+									disabled={!isEditing}
+									value={placeholderBubbleState}
+									onValueChange={(value) =>
+										setValue("placeholder_bubble_state", value)
+									}
+								>
+									<SelectTrigger>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{CHAT_PLACEHOLDER_BUBBLE_STATES.map((option) => (
+											<SelectItem key={option.value} value={option.value}>
+												{option.label}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+								<p className="text-sm text-muted-foreground">
+									{
+										CHAT_PLACEHOLDER_BUBBLE_STATES.find(
+											(option) => option.value === placeholderBubbleState,
+										)?.description
+									}{" "}
+									The orb holds this pose — it does not follow what the
+									assistant is actually doing.
+								</p>
+							</div>
+						)}
+
+						{placeholderVisual === "image" && (
+							<div className="space-y-2">
+								<Label>Placeholder Image</Label>
+								<AssetPicker
+									accept="image"
+									appId={appId}
+									disabled={!isEditing}
+									placeholder="Select from storage or enter an image URL..."
+									value={config?.placeholder_image ?? ""}
+									onChange={(value) => setValue("placeholder_image", value)}
+								/>
+								<p className="text-sm text-muted-foreground">
+									Shown as a circle, so a square image works best. Storage
+									images are securely resolved whenever the chat opens.
+								</p>
+							</div>
+						)}
 
 						<div className="space-y-2">
 							<Label htmlFor="chat_ai_disclosure">AI Disclosure</Label>

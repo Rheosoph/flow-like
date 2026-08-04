@@ -95,6 +95,25 @@ export const ORB_STATE_PARAMS: Record<FlowPilotOrbState, OrbStateParams> = {
 export const ORB_TEETH_COUNT = 8;
 
 /**
+ * The empty-state mark. Deliberately calmer than `idle` — it is rendered large and stared at
+ * while you decide what to type, so the personality lives in its entrance, its pointer
+ * attention, and its exit rather than in a loop.
+ */
+export const ORB_INVITING_PARAMS: OrbStateParams = {
+	rate: 0.3,
+	focus: 0.16,
+	bulge: 0.14,
+	reach: 0.3,
+	scale: 1,
+	breathe: 0.018,
+	round: 0.2,
+	teeth: 0,
+	sat: 0,
+	spin: 0.1,
+	spinMix: 0.16,
+};
+
+/**
  * Tools that mutate something or produce code/UI. Anything here is `working`; every other tool
  * is research or loading, so it falls through to `thinking`. Deliberately an allow-list of
  * mutations — a new read-only tool should default to thinking, not claim to be applying changes.

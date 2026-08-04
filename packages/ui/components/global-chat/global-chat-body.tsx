@@ -114,10 +114,14 @@ import {
 	type IChatConcurrency,
 	type IChatRef,
 } from "../interfaces/chat-default/chat";
-import { ChatEmptyOrb } from "../interfaces/chat-default/chat-empty-orb";
 import { ChatWidgetExecutionProvider } from "../interfaces/chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
+import {
+	FlowPilotEmptyState,
+	type IEmptyStateSuggestion,
+	useEmptyStateExit,
+} from "./flowpilot-empty-state";
 import { GlobalChatHistory } from "./global-chat-history";
 import { InlineAppChatCard } from "./inline-app-chat-card";
 import { InlineAppPageCard } from "./inline-app-page-card";
@@ -145,11 +149,7 @@ const PROVIDERS: Array<{
 ];
 
 // Quick-start prompts on the empty chat; the `prompt` is what actually gets sent.
-const EMPTY_SUGGESTIONS: Array<{
-	label: string;
-	icon: typeof SparklesIcon;
-	prompt: string;
-}> = [
+const EMPTY_SUGGESTIONS: readonly IEmptyStateSuggestion[] = [
 	{ label: "Create an app", icon: PlusIcon, prompt: "Create a new app" },
 	{
 		label: "Browse the store",
@@ -1053,6 +1053,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		// A queued draft is about to send — don't flash the empty state under it.
 		!pendingDraft;
 
+	// The mark collapses into the live orb on send, so it has to outlive the condition itself.
+	const { mounted: emptyStateMounted, exiting: emptyStateExiting } =
+		useEmptyStateExit(showEmptyState);
+
 	// Agent-SDK backends (Copilot / Codex / Claude Code) are local CLIs — desktop only. On web only
 	// profile Bits are offered, matching the `/ai/global-chat/backends` capability.
 	const availableProviders = useMemo(
@@ -1383,29 +1387,16 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								: ""
 						} ${showWorkspace && !canSideBySide ? "hidden" : ""}`}
 					>
-						{showEmptyState && (
-							<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center gap-7 px-6">
-								<ChatEmptyOrb size={240} />
-								<div className="pointer-events-auto flex flex-wrap items-center justify-center gap-3">
-									{EMPTY_SUGGESTIONS.map(({ label, icon: Icon, prompt }) => (
-										<button
-											key={label}
-											type="button"
-											aria-label={label}
-											title={label}
-											onClick={() => void handleSendMessage(prompt)}
-											className="group relative flex size-12 items-center justify-center rounded-2xl border text-muted-foreground outline-none transition-all hover:border-primary/45 hover:bg-background hover:text-primary focus-visible:ring-2 focus-visible:ring-primary/40 motion-safe:hover:-translate-y-0.5"
-											style={{
-												borderColor: "var(--fl-chat-rule, var(--border))",
-											}}
-										>
-											<Icon className="size-5" />
-											<span className="pointer-events-none absolute top-full mt-2 whitespace-nowrap text-[11px] font-medium text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
-												{label}
-											</span>
-										</button>
-									))}
-								</div>
+						{emptyStateMounted && (
+							<div className="pointer-events-none absolute inset-x-0 top-0 bottom-28 z-10 flex flex-col items-center justify-center overflow-hidden px-6">
+								{/* The dock is too narrow for the orb to frame the composer rather than
+								    crowd it, so there it is the suggestions alone. */}
+								<FlowPilotEmptyState
+									suggestions={EMPTY_SUGGESTIONS}
+									onSelect={(prompt) => void handleSendMessage(prompt)}
+									suggestionsOnly={compact}
+									exiting={emptyStateExiting}
+								/>
 							</div>
 						)}
 						{/* Embedded-widget actions (ActionHandler's widget_event) route through

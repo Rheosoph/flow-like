@@ -28,10 +28,10 @@ import {
 	Zap,
 } from "lucide-react";
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
-import { useMiniSearch } from "react-minisearch";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/index";
 import { useIsMobile } from "../../../hooks/use-mobile";
+import { useSearch } from "../../../hooks/use-search-index";
 import { Bit } from "../../../lib/bit/bit";
 import { filterHostableLlmModels } from "../../../lib/bit/local-model-filter";
 import { isMlxModelBit } from "../../../lib/bit/mlx-model-pack";
@@ -278,26 +278,29 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 	const [installedBits, setInstalledBits] = useState<Set<string>>(new Set());
 
-	const { search, searchResults, addAllAsync, removeAll } = useMiniSearch<IBit>(
-		[],
-		{
-			fields: [
-				"authors",
-				"file_name",
-				"hub",
-				"id",
-				"name",
-				"long_description",
-				"description",
-				"type",
-			],
-			storeFields: ["id"],
-			searchOptions: {
-				fuzzy: true,
-				boost: { name: 2, type: 1.5, description: 1, long_description: 0.5 },
-			},
+	const searchedBits = useSearch(hostableBits, searchTerm, {
+		fields: [
+			"meta.en.name",
+			"meta.en.description",
+			"meta.en.long_description",
+			"meta.en.tags",
+			"id",
+			"type",
+			"authors",
+			"file_name",
+			"hub",
+			"parameters.provider.provider_name",
+			"parameters.provider.model_id",
+		],
+		boost: {
+			"meta.en.name": 4,
+			id: 2,
+			"parameters.provider.provider_name": 2,
+			type: 1.5,
+			"meta.en.description": 1,
+			"meta.en.long_description": 0.5,
 		},
-	);
+	});
 
 	useEffect(() => {
 		if (!foundBits.data) return;
@@ -316,19 +319,6 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 		};
 		checkInstalledAll();
 	}, [hostableBits, profile.data, checkInstalled]);
-
-	useEffect(() => {
-		removeAll();
-		if (hostableBits.length === 0) return;
-		addAllAsync(
-			hostableBits.map((item) => ({
-				...item,
-				name: item.meta?.en?.name,
-				long_description: item.meta?.en?.long_description,
-				description: item.meta?.en?.description,
-			})),
-		);
-	}, [hostableBits, addAllAsync, removeAll]);
 
 	const providers = useMemo(() => {
 		const providerSet = new Set<string>();
@@ -367,12 +357,7 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 	);
 
 	const filteredModels = useMemo(() => {
-		let models = searchTerm.trim()
-			? filterHostableLlmModels((searchResults as IBit[]) ?? [], {
-					canHostLlamaCPP,
-					canHostMLX,
-				})
-			: hostableBits;
+		let models = searchedBits;
 		models = models.filter((bit) => !blacklist.has(bit.id));
 		models = models.filter((bit) => bit.meta?.en !== undefined);
 
@@ -433,6 +418,10 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 			return true;
 		});
 
+		// A live query already orders by relevance; only an explicitly picked
+		// sort ("updated" is the untouched default) overrides it.
+		if (searchTerm.trim() && sortBy === "updated") return models;
+
 		models.sort((a, b) => {
 			const aParams = a.parameters as ILlmParameters | undefined;
 			const bParams = b.parameters as ILlmParameters | undefined;
@@ -474,11 +463,8 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 		return models;
 	}, [
-		hostableBits,
-		searchResults,
+		searchedBits,
 		searchTerm,
-		canHostLlamaCPP,
-		canHostMLX,
 		inputModalities,
 		outputModalities,
 		providerFilter,
@@ -893,20 +879,14 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 						<Input
 							placeholder="Search models, providers, capabilities…"
 							value={searchTerm}
-							onChange={(e) => {
-								setSearchTerm(e.target.value);
-								search(e.target.value);
-							}}
+							onChange={(e) => setSearchTerm(e.target.value)}
 							className="h-9 pl-10 text-sm bg-muted/40 border-border/60 focus:bg-background"
 						/>
 						{searchTerm && (
 							<button
 								type="button"
 								aria-label="Clear search"
-								onClick={() => {
-									setSearchTerm("");
-									search("");
-								}}
+								onClick={() => setSearchTerm("")}
 								className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground/60 hover:text-foreground transition-colors"
 							>
 								<X className="h-4 w-4" />
@@ -1121,7 +1101,6 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 								className="mt-4 h-8 text-xs"
 								onClick={() => {
 									setSearchTerm("");
-									search("");
 									resetFilters();
 								}}
 							>
