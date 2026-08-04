@@ -12,7 +12,7 @@
  * Output: fenced code blocks that Plate routes to custom renderers.
  */
 
-const DIRECTIVE_TYPES = [
+export const DIRECTIVE_TYPES = [
 	"info",
 	"warning",
 	"error",

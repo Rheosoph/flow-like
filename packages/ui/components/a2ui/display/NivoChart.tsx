@@ -9,6 +9,10 @@ import {
 	useRef,
 	useState,
 } from "react";
+import {
+	CHAT_CHART_PALETTE_VARS,
+	getNivoChartTheme,
+} from "../../../lib/chart-theme";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
@@ -892,36 +896,12 @@ export function A2UINivoChart({
 		return isValidForChartType() ? parsedData : fallbackData;
 	}, [rawData, chartType]);
 
-	const theme = useMemo(
-		() => ({
-			background: "transparent",
-			text: { fill: "#888" },
-			fontSize: 11,
-			axis: {
-				domain: { line: { stroke: "#444" } },
-				ticks: { line: { stroke: "#444" }, text: { fill: "#888" } },
-				legend: { text: { fill: "#888" } },
-			},
-			grid: { line: { stroke: "#333" } },
-			legends: { text: { fill: "#888" } },
-			labels: { text: { fill: "#fff" } },
-			tooltip: {
-				container: {
-					background: "#1a1a1a",
-					color: "#fff",
-					fontSize: 12,
-					borderRadius: 4,
-					boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-				},
-			},
-		}),
-		[],
-	);
+	const theme = useMemo(() => getNivoChartTheme(), []);
 
 	const colorScheme = useMemo(() => {
 		if (Array.isArray(colors)) return colors;
 		if (typeof colors === "string") return { scheme: colors };
-		return { scheme: "nivo" };
+		return [...CHAT_CHART_PALETTE_VARS];
 	}, [colors]);
 
 	// Responsive margins based on container size
@@ -1056,8 +1036,8 @@ export function A2UINivoChart({
 					arcLinkLabelsSkipAngle: pieStyle?.arcLinkLabelsSkipAngle ?? 10,
 					activeOuterRadiusOffset: pieStyle?.activeOuterRadiusOffset ?? 8,
 					borderWidth: 1,
-					arcLinkLabelsTextColor: "#888",
-					arcLabelsTextColor: "#fff",
+					arcLinkLabelsTextColor: "var(--fl-chat-chart-text-muted, #99a3b1)",
+					arcLabelsTextColor: "var(--fl-chat-chart-text, #e8ebf0)",
 				};
 			case "radar":
 				return {
@@ -1174,16 +1154,22 @@ export function A2UINivoChart({
 					from: "2024-01-01",
 					to: "2024-12-31",
 					direction: calendarStyle?.direction ?? "horizontal",
-					emptyColor: calendarStyle?.emptyColor ?? "#333",
-					colors: ["#61cdbb", "#97e3d5", "#e8c1a0", "#f47560"],
+					emptyColor:
+						calendarStyle?.emptyColor ?? "var(--fl-chat-chart-empty, #242a33)",
+					colors: [
+						"var(--fl-chat-chart-3, #2fb8c6)",
+						"var(--fl-chat-chart-6, #3fb27f)",
+						"var(--fl-chat-chart-4, #f0a93c)",
+						"var(--fl-chat-chart-1, #fb562d)",
+					],
 					yearSpacing: calendarStyle?.yearSpacing ?? 40,
 					yearLegendOffset: calendarStyle?.yearLegendOffset ?? 10,
 					monthSpacing: calendarStyle?.monthSpacing ?? 0,
 					monthBorderWidth: calendarStyle?.monthBorderWidth ?? 2,
-					monthBorderColor: "#444",
+					monthBorderColor: "var(--fl-chat-chart-axis, #39404a)",
 					daySpacing: calendarStyle?.daySpacing ?? 0,
 					dayBorderWidth: calendarStyle?.dayBorderWidth ?? 2,
-					dayBorderColor: "#1a1a1a",
+					dayBorderColor: "var(--fl-chat-surface-background, transparent)",
 				};
 			}
 			case "bump":
@@ -1272,13 +1258,13 @@ export function A2UINivoChart({
 					yDomain: [0, 100],
 					enableLinks: true,
 					linkLineWidth: 1,
-					linkLineColor: "#666",
+					linkLineColor: "var(--fl-chat-chart-grid, #2b313a)",
 					enableCells: true,
 					cellLineWidth: 2,
-					cellLineColor: "#888",
+					cellLineColor: "var(--fl-chat-chart-axis, #39404a)",
 					enablePoints: true,
 					pointSize: 8,
-					pointColor: "#6366f1",
+					pointColor: "var(--fl-chat-chart-1, #fb562d)",
 				};
 			}
 			case "waffle":

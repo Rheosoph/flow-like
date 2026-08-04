@@ -18,6 +18,30 @@ function toRouteMapping(r: RemoteRouteMapping): IRouteMapping {
 	return { path: r.path, eventId: r.eventId };
 }
 
+/**
+ * Merge server route data with routes backed by the device's local event
+ * catalog. The server wins for a conflicting path, while a local-only path is
+ * retained so an incomplete remote mirror cannot hide a Local interface.
+ */
+export function mergeLocalAndRemoteRoutes(
+	localRoutes: IRouteMapping[],
+	remoteRoutes: IRouteMapping[],
+): IRouteMapping[] {
+	const merged = new Map<string, IRouteMapping>();
+
+	for (const route of localRoutes) {
+		merged.set(route.path, route);
+	}
+
+	for (const route of remoteRoutes) {
+		merged.set(route.path, route);
+	}
+
+	return Array.from(merged.values()).toSorted((a, b) =>
+		a.path.localeCompare(b.path),
+	);
+}
+
 export class RouteState implements IAppRouteState {
 	constructor(private readonly backend: TauriBackend) {}
 
@@ -48,7 +72,7 @@ export class RouteState implements IAppRouteState {
 					eventId: r.eventId,
 				}).catch(() => {});
 			}
-			return mapped;
+			return mergeLocalAndRemoteRoutes(local, mapped);
 		};
 
 		if (force) {

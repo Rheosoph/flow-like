@@ -11,8 +11,10 @@ import {
 	XIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { useHub } from "../../hooks/use-hub";
 import { useInvoke } from "../../hooks/use-invoke";
+import { isMlxModelBit } from "../../lib/bit/mlx-model-pack";
 import type { IBit } from "../../lib/schema/bit/bit";
 import type { IEmbeddingModelParameters } from "../../lib/schema/bit/bit/embedding-model-parameters";
 import type {
@@ -22,6 +24,10 @@ import type {
 import { humanFileSize } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import { useDownloadManager } from "../../state/download-manager";
+import {
+	handleUpgradeRequiredError,
+	openUpgradeDialogIfEnabled,
+} from "../../state/upgrade-dialog-state";
 import type { ISettingsProfile } from "../../types";
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 import { Badge } from "./badge";
@@ -151,17 +157,16 @@ export function ModelDetailSheet({
 	const userInfo = useInvoke(backend.userState.getInfo, backend.userState, []);
 	const displayBit = detailedBit.data ?? bit;
 
-	const isVirtualBit = useMemo(
-		() =>
+	// The backend-resolved pack size is authoritative: it accounts for artifacts
+	// the bit itself never names (inline MLX manifests, llama.cpp projectors).
+	const isVirtualBit = useMemo(() => {
+		if (bitSize.isSuccess) return (bitSize.data ?? 0) === 0;
+		return (
 			(displayBit?.dependencies?.length ?? 0) === 0 &&
-			(!displayBit?.download_link || (bitSize.data === 0 && bitSize.isSuccess)),
-		[
-			displayBit?.dependencies,
-			displayBit?.download_link,
-			bitSize.data,
-			bitSize.isSuccess,
-		],
-	);
+			!displayBit?.download_link &&
+			!(displayBit && isMlxModelBit(displayBit))
+		);
+	}, [displayBit, bitSize.data, bitSize.isSuccess]);
 
 	const tierInfo = useMemo(() => {
 		if (!displayBit) return { isRestricted: false, requiredTier: null };
@@ -228,19 +233,41 @@ export function ModelDetailSheet({
 		const bitIndex = profile.hub_profile.bits.findIndex(
 			(id) => id.split(":").pop() === displayBit.id,
 		);
-		if (bitIndex === -1) {
-			await downloadBit(displayBit);
-			await backend.bitState.addBit(displayBit, profile);
-		} else {
-			await backend.bitState.removeBit(displayBit, profile);
+		try {
+			if (bitIndex === -1) {
+				if (tierInfo.isRestricted) {
+					if (
+						!openUpgradeDialogIfEnabled({
+							reason: "model-tier",
+							requiredTier: tierInfo.requiredTier ?? undefined,
+						})
+					) {
+						toast.error(
+							`This model requires the ${tierInfo.requiredTier} plan.`,
+						);
+					}
+					return;
+				}
+				await downloadBit(displayBit);
+				await backend.bitState.addBit(displayBit, profile);
+			} else {
+				await backend.bitState.removeBit(displayBit, profile);
+			}
+			await refetchCurrentProfile();
+		} catch (error) {
+			console.error("Failed to update profile models:", error);
+			if (handleUpgradeRequiredError(error, "model-tier")) return;
+			toast.error(
+				error instanceof Error ? error.message : "Failed to update profile",
+			);
 		}
-		await refetchCurrentProfile();
 	}, [
 		displayBit,
 		currentProfile.data,
 		downloadBit,
 		backend.bitState,
 		refetchCurrentProfile,
+		tierInfo,
 	]);
 
 	if (!displayBit || !displayBit.meta.en) return null;

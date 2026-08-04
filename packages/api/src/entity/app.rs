@@ -25,8 +25,6 @@ pub struct Model {
     pub primary_category: Option<Category>,
     #[sea_orm(column_name = "secondaryCategory")]
     pub secondary_category: Option<Category>,
-    #[sea_orm(column_name = "appType")]
-    pub app_type: Option<AppType>,
     #[sea_orm(column_name = "ratingSum")]
     pub rating_sum: i64,
     #[sea_orm(column_name = "ratingCount")]
@@ -57,6 +55,8 @@ pub struct Model {
     pub forked_at: Option<DateTime>,
     #[sea_orm(column_name = "forkedFrom", column_type = "Text", nullable)]
     pub forked_from: Option<String>,
+    #[sea_orm(column_name = "appType")]
+    pub app_type: Option<AppType>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

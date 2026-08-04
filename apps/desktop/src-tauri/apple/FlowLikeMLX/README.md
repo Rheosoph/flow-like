@@ -4,8 +4,10 @@ Native MLX LLM/VLM inference for Flow-Like on Apple devices.
 
 The package is pinned to:
 
-- `mlx-swift-lm` 3.31.3
-- `mlx-swift` 0.31.3
+- `mlx-swift-lm` revision `10e0cb7442920d3f67a08e067d6670334e9dadef`
+  (3.31.4 plus the upstream Gemma 4 VLM shared-KV loader and cooperative
+  cancellation fixes)
+- `mlx-swift` 0.31.4
 - `swift-transformers` 1.3.0
 - macOS 14 and iOS 17
 
@@ -38,12 +40,15 @@ the Rust compatibility proxy.
 - One generation runs at a time. macOS retains up to two loaded models and iOS
   retains one, using an LRU policy.
 - iOS sets the MLX recyclable-buffer cache to 20 MiB, based on the official MLX
-  iOS guidance. A memory warning or background transition cancels work, unloads
-  weights, and clears the MLX buffer cache.
+  iOS guidance, and the app target requests Apple's increased-memory-limit
+  entitlement. On the first memory warning, MLX stops retaining returned
+  buffers and releases the model at safe idle; repeated pressure cancels the
+  active request. Leaving the foreground closes admission immediately and
+  cancels active/queued MLX work until the app becomes active again.
 - LLM history uses MLX's raw message representation so `tool_calls` and
   `tool_call_id` survive subsequent tool-loop turns.
-- mlx-swift-lm 3.31.3 cannot represent tool-call history in its structured
-  multimodal `Chat.Message`; VLM requests report that limitation explicitly.
+- Flow-Like's structured multimodal `Chat.Message` mapping does not yet represent
+  tool-call history; VLM requests report that limitation explicitly.
 - VLM images accept local files, base64 image data URLs, and HTTP(S). Remote
   responses have finite timeouts, must be successful `image/*` responses, and
   are capped at 20 MiB while streaming.
@@ -119,6 +124,7 @@ resolves and compiles MLX, including its Metal resources, as part of the app.
 
 The package tests cover request mapping, LLM tool history, VLM limitations,
 image reference validation, stop-sequence filtering, generation parameters,
-and terminal callback gating. Run them from Xcode on an Apple-silicon Mac.
-Model-backed smoke tests should use a small curated Bit and a physical iOS
-device; the unit tests do not download weights.
+memory-warning/lifecycle admission policy, and terminal callback gating. Run
+them from Xcode on an Apple-silicon Mac. Model-backed smoke tests should use a
+small curated Bit and a physical iOS device; the unit tests do not download
+weights.

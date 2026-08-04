@@ -190,6 +190,9 @@ pub async fn upsert_board(
             }
 
             if let Some(data) = board_data {
+                board.log_level = data.log_level;
+                board.stage = data.stage;
+                board.execution_mode = data.execution_mode;
                 board.variables = data.variables;
                 board.comments = data.comments;
                 board.nodes = data.nodes;
@@ -199,6 +202,7 @@ pub async fn upsert_board(
                 board.version = data.version;
                 board.viewport = data.viewport;
                 board.page_ids = data.page_ids;
+                board.created_at = data.created_at;
                 board.updated_at = data.updated_at;
                 board.hash();
             }
@@ -227,6 +231,9 @@ pub async fn upsert_board(
         let mut board = board.lock().await;
         board.name = name;
         board.description = description;
+        board.log_level = board_data.log_level;
+        board.stage = board_data.stage;
+        board.execution_mode = board_data.execution_mode;
         board.variables = board_data.variables;
         board.comments = board_data.comments;
         board.nodes = board_data.nodes;

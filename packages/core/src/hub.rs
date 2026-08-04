@@ -123,6 +123,70 @@ pub struct UserTier {
 
 pub type UserTiers = HashMap<String, UserTier>;
 
+/// Decides what users see when they hit a plan limit: a self-service upgrade
+/// flow (consumer) or a "contact us" card (enterprise deployments).
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversionMode {
+    #[default]
+    Consumer,
+    Enterprise,
+}
+
+/// Marketing metadata for a tier, keyed by tier id in `ConversionConfig`.
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone, Default)]
+pub struct TierDisplay {
+    /// Name shown instead of the raw tier key (e.g. "Starter" for FREE)
+    pub display_name: Option<String>,
+    /// One-line value proposition under the tier name
+    pub tagline: Option<String>,
+    /// Curated feature bullets shown in addition to the derived limit facts
+    #[serde(default)]
+    pub features: Vec<String>,
+    /// Marks the recommended tier — gets the "Most popular" treatment
+    #[serde(default)]
+    pub highlight: bool,
+    /// Badge text overriding the default highlight label
+    pub badge: Option<String>,
+}
+
+/// Upgrade / conversion experience configuration
+#[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]
+pub struct ConversionConfig {
+    /// When false, plan-limit errors surface as plain messages without the
+    /// upgrade dialog
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub mode: ConversionMode,
+    /// Headline override for the upgrade dialog
+    pub headline: Option<String>,
+    /// Supporting line under the headline
+    pub subheadline: Option<String>,
+    /// Contact used in enterprise mode and for the enterprise tier CTA;
+    /// falls back to the hub contact when unset
+    pub contact: Option<Contact>,
+    /// Custom message shown on the enterprise contact card
+    pub contact_message: Option<String>,
+    /// Per-tier marketing metadata keyed by tier id (FREE, PREMIUM, ...)
+    #[serde(default)]
+    pub tier_display: HashMap<String, TierDisplay>,
+}
+
+impl Default for ConversionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            mode: ConversionMode::default(),
+            headline: None,
+            subheadline: None,
+            contact: None,
+            contact_message: None,
+            tier_display: HashMap::new(),
+        }
+    }
+}
+
 fn default_secure() -> bool {
     true
 }
@@ -181,6 +245,10 @@ pub struct Hub {
     /// Fork-an-app feature configuration
     #[serde(default)]
     pub forking: ForkingConfig,
+
+    /// Upgrade / conversion experience configuration
+    #[serde(default)]
+    pub conversion: ConversionConfig,
 
     #[serde(skip)]
     recursion_guard: Option<Arc<Mutex<RecursionGuard>>>,
@@ -555,6 +623,17 @@ pub struct Contact {
     pub name: String,
     pub email: String,
     pub url: String,
+}
+
+impl Contact {
+    /// Email when present, otherwise the contact URL — for user-facing prose.
+    pub fn preferred_reference(&self) -> &str {
+        if self.email.is_empty() {
+            &self.url
+        } else {
+            &self.email
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema, Clone)]

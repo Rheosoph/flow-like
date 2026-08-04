@@ -167,6 +167,22 @@ export function clearActiveRun(runId?: string) {
 	writeActiveRuns(remaining);
 }
 
+/**
+ * Last timestamp handed out, so consecutive messages never collide.
+ *
+ * A turn creates the question and its reply back-to-back, which lands both in the
+ * same millisecond on any quick machine. The transcript sorts on `timestamp`, and
+ * Dexie breaks ties by primary key — a random cuid — so after a reload the reply
+ * could sort ahead of the question it answers. Strictly increasing stamps make the
+ * order deterministic without touching any call site.
+ */
+let lastIssuedTimestamp = 0;
+
+export function nextGlobalChatTimestamp(): number {
+	lastIssuedTimestamp = Math.max(Date.now(), lastIssuedTimestamp + 1);
+	return lastIssuedTimestamp;
+}
+
 export function makeGlobalChatMessage(
 	role: IRole,
 	content: string,
@@ -180,7 +196,7 @@ export function makeGlobalChatMessage(
 		files: [],
 		tools: [],
 		actions: [],
-		timestamp: Date.now(),
+		timestamp: nextGlobalChatTimestamp(),
 	};
 }
 

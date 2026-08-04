@@ -24,6 +24,7 @@ import {
 	Tooltip,
 	TooltipContent,
 	TooltipTrigger,
+	useSearch,
 } from "@flow-like/flow-like-ui";
 import {
 	Avatar,
@@ -53,6 +54,7 @@ import {
 	Code2,
 	ExternalLink,
 	FolderOpen,
+	LayoutTemplate,
 	Loader2,
 	Lock,
 	Package,
@@ -378,6 +380,23 @@ function ProjectCard({
 
 					<Tooltip>
 						<TooltipTrigger asChild>
+							<Link
+								href={`/developer/test-widget?project=${encodeURIComponent(project.path)}`}
+							>
+								<Button
+									size="icon"
+									variant="ghost"
+									className="h-6 w-6 rounded-full text-muted-foreground/60 hover:text-foreground/80 hover:bg-muted/30"
+								>
+									<LayoutTemplate className="h-3 w-3" />
+								</Button>
+							</Link>
+						</TooltipTrigger>
+						<TooltipContent>Test Widgets</TooltipContent>
+					</Tooltip>
+
+					<Tooltip>
+						<TooltipTrigger asChild>
 							<Button
 								size="icon"
 								variant="ghost"
@@ -486,16 +505,10 @@ export default function DeveloperPage() {
 		return () => clearInterval(interval);
 	}, []);
 
-	const filtered = useMemo(() => {
-		if (!search.trim()) return projects;
-		const q = search.toLowerCase();
-		return projects.filter(
-			(p) =>
-				p.name.toLowerCase().includes(q) ||
-				p.path.toLowerCase().includes(q) ||
-				p.language.toLowerCase().includes(q),
-		);
-	}, [projects, search]);
+	const filtered = useSearch(projects, search, {
+		fields: ["name", "path", "language"],
+		boost: { name: 3, path: 1.5 },
+	});
 
 	const handleAddExisting = async () => {
 		try {

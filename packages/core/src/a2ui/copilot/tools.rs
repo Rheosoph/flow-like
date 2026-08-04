@@ -107,13 +107,15 @@ Properties:
 - icon: BoundValue (string) - Lucide icon name (e.g., "send", "plus", "trash")
 - iconPosition: BoundValue - "left" | "right" (default: "left")
 - tooltip: BoundValue (string) - Tooltip text on hover
-- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] - actions[0] fires on click (inside the component object)
+- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] - legacy default; only actions[0] fires when no named click handler exists
+- eventHandlers: { "click": [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }] } - optional ordered actions for this exact component event
 
 Action wiring (same contract for every interactive component):
 - "workflow_event" invokes ONE named board event; context carries routing ids ONLY (nodeId, optional boardId/appId)
 - NEVER copy element/dashboard values into the context - the event body reads current element state itself at runtime (Get Element -> Get Element Value / Get File Input Files)
 - Other built-in names: "navigate_page" (context.route, optional context.queryParams) and "external_link" (context.url)
-- A board can set or re-point this later with Set Element Action (a2uiSetElementAction)
+- Exact eventHandlers entries override the legacy default; an explicit [] disables that event
+- A board can set or re-point the legacy default or a named event later with Set Element Action (a2uiSetElementAction; optional event_name)
 
 Example:
 {
@@ -378,7 +380,8 @@ Properties:
 - height: BoundValue (string, CSS value e.g. "600px")
 - responsive: BoundValue (boolean) - auto agenda on narrow widths
 - compactBreakpoint: BoundValue (number, px)
-- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
+- actions: legacy default action; interactions fire with _action_context { interaction: "create"|"update"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
+- eventHandlers: optional ordered action lists keyed by "create" | "update" | "move" | "resize" | "open" | "delete"
 
 Example:
 {
@@ -413,7 +416,8 @@ Properties:
 - height: BoundValue (string, CSS value e.g. "600px")
 - responsive: BoundValue (boolean) - auto compact on narrow widths
 - compactBreakpoint: BoundValue (number, px)
-- actions: [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"move"|"resize"|"open"|"delete"|"link", id?, start?, end?, fromId?, toId? }
+- actions: legacy default action; interactions fire with _action_context { interaction: "create"|"update"|"move"|"resize"|"open"|"delete"|"link"|"reorder", id?, start?, end?, fromId?, toId? }
+- eventHandlers: optional ordered action lists keyed by "create" | "update" | "move" | "resize" | "open" | "delete" | "link" | "reorder"
 
 Example:
 {

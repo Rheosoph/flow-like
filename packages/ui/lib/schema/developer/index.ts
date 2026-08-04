@@ -19,8 +19,9 @@ export interface DeveloperSettings {
 
 export interface ScaffoldInput {
 	targetDir: string;
-	language: string;
 	projectName: string;
+	nodeLanguage: string | null;
+	widgetFrameworks: string[];
 }
 
 export type TemplateLanguage =
@@ -154,6 +155,65 @@ export const TEMPLATE_LANGUAGES: {
 	},
 ];
 
+export type WidgetFramework =
+	| "react"
+	| "preact"
+	| "svelte"
+	| "vue"
+	| "solid"
+	| "lit"
+	| "vanilla";
+
+export const WIDGET_FRAMEWORKS: {
+	value: WidgetFramework;
+	label: string;
+	description: string;
+	icon: string;
+}[] = [
+	{
+		value: "react",
+		label: "React",
+		description: "Largest ecosystem, matches the host app's stack",
+		icon: "⚛️",
+	},
+	{
+		value: "preact",
+		label: "Preact",
+		description: "React DX at ~11 KB — recommended for small widgets",
+		icon: "⚡",
+	},
+	{
+		value: "svelte",
+		label: "Svelte",
+		description: "Compiles the framework away, smallest bundles",
+		icon: "🔥",
+	},
+	{
+		value: "vue",
+		label: "Vue",
+		description: "Huge community, Vite-native single-file components",
+		icon: "💚",
+	},
+	{
+		value: "solid",
+		label: "Solid",
+		description: "Fine-grained reactivity, tiny output",
+		icon: "🔷",
+	},
+	{
+		value: "lit",
+		label: "Lit",
+		description: "Web components, very small runtime",
+		icon: "🔆",
+	},
+	{
+		value: "vanilla",
+		label: "Vanilla TS",
+		description: "Zero-framework TypeScript baseline",
+		icon: "🍦",
+	},
+];
+
 export const EDITOR_OPTIONS = [
 	{ value: "vscode", label: "VS Code" },
 	{ value: "cursor", label: "Cursor" },
@@ -212,9 +272,33 @@ export interface RunNodeInput {
 	nodeName?: string;
 }
 
+export interface WidgetInspection {
+	id: string;
+	name: string;
+	description: string;
+	inputCount: number;
+	eventCount: number;
+	queryCount: number;
+	contract: import("@flow-like/widget-sdk").WidgetContract;
+}
+
 export interface PackageInspection {
 	nodes: WasmNodeDefinition[];
 	manifest: import("../wasm").PackageManifest | null;
 	isPackage: boolean;
 	wasmPath: string;
+	widgets: WidgetInspection[];
+	widgetBundlePath?: string | null;
+}
+
+export interface PublishArtifacts {
+	wasm?: string | null;
+	widgetBundle?: string | null;
+}
+
+export interface WidgetPreviewBundle {
+	packageId: string;
+	packageVersion: string;
+	bundleHash: string;
+	widgets: WidgetInspection[];
 }

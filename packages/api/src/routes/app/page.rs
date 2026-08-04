@@ -3,8 +3,8 @@ use axum::{Router, routing::get};
 use crate::state::{AppState, BoardMutationGuard};
 
 // Page ids are database-primary-key global, while the canonical files live under boards. Reuse
-// the replica-safe board mutation primitive with an impossible real app-id scope so upsert/delete
-// can serialize one page id before either discovers its owning board.
+// the replica-safe mutation primitive with an impossible real app-id scope so upsert/delete can
+// serialize one page id before either discovers its owning board.
 const PAGE_ID_MUTATION_SCOPE: &str = "\0flow-like.page-id-mutation/v1";
 
 pub(crate) async fn page_id_mutation_guard(
@@ -37,7 +37,7 @@ pub fn routes() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::PAGE_ID_MUTATION_SCOPE;
-    use crate::state::{board_mutation_advisory_key, board_mutation_lock_key};
+    use crate::state::{board_mutation_lock_id, board_mutation_lock_key};
 
     #[test]
     fn page_id_mutation_scope_is_stable_and_separate_from_real_boards() {
@@ -54,12 +54,12 @@ mod tests {
             board_mutation_lock_key(PAGE_ID_MUTATION_SCOPE, "other")
         );
         assert_ne!(
-            board_mutation_advisory_key(PAGE_ID_MUTATION_SCOPE, "page"),
-            board_mutation_advisory_key("app", "page")
+            board_mutation_lock_id(PAGE_ID_MUTATION_SCOPE, "page"),
+            board_mutation_lock_id("app", "page")
         );
         assert_ne!(
-            board_mutation_advisory_key(PAGE_ID_MUTATION_SCOPE, "page"),
-            board_mutation_advisory_key(PAGE_ID_MUTATION_SCOPE, "other")
+            board_mutation_lock_id(PAGE_ID_MUTATION_SCOPE, "page"),
+            board_mutation_lock_id(PAGE_ID_MUTATION_SCOPE, "other")
         );
     }
 }

@@ -5,6 +5,7 @@ import { useDebounce } from "@uidotdev/usehooks";
 import { Download, HardDrive, Loader2, Package, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
+import { useSearch } from "../../hooks/use-search-index";
 import {
 	type InstalledPackage,
 	PackageStatus,
@@ -108,24 +109,22 @@ export function PackageSearchDialog({
 
 	const totalRemote = remote.data?.pages[0]?.totalCount ?? 0;
 
-	const mergedPackages = useMemo<PackageSummary[]>(() => {
-		if (!isOffline.data) return remotePackages;
-
+	// Online the registry does the searching; offline we index locally.
+	const offlineCandidates = useMemo<PackageSummary[]>(() => {
+		if (!isOffline.data) return [];
 		const remoteIds = new Set(remotePackages.map((p) => p.id));
 		const localSummaries = (localPackages.data ?? [])
 			.map(installedToSummary)
 			.filter((p) => !remoteIds.has(p.id));
-		const merged = [...remotePackages, ...localSummaries];
+		return [...remotePackages, ...localSummaries];
+	}, [remotePackages, localPackages.data, isOffline.data]);
 
-		if (!debouncedSearch) return merged;
-		const q = debouncedSearch.toLowerCase();
-		return merged.filter(
-			(p) =>
-				p.name.toLowerCase().includes(q) ||
-				p.description.toLowerCase().includes(q) ||
-				p.id.toLowerCase().includes(q),
-		);
-	}, [remotePackages, localPackages.data, isOffline.data, debouncedSearch]);
+	const offlineMatches = useSearch(offlineCandidates, debouncedSearch, {
+		fields: ["name", "id", "description", "keywords"],
+		boost: { name: 3, id: 2, keywords: 1.5 },
+	});
+
+	const mergedPackages = isOffline.data ? offlineMatches : remotePackages;
 
 	const excludeSet = useMemo(
 		() => new Set(excludePackageIds),

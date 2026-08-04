@@ -7,7 +7,7 @@ import {
 	AccordionTrigger,
 	Accordion as ShadAccordion,
 } from "../../ui/accordion";
-import { useComponentActionTrigger } from "../ActionHandler";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -28,7 +28,7 @@ export function A2UIAccordion({
 	renderChild,
 }: ComponentProps<AccordionComponent>) {
 	const { resolve } = useData();
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const multiple = useResolved<boolean>(component.multiple);
 	const defaultExpanded = useResolved<string[]>(component.defaultExpanded);
 
@@ -44,7 +44,7 @@ export function A2UIAccordion({
 				context: { expanded: newValue },
 			});
 		}
-		void triggerAction(component.actions, { expanded: newValue });
+		void triggerEvent("change", component, { expanded: newValue });
 	};
 
 	const accordionType = multiple ? "multiple" : "single";

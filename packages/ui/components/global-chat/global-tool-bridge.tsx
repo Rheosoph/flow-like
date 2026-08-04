@@ -70,6 +70,7 @@ import {
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import { registerGlobalChatToolExecutor } from "../../state/global-chat/global-chat-tool-registry";
+import { handleUpgradeRequiredError } from "../../state/upgrade-dialog-state";
 import { foldA2UIServerMessage } from "../a2ui/fold-surfaces";
 import type {
 	A2UIServerMessage,
@@ -2550,7 +2551,28 @@ export function GlobalToolBridge() {
 					const authenticated = Boolean(authRef.current?.isAuthenticated);
 					const online =
 						(argBool(args, "online") ?? authenticated) && authenticated;
-					const app = await backend.appState.createApp(meta, [], online);
+					let app: Awaited<ReturnType<typeof backend.appState.createApp>>;
+					try {
+						app = await backend.appState.createApp(meta, [], online);
+					} catch (error) {
+						console.error(
+							"[global-tool-bridge] create_app: creation failed",
+							error,
+						);
+						if (handleUpgradeRequiredError(error, "project-limit")) {
+							return {
+								status: "error",
+								message:
+									"The user's plan does not allow creating another online project; an upgrade dialog was shown to them. Either wait for the user to upgrade, or offer to create the app locally instead (online:false).",
+							};
+						}
+						return {
+							status: "error",
+							message: `create_app failed: ${
+								error instanceof Error ? error.message : String(error)
+							}`,
+						};
+					}
 					// Associate the app with the current profile so it surfaces in list_apps
 					// (which is profile-scoped) and the user's library, matching the other
 					// create-app entry points.

@@ -73,6 +73,16 @@
 			"llm_tiers": ["FREE"]
 		}
 	},
+	"conversion": {
+		"enabled": true,
+		"mode": "enterprise",
+		"contact": {
+			"name": "IT Administration",
+			"email": "admin@your-domain.com",
+			"url": "https://your-domain.com"
+		},
+		"contact_message": "Your workspace is managed by your organization. Reach out to your administrator to unlock more projects, models or capacity."
+	},
 	"lookup": {
 		"email": true,
 		"username": true,

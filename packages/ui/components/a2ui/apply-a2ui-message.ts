@@ -55,6 +55,41 @@ function getComponentData(component: SurfaceComponent): ComponentData {
 	return component.component as unknown as ComponentData;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Element updates targeting a `microWidgetInstance` are typed props patches
+ * (Update Widget Inputs → `props:update` postMessage): the patch merges into
+ * `component.props` — never spread onto the component itself — and the
+ * renderer forwards the diff over the flw/1 bridge. Returns the next
+ * component data, or null when the update is not a props patch (styling,
+ * visibility, createComponent, … fall through to the generic handling).
+ */
+export function applyMicroWidgetPropsPatch(
+	data: ComponentData,
+	updateValue: Record<string, unknown>,
+): ComponentData | null {
+	if (data.type !== "microWidgetInstance") return null;
+
+	const updateType = updateValue?.type as string | undefined;
+	const explicitPropsPatch =
+		updateType === "setProps" || updateType === "propsUpdate";
+
+	let patch: Record<string, unknown> | null = null;
+	if (isPlainObject(updateValue?.props)) {
+		patch = updateValue.props;
+	} else if (explicitPropsPatch || updateType === undefined) {
+		const { type: _type, props: _props, ...rest } = updateValue ?? {};
+		patch = rest;
+	}
+
+	if (!patch || Object.keys(patch).length === 0) return null;
+	const currentProps = isPlainObject(data.props) ? data.props : {};
+	return { ...data, props: { ...currentProps, ...patch } };
+}
+
 function withComponentData(
 	component: SurfaceComponent,
 	next: ComponentData,
@@ -77,6 +112,9 @@ export function applyElementUpdate(
 ): SurfaceComponent {
 	const updateType = updateValue?.type as string;
 	const data = getComponentData(component);
+
+	const microPatch = applyMicroWidgetPropsPatch(data, updateValue);
+	if (microPatch) return withComponentData(component, microPatch);
 
 	switch (updateType) {
 		case "setText": {
@@ -140,6 +178,26 @@ export function applyElementUpdate(
 			return withComponentData(component, {
 				...data,
 				actions: action ? [action] : undefined,
+			});
+		}
+		case "setEventActions": {
+			const eventName = updateValue.eventName;
+			const actions = updateValue.actions;
+			if (
+				typeof eventName !== "string" ||
+				!eventName.trim() ||
+				!Array.isArray(actions)
+			) {
+				return component;
+			}
+			const normalizedEventName = eventName.trim();
+
+			return withComponentData(component, {
+				...data,
+				eventHandlers: {
+					...(isPlainObject(data.eventHandlers) ? data.eventHandlers : {}),
+					[normalizedEventName]: actions,
+				},
 			});
 		}
 		case "setPlaceholder":

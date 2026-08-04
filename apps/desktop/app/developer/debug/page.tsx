@@ -1,7 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
 	Accordion,
 	AccordionContent,
@@ -39,6 +37,8 @@ import type {
 	WasmPinDefinition,
 } from "@flow-like/flow-like-ui/lib/schema/developer";
 import type { PackageManifest } from "@flow-like/flow-like-ui/lib/schema/wasm";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import { AnimatePresence, motion } from "framer-motion";
 import {
 	AlertCircle,

@@ -242,6 +242,8 @@ pub async fn apply_board_commands_to_board(
     let setup_commands = planner.build_setup_commands(board, &board_commands)?;
     let mut applied_commands = Vec::new();
 
+    // `execute_commands` appends the node state `on_update` derived during this phase, so the
+    // flattened batch stays replayable on a machine that has never run it.
     if !setup_commands.is_empty() {
         match board.execute_commands(setup_commands, state.clone()).await {
             Ok(mut executed) => applied_commands.append(&mut executed),
@@ -3188,5 +3190,150 @@ eventsChat() {
             decode_default(total),
             flow_like_types::Value::String("9".to_string())
         );
+    }
+
+    struct TestDynamicFormatLogic;
+
+    #[flow_like_types::async_trait]
+    impl NodeLogic for TestDynamicFormatLogic {
+        fn get_node(&self) -> Node {
+            dynamic_format_catalog_node()
+        }
+
+        async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        /// Mirrors `string_format` and `control_call_function`: placeholder pins are minted with
+        /// fresh ids and reconciled by NAME, so a replay that re-derives them allocates a second,
+        /// different set of ids.
+        async fn on_update(&self, node: &mut Node, _board: &Board) {
+            let format_string = node
+                .get_pin_by_name("format_string")
+                .and_then(|pin| pin.default_value.clone())
+                .and_then(|bytes| {
+                    flow_like_types::json::from_slice::<flow_like_types::Value>(&bytes).ok()
+                })
+                .and_then(|value| value.as_str().map(ToOwned::to_owned))
+                .unwrap_or_default();
+
+            let placeholders: Vec<String> = format_string
+                .split('{')
+                .skip(1)
+                .filter_map(|part| part.split('}').next())
+                .map(ToOwned::to_owned)
+                .collect();
+
+            let stale: Vec<String> = node
+                .pins
+                .values()
+                .filter(|pin| {
+                    pin.pin_type == PinType::Input
+                        && pin.name != "format_string"
+                        && !placeholders.contains(&pin.name)
+                })
+                .map(|pin| pin.id.clone())
+                .collect();
+            for id in stale {
+                node.pins.remove(&id);
+            }
+
+            for placeholder in placeholders {
+                if node
+                    .pins
+                    .values()
+                    .any(|pin| pin.pin_type == PinType::Input && pin.name == placeholder)
+                {
+                    continue;
+                }
+                node.add_input_pin(&placeholder, &placeholder, "", VariableType::Generic);
+            }
+        }
+    }
+
+    /// The desktop ships the applied batch to the Hub, which replays it as ONE command list against
+    /// a board that has never run this node's `on_update`. Before the batch carried the derived node
+    /// state, the trailing `ConnectPin` referenced a placeholder pin id that existed on no other
+    /// machine, so every remote apply failed with "To Pin (...) not found in container" and the
+    /// desktop outbox wedged permanently.
+    #[tokio::test]
+    async fn applied_batch_replays_dynamic_pins_on_a_fresh_board() {
+        let state = Arc::new(crate::state::FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        {
+            let registry = state.node_registry();
+            let mut registry = registry.write().await;
+            registry.push_node(Arc::new(TestDynamicFormatLogic));
+        }
+
+        let catalog = vec![dynamic_format_catalog_node()];
+        let commands = vec![
+            BoardCommand::AddNode {
+                node_type: "dynamic_format".to_string(),
+                ref_id: Some("$source".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::AddNode {
+                node_type: "dynamic_format".to_string(),
+                ref_id: Some("$target".to_string()),
+                position: None,
+                friendly_name: None,
+                additional_pins: None,
+                target_layer: None,
+                summary: None,
+            },
+            BoardCommand::UpdateNodePin {
+                node_id: "$target".to_string(),
+                pin_id: "format_string".to_string(),
+                value: json!("Hi {idx}"),
+                summary: None,
+            },
+            BoardCommand::ConnectPins {
+                from_node: "$source".to_string(),
+                from_pin: "value".to_string(),
+                to_node: "$target".to_string(),
+                to_pin: "idx".to_string(),
+                summary: None,
+            },
+        ];
+
+        let mut board = empty_board();
+        let applied =
+            apply_board_commands_to_board(&mut board, commands, &catalog, state.clone(), None)
+                .await
+                .expect("the local apply mints the placeholder pin and connects it");
+        assert!(
+            !applied.commands.is_empty(),
+            "the apply must produce a command batch"
+        );
+        assert!(
+            connected_placeholder(&board).is_some(),
+            "the local board must carry the connected placeholder pin"
+        );
+
+        let mut replay_board = empty_board();
+        replay_board
+            .execute_commands(applied.commands.clone(), state)
+            .await
+            .expect("the applied batch must replay verbatim on a board that never ran on_update");
+
+        assert!(
+            connected_placeholder(&replay_board).is_some(),
+            "the replayed board must carry the same connected placeholder pin"
+        );
+    }
+
+    fn connected_placeholder(board: &Board) -> Option<&Pin> {
+        board.nodes.values().find_map(|node| {
+            node.pins
+                .values()
+                .find(|pin| pin.name == "idx" && !pin.depends_on.is_empty())
+        })
     }
 }

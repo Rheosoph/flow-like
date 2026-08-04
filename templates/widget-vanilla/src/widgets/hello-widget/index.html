@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Hello Widget</title>
+		<style>
+			body {
+				margin: 0;
+				background: var(--background);
+				color: var(--foreground);
+				font-family: var(--font-sans, system-ui, sans-serif);
+			}
+
+			main {
+				display: grid;
+				gap: 0.75rem;
+				justify-items: start;
+				padding: 1rem;
+			}
+
+			h1 {
+				margin: 0;
+				font-size: 1.25rem;
+			}
+
+			button {
+				background: var(--primary);
+				color: var(--primary-foreground);
+				border: 1px solid var(--border);
+				border-radius: var(--radius);
+				padding: 0.5rem 1rem;
+				font: inherit;
+				cursor: pointer;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="./index.ts"></script>
+	</body>
+</html>

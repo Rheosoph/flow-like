@@ -13,8 +13,8 @@ import {
 	takeRedo,
 	takeUndo,
 } from "../../lib/flow-history-stacks";
-import { toastWarning } from "../../lib/messages";
 import type { BoardEditReceiptHistoryMode } from "../../lib/flowpilot/board-edit-job-delivery";
+import { toastWarning } from "../../lib/messages";
 
 interface IStackItem extends IHistoryStacks {
 	key: string;

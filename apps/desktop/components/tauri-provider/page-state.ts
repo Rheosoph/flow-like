@@ -35,8 +35,51 @@ export function isNativePageNotFoundError(error: unknown): boolean {
 	);
 }
 
+/** A fresh native install can know the page's board id before that board exists locally. */
+export function isNativePageBoardUnavailableError(error: unknown): boolean {
+	const message = nativeErrorMessage(error)?.trim();
+	return Boolean(
+		message?.startsWith("Failed to open board '") &&
+			message.includes(" while looking up page '"),
+	);
+}
+
 export class PageState implements IPageState {
 	constructor(private readonly backend: TauriBackend) {}
+
+	private async getNativePage(
+		appId: string,
+		pageId: string,
+		boardId?: string,
+	): Promise<IPage> {
+		try {
+			return await invoke<IPage>("get_page", {
+				appId,
+				pageId,
+				boardId,
+			});
+		} catch (localError) {
+			if (!boardId || !isNativePageBoardUnavailableError(localError)) {
+				throw localError;
+			}
+
+			try {
+				// Native get_page opens the current (unversioned) board manifest. Ensure
+				// that exact local storage view exists before retrying the lookup.
+				await this.backend.boardState.getBoard(appId, boardId, undefined, true);
+			} catch {
+				// Preserve the authoritative native storage failure when repair itself
+				// is unavailable (offline, unauthenticated, or a real storage error).
+				throw localError;
+			}
+
+			return invoke<IPage>("get_page", {
+				appId,
+				pageId,
+				boardId,
+			});
+		}
+	}
 
 	private async pushPageToServer(appId: string, page: IPage): Promise<void> {
 		const isOffline = await this.backend.isOffline(appId);
@@ -140,11 +183,7 @@ export class PageState implements IPageState {
 	): Promise<IPage> {
 		let localPage: IPage | null = null;
 		try {
-			localPage = await invoke<IPage>("get_page", {
-				appId,
-				pageId,
-				boardId,
-			});
+			localPage = await this.getNativePage(appId, pageId, boardId);
 		} catch (localError) {
 			if (!isNativePageNotFoundError(localError)) {
 				throw localError;

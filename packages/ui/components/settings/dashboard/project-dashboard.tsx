@@ -91,7 +91,7 @@ function DashboardSkeleton() {
 	return (
 		<div className="space-y-4">
 			<Skeleton className="h-16 w-full rounded-xl" />
-			<div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+			<div className="grid grid-cols-1 gap-3 min-[400px]:grid-cols-2 lg:grid-cols-4">
 				{["a", "b", "c", "d"].map((key) => (
 					<Skeleton key={key} className="h-24 rounded-xl" />
 				))}
@@ -226,7 +226,7 @@ export function ProjectDashboard({
 
 	return (
 		<TooltipProvider>
-			<div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-1 pb-6">
+			<div className="mx-auto flex min-w-0 w-full max-w-6xl flex-col gap-4 px-1 pb-6">
 				<ProjectIdentityRow
 					app={app.data}
 					metadata={metadata.data}

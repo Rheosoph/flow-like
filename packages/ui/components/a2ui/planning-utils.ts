@@ -1,6 +1,7 @@
 // Shared date / geometry helpers for the interactive Calendar and Gantt
 // components. Kept free of React so the math can be unit-tested directly.
 
+import { createId } from "@paralleldrive/cuid2";
 import {
 	addDays,
 	addMinutes,
@@ -15,13 +16,12 @@ import {
 	startOfWeek,
 } from "date-fns";
 import type { CalendarEvent, GanttTask, PlanningDensity } from "./types";
-import { createId } from "@paralleldrive/cuid2";
 
 export type WeekStartsOn = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 
 /** Unique id for a locally-created event/task (optimistic create). */
 export function genId(prefix: string): string {
-	const rand = createId()
+	const rand = createId();
 	return `${prefix}-${rand}`;
 }
 

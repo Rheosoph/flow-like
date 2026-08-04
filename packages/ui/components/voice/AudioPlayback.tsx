@@ -26,6 +26,7 @@ export type RecordControlProps = Pick<
 	| "onClick"
 	| "onPointerDown"
 	| "onPointerUp"
+	| "onPointerCancel"
 	| "onPointerLeave"
 	| "onPointerEnter"
 	| "onContextMenu"

@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "../../../lib/utils";
-import { useComponentActionTrigger } from "../ActionHandler";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -25,10 +25,10 @@ export function A2UIMiniMap({
 	const playerX = useResolved<number>(component.playerX);
 	const playerY = useResolved<number>(component.playerY);
 	const playerRotation = useResolved<number>(component.playerRotation) ?? 0;
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 
 	const handleMarkerClick = (marker: MapMarkerDef) => {
-		void triggerAction(component.actions, {
+		void triggerEvent("markerClick", component, {
 			markerId: marker.id,
 			markerX: marker.x,
 			markerY: marker.y,

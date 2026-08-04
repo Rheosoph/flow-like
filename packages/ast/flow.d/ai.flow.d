@@ -880,14 +880,15 @@ declare function aiGenerativeBuildHyperbolic({ endpoint?: string, apiKey?: strin
 declare function aiGenerativeBuildLmstudio({ endpoint?: string, modelId?: string }): Struct;
 
 /**
- * Prepares a Bit for MiniMax's OpenAI-compatible API using the provided credentials
- * @param endpoint (optional) — MiniMax OpenAI-compatible base URL (override only for a proxy)
+ * Prepares a Bit for the MiniMax API using the provided credentials
+ * @param region (optional) — MiniMax API region used when no custom endpoint is provided
+ * @param endpoint (optional) — Optional MiniMax API base URL override for a proxy
  * @param apiKey (optional) — MiniMax API key used for authentication
  * @param modelId (optional) — MiniMax model identifier to request
  * @returns model — Bit containing the provider configuration
  * @impure has side effects / drives control flow
  */
-declare function aiGenerativeBuildMinimax({ endpoint?: string, apiKey?: string, modelId?: string }): Struct;
+declare function aiGenerativeBuildMinimax({ region?: string, endpoint?: string, apiKey?: string, modelId?: string }): Struct;
 
 /**
  * Builds the Mira model based on certain selection criteria

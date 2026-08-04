@@ -31,6 +31,7 @@ import { normalizeBoxes, resolveBoxesField } from "./bbox-utils";
 import { applyMediaSourceUpdate } from "./media-source";
 import { applyStyleUpdate } from "./style-updates";
 import type { A2UIServerMessage, Surface, SurfaceComponent } from "./types";
+import { handleWidgetQueryMessage } from "./widget-query-handler";
 
 interface DialogState {
 	id: string;
@@ -625,6 +626,9 @@ function RouteDialogRenderer({
 				await execFn(appId, boardId, payload, false, undefined, (events) => {
 					for (const event of events) {
 						if (event.event_type === "a2ui") {
+							if (handleWidgetQueryMessage(event.payload)) {
+								continue;
+							}
 							handleServerMessage(event.payload as A2UIServerMessage);
 						}
 					}

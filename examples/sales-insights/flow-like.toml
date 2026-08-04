@@ -1,0 +1,44 @@
+manifest_version = 2
+id = "com.flowlike.example.sales-insights"
+name = "Sales Insights"
+version = "0.1.0"
+description = "Example package pairing Rust WASM nodes with two React micro widgets: instantiate a chart, update it live from a flow, and read widget state back through typed queries."
+license = "MIT"
+keywords = [
+    "example",
+    "widgets",
+    "charts",
+]
+repository = "https://github.com/Rheosoph/flow-like"
+
+# Canonical build outputs staged at the project root (see mise.toml).
+wasm_path = "node.wasm"
+widget_bundle_path = "widgets.flwb"
+
+[[authors]]
+name = "Flow-Like"
+
+[[nodes]]
+category = "Sales Insights"
+description = "Generates deterministic demo revenue rows"
+id = "sales_demo_data"
+name = "Sales Demo Data"
+
+[[nodes]]
+category = "Sales Insights"
+description = "Filters revenue rows with the Filter Panel widget's state"
+id = "apply_sales_filter"
+name = "Apply Sales Filter"
+
+[[nodes]]
+category = "Sales Insights"
+description = "Aggregates revenue rows into totals and extremes"
+id = "sales_summary"
+name = "Sales Summary"
+
+# Resource limits for the package sandbox. Widgets need no sandbox permissions:
+# they render in an opaque-origin iframe with `default-src 'none'` and reach the
+# host only through the typed flw/1 contract.
+[permissions]
+memory = "standard"
+timeout = "standard"

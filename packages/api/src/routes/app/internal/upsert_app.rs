@@ -48,6 +48,7 @@ pub struct AppUpsertBody {
     responses(
         (status = 200, description = "Application created or updated", body = Object),
         (status = 401, description = "Unauthorized"),
+        (status = 402, description = "Plan limit reached — upgrading the subscription unlocks more projects"),
         (status = 403, description = "Forbidden")
     )
 )]
@@ -151,7 +152,9 @@ pub async fn upsert_app(
 
     if tier.max_non_visible_projects == 0 {
         tracing::warn!("Configuration doesn't allow for the creation of non-visible projects",);
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::payment_required(
+            "Your current plan does not include online projects.",
+        ));
     }
 
     if tier.max_non_visible_projects > 0 {
@@ -176,7 +179,10 @@ pub async fn upsert_app(
                 tier.max_non_visible_projects,
                 count
             );
-            return Err(ApiError::FORBIDDEN);
+            return Err(ApiError::payment_required(format!(
+                "You have used {} of {} online projects included in your plan.",
+                count, tier.max_non_visible_projects
+            )));
         }
     }
 

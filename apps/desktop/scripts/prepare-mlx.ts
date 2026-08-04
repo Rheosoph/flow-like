@@ -63,6 +63,12 @@ function collectResourceBundles(root: string): string[] {
 			bundles.push(candidate);
 			continue;
 		}
+		// Test and debug products can embed copies of the same SwiftPM resource
+		// bundles that also exist at the products root. They are not runtime
+		// resources for the helper and would otherwise cause duplicate names.
+		if (entry.name.endsWith(".xctest") || entry.name.endsWith(".dSYM")) {
+			continue;
+		}
 		bundles.push(...collectResourceBundles(candidate));
 	}
 	return bundles;
@@ -82,9 +88,11 @@ function main(): void {
 	fs.mkdirSync(DERIVED_DATA_DIR, { recursive: true });
 	fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
+	console.log(`Preparing the MLX Swift helper (${configuration})...`);
 	const build = spawnSync(
 		"xcodebuild",
 		[
+			"-quiet",
 			"-scheme",
 			"flow-like-mlx",
 			"-configuration",

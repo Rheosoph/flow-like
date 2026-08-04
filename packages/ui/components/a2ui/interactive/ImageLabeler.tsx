@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
-import { useExecuteAction, useOnAction } from "../ActionHandler";
+import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -40,7 +40,7 @@ export function A2UIImageLabeler({
 	componentId,
 }: ComponentProps<ImageLabelerComponent>) {
 	const onAction = useOnAction();
-	const { executeAction } = useExecuteAction();
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -160,15 +160,12 @@ export function A2UIImageLabeler({
 				context: { value: updatedBoxes },
 			});
 
-			const action = component.actions?.[0];
-			if (action) {
-				void executeAction(action, componentId, {
-					value: updatedBoxes,
-					boxes: updatedBoxes,
-				});
-			}
+			void triggerEvent("change", component, {
+				value: updatedBoxes,
+				boxes: updatedBoxes,
+			});
 		},
-		[component.actions, componentId, executeAction, onAction, surfaceId],
+		[component, componentId, onAction, surfaceId, triggerEvent],
 	);
 
 	const handleMouseUp = useCallback(() => {

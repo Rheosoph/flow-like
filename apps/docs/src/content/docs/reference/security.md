@@ -37,6 +37,9 @@ on the same Flow-Like capability and resource boundary.
 - Each instance has WebAssembly linear memory separate from host memory.
 - WASI is disabled by the normal security configurations unless explicitly
   enabled.
+- Host process environment variables are never inherited by WASM guests,
+  including permissive and runtime execution profiles. Any guest environment
+  value must be supplied individually through explicit guest configuration.
 - Fuel metering limits instruction execution.
 - Epoch interruption enforces a wall-clock deadline.
 - Memory, tables, memories, table elements, instances, and stack depth are

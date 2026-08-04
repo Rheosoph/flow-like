@@ -43,6 +43,12 @@ export interface IConfigInterfaceProps {
 	 * server endpoint. Defaults to Local when unset.
 	 */
 	eventExecutionMode?: IEventExecutionMode;
+	/**
+	 * Which slice of this config to render, from `getEventSections`. Components
+	 * that declare sections render only the matching part; the rest ignore it and
+	 * render everything, so splitting a component is opt-in and incremental.
+	 */
+	section?: string;
 }
 
 /** Where a sink can run */

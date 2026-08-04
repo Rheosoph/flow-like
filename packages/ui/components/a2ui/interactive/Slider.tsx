@@ -3,7 +3,7 @@
 import { cn } from "../../../lib/utils";
 import { Label } from "../../ui/label";
 import { Slider } from "../../ui/slider";
-import { useComponentActionTrigger, useOnAction } from "../ActionHandler";
+import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -22,7 +22,7 @@ export function A2UISlider({
 	surfaceId,
 }: ComponentProps<SliderComponent>) {
 	const onAction = useOnAction();
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const value = useResolved<number>(component.value);
 	const disabled = useResolved<boolean>(component.disabled);
 	const min = useResolved<number>(component.min) ?? 0;
@@ -48,7 +48,7 @@ export function A2UISlider({
 		}
 	};
 	const handleCommit = (newValues: number[]) => {
-		void triggerAction(component.actions, { value: newValues[0] });
+		void triggerEvent("change", component, { value: newValues[0] });
 	};
 
 	return (

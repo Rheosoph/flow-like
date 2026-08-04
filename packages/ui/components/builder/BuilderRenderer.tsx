@@ -930,7 +930,17 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 					// interaction happens in preview and /use, not while editing.
 					isPreviewMode={false}
 				>
-					<div className={cn("min-h-full w-full", className)}>
+					{/*
+					 * Iframe events cannot bubble into the builder document. Disable iframe
+					 * hit testing only on the edit canvas so clicks reach the existing
+					 * component selection handlers. Preview/runtime stays interactive.
+					 */}
+					<div
+						className={cn(
+							"min-h-full w-full [&_iframe]:pointer-events-none",
+							className,
+						)}
+					>
 						<BuilderComponent
 							componentId={surface.rootComponentId}
 							surfaceComponent={rootComponent}

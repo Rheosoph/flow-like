@@ -63,6 +63,8 @@ any-speech-to-text = { git = "https://github.com/Rheosoph/any-speech-to-text", r
 
 [dev-dependencies]
 proptest = "1"
+ahash.workspace = true
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [features]
 tauri = ["flow-like-storage/tauri"]

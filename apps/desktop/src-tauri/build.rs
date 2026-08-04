@@ -201,6 +201,20 @@ fn main() {
     if target_os == "ios" {
         println!("cargo:rustc-link-lib=z");
         println!("cargo:rustc-link-lib=framework=Accelerate");
+
+        // Cargo also builds the cdylib crate type before Xcode links the final
+        // static library into the app. The MLX C bridge lives in a SwiftPM
+        // product that Xcode links later, so allow only those bridge symbols
+        // to remain undefined in this intermediate artifact.
+        for symbol in [
+            "_flow_like_mlx_cancel",
+            "_flow_like_mlx_clear_cache",
+            "_flow_like_mlx_generate",
+            "_flow_like_mlx_is_available",
+            "_flow_like_mlx_unload",
+        ] {
+            println!("cargo:rustc-link-arg-cdylib=-Wl,-U,{symbol}");
+        }
     }
 
     if target_os == "android" {
@@ -221,6 +235,9 @@ fn main() {
         if let Some(app_domain) = config.get("app").and_then(|d| d.as_str()) {
             app_link_domain = app_domain.to_string();
             println!("cargo:rustc-env=FLOW_LIKE_CONFIG_APP={}", app_domain);
+        }
+        if let Some(web_domain) = config.get("web").and_then(|d| d.as_str()) {
+            println!("cargo:rustc-env=FLOW_LIKE_CONFIG_WEB={}", web_domain);
         }
         let secure = config
             .get("secure")

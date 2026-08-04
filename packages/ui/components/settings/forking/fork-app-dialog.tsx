@@ -13,8 +13,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
 	type IBeginOfflineForkResponse,
-	type IForkPreviewTarget,
 	type IForkPreviewResponse,
+	type IForkPreviewTarget,
 	type IOnlineForkBody,
 	type IOnlineForkResponse,
 	isTokenReplaceable,

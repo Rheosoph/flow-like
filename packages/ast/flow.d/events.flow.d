@@ -264,8 +264,7 @@ declare function callRemoteApi({ flowRemoteAppId?: string, flowRemoteEvent?: str
  * @param flowRemoteAppId (optional) — Connected project to invoke the event in
  * @param flowRemoteEvent (optional) — Chat event of the selected project
  * @param flowRemoteEventMeta (optional) — Auto-filled by the editor when an event is selected. Drives the typed pins.
- * @param message (optional) — User message appended to the conversation
- * @param history (optional) — Prior conversation history
+ * @param history (optional) — Conversation to send, including the new user message
  * @param localSession (optional) — State local to this chat session
  * @param globalSession (optional) — State shared for the remote chat user
  * @param tools (optional) — Tool ids the remote assistant may use
@@ -274,23 +273,23 @@ declare function callRemoteApi({ flowRemoteAppId?: string, flowRemoteEvent?: str
  * @param user (optional) — User information forwarded to the remote chat
  * @param timeoutSeconds (optional) — Maximum time to wait for the remote request to finish
  * @returns chunk — Latest streamed response chunk
- * @returns response — Latest complete model response
- * @returns responseText — Text of the latest complete response
- * @returns widgets — Widgets emitted by the remote chat update
- * @returns attachmentsOut — Attachments emitted by the remote chat update
- * @returns actionsOut — Actions emitted by the remote chat update
- * @returns plan — Latest streamed reasoning plan
+ * @returns response — Complete model response
+ * @returns responseText — Text of the complete response
+ * @returns widgets — Widgets emitted by the remote chat
+ * @returns attachmentsOut — Attachments emitted by the remote chat
+ * @returns actionsOut — Actions emitted by the remote chat
  * @returns localSessionOut — Latest remote local session state
  * @returns globalSessionOut — Latest remote global session state
- * @returns usageStat — Latest model usage update
  * @returns modelId — Model reported by the remote chat
- * @returns eventType — Type of the latest streamed remote event
- * @returns eventPayload — Raw payload of the latest streamed remote event
  * @returns runId — Remote run id
  * @returns status — Final run status
+ * @returns plan — Latest streamed reasoning plan
+ * @returns usageStat — Latest model usage update
+ * @returns eventType — Type of the latest streamed remote event
+ * @returns eventPayload — Raw payload of the latest streamed remote event
  * @impure has side effects / drives control flow
  */
-declare function callRemoteChat({ flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, message?: string, history?: Struct, localSession?: Struct, globalSession?: Struct, tools?: string[], actions?: Struct[], attachments?: Struct[], user?: Struct, timeoutSeconds?: int }): { chunk: Struct, response: Struct, responseText: string, widgets: Struct[], attachmentsOut: Struct[], actionsOut: Struct[], plan: Struct, localSessionOut: Struct, globalSessionOut: Struct, usageStat: Struct, modelId: string, eventType: string, eventPayload: any, runId: string, status: string };
+declare function callRemoteChat({ flowRemoteAppId?: string, flowRemoteEvent?: string, flowRemoteEventMeta?: string, history?: Struct, localSession?: Struct, globalSession?: Struct, tools?: string[], actions?: Struct[], attachments?: Struct[], user?: Struct, timeoutSeconds?: int }): { chunk: Struct, response: Struct, responseText: string, widgets: Struct[], attachmentsOut: Struct[], actionsOut: Struct[], localSessionOut: Struct, globalSessionOut: Struct, modelId: string, runId: string, status: string, plan: Struct, usageStat: Struct, eventType: string, eventPayload: any };
 
 /**
  * Invoke a chat, API or MCP event of a connected project. Pins adapt to the selected event. The project must have granted this app a role that allows executing events.

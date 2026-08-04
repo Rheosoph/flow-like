@@ -4,11 +4,12 @@
 //! required permissions, resource limits, and OAuth scopes upfront.
 
 use crate::limits::{WasmCapabilities, WasmLimits};
+use crate::widget::WidgetContract;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Current manifest version
-pub const MANIFEST_VERSION: u32 = 1;
+/// Current manifest version (v2 adds micro-frontend widget support)
+pub const MANIFEST_VERSION: u32 = 2;
 
 /// Memory tier presets for packages
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -275,12 +276,13 @@ impl PackagePermissions {
     /// Convert to WasmSecurityConfig
     pub fn to_security_config(&self) -> crate::limits::WasmSecurityConfig {
         let capabilities = self.to_capabilities();
-        let has_network = capabilities.intersects(WasmCapabilities::NETWORK_ALL);
         crate::limits::WasmSecurityConfig {
             limits: self.to_limits(),
             capabilities,
             allow_wasi: false,
-            allow_wasi_network: has_network,
+            // Individual network capabilities are enforced independently.
+            // This flag is reserved for an explicit grant-all override.
+            allow_wasi_network: false,
             allowed_hosts: if self.network.allowed_hosts.is_empty() {
                 None
             } else {
@@ -397,6 +399,32 @@ pub struct PackageNodeEntry {
     /// Additional node-specific metadata
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
+}
+
+/// Widget entry in the package manifest
+///
+/// Carries the full typed contract so pin generation works from the
+/// installed manifest alone, without opening the widget bundle.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct PackageWidgetEntry {
+    /// Widget identifier, unique within the package
+    pub id: String,
+    /// Display name
+    pub name: String,
+    /// Description
+    pub description: String,
+    /// Icon (optional, base64 or URL)
+    #[serde(default)]
+    pub icon: Option<String>,
+    /// Preview thumbnail (optional, base64 or URL)
+    #[serde(default)]
+    pub thumbnail: Option<String>,
+    /// Typed contract (must match the contract.json inside the bundle byte-for-byte)
+    pub contract: WidgetContract,
+    /// Keywords for discovery
+    #[serde(default)]
+    pub keywords: Vec<String>,
 }
 
 /// Domain category for WASM packages
@@ -525,6 +553,18 @@ pub struct PackageManifest {
     #[serde(default)]
     pub wasm_hash: Option<String>,
 
+    /// Micro-frontend widgets shipped by this package
+    #[serde(default)]
+    pub widgets: Vec<PackageWidgetEntry>,
+
+    /// Widget bundle (`.flwb`) path relative to manifest (for local development)
+    #[serde(default)]
+    pub widget_bundle_path: Option<String>,
+
+    /// SHA-256 hash of the widget bundle (for integrity verification)
+    #[serde(default)]
+    pub widget_bundle_hash: Option<String>,
+
     /// Additional package metadata
     #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
@@ -550,6 +590,9 @@ impl PackageManifest {
             min_flow_like_version: None,
             wasm_path: None,
             wasm_hash: None,
+            widgets: Vec::new(),
+            widget_bundle_path: None,
+            widget_bundle_hash: None,
             metadata: HashMap::new(),
         }
     }
@@ -566,6 +609,35 @@ impl PackageManifest {
         }
         if self.version.is_empty() {
             errors.push("Package version is required".to_string());
+        }
+
+        let mut seen_widget_ids = std::collections::HashSet::new();
+        for widget in &self.widgets {
+            if !seen_widget_ids.insert(widget.id.clone()) {
+                errors.push(format!("Duplicate widget id in manifest: {}", widget.id));
+            }
+            if widget.name.is_empty() {
+                errors.push(format!("Widget '{}' is missing a name", widget.id));
+            }
+            if widget.contract.id != widget.id {
+                errors.push(format!(
+                    "Widget '{}' contract id '{}' does not match its entry id",
+                    widget.id, widget.contract.id
+                ));
+            }
+            if let Err(contract_errors) = widget.contract.validate() {
+                errors.extend(contract_errors);
+            }
+        }
+
+        if !self.widgets.is_empty()
+            && self.widget_bundle_path.is_none()
+            && self.widget_bundle_hash.is_none()
+        {
+            errors.push(
+                "Manifest declares widgets but neither widget_bundle_path nor widget_bundle_hash"
+                    .to_string(),
+            );
         }
 
         if errors.is_empty() {
@@ -623,5 +695,49 @@ mod tests {
 
         let empty = PackageManifest::new("", "Test", "1.0.0", "desc");
         assert!(empty.validate().is_err());
+    }
+
+    #[test]
+    fn test_manifest_v1_parses_without_widget_fields() {
+        let v1 = r#"{
+            "manifest_version": 1,
+            "id": "com.example.legacy",
+            "name": "Legacy",
+            "version": "0.1.0",
+            "description": "no widgets"
+        }"#;
+        let manifest = PackageManifest::from_json(v1).unwrap();
+        assert!(manifest.widgets.is_empty());
+        assert!(manifest.widget_bundle_path.is_none());
+        assert!(manifest.validate().is_ok());
+    }
+
+    #[test]
+    fn test_manifest_widget_validation() {
+        let mut manifest = PackageManifest::new(
+            "com.example.widgets",
+            "Widget Package",
+            "1.0.0",
+            "ships widgets",
+        );
+        manifest.widgets.push(PackageWidgetEntry {
+            id: "sales-chart".into(),
+            name: "Sales Chart".into(),
+            description: "chart".into(),
+            icon: None,
+            thumbnail: None,
+            contract: WidgetContract::new("sales-chart"),
+            keywords: Vec::new(),
+        });
+
+        let errors = manifest.validate().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("widget_bundle_path")));
+
+        manifest.widget_bundle_path = Some("widgets.flwb".into());
+        assert!(manifest.validate().is_ok());
+
+        manifest.widgets[0].contract.id = "other-id".into();
+        let errors = manifest.validate().unwrap_err();
+        assert!(errors.iter().any(|e| e.contains("does not match")));
     }
 }

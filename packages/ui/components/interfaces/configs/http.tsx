@@ -88,6 +88,7 @@ export function HttpConfig({
 	onConfigUpdate,
 	hub,
 	eventExecutionMode,
+	section,
 }: IConfigInterfaceProps) {
 	const backend = useBackend();
 	const profile = useInvoke(
@@ -146,183 +147,198 @@ export function HttpConfig({
 		</pre>
 	);
 
+	// The events surface renders one section at a time; anywhere else (and for
+	// any section this component doesn't know) it renders whole.
+	const shows = (id: string) => !section || section === id;
+
 	return (
 		<div className="w-full space-y-6">
-			<div className="space-y-1">
-				<h3 className="text-lg font-semibold">HTTP Event Sink</h3>
-				<p className="text-sm text-muted-foreground">
-					Trigger this event via HTTP requests.
-				</p>
-			</div>
-
-			{/* Method Selection */}
-			<div className="space-y-2">
-				<Label htmlFor="http_method">HTTP Method</Label>
-				<Select
-					value={method}
-					onValueChange={(value) => setValue("method", value)}
-					disabled={!isEditing}
-				>
-					<SelectTrigger id="http_method" className="w-full">
-						<SelectValue placeholder="Select HTTP method" />
-					</SelectTrigger>
-					<SelectContent>
-						{HTTP_METHODS.map((m) => (
-							<SelectItem key={m.value} value={m.value}>
-								<div className="flex items-center gap-2">
-									<Badge variant="outline" className="font-mono">
-										{m.label}
-									</Badge>
-									<span className="text-muted-foreground text-xs">
-										{m.description}
-									</span>
-								</div>
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-				<p className="text-sm text-muted-foreground">
-					The HTTP method that will trigger this event.
-				</p>
-			</div>
-
-			{/* Path */}
-			<div className="space-y-2">
-				<Label htmlFor="http_path">Path</Label>
-				<div className="flex items-center gap-2">
-					<div className="shrink-0 text-sm text-muted-foreground">/{appId}</div>
-					<Input
-						id="http_path"
-						value={path}
-						onChange={(e) => setValue("path", e.target.value)}
-						placeholder="/webhook"
-						disabled={!isEditing}
-						className={pathError ? "border-destructive" : ""}
-					/>
+			{!section && (
+				<div className="space-y-1">
+					<h3 className="text-lg font-semibold">HTTP Event Sink</h3>
+					<p className="text-sm text-muted-foreground">
+						Trigger this event via HTTP requests.
+					</p>
 				</div>
-				{pathError && <p className="text-sm text-destructive">{pathError}</p>}
-				<p className="text-sm text-muted-foreground">
-					The path for this endpoint. Must start with <code>/</code>.
-				</p>
-			</div>
+			)}
 
-			{/* URL Preview — tied to the event's execution mode, not to platform
+			{shows("endpoint") && (
+				<>
+					{/* Method Selection */}
+					<div className="space-y-2">
+						<Label htmlFor="http_method">HTTP Method</Label>
+						<Select
+							value={method}
+							onValueChange={(value) => setValue("method", value)}
+							disabled={!isEditing}
+						>
+							<SelectTrigger id="http_method" className="w-full">
+								<SelectValue placeholder="Select HTTP method" />
+							</SelectTrigger>
+							<SelectContent>
+								{HTTP_METHODS.map((m) => (
+									<SelectItem key={m.value} value={m.value}>
+										<div className="flex items-center gap-2">
+											<Badge variant="outline" className="font-mono">
+												{m.label}
+											</Badge>
+											<span className="text-muted-foreground text-xs">
+												{m.description}
+											</span>
+										</div>
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+						<p className="text-sm text-muted-foreground">
+							The HTTP method that will trigger this event.
+						</p>
+					</div>
+
+					{/* Path */}
+					<div className="space-y-2">
+						<Label htmlFor="http_path">Path</Label>
+						<div className="flex items-center gap-2">
+							<div className="shrink-0 text-sm text-muted-foreground">
+								/{appId}
+							</div>
+							<Input
+								id="http_path"
+								value={path}
+								onChange={(e) => setValue("path", e.target.value)}
+								placeholder="/webhook"
+								disabled={!isEditing}
+								className={pathError ? "border-destructive" : ""}
+							/>
+						</div>
+						{pathError && (
+							<p className="text-sm text-destructive">{pathError}</p>
+						)}
+						<p className="text-sm text-muted-foreground">
+							The path for this endpoint. Must start with <code>/</code>.
+						</p>
+					</div>
+
+					{/* URL Preview — tied to the event's execution mode, not to platform
 			    capabilities. Remote events show the server endpoint; Local events
 			    show the desktop localhost URL plus tunnel instructions. */}
-			<div className="space-y-2">
-				<Label>Endpoint URL</Label>
-				{isRemote ? (
-					remoteUrl ? (
-						<div className="space-y-3">
-							<UrlPreview
-								url={remoteUrl}
-								method={method}
-								variant="default"
-								authToken={authToken}
-								CurlExample={CurlExample}
-							/>
-							<p className="text-xs text-muted-foreground">
-								This is a public, server-hosted endpoint. It's always available
-								— no tunneling required. Point external services at this URL to
-								trigger the event.
+					<div className="space-y-2">
+						<Label>Endpoint URL</Label>
+						{isRemote ? (
+							remoteUrl ? (
+								<div className="space-y-3">
+									<UrlPreview
+										url={remoteUrl}
+										method={method}
+										variant="default"
+										authToken={authToken}
+										CurlExample={CurlExample}
+									/>
+									<p className="text-xs text-muted-foreground">
+										This is a public, server-hosted endpoint. It's always
+										available — no tunneling required. Point external services
+										at this URL to trigger the event.
+									</p>
+								</div>
+							) : (
+								<Alert variant="destructive">
+									<AlertTitle>Server endpoint unavailable</AlertTitle>
+									<AlertDescription>
+										This event is configured to run remotely, but no hub domain
+										is available. Sign in to a hub that supports HTTP sinks, or
+										switch the event to run locally.
+									</AlertDescription>
+								</Alert>
+							)
+						) : (
+							<div className="space-y-4">
+								<UrlPreview
+									url={localUrl}
+									method={method}
+									variant="secondary"
+									authToken={authToken}
+									CurlExample={CurlExample}
+								/>
+								<Alert>
+									<AlertTitle>Local endpoint</AlertTitle>
+									<AlertDescription>
+										This URL is only reachable while the desktop app is running
+										on this machine. To expose it to the public internet, use a
+										tunnel (instructions below).
+									</AlertDescription>
+								</Alert>
+								<LocalTunnelGuide path={path} platform={platform} />
+							</div>
+						)}
+					</div>
+				</>
+			)}
+
+			{shows("access") && (
+				<div className="space-y-4">
+					<div className="flex items-center justify-between">
+						<div className="space-y-0.5">
+							<Label>Authentication</Label>
+							<p className="text-sm text-muted-foreground">
+								Optional Bearer token to secure this endpoint
 							</p>
 						</div>
-					) : (
-						<Alert variant="destructive">
-							<AlertTitle>Server endpoint unavailable</AlertTitle>
-							<AlertDescription>
-								This event is configured to run remotely, but no hub domain is
-								available. Sign in to a hub that supports HTTP sinks, or switch
-								the event to run locally.
-							</AlertDescription>
-						</Alert>
-					)
-				) : (
-					<div className="space-y-4">
-						<UrlPreview
-							url={localUrl}
-							method={method}
-							variant="secondary"
-							authToken={authToken}
-							CurlExample={CurlExample}
+						<Switch
+							checked={authToken !== null && authToken !== ""}
+							onCheckedChange={(checked) => {
+								if (checked) {
+									setValue("auth_token", generateToken());
+								} else {
+									setValue("auth_token", null);
+								}
+							}}
+							disabled={!isEditing}
 						/>
-						<Alert>
-							<AlertTitle>Local endpoint</AlertTitle>
-							<AlertDescription>
-								This URL is only reachable while the desktop app is running on
-								this machine. To expose it to the public internet, use a tunnel
-								(instructions below).
-							</AlertDescription>
-						</Alert>
-						<LocalTunnelGuide path={path} platform={platform} />
 					</div>
-				)}
-			</div>
 
-			{/* Authentication */}
-			<div className="space-y-4">
-				<div className="flex items-center justify-between">
-					<div className="space-y-0.5">
-						<Label>Authentication</Label>
-						<p className="text-sm text-muted-foreground">
-							Optional Bearer token to secure this endpoint
-						</p>
-					</div>
-					<Switch
-						checked={authToken !== null && authToken !== ""}
-						onCheckedChange={(checked) => {
-							if (checked) {
-								setValue("auth_token", generateToken());
-							} else {
-								setValue("auth_token", null);
-							}
-						}}
-						disabled={!isEditing}
-					/>
+					{authToken && (
+						<div className="space-y-2">
+							<div className="flex items-center justify-between">
+								<Label htmlFor="http_auth_token">Bearer Token</Label>
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									onClick={() => setShowToken(!showToken)}
+								>
+									{showToken ? "Hide" : "Show"}
+								</Button>
+							</div>
+							<div className="flex gap-2">
+								<Input
+									id="http_auth_token"
+									type={showToken ? "text" : "password"}
+									value={authToken}
+									onChange={(e) => setValue("auth_token", e.target.value)}
+									placeholder="Enter token or generate one"
+									disabled={!isEditing}
+									className="font-mono text-xs"
+								/>
+								<Button
+									type="button"
+									variant="secondary"
+									onClick={() => setValue("auth_token", generateToken())}
+									disabled={!isEditing}
+								>
+									Generate
+								</Button>
+							</div>
+							<p className="text-sm text-muted-foreground">
+								Include this token as{" "}
+								<code>Authorization: Bearer {"{token}"}</code> in your requests.
+							</p>
+						</div>
+					)}
 				</div>
-
-				{authToken && (
-					<div className="space-y-2">
-						<div className="flex items-center justify-between">
-							<Label htmlFor="http_auth_token">Bearer Token</Label>
-							<Button
-								type="button"
-								variant="ghost"
-								size="sm"
-								onClick={() => setShowToken(!showToken)}
-							>
-								{showToken ? "Hide" : "Show"}
-							</Button>
-						</div>
-						<div className="flex gap-2">
-							<Input
-								id="http_auth_token"
-								type={showToken ? "text" : "password"}
-								value={authToken}
-								onChange={(e) => setValue("auth_token", e.target.value)}
-								placeholder="Enter token or generate one"
-								disabled={!isEditing}
-								className="font-mono text-xs"
-							/>
-							<Button
-								type="button"
-								variant="secondary"
-								onClick={() => setValue("auth_token", generateToken())}
-								disabled={!isEditing}
-							>
-								Generate
-							</Button>
-						</div>
-						<p className="text-sm text-muted-foreground">
-							Include this token as{" "}
-							<code>Authorization: Bearer {"{token}"}</code> in your requests.
-						</p>
-					</div>
-				)}
-			</div>
+			)}
 
 			{/* Conflict Warning */}
-			{!pathError && (
+			{shows("endpoint") && !pathError && (
 				<Alert>
 					<AlertTitle>Route Conflicts</AlertTitle>
 					<AlertDescription>

@@ -14,6 +14,9 @@ const CHART_COMPONENTS = {
 	plotly: () => import("./chart-plotly-preview"),
 } as const;
 
+const TOGGLE_CLASS =
+	"absolute top-2 left-2 z-10 rounded-md border border-border bg-background/95 px-2 py-1 text-xs text-muted-foreground hover:text-foreground";
+
 interface ChartCodeBlockProps {
 	/** Raw content from code block */
 	content: string;
@@ -150,23 +153,28 @@ export function ChartCodeBlock({
 				<button
 					type="button"
 					onClick={() => setShowSource(false)}
-					className="absolute top-2 right-2 z-10 text-xs text-muted-foreground hover:text-foreground bg-background/80 px-2 py-1 rounded"
+					className={TOGGLE_CLASS}
 				>
 					Show Chart
 				</button>
-				<pre className="overflow-x-auto p-4 font-mono text-sm bg-muted/50 rounded-md">
+				<pre className="overflow-x-auto p-4 pt-10 font-mono text-sm bg-muted/50 rounded-md">
 					<code>{content}</code>
 				</pre>
 			</div>
 		);
 	}
 
+	// Top left, and only on hover: Plotly parks its toolbar in the top right, and
+	// a permanent control competes with the chart title.
 	return (
-		<div className={cn("relative", className)}>
+		<div className={cn("group relative", className)}>
 			<button
 				type="button"
 				onClick={() => setShowSource(true)}
-				className="absolute top-2 right-2 z-10 text-xs text-muted-foreground hover:text-foreground bg-background/80 px-2 py-1 rounded"
+				className={cn(
+					TOGGLE_CLASS,
+					"opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100",
+				)}
 			>
 				View Source
 			</button>

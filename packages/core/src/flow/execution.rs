@@ -1457,7 +1457,6 @@ impl InternalRun {
 
         let new_stack = futures::stream::iter(stack.stack.clone())
             .map(|target| {
-                let dependencies = dependencies;
                 let handler = handler.clone();
                 let run = run.clone();
                 let meta = meta.clone();

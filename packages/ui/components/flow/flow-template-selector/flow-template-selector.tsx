@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { useInvoke } from "../../../hooks";
+import { useSearch } from "../../../hooks/use-search-index";
 import {
 	hashToGradient,
 	useThemeInfo,
@@ -139,29 +140,22 @@ export function FlowTemplateSelector({
 		[appsWithTemplates],
 	);
 
-	const filteredTemplates = useMemo(() => {
-		let filtered = allTemplates;
+	const categoryTemplates = useMemo(() => {
+		if (!selectedCategory) return allTemplates;
+		const app = appsWithTemplates.find((a) => a.app.id === selectedCategory);
+		return app?.templates ?? [];
+	}, [allTemplates, appsWithTemplates, selectedCategory]);
 
-		if (selectedCategory) {
-			const app = appsWithTemplates.find((a) => a.app.id === selectedCategory);
-			filtered = app?.templates || [];
-		}
-
-		if (searchQuery.trim()) {
-			const query = searchQuery.toLowerCase();
-			filtered = filtered.filter(
-				(t) =>
-					t.metadata?.name?.toLowerCase().includes(query) ||
-					t.templateId.toLowerCase().includes(query) ||
-					t.metadata?.description?.toLowerCase().includes(query) ||
-					t.metadata?.tags?.some((tag: string) =>
-						tag.toLowerCase().includes(query),
-					),
-			);
-		}
-
-		return filtered;
-	}, [allTemplates, appsWithTemplates, selectedCategory, searchQuery]);
+	const filteredTemplates = useSearch(categoryTemplates, searchQuery, {
+		fields: [
+			"metadata.name",
+			"templateId",
+			"metadata.description",
+			"metadata.long_description",
+			"metadata.tags",
+		],
+		boost: { "metadata.name": 3, "metadata.tags": 1.5 },
+	});
 
 	const handleApplyTemplate = useCallback(
 		async (template: TemplateInfo) => {

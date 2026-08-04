@@ -9,6 +9,13 @@ export type IVoiceVariant =
 export type IVoiceSize = "sm" | "md" | "lg";
 export type IVoicePlaybackMode = "text" | "audio" | "both";
 
+export type IChatPlaceholderVisual = "none" | "planet" | "bubble" | "image";
+export type IChatPlaceholderBubbleState =
+	| "idle"
+	| "ready"
+	| "thinking"
+	| "working";
+
 export interface IVoiceConfig {
 	mode?: IVoiceChatMode | null;
 	invoke?: IVoiceInvokeMode | null;
@@ -31,6 +38,9 @@ export interface IEventPayloadChat {
 	background_image?: string | null;
 	color_scheme?: "system" | "light" | "dark" | null;
 	custom_css?: string | null;
+	placeholder_visual?: IChatPlaceholderVisual | null;
+	placeholder_bubble_state?: IChatPlaceholderBubbleState | null;
+	placeholder_image?: string | null;
 	voice?: IVoiceConfig | null;
 	navigate_to_routes?: string[] | null;
 	default_tools?: string[] | null;

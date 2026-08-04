@@ -33,6 +33,7 @@ import {
 	nowSystemTime,
 	useBackend,
 	useInvoke,
+	useSearch,
 	useSetQueryParams,
 } from "@flow-like/flow-like-ui";
 import {
@@ -46,7 +47,7 @@ import {
 	Trash2,
 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { toast } from "sonner";
 
 export default function TemplatesPage() {
@@ -83,17 +84,11 @@ export default function TemplatesPage() {
 		workflowVersion: undefined,
 	});
 
-	const filteredTemplates = useMemo(() => {
-		return (
-			templates.data?.filter(
-				(template) =>
-					template[2]?.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-					template[2]?.description
-						.toLowerCase()
-						.includes(searchTerm.toLowerCase()),
-			) ?? []
-		);
-	}, [templates.data, searchTerm]);
+	// templates are [appId, templateId, metadata] tuples
+	const filteredTemplates = useSearch(templates.data, searchTerm, {
+		fields: ["2.name", "2.description", "2.long_description", "2.tags"],
+		boost: { "2.name": 3, "2.tags": 1.5 },
+	});
 
 	const handleCreateTemplate = useCallback(async () => {
 		if (!selectedWorkflow || !newTemplate.name) {

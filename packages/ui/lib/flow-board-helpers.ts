@@ -626,15 +626,9 @@ function functionReferenceNodeIdsFromEdgeId(
 export function getFunctionReferenceNodeIdsFromEdge(
 	edge: FunctionReferenceEdgeLike,
 ): FunctionReferenceNodeIds | undefined {
-	const sourceRefOutNodeId = nodeIdFromRefHandle(
-		edge.sourceHandle,
-		"ref_out_",
-	);
+	const sourceRefOutNodeId = nodeIdFromRefHandle(edge.sourceHandle, "ref_out_");
 	const sourceRefInNodeId = nodeIdFromRefHandle(edge.sourceHandle, "ref_in_");
-	const targetRefOutNodeId = nodeIdFromRefHandle(
-		edge.targetHandle,
-		"ref_out_",
-	);
+	const targetRefOutNodeId = nodeIdFromRefHandle(edge.targetHandle, "ref_out_");
 	const targetRefInNodeId = nodeIdFromRefHandle(edge.targetHandle, "ref_in_");
 
 	if (sourceRefOutNodeId && targetRefInNodeId) {
@@ -677,10 +671,7 @@ export function removeFunctionReferenceCommandForEdge({
 	if (!nodeIds) return undefined;
 
 	const { refOutNodeId, refInNodeId } = nodeIds;
-	if (
-		skippedNodeIds?.has(refOutNodeId) ||
-		skippedNodeIds?.has(refInNodeId)
-	) {
+	if (skippedNodeIds?.has(refOutNodeId) || skippedNodeIds?.has(refInNodeId)) {
 		return undefined;
 	}
 
@@ -888,9 +879,8 @@ export function handleEdgesChange({
 			removeChanges
 				.map((change: any) => {
 					const selectedId = change.id;
-					const selectedEdge: FunctionReferenceEdgeLike | undefined = edges.find(
-						(edge) => edge.id === selectedId,
-					);
+					const selectedEdge: FunctionReferenceEdgeLike | undefined =
+						edges.find((edge) => edge.id === selectedId);
 					const [fallbackFromPinId, fallbackToPinId] = selectedId.split("-");
 					const fromPinId = selectedEdge?.sourceHandle ?? fallbackFromPinId;
 					const toPinId = selectedEdge?.targetHandle ?? fallbackToPinId;

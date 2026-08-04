@@ -28,6 +28,7 @@ pub mod tmp;
 pub mod usage;
 pub mod user;
 pub mod webhook;
+pub mod widget_query;
 
 #[derive(Clone, Deserialize, Serialize, Debug)]
 pub struct LanguageParams {

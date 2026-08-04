@@ -437,6 +437,7 @@ impl Modify for SecurityAddon {
         crate::routes::registry::publish::publish,
         crate::routes::registry::search::search,
         crate::routes::registry::download::download,
+        crate::routes::registry::widget_asset::get_widget_asset,
         // Bit routes
         crate::routes::bit::get_bit::get_bit,
         crate::routes::bit::get_with_dependencies::get_with_dependencies,

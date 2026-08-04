@@ -13,7 +13,8 @@ import {
 	Trash2,
 	X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import { useSearch } from "../../../../hooks/use-search-index";
 import type { SavedQuery } from "../../../../state/backend-state/query-state";
 import {
 	AlertDialog,
@@ -162,15 +163,10 @@ export function SavedQuerySidebar({
 	const [deleting, setDeleting] = useState(false);
 	const [search, setSearch] = useState("");
 
-	const filtered = useMemo(() => {
-		const needle = search.trim().toLowerCase();
-		if (!needle) return queries;
-		return queries.filter(
-			(query) =>
-				query.name.toLowerCase().includes(needle) ||
-				(query.description ?? "").toLowerCase().includes(needle),
-		);
-	}, [queries, search]);
+	const filtered = useSearch(queries, search, {
+		fields: ["name", "description", "sql"],
+		boost: { name: 3 },
+	});
 
 	const storedQueries = filtered.filter((query) => query.kind === "query");
 	const views = filtered.filter((query) => query.kind === "view");

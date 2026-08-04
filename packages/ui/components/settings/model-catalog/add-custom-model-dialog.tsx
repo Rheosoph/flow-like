@@ -30,6 +30,7 @@ import { IBitTypes } from "../../../lib/schema/bit/bit";
 import type { ILlmParameters } from "../../../lib/schema/bit/bit/llm-parameters";
 import { humanFileSize } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
+import { useDownloadManager } from "../../../state/download-manager";
 import {
 	Avatar,
 	AvatarFallback,
@@ -604,6 +605,7 @@ export function AddCustomModelDialog({
 }: Readonly<AddCustomModelDialogProps>) {
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
+	const download = useDownloadManager((s) => s.download);
 	const isEdit = !!existingBit;
 	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
 	const canHostLocal = !webMode && (canHostLlamaCPP || canHostMLX);
@@ -1324,6 +1326,21 @@ export function AddCustomModelDialog({
 					[],
 				),
 			]);
+
+			// A locally executed model is useless until its weights are on disk.
+			// Start the transfer here so the catalog card shows progress right
+			// away instead of waiting for a manual download from the card menu.
+			if (isHf) {
+				void download(saved ?? bit).catch((error) => {
+					console.error("Custom model download failed", error);
+					toast.error(
+						`Model saved, but the download failed: ${
+							error instanceof Error ? error.message : String(error)
+						}`,
+					);
+				});
+			}
+
 			toast.success(isEdit ? "Model updated" : "Custom model added");
 			onOpenChange(false);
 		} catch (error) {
@@ -1362,6 +1379,7 @@ export function AddCustomModelDialog({
 		invalidate,
 		isEdit,
 		onOpenChange,
+		download,
 	]);
 
 	const title = useMemo(() => {

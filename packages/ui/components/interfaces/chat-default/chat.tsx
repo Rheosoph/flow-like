@@ -207,10 +207,18 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			latestAudioUrl,
 		);
 
-		// Cleanup RAF on unmount
+		// Cleanup RAF on unmount. The id MUST be cleared, not just cancelled:
+		// `pushCurrentMessageUpdate` only schedules a frame while it is null, and refs
+		// survive React's mount → cleanup → remount cycle. Leaving a stale id latches
+		// the gate shut, so every later push lands in `pendingMessagesRef` and is never
+		// flushed — the global chat pushes on mount, right inside that window, which
+		// killed its live bubbles while app chats (first push long after mount) were fine.
 		useEffect(() => {
 			return () => {
-				if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+				if (rafIdRef.current !== null) {
+					cancelAnimationFrame(rafIdRef.current);
+					rafIdRef.current = null;
+				}
 			};
 		}, []);
 
@@ -422,10 +430,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		);
 
 		const handleVoiceModeSend = useCallback(
-			async (audioFile: File) => {
+			async (content: string, audioFile?: File) => {
 				// keep voice mode open so the orb can react to the spoken answer;
 				// VoiceMode closes itself once the answer has been delivered.
-				await handleSendMessage("", undefined, undefined, audioFile);
+				await handleSendMessage(content, undefined, undefined, audioFile);
 			},
 			[handleSendMessage],
 		);
@@ -541,7 +549,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								className="w-full px-1 sm:px-4"
 								key={`msg-${item.data.id}`}
 								style={{
-									maxWidth: "var(--fl-chat-content-width, 64rem)",
+									maxWidth:
+										"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 								}}
 							>
 								<MessageComponent
@@ -560,27 +569,35 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									getMessageTextContent(m) === sendingContent,
 							) && (
 								<div
-									className="flex w-full animate-in flex-col items-end space-y-1 px-4 fade-in slide-in-from-bottom-2 duration-200"
+									className="flex w-full animate-in flex-col items-start space-y-1 px-4 fade-in slide-in-from-bottom-2 duration-200"
 									style={{
-										maxWidth: "var(--fl-chat-content-width, 64rem)",
+										maxWidth:
+											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 									}}
 								>
 									<div
-										className="max-w-3xl px-4 py-2 shadow-sm"
+										className="w-full border-l-2 py-2 pr-4 pl-3.5"
 										data-fl-chat-message="user"
 										style={{
 											backgroundColor:
-												"var(--fl-chat-user-message-background, var(--muted))",
-											borderRadius: "var(--fl-chat-message-radius, 0.75rem)",
+												"var(--fl-chat-ask-background, transparent)",
+											borderLeftColor:
+												"var(--fl-chat-ask-rule, var(--primary))",
+											borderRadius:
+												"0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0",
 											color:
 												"var(--fl-chat-user-message-foreground, var(--foreground))",
+											maxWidth: "var(--fl-chat-measure, 38rem)",
 										}}
 									>
-										<p className="whitespace-pre-wrap text-sm">
+										<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+											Asked
+										</span>
+										<p className="line-clamp-6 whitespace-pre-wrap text-sm leading-relaxed">
 											{sendingContent}
 										</p>
 									</div>
-									<div className="flex items-center gap-2 pr-1">
+									<div className="flex items-center gap-2 pl-1">
 										<PuffLoader
 											size={16}
 											color={chatTheme === "dark" ? "white" : "black"}
@@ -596,7 +613,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								className="w-full px-4"
 								key={`msg-${liveMessage.id}`}
 								style={{
-									maxWidth: "var(--fl-chat-content-width, 64rem)",
+									maxWidth:
+										"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 								}}
 							>
 								<MessageComponent
@@ -614,7 +632,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									className="flex w-full flex-col items-start px-4"
 									key={`grp-${(item.data as IInteractionRequest[]).map((i) => i.id).join("-")}`}
 									style={{
-										maxWidth: "var(--fl-chat-content-width, 64rem)",
+										maxWidth:
+											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 									}}
 								>
 									<InteractionGroup
@@ -627,7 +646,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									className="flex w-full flex-col items-start px-4"
 									key={`int-${(item.data as IInteractionRequest).id}`}
 									style={{
-										maxWidth: "var(--fl-chat-content-width, 64rem)",
+										maxWidth:
+											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 									}}
 								>
 									<Interaction
@@ -643,7 +663,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					{inlinePrompt && (
 						<div
 							className="mx-auto w-full shrink-0 px-2 pt-1"
-							style={{ maxWidth: "var(--fl-chat-content-width, 64rem)" }}
+							style={{
+								maxWidth:
+									"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+							}}
 						>
 							{inlinePrompt}
 						</div>
@@ -654,7 +677,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 						className="mx-auto w-full space-y-2 px-3"
 						data-fl-chat-composer-dock
 						style={{
-							maxWidth: "var(--fl-chat-content-width, 64rem)",
+							maxWidth:
+								"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 							paddingBottom:
 								"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 						}}
@@ -670,6 +694,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								audioInput={voiceEnabled}
 								voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
 								voiceInvoke={voiceConfig.invoke}
+								voiceMaxDuration={voiceConfig.maxDuration}
 								// With concurrency the composer never locks: a send starts another
 								// turn or queues. Without it, a live stream still blocks as before.
 								sendDisabled={concurrency ? false : isSending || isStreamActive}

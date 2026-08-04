@@ -27,21 +27,30 @@
 			"steps": [
 				{
 					"type": "waitFor",
-					"selector": "input[placeholder=\"Search roles...\"]",
+					"selector": "input[placeholder=\"Search roles\"]",
 					"state": "visible"
 				},
 				{
 					"type": "click",
-					"selector": "div.flex.flex-col.h-full.max-h-full.overflow-hidden.gap-4.p-4 > div:first-child button"
+					"selector": "div:has(> div > input[placeholder=\"Search roles\"]) > button"
 				},
 				{
 					"type": "waitFor",
-					"selector": "input[placeholder=\"e.g. Editor, Viewer...\"]",
+					"selector": "#role-templates > div:last-child > button:nth-child(2)",
+					"state": "visible"
+				},
+				{
+					"type": "click",
+					"selector": "#role-templates > div:last-child > button:nth-child(2)"
+				},
+				{
+					"type": "waitFor",
+					"selector": "input[placeholder=\"Who is this for?\"]",
 					"state": "visible"
 				},
 				{
 					"type": "fill",
-					"selector": "input[placeholder=\"e.g. Editor, Viewer...\"]",
+					"selector": "input[placeholder=\"e.g. Reviewer\"]",
 					"value": "Support Specialist"
 				},
 				{

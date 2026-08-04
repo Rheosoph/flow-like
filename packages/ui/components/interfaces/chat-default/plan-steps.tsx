@@ -33,6 +33,13 @@ interface PlanStepsProps {
 	 * pending" — without this the panel would snap shut and reopen once per round.
 	 */
 	loading?: boolean;
+	/**
+	 * Whether the owning turn is still generating, regardless of whether THIS group owns the
+	 * active step. Inline groups only receive `loading` for the live segment (so finished groups
+	 * don't spin at "Working…"), but every group must stay expanded until the turn ends —
+	 * otherwise each one folds away the instant it settles and the run looks frozen mid-stream.
+	 */
+	turnActive?: boolean;
 }
 
 const VISIBLE_STEPS_COUNT = 4;
@@ -60,6 +67,112 @@ const LANE_META: Record<
 	page: { label: "Page", Icon: LayoutIcon },
 	workflow: { label: "Workflow", Icon: WorkflowIcon },
 };
+
+/** Status dots shown beyond this count are folded into a "+N". */
+const SUMMARY_DOT_LIMIT = 8;
+
+interface IStepSummary {
+	readonly total: number;
+	readonly laneCount: number;
+	readonly doneCount: number;
+	readonly failedCount: number;
+	readonly settledCount: number;
+	readonly durationLabel: string | null;
+}
+
+function summariseSteps(steps: IPlanStep[]): IStepSummary {
+	let doneCount = 0;
+	let failedCount = 0;
+	// Same unit as step.startTime/endTime; formatDuration wants microseconds,
+	// which is why the existing rows multiply by 1000 too.
+	let elapsedMs = 0;
+	const lanes = new Set<string>();
+
+	for (const step of steps) {
+		if (step.status === "done") doneCount += 1;
+		if (step.status === "failed") failedCount += 1;
+		if (step.detail?.kind === "build_lane") lanes.add(step.detail.lane);
+		if (step.startTime && step.endTime) {
+			elapsedMs += Math.max(0, step.endTime - step.startTime);
+		}
+	}
+
+	return {
+		total: steps.length,
+		laneCount: lanes.size,
+		doneCount,
+		failedCount,
+		settledCount: doneCount + failedCount,
+		durationLabel: elapsedMs > 0 ? formatDuration(elapsedMs * 1000) : null,
+	};
+}
+
+/**
+ * The whole run at a glance: one dot per step, so a failure is visible without
+ * expanding anything.
+ */
+function StatusDots({ steps }: { steps: IPlanStep[] }) {
+	const shown = steps.slice(0, SUMMARY_DOT_LIMIT);
+	const overflow = steps.length - shown.length;
+
+	return (
+		<span className="flex shrink-0 items-center gap-1" aria-hidden="true">
+			{shown.map((step) => (
+				<span
+					key={step.id}
+					className={cn(
+						"size-1.5 rounded-full",
+						step.status === "done" && "bg-emerald-500",
+						step.status === "failed" && "bg-destructive/70",
+						step.status === "progress" &&
+							"bg-primary motion-safe:animate-pulse-soft",
+						step.status === "planned" && "bg-muted-foreground/35",
+					)}
+				/>
+			))}
+			{overflow > 0 && (
+				<span className="text-[10px] tabular-nums text-muted-foreground/60">
+					+{overflow}
+				</span>
+			)}
+		</span>
+	);
+}
+
+/** The one line a settled run collapses to. */
+function ActivitySummaryLabel({
+	summary,
+	running,
+	activeTitle,
+}: {
+	summary: IStepSummary;
+	running: boolean;
+	activeTitle?: string;
+}) {
+	if (running) {
+		return (
+			<span className="min-w-0 flex-1 truncate">
+				<span className="text-foreground">{activeTitle ?? "Working…"}</span>
+				<span className="text-muted-foreground">
+					{" · "}
+					{summary.settledCount}/{summary.total}
+				</span>
+			</span>
+		);
+	}
+
+	const parts = [`${summary.total} step${summary.total === 1 ? "" : "s"}`];
+	if (summary.laneCount > 1) parts.push(`across ${summary.laneCount} lanes`);
+	if (summary.durationLabel) parts.push(summary.durationLabel);
+	if (summary.failedCount > 0) {
+		parts.push(`${summary.failedCount} not completed`);
+	}
+
+	return <span className="min-w-0 flex-1 truncate">{parts.join(" · ")}</span>;
+}
+
+const ACTIVITY_TRIGGER_CLASS =
+	"group flex w-full items-center gap-2.5 border-y py-2 text-left text-xs font-medium text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0";
 
 /**
  * One concurrent branch of a build, rendered as a block rather than a row.
@@ -279,8 +392,24 @@ export function InlineStepGroup({
 	steps,
 	currentStepId,
 	loading,
+	turnActive,
 }: PlanStepsProps) {
 	const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+
+	// Open for as long as the turn is generating — not merely while this group owns
+	// the active step — then fold to its summary line so the finished answer reads
+	// as prose rather than as a log.
+	const isLive =
+		Boolean(loading) ||
+		Boolean(turnActive) ||
+		steps.some((s) => s.status === "progress" || s.status === "planned");
+	const [open, setOpen] = useState(isLive);
+	const wasLiveRef = useRef(isLive);
+	useEffect(() => {
+		if (wasLiveRef.current && !isLive) setOpen(false);
+		if (!wasLiveRef.current && isLive) setOpen(true);
+		wasLiveRef.current = isLive;
+	}, [isLive]);
 
 	useEffect(() => {
 		if (!currentStepId) return;
@@ -299,6 +428,7 @@ export function InlineStepGroup({
 				steps={steps}
 				currentStepId={currentStepId}
 				loading={loading}
+				turnActive={turnActive}
 			/>
 		);
 	}
@@ -312,18 +442,57 @@ export function InlineStepGroup({
 		});
 	};
 
+	const summary = summariseSteps(steps);
+	const running =
+		Boolean(loading) ||
+		steps.some((s) => s.status === "progress" || s.status === "planned");
+	const activeStep = currentStepId
+		? steps.find((s) => s.id === currentStepId)
+		: undefined;
+
 	return (
-		<div className="my-2 rounded-lg border border-border/40 bg-muted/20 px-1 py-1 space-y-0.5">
-			{steps.map((step) => (
-				<StepRow
-					key={step.id}
-					step={step}
-					isActive={currentStepId === step.id}
-					isExpanded={expandedSteps.has(step.id)}
-					onToggle={toggleStep}
+		<Collapsible
+			open={open}
+			onOpenChange={setOpen}
+			className="my-3"
+			data-fl-plan-group
+			style={{ maxWidth: "var(--fl-chat-measure, 38rem)" }}
+		>
+			<CollapsibleTrigger
+				className={ACTIVITY_TRIGGER_CLASS}
+				style={{ borderColor: "var(--fl-chat-rule, var(--border))" }}
+			>
+				{running ? (
+					<Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
+				) : (
+					<StatusDots steps={steps} />
+				)}
+				<ActivitySummaryLabel
+					summary={summary}
+					running={running}
+					activeTitle={activeStep?.title}
 				/>
-			))}
-		</div>
+				<ChevronDown
+					className={cn(
+						"size-3.5 shrink-0 transition-transform",
+						open ? "rotate-180" : "",
+					)}
+				/>
+			</CollapsibleTrigger>
+			<CollapsibleContent>
+				<div className="space-y-0.5 pt-2 pb-1">
+					{steps.map((step) => (
+						<StepRow
+							key={step.id}
+							step={step}
+							isActive={currentStepId === step.id}
+							isExpanded={expandedSteps.has(step.id)}
+							onToggle={toggleStep}
+						/>
+					))}
+				</div>
+			</CollapsibleContent>
+		</Collapsible>
 	);
 }
 
@@ -331,7 +500,12 @@ export function InlineStepGroup({
  * Compact tool/step activity timeline for a chat message. Expanded while the agent is working;
  * collapses to a one-line summary once every step has settled.
  */
-export function PlanSteps({ steps, currentStepId, loading }: PlanStepsProps) {
+export function PlanSteps({
+	steps,
+	currentStepId,
+	loading,
+	turnActive,
+}: PlanStepsProps) {
 	const [expandedSteps, setExpandedSteps] = useState<Set<string>>(
 		new Set(currentStepId ? [currentStepId] : []),
 	);
@@ -343,7 +517,7 @@ export function PlanSteps({ steps, currentStepId, loading }: PlanStepsProps) {
 	const allSettled =
 		steps.length > 0 &&
 		steps.every((s) => s.status === "done" || s.status === "failed");
-	const running = Boolean(loading) || !allSettled;
+	const running = Boolean(loading) || Boolean(turnActive) || !allSettled;
 	// A build that handed functions back for the user to implement must not fold itself away on
 	// success: an unread gap is a workflow the user believes is finished.
 	const hasGaps = steps.some(
@@ -414,41 +588,39 @@ export function PlanSteps({ steps, currentStepId, loading }: PlanStepsProps) {
 		? steps.find((s) => s.id === currentStepId)
 		: undefined;
 
+	const summary = summariseSteps(steps);
+
 	return (
 		<Collapsible
 			open={open}
 			onOpenChange={setOpen}
-			className="my-2 rounded-lg border border-border/40 bg-muted/20"
+			className="my-3"
+			data-fl-plan-group
+			style={{ maxWidth: "var(--fl-chat-measure, 38rem)" }}
 		>
-			<CollapsibleTrigger className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left rounded-lg hover:bg-muted/40 transition-colors outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0">
+			<CollapsibleTrigger
+				className={ACTIVITY_TRIGGER_CLASS}
+				style={{ borderColor: "var(--fl-chat-rule, var(--border))" }}
+			>
 				{running ? (
-					<Loader2 className="size-3.5 text-primary animate-spin shrink-0" />
-				) : failedCount > 0 ? (
-					<CircleMinus className="size-3.5 text-muted-foreground/70 shrink-0" />
+					<Loader2 className="size-3.5 shrink-0 animate-spin text-primary" />
 				) : (
-					<CheckCircle2 className="size-3.5 text-emerald-500 shrink-0" />
+					<StatusDots steps={steps} />
 				)}
-				<span className="text-xs font-medium text-foreground/90 shrink-0">
-					{running
-						? (activeStep?.title ?? "Working…")
-						: `${steps.length} step${steps.length === 1 ? "" : "s"}`}
-				</span>
-				<span className="text-xs text-muted-foreground truncate min-w-0 flex-1">
-					{running
-						? `${settledCount}/${steps.length}`
-						: failedCount > 0
-							? `${failedCount} not completed`
-							: "completed"}
-				</span>
+				<ActivitySummaryLabel
+					summary={summary}
+					running={running}
+					activeTitle={activeStep?.title}
+				/>
 				<ChevronDown
 					className={cn(
-						"size-3.5 text-muted-foreground shrink-0 transition-transform",
+						"size-3.5 shrink-0 transition-transform",
 						open ? "rotate-180" : "",
 					)}
 				/>
 			</CollapsibleTrigger>
 			<CollapsibleContent>
-				<div className="px-1 pb-1 space-y-0.5">
+				<div className="space-y-0.5 pt-2 pb-1">
 					{olderSteps.length > 0 && (
 						<button
 							type="button"

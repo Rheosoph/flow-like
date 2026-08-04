@@ -168,28 +168,37 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 			initial={{ opacity: 0, y: 8, scale: 0.98 }}
 			animate={{ opacity: 1, y: 0, scale: 1 }}
 			transition={{ type: "spring", stiffness: 380, damping: 32 }}
-			className="flex max-h-[70vh] w-full flex-col overflow-hidden rounded-xl border border-amber-500/40 bg-background/80 shadow-lg backdrop-blur-xl"
+			className="flex max-h-[70vh] w-full flex-col overflow-hidden rounded-2xl border bg-card shadow-floating"
+			style={{ borderColor: "var(--fl-chat-rule-strong, var(--border))" }}
 		>
-			<div className="flex shrink-0 items-center gap-2 border-b border-amber-500/15 bg-amber-500/5 px-3 py-2">
+			<div className="flex shrink-0 items-start gap-3 px-4 pt-4 pb-2">
 				<span
-					className={`flex items-center justify-center size-6 rounded-md shrink-0 ${isApproval ? "bg-amber-500/15 text-amber-600 dark:text-amber-400" : "bg-primary/15 text-primary"}`}
+					className={cn(
+						"flex size-8 shrink-0 items-center justify-center rounded-full",
+						isApproval
+							? "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+							: "bg-primary/15 text-primary",
+					)}
 				>
 					{isApproval ? (
-						<ShieldQuestionIcon className="size-3.5" />
+						<ShieldQuestionIcon className="size-4" />
 					) : (
-						<SparklesIcon className="size-3.5" />
+						<SparklesIcon className="size-4" />
 					)}
 				</span>
-				<span className="min-w-0 flex-1 truncate text-[13px] font-semibold">
-					{prompt.title}
-				</span>
-				<span
-					className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wide shrink-0 ${isApproval ? "bg-amber-500/10 text-amber-600 dark:text-amber-400" : "bg-primary/10 text-primary"}`}
-				>
-					{isApproval ? "Approval" : "Question"}
-				</span>
+				<div className="min-w-0 flex-1">
+					<p
+						className="text-[15px] leading-snug"
+						style={{ fontFamily: "var(--fl-chat-prose-font)" }}
+					>
+						{prompt.title}
+					</p>
+					<p className="mt-0.5 text-[11px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+						{isApproval ? "Needs your approval" : "Needs an answer"}
+					</p>
+				</div>
 			</div>
-			<div className="min-h-0 space-y-2.5 overflow-y-auto px-3 py-2.5">
+			<div className="min-h-0 space-y-2.5 overflow-y-auto px-4 pt-1 pb-3">
 				{prompt.appId ? (
 					<ApprovalAppIdentity
 						appId={prompt.appId}
@@ -258,11 +267,14 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 						/>
 					))}
 			</div>
-			<div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-border/40 bg-background/90 px-3 py-2">
+			<div
+				className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t px-4 py-3"
+				style={{ borderColor: "var(--fl-chat-rule, var(--border))" }}
+			>
 				{isApproval ? (
 					<label
 						htmlFor="inline-tool-prompt-remember"
-						className="flex items-center gap-2 text-xs text-muted-foreground"
+						className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
 					>
 						<Checkbox
 							id="inline-tool-prompt-remember"
@@ -276,9 +288,9 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 				)}
 				<div className="ml-auto flex items-center gap-2">
 					<Button
-						variant="ghost"
+						variant="outline"
 						size="sm"
-						className="outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 						onClick={() =>
 							isApproval
 								? prompt.respond({ approved: false, remember: false })
@@ -290,7 +302,7 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 					<Button
 						size="sm"
 						disabled={!isApproval && !canSend}
-						className="outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+						className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 						onClick={() => {
 							if (isApproval) {
 								prompt.respond({ approved: true, remember });

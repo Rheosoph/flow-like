@@ -101,6 +101,48 @@
 	--fl-chat-pad-bottom: 1rem;
 	--fl-chat-user-message-background: var(--muted);
 
+	/* Reading surface. Global rather than scoped to .fl-chat-root, because the
+	   FlowPilot chat renders outside that wrapper and needs the same treatment. */
+	--fl-chat-measure: 38rem;
+	/* One column width shared by the message rows and the composer, so their
+	   edges line up. Artifacts may break the prose measure but not this.
+	   Deliberately NOT resolved into a --fl-chat-column here: --fl-chat-content-width
+	   is declared on .fl-chat-root, so a min() computed at :root would freeze at
+	   46rem and ignore any per-chat override. The use sites resolve it instead. */
+	--fl-chat-wide: 46rem;
+	/* The question is a margin note, not a card — the rule carries it. */
+	--fl-chat-ask-background: transparent;
+	--fl-chat-prose-font: "Source Serif 4", "Iowan Old Style", Charter,
+		"Bitstream Charter", Georgia, ui-serif, serif;
+	--fl-chat-prose-size: 1.0625rem;
+	--fl-chat-prose-leading: 1.72;
+	--fl-chat-ask-foreground: var(--muted-foreground);
+	--fl-chat-ask-rule: var(--primary);
+	--fl-chat-rule: color-mix(in oklch, var(--border) 70%, transparent);
+	--fl-chat-rule-strong: var(--border);
+
+	/* Chrome-on-demand: the toolbar rests at this opacity until reached for. */
+	--fl-chat-chrome-rest: 0.45;
+
+	/* --chart-1..5 span only ~40deg of hue, so they read as one colour in a
+	   categorical series. This ramp keeps the brand ember first and spaces the rest. */
+	--fl-chat-chart-1: oklch(0.6724 0.208 34.7886);
+	--fl-chat-chart-2: oklch(0.6 0.19 295);
+	--fl-chat-chart-3: oklch(0.68 0.115 195);
+	--fl-chat-chart-4: oklch(0.77 0.15 75);
+	--fl-chat-chart-5: oklch(0.58 0.16 255);
+	--fl-chat-chart-6: oklch(0.66 0.145 150);
+	--fl-chat-chart-7: oklch(0.64 0.185 350);
+	--fl-chat-chart-8: oklch(0.56 0.042 250);
+	--fl-chat-chart-text: var(--foreground);
+	--fl-chat-chart-text-muted: var(--muted-foreground);
+	--fl-chat-chart-grid: color-mix(in oklch, var(--border) 60%, transparent);
+	--fl-chat-chart-axis: var(--border);
+	--fl-chat-chart-empty: color-mix(in oklch, var(--muted) 70%, transparent);
+	--fl-chat-chart-tooltip-background: var(--popover);
+	--fl-chat-chart-tooltip-foreground: var(--popover-foreground);
+	--fl-chat-chart-tooltip-border: var(--border);
+
 	--pin-string: oklch(71.8% 0.202 349.761);
 	--pin-integer: oklch(78.9% 0.154 211.53);
 	--pin-float: oklch(79.2% 0.209 151.711);
@@ -191,6 +233,15 @@
 		transparent
 	);
 
+	/* Chart hues need a little more lightness to hold up on a dark ground. */
+	--fl-chat-chart-2: oklch(0.68 0.175 295);
+	--fl-chat-chart-3: oklch(0.75 0.11 195);
+	--fl-chat-chart-4: oklch(0.82 0.14 75);
+	--fl-chat-chart-5: oklch(0.68 0.155 255);
+	--fl-chat-chart-6: oklch(0.74 0.14 150);
+	--fl-chat-chart-7: oklch(0.71 0.175 350);
+	--fl-chat-chart-8: oklch(0.68 0.038 250);
+
 	--pin-string: oklch(71.8% 0.202 349.761);
 	--pin-integer: oklch(78.9% 0.154 211.53);
 	--pin-float: oklch(79.2% 0.209 151.711);
@@ -231,6 +282,71 @@
 	--fl-chat-background-position: center;
 }
 
+/* Chrome on demand: the toolbar recedes until you reach for it. Hover, keyboard
+   focus, touch devices and live runs all bring it back to full strength, so it is
+   never the only way to reach a control. */
+.fl-chat-chrome {
+	opacity: var(--fl-chat-chrome-rest, 0.45);
+	transition: opacity 260ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.fl-chat-chrome:hover,
+.fl-chat-chrome:focus-within,
+.fl-chat-chrome[data-chrome-pinned="true"] {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.fl-chat-chrome {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.fl-chat-chrome {
+		transition: none;
+	}
+}
+
+/* The answer is the document: a text serif at a real measure. Artifacts (widgets,
+   charts, tables, code) deliberately break that measure and keep the UI faces. */
+[data-fl-chat-prose] {
+	max-width: var(--fl-chat-measure, 38rem);
+	font-family: var(--fl-chat-prose-font);
+	font-size: var(--fl-chat-prose-size, 1.0625rem);
+	line-height: var(--fl-chat-prose-leading, 1.72);
+	letter-spacing: -0.003em;
+}
+
+[data-fl-chat-prose] :is(code, pre, kbd, samp) {
+	font-family: var(--font-mono);
+	font-size: 0.8125em;
+	letter-spacing: 0;
+}
+
+[data-fl-chat-prose] :is(table, pre, blockquote) {
+	max-width: none;
+}
+
+[data-fl-chat-prose] :is(table, th, td) {
+	font-family: var(--font-sans);
+	font-size: 0.8125rem;
+	letter-spacing: 0;
+}
+
+[data-fl-chat-prose] :is(h1, h2, h3, h4) {
+	letter-spacing: -0.012em;
+	text-wrap: balance;
+}
+
+/* Chat-embedded widgets and charts are UI, not prose. */
+[data-fl-chat-prose] [data-slate-void],
+[data-fl-chat-prose] figure {
+	font-family: var(--font-sans);
+	font-size: 0.875rem;
+	line-height: 1.5;
+}
+
 /* Background art needs local contrast, not one heavy wash over the whole image. These
    values remain CSS variables so event-level custom CSS can tune the treatment. */
 .fl-chat-root:where([data-fl-chat-has-background="true"]) {
@@ -242,6 +358,12 @@
 	--fl-chat-user-message-background: color-mix(
 		in oklch,
 		var(--muted) 82%,
+		transparent
+	);
+	/* Over background art the note needs a scrim to stay legible. */
+	--fl-chat-ask-background: color-mix(
+		in oklch,
+		var(--background) 76%,
 		transparent
 	);
 	--fl-chat-ai-message-background: color-mix(
@@ -421,6 +543,19 @@
 		50% {
 			animation-timing-function: cubic-bezier(0.8, 0, 1, 1);
 			transform: translateY(-20%);
+		}
+	}
+
+	@keyframes fl-orb-breathe {
+		0%,
+		100% {
+			opacity: 0.55;
+			transform: scale(1);
+		}
+
+		50% {
+			opacity: 0.18;
+			transform: scale(1.055);
 		}
 	}
 

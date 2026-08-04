@@ -3,10 +3,15 @@
 import NextLink from "next/link";
 import { useRef } from "react";
 import { cn } from "../../../lib/utils";
-import { useActionContext, useExecuteAction } from "../ActionHandler";
+import {
+	useActionContext,
+	useComponentEventTrigger,
+	useExecuteAction,
+} from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { firstEventAction } from "../event-handlers";
 import type { BoundValue, LinkComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -44,14 +49,19 @@ export function A2UILink({
 		component.queryParams,
 	);
 	const disabled = useResolved<boolean>(component.disabled);
-	const { executeAction, isPreviewMode } = useExecuteAction();
+	const { isPreviewMode } = useExecuteAction();
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const { appId } = useActionContext();
 
 	const variant = component.variant ?? "primary";
 	const underline = component.underline ?? "hover";
 
-	// Check for action defined in ComponentBase.actions
-	const action = component.actions?.[0];
+	// Named navigation handlers take precedence over the legacy default action.
+	const action = firstEventAction(
+		component.eventHandlers,
+		"navigate",
+		component.actions,
+	);
 
 	const handleClick = (e: React.MouseEvent) => {
 		// Only handle actions in preview mode
@@ -77,7 +87,7 @@ export function A2UILink({
 
 		if (action) {
 			e.preventDefault();
-			executeAction(action, componentId);
+			void triggerEvent("navigate", component);
 			return;
 		}
 		if (onAction) {

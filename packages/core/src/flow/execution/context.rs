@@ -1363,6 +1363,60 @@ impl ExecutionContext {
         self.stream_a2ui_update(message).await
     }
 
+    /// Live round-trip to the rendered frontend: run a contract query against
+    /// a micro widget instance and await its `query:result`. The request rides
+    /// the a2ui stream; the host delivers the response through
+    /// [`flow_like_types::frontend_request::resolve_frontend_request`] (Tauri
+    /// command on desktop, `/widget-query/{id}/respond` API route on web).
+    /// Returns the raw response envelope `{ "ok": bool, "value"?: …, "error"?: … }`.
+    pub async fn query_widget(
+        &mut self,
+        instance_id: &str,
+        query: &str,
+        args: Option<Value>,
+        timeout: std::time::Duration,
+    ) -> flow_like_types::Result<Value> {
+        use flow_like_types::frontend_request::{
+            abandon_frontend_request, register_frontend_request,
+        };
+
+        let request_id = flow_like_types::create_id();
+        let receiver = register_frontend_request(&request_id).await;
+
+        let message = crate::a2ui::A2UIServerMessage::widget_query(
+            &request_id,
+            instance_id,
+            query,
+            args,
+            timeout.as_millis() as u64,
+        );
+        if let Err(err) = self.stream_a2ui_update(message).await {
+            abandon_frontend_request(&request_id).await;
+            return Err(err);
+        }
+
+        match flow_like_types::tokio::time::timeout(timeout, receiver).await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(_)) => {
+                abandon_frontend_request(&request_id).await;
+                Err(flow_like_types::anyhow!(
+                    "Widget query '{}' on instance '{}' was dropped without a response",
+                    query,
+                    instance_id
+                ))
+            }
+            Err(_) => {
+                abandon_frontend_request(&request_id).await;
+                Err(flow_like_types::anyhow!(
+                    "Widget query '{}' on instance '{}' timed out after {}ms — no live surface answered",
+                    query,
+                    instance_id,
+                    timeout.as_millis()
+                ))
+            }
+        }
+    }
+
     pub async fn show_screen(&mut self) -> flow_like_types::Result<()> {
         let message = crate::a2ui::A2UIServerMessage::show_screen();
         self.stream_a2ui_update(message).await

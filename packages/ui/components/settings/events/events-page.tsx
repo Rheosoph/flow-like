@@ -34,21 +34,19 @@ import {
 	SelectItem,
 	SelectTrigger,
 	SelectValue,
-	Table,
-	TableBody,
-	TableCell,
-	TableHead,
-	TableHeader,
-	TableRow,
 	Textarea,
 	VariableConfigCard,
 	VariableTypeIndicator,
-	formatEventTypeLabel,
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import type { IOAuthConsentStore } from "@flow-like/flow-like-ui/db/oauth-db";
+import type { EventSectionId } from "@flow-like/flow-like-ui/lib/event-sections";
+import {
+	getEventSections,
+	isTriggerSection,
+} from "@flow-like/flow-like-ui/lib/event-sections";
 import {
 	checkOAuthTokens,
 	checkOAuthTokensFromPrerun,
@@ -59,6 +57,7 @@ import type {
 } from "@flow-like/flow-like-ui/lib/oauth/types";
 import { normalizeBoardVersion } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IHub } from "@flow-like/flow-like-ui/lib/schema/hub/hub";
+import { stableStringify } from "@flow-like/flow-like-ui/lib/stable-stringify";
 import {
 	convertJsonToUint8Array,
 	parseUint8ArrayToJson,
@@ -70,7 +69,6 @@ import {
 	Cloud,
 	CodeIcon,
 	CogIcon,
-	EditIcon,
 	ExternalLinkIcon,
 	FileTextIcon,
 	FormInputIcon,
@@ -92,7 +90,12 @@ import {
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-type ViewMode = "list" | "table";
+import { EventAttentionStrip } from "./event-attention-strip";
+import { EventSectionRail } from "./event-section-rail";
+import { EventsOverview } from "./events-overview";
+import { SectionGuidance } from "./section-guidance";
+import { SetupChecklist } from "./setup-checklist";
+import { useEventIssues } from "./use-event-issues";
 
 // Helper function to check if an event requires a sink based on eventMapping
 function eventRequiresSink(
@@ -586,7 +589,7 @@ export default function EventsPage({
 							</CardContent>
 						</Card>
 					) : (
-						<EventsTable
+						<EventsOverview
 							events={events.data ?? []}
 							boardsMap={boardsMap}
 							appId={id ?? ""}
@@ -1189,10 +1192,55 @@ function EventConfiguration({
 	}, [board.data, event.node_id, event.inputs, event.default_page_id]);
 
 	const isDirty = useMemo(() => {
-		if (JSON.stringify(formData) !== JSON.stringify(event)) return true;
+		// `config` is a byte blob whose encoding depends on key insertion order, so
+		// comparing the raw arrays reports edits that never happened. Compare the
+		// decoded config with sorted keys, and the rest of the event separately.
+		const { config: draftConfig, ...draftRest } = formData;
+		const { config: savedConfig, ...savedRest } = event;
+		if (stableStringify(draftRest) !== stableStringify(savedRest)) return true;
+		if (
+			stableStringify(parseUint8ArrayToJson(draftConfig ?? []) ?? {}) !==
+			stableStringify(parseUint8ArrayToJson(savedConfig ?? []) ?? {})
+		) {
+			return true;
+		}
 		if (routeForEvent && routePathDraft !== routeForEvent.path) return true;
 		return false;
 	}, [formData, event, routePathDraft, routeForEvent]);
+
+	// The section rail is generated from the event type, so a mailbox shows a
+	// different shape from an MCP server without the layout knowing either exists.
+	const sections = useMemo(() => getEventSections(formData), [formData]);
+	const [activeSection, setActiveSection] = useState<EventSectionId>(
+		() => sections[0]?.id ?? "flow",
+	);
+	// The rail is type-derived, so changing type (or opening a page event, which
+	// has no trigger section at all) can strand the selection on a section that
+	// no longer exists.
+	useEffect(() => {
+		if (!sections.some((section) => section.id === activeSection)) {
+			setActiveSection(sections[0]?.id ?? "flow");
+		}
+	}, [sections, activeSection]);
+	const activeSectionDef =
+		sections.find((section) => section.id === activeSection) ?? sections[0];
+
+	const parsedConfig = useMemo(
+		() => parseUint8ArrayToJson(formData.config ?? []) ?? {},
+		[formData.config],
+	);
+
+	const issues = useEventIssues({
+		event: formData,
+		config: parsedConfig,
+		drift: inputsDrift,
+		requiresSink: eventRequiresSink(
+			eventMapping,
+			formData,
+			board.data?.nodes?.[formData.node_id]?.name,
+		),
+		routeError: routePathError,
+	});
 
 	const enterEdit = useCallback(() => {
 		setIsEditing(true);
@@ -1370,177 +1418,201 @@ function EventConfiguration({
 					)}
 				</div>
 
-				{/* Main Configuration */}
-				<div className="space-y-6">
-					{/* Top Row - Essential Information */}
-					<div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-						{/* Basic Information */}
-						<Card>
-							<CardHeader>
-								<CardTitle className="flex items-center gap-2">
-									<FileTextIcon className="h-5 w-5" />
-									Basic Information
-								</CardTitle>
-							</CardHeader>
-							<CardContent className="space-y-4">
-								<div>
-									<Label>Event Name</Label>
-									{isEditing ? (
-										<Input
-											type="text"
-											value={formData.name}
-											onChange={(e) =>
-												handleInputChange("name", e.target.value)
-											}
-										/>
-									) : (
-										<button
-											type="button"
-											className="mt-1 text-sm text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
-											onClick={enterEdit}
-										>
-											{event.name}
-										</button>
-									)}
-								</div>
-								<div>
-									<Label>Description</Label>
-									{isEditing ? (
-										<Textarea
-											value={formData.description}
-											onChange={(e) =>
-												handleInputChange("description", e.target.value)
-											}
-											rows={3}
-										/>
-									) : (
-										<button
-											type="button"
-											className="mt-1 text-sm text-muted-foreground text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
-											onClick={enterEdit}
-										>
-											{event.description || "Click to add a description"}
-										</button>
-									)}
-								</div>
-								{uiEventTypeSet.has(formData.event_type) ||
-								isPageTargetEvent ? (
+				{/* Workspace: section rail, one section at a time, guidance */}
+				<div className="grid grid-cols-1 gap-6 lg:grid-cols-[188px_minmax(0,1fr)] xl:grid-cols-[188px_minmax(0,1fr)_296px]">
+					<EventSectionRail
+						sections={sections}
+						active={activeSection}
+						onSelect={setActiveSection}
+						issues={issues}
+					/>
+
+					<div className="min-w-0 space-y-6">
+						<div>
+							<h2 className="text-lg font-semibold tracking-tight">
+								{activeSectionDef.label}
+							</h2>
+							<p className="mt-1 max-w-[74ch] text-sm text-muted-foreground">
+								{activeSectionDef.blurb}
+							</p>
+						</div>
+
+						<EventAttentionStrip
+							issues={issues}
+							sections={sections}
+							onNavigate={setActiveSection}
+						/>
+
+						<SectionGuidance event={formData} section={activeSection} />
+
+						{activeSection === "identity" && (
+							<Card>
+								<CardHeader>
+									<CardTitle className="flex items-center gap-2">
+										<FileTextIcon className="h-5 w-5" />
+										Basic Information
+									</CardTitle>
+								</CardHeader>
+								<CardContent className="space-y-4">
 									<div>
-										<Label>Route Path</Label>
+										<Label>Event Name</Label>
 										{isEditing ? (
-											<div className="space-y-1">
-												<Input
-													value={routePathDraft}
-													onChange={(e) => setRoutePathDraft(e.target.value)}
-													placeholder="/"
-												/>
-												{routePathError && (
-													<p className="text-xs text-destructive">
-														{routePathError}
+											<Input
+												type="text"
+												value={formData.name}
+												onChange={(e) =>
+													handleInputChange("name", e.target.value)
+												}
+											/>
+										) : (
+											<button
+												type="button"
+												className="mt-1 text-sm text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
+												onClick={enterEdit}
+											>
+												{event.name}
+											</button>
+										)}
+									</div>
+									<div>
+										<Label>Description</Label>
+										{isEditing ? (
+											<Textarea
+												value={formData.description}
+												onChange={(e) =>
+													handleInputChange("description", e.target.value)
+												}
+												rows={3}
+											/>
+										) : (
+											<button
+												type="button"
+												className="mt-1 text-sm text-muted-foreground text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
+												onClick={enterEdit}
+											>
+												{event.description || "Click to add a description"}
+											</button>
+										)}
+									</div>
+									{uiEventTypeSet.has(formData.event_type) ||
+									isPageTargetEvent ? (
+										<div>
+											<Label>Route Path</Label>
+											{isEditing ? (
+												<div className="space-y-1">
+													<Input
+														value={routePathDraft}
+														onChange={(e) => setRoutePathDraft(e.target.value)}
+														placeholder="/"
+													/>
+													{routePathError && (
+														<p className="text-xs text-destructive">
+															{routePathError}
+														</p>
+													)}
+													<p className="text-xs text-muted-foreground">
+														Used for path-based navigation. Must be unique.
 													</p>
-												)}
-												<p className="text-xs text-muted-foreground">
-													Used for path-based navigation. Must be unique.
-												</p>
+												</div>
+											) : (
+												<button
+													type="button"
+													className="mt-1 text-sm text-muted-foreground font-mono text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
+													onClick={enterEdit}
+												>
+													{routeForEvent?.path ?? "No route configured"}
+												</button>
+											)}
+										</div>
+									) : null}
+									<div>
+										<Label>Event ID</Label>
+										<p className="mt-1 text-sm text-muted-foreground font-mono">
+											{event.id}
+										</p>
+									</div>
+									<div>
+										<Label>Case Keys</Label>
+										<p className="mt-0.5 text-xs text-muted-foreground">
+											Tie every run to a business object for process mining:
+											each key is read from the payload at the given path (e.g.{" "}
+											<span className="font-mono">order.id</span>) and groups
+											runs into cases across apps.
+										</p>
+										{isEditing ? (
+											<div className="mt-2 space-y-2">
+												{caseKeyRows.map((row, index) => (
+													<div
+														key={`case-key-${String(index)}`}
+														className="flex items-center gap-2"
+													>
+														<Input
+															value={row.key}
+															placeholder="order_id"
+															className="h-8 w-36 font-mono text-xs"
+															onChange={(e) => {
+																const rows = [...caseKeyRows];
+																rows[index] = { ...row, key: e.target.value };
+																commitCaseKeyRows(rows);
+															}}
+														/>
+														<span className="text-xs text-muted-foreground">
+															←
+														</span>
+														<Input
+															value={row.path}
+															placeholder="order.id"
+															className="h-8 flex-1 font-mono text-xs"
+															onChange={(e) => {
+																const rows = [...caseKeyRows];
+																rows[index] = { ...row, path: e.target.value };
+																commitCaseKeyRows(rows);
+															}}
+														/>
+														<Button
+															variant="ghost"
+															size="icon"
+															className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+															aria-label="Remove case key"
+															onClick={() =>
+																commitCaseKeyRows(
+																	caseKeyRows.filter(
+																		(_, rowIndex) => rowIndex !== index,
+																	),
+																)
+															}
+														>
+															<Trash2 className="h-3.5 w-3.5" />
+														</Button>
+													</div>
+												))}
+												<Button
+													variant="outline"
+													size="sm"
+													disabled={caseKeyRows.length >= 8}
+													onClick={() =>
+														commitCaseKeyRows([
+															...caseKeyRows,
+															{ key: "", path: "" },
+														])
+													}
+												>
+													<Plus className="mr-1.5 h-3.5 w-3.5" />
+													Add case key
+												</Button>
 											</div>
 										) : (
 											<button
 												type="button"
-												className="mt-1 text-sm text-muted-foreground font-mono text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
+												className="mt-1 w-full rounded px-2 py-1 -mx-2 text-left transition-colors hover:bg-muted/60"
 												onClick={enterEdit}
 											>
-												{routeForEvent?.path ?? "No route configured"}
-											</button>
-										)}
-									</div>
-								) : null}
-								<div>
-									<Label>Event ID</Label>
-									<p className="mt-1 text-sm text-muted-foreground font-mono">
-										{event.id}
-									</p>
-								</div>
-								<div>
-									<Label>Case Keys</Label>
-									<p className="mt-0.5 text-xs text-muted-foreground">
-										Tie every run to a business object for process mining: each
-										key is read from the payload at the given path (e.g.{" "}
-										<span className="font-mono">order.id</span>) and groups runs
-										into cases across apps.
-									</p>
-									{isEditing ? (
-										<div className="mt-2 space-y-2">
-											{caseKeyRows.map((row, index) => (
-												<div
-													key={`case-key-${String(index)}`}
-													className="flex items-center gap-2"
-												>
-													<Input
-														value={row.key}
-														placeholder="order_id"
-														className="h-8 w-36 font-mono text-xs"
-														onChange={(e) => {
-															const rows = [...caseKeyRows];
-															rows[index] = { ...row, key: e.target.value };
-															commitCaseKeyRows(rows);
-														}}
-													/>
-													<span className="text-xs text-muted-foreground">
-														←
-													</span>
-													<Input
-														value={row.path}
-														placeholder="order.id"
-														className="h-8 flex-1 font-mono text-xs"
-														onChange={(e) => {
-															const rows = [...caseKeyRows];
-															rows[index] = { ...row, path: e.target.value };
-															commitCaseKeyRows(rows);
-														}}
-													/>
-													<Button
-														variant="ghost"
-														size="icon"
-														className="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
-														aria-label="Remove case key"
-														onClick={() =>
-															commitCaseKeyRows(
-																caseKeyRows.filter(
-																	(_, rowIndex) => rowIndex !== index,
-																),
-															)
-														}
-													>
-														<Trash2 className="h-3.5 w-3.5" />
-													</Button>
-												</div>
-											))}
-											<Button
-												variant="outline"
-												size="sm"
-												disabled={caseKeyRows.length >= 8}
-												onClick={() =>
-													commitCaseKeyRows([
-														...caseKeyRows,
-														{ key: "", path: "" },
-													])
-												}
-											>
-												<Plus className="mr-1.5 h-3.5 w-3.5" />
-												Add case key
-											</Button>
-										</div>
-									) : (
-										<button
-											type="button"
-											className="mt-1 w-full rounded px-2 py-1 -mx-2 text-left transition-colors hover:bg-muted/60"
-											onClick={enterEdit}
-										>
-											{Object.keys(event.correlation_mappings ?? {}).length >
-											0 ? (
-												<span className="flex flex-wrap gap-1">
-													{Object.entries(event.correlation_mappings ?? {}).map(
-														([key, path]) => (
+												{Object.keys(event.correlation_mappings ?? {}).length >
+												0 ? (
+													<span className="flex flex-wrap gap-1">
+														{Object.entries(
+															event.correlation_mappings ?? {},
+														).map(([key, path]) => (
 															<Badge
 																key={key}
 																variant="secondary"
@@ -1551,121 +1623,40 @@ function EventConfiguration({
 																	← {path}
 																</span>
 															</Badge>
-														),
-													)}
-												</span>
-											) : (
-												<span className="text-sm text-muted-foreground">
-													No case keys — click to configure process mining
-												</span>
-											)}
-										</button>
-									)}
-								</div>
-							</CardContent>
-						</Card>
-
-						{/* Flow Configuration */}
-						<Card>
-							<CardHeader>
-								<CardTitle className="flex items-center gap-2">
-									<LayersIcon className="h-5 w-5" />
-									{event.default_page_id
-										? "Page Configuration"
-										: "Flow Configuration"}
-								</CardTitle>
-							</CardHeader>
-							{!isEditing && event.default_page_id && (
-								<CardContent className="space-y-4">
-									<div>
-										<Label className="group flex items-center hover:underline">
-											<Link
-												title="Open Page Editor"
-												className="flex flex-row items-center"
-												href={`/library/config/page-editor?id=${appId}&pageId=${event.default_page_id}`}
-											>
-												Page
-												<Button
-													size={"icon"}
-													variant={"ghost"}
-													className="p-0! w-4 h-4 ml-1 mb-[0.1rem]"
-												>
-													<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
-												</Button>
-											</Link>
-										</Label>
-										<p className="mt-1 text-sm text-muted-foreground font-mono">
-											{event.default_page_id}
-										</p>
-									</div>
-									<div>
-										<Label>Flow Version</Label>
-										<button
-											type="button"
-											className="mt-1 block w-full rounded px-2 py-1 -mx-2 text-left text-sm text-muted-foreground hover:bg-muted/60 transition-colors"
-											onClick={enterEdit}
-										>
-											{event.board_version
-												? `v${event.board_version.join(".")}`
-												: "Latest"}
-										</button>
+														))}
+													</span>
+												) : (
+													<span className="text-sm text-muted-foreground">
+														No case keys — click to configure process mining
+													</span>
+												)}
+											</button>
+										)}
 									</div>
 								</CardContent>
-							)}
-							{!isEditing && !event.default_page_id && (
-								<CardContent className="space-y-4">
-									<div>
-										<Label>Flow</Label>
-										<button
-											type="button"
-											className="mt-1 text-sm text-muted-foreground font-mono text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors block"
-											onClick={enterEdit}
-										>
-											{board.data?.name ?? "BOARD NOT FOUND!"}
-										</button>
-									</div>
-									<div>
-										<Label>Flow Version</Label>
-										<button
-											type="button"
-											className="mt-1 text-sm text-muted-foreground text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors block"
-											onClick={enterEdit}
-										>
-											{event.board_version
-												? event.board_version.join(".")
-												: "Latest"}
-										</button>
-									</div>
-									<div>
-										<Label className="group flex items-center hover:underline">
-											{onNavigateToFlow ? (
-												<button
-													type="button"
-													title="Open Flow and Node"
-													className="flex flex-row items-center"
-													onClick={() =>
-														onNavigateToFlow({
-															boardId: event.board_id,
-															appId,
-															nodeId: event.node_id,
-															version: event.board_version as
-																| [number, number, number]
-																| undefined,
-														})
-													}
-												>
-													Node ID
-													<span className="p-0! w-4 h-4 ml-1 mb-[0.1rem] inline-flex">
-														<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
-													</span>
-												</button>
-											) : (
+							</Card>
+						)}
+
+						{activeSection === "flow" && (
+							<Card>
+								<CardHeader>
+									<CardTitle className="flex items-center gap-2">
+										<LayersIcon className="h-5 w-5" />
+										{event.default_page_id
+											? "Page Configuration"
+											: "Flow Configuration"}
+									</CardTitle>
+								</CardHeader>
+								{!isEditing && event.default_page_id && (
+									<CardContent className="space-y-4">
+										<div>
+											<Label className="group flex items-center hover:underline">
 												<Link
-													title="Open Flow and Node"
+													title="Open Page Editor"
 													className="flex flex-row items-center"
-													href={`/flow?id=${event.board_id}&app=${appId}&node=${event.node_id}${event.board_version ? `&version=${event.board_version.join("_")}` : ""}`}
+													href={`/library/config/page-editor?id=${appId}&pageId=${event.default_page_id}`}
 												>
-													Node ID
+													Page
 													<Button
 														size={"icon"}
 														variant={"ghost"}
@@ -1674,113 +1665,132 @@ function EventConfiguration({
 														<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
 													</Button>
 												</Link>
-											)}
-										</Label>
-										<p className="mt-1 text-sm text-muted-foreground font-mono">
-											{board.data?.nodes?.[event.node_id]?.friendly_name ??
-												"Node not found"}{" "}
-											({event.node_id})
-										</p>
-									</div>
-								</CardContent>
-							)}
-							{isEditing && isPageTargetEvent && (
-								<CardContent className="space-y-4">
-									{/* Page Selection */}
-									<div className="space-y-2">
-										<Label htmlFor="page">Page</Label>
-										<Select
-											value={formData.default_page_id ?? ""}
-											onValueChange={(value) => {
-												handleInputChange("default_page_id", value);
-												const page = (pages.data ?? []).find(
-													(p: PageListItem) => p.pageId === value,
-												);
-												if (page?.boardId) {
-													handleInputChange("board_id", page.boardId);
-												}
-												handleInputChange("board_version", undefined);
-											}}
-										>
-											<SelectTrigger>
-												<SelectValue placeholder="Select a page" />
-											</SelectTrigger>
-											<SelectContent>
-												{(pages.data ?? []).map((p: PageListItem) => (
-													<SelectItem key={p.pageId} value={p.pageId}>
-														{p.name}
-													</SelectItem>
-												))}
-											</SelectContent>
-										</Select>
-									</div>
-									<div className="space-y-2">
-										<Label>Flow Version</Label>
-										<Select
-											value={formData.board_version?.join(".") ?? "latest"}
-											onValueChange={(value) =>
-												handleInputChange(
-													"board_version",
-													value === "latest"
-														? undefined
-														: normalizeBoardVersion(
-																value.split(".").map(Number),
-															),
-												)
-											}
-										>
-											<SelectTrigger>
-												<SelectValue />
-											</SelectTrigger>
-											<SelectContent>
-												<SelectItem value="latest">Latest</SelectItem>
-												{versions.data?.map((version) => (
-													<SelectItem
-														key={version.join(".")}
-														value={version.join(".")}
+											</Label>
+											<p className="mt-1 text-sm text-muted-foreground font-mono">
+												{event.default_page_id}
+											</p>
+										</div>
+										<div>
+											<Label>Flow Version</Label>
+											<button
+												type="button"
+												className="mt-1 block w-full rounded px-2 py-1 -mx-2 text-left text-sm text-muted-foreground hover:bg-muted/60 transition-colors"
+												onClick={enterEdit}
+											>
+												{event.board_version
+													? `v${event.board_version.join(".")}`
+													: "Latest"}
+											</button>
+										</div>
+									</CardContent>
+								)}
+								{!isEditing && !event.default_page_id && (
+									<CardContent className="space-y-4">
+										<div>
+											<Label>Flow</Label>
+											<button
+												type="button"
+												className="mt-1 text-sm text-muted-foreground font-mono text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors block"
+												onClick={enterEdit}
+											>
+												{board.data?.name ?? "BOARD NOT FOUND!"}
+											</button>
+										</div>
+										<div>
+											<Label>Flow Version</Label>
+											<button
+												type="button"
+												className="mt-1 text-sm text-muted-foreground text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors block"
+												onClick={enterEdit}
+											>
+												{event.board_version
+													? event.board_version.join(".")
+													: "Latest"}
+											</button>
+										</div>
+										<div>
+											<Label className="group flex items-center hover:underline">
+												{onNavigateToFlow ? (
+													<button
+														type="button"
+														title="Open Flow and Node"
+														className="flex flex-row items-center"
+														onClick={() =>
+															onNavigateToFlow({
+																boardId: event.board_id,
+																appId,
+																nodeId: event.node_id,
+																version: event.board_version as
+																	| [number, number, number]
+																	| undefined,
+															})
+														}
 													>
-														v{version.join(".")}
-													</SelectItem>
-												))}
-											</SelectContent>
-										</Select>
-									</div>
-								</CardContent>
-							)}
-							{isEditing && !isPageTargetEvent && (
-								<CardContent className="space-y-4">
-									{/* Board Selection */}
-									<div className="space-y-4">
+														Node ID
+														<span className="p-0! w-4 h-4 ml-1 mb-[0.1rem] inline-flex">
+															<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
+														</span>
+													</button>
+												) : (
+													<Link
+														title="Open Flow and Node"
+														className="flex flex-row items-center"
+														href={`/flow?id=${event.board_id}&app=${appId}&node=${event.node_id}${event.board_version ? `&version=${event.board_version.join("_")}` : ""}`}
+													>
+														Node ID
+														<Button
+															size={"icon"}
+															variant={"ghost"}
+															className="p-0! w-4 h-4 ml-1 mb-[0.1rem]"
+														>
+															<ExternalLinkIcon className="w-4 h-4 group-hover:text-primary" />
+														</Button>
+													</Link>
+												)}
+											</Label>
+											<p className="mt-1 text-sm text-muted-foreground font-mono">
+												{board.data?.nodes?.[event.node_id]?.friendly_name ??
+													"Node not found"}{" "}
+												({event.node_id})
+											</p>
+										</div>
+									</CardContent>
+								)}
+								{isEditing && isPageTargetEvent && (
+									<CardContent className="space-y-4">
+										{/* Page Selection */}
 										<div className="space-y-2">
-											<Label htmlFor="board">Flow</Label>
+											<Label htmlFor="page">Page</Label>
 											<Select
-												value={formData.board_id}
+												value={formData.default_page_id ?? ""}
 												onValueChange={(value) => {
-													handleInputChange("board_id", value);
+													handleInputChange("default_page_id", value);
+													const page = (pages.data ?? []).find(
+														(p: PageListItem) => p.pageId === value,
+													);
+													if (page?.boardId) {
+														handleInputChange("board_id", page.boardId);
+													}
 													handleInputChange("board_version", undefined);
-													handleInputChange("node_id", undefined);
 												}}
 											>
 												<SelectTrigger>
-													<SelectValue placeholder="Select a board" />
+													<SelectValue placeholder="Select a page" />
 												</SelectTrigger>
 												<SelectContent>
-													{boards.data?.map((board) => (
-														<SelectItem key={board.id} value={board.id}>
-															{board.name}
+													{(pages.data ?? []).map((p: PageListItem) => (
+														<SelectItem key={p.pageId} value={p.pageId}>
+															{p.name}
 														</SelectItem>
 													))}
 												</SelectContent>
 											</Select>
 										</div>
-									</div>
-									{/* Board Version Selection */}
-									<div className="space-y-4">
 										<div className="space-y-2">
-											<Label htmlFor="board">Flow Version</Label>
+											<Label>Flow Version</Label>
 											<Select
 												value={formData.board_version?.join(".") ?? "latest"}
-												onValueChange={(value) => {
+												onValueChange={(value) =>
 													handleInputChange(
 														"board_version",
 														value === "latest"
@@ -1788,425 +1798,524 @@ function EventConfiguration({
 															: normalizeBoardVersion(
 																	value.split(".").map(Number),
 																),
-													);
-													handleInputChange("node_id", undefined);
-												}}
+													)
+												}
 											>
 												<SelectTrigger>
 													<SelectValue />
 												</SelectTrigger>
 												<SelectContent>
 													<SelectItem value="latest">Latest</SelectItem>
-													{versions.data?.map((board) => (
+													{versions.data?.map((version) => (
 														<SelectItem
-															key={board.join(".")}
-															value={board.join(".")}
+															key={version.join(".")}
+															value={version.join(".")}
 														>
-															v{board.join(".")}
+															v{version.join(".")}
 														</SelectItem>
 													))}
 												</SelectContent>
 											</Select>
 										</div>
-									</div>
-
-									{/* Node and Board Selection */}
-									{board.data && (
+									</CardContent>
+								)}
+								{isEditing && !isPageTargetEvent && (
+									<CardContent className="space-y-4">
+										{/* Board Selection */}
 										<div className="space-y-4">
 											<div className="space-y-2">
-												<Label htmlFor="node">Node</Label>
+												<Label htmlFor="board">Flow</Label>
 												<Select
-													value={formData.node_id}
-													onValueChange={(value) =>
-														handleInputChange("node_id", value)
-													}
+													value={formData.board_id}
+													onValueChange={(value) => {
+														handleInputChange("board_id", value);
+														handleInputChange("board_version", undefined);
+														handleInputChange("node_id", undefined);
+													}}
 												>
 													<SelectTrigger>
-														<SelectValue placeholder="Select a node" />
+														<SelectValue placeholder="Select a board" />
 													</SelectTrigger>
 													<SelectContent>
-														{Object.values(board.data.nodes)
-															.filter((node) => node.start)
-															.map((node) => (
-																<SelectItem key={node.id} value={node.id}>
-																	{node?.friendly_name || node?.name}
-																</SelectItem>
-															))}
+														{boards.data?.map((board) => (
+															<SelectItem key={board.id} value={board.id}>
+																{board.name}
+															</SelectItem>
+														))}
 													</SelectContent>
 												</Select>
 											</div>
 										</div>
-									)}
-								</CardContent>
-							)}
-						</Card>
-					</div>
-
-					{/* Version Information - Single row for metadata */}
-					<Card>
-						<CardHeader>
-							<CardTitle className="flex items-center gap-2">
-								<GitBranchIcon className="h-5 w-5" />
-								Version Information
-							</CardTitle>
-						</CardHeader>
-						<CardContent>
-							<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-								<div>
-									<Label>Event Version</Label>
-									<p className="mt-1 text-sm text-muted-foreground">
-										{event.event_version.join(".")}
-									</p>
-								</div>
-								<div>
-									<Label>Created</Label>
-									<p className="mt-1 text-sm text-muted-foreground">
-										{new Date(
-											event.created_at.secs_since_epoch * 1000,
-										).toLocaleString()}
-									</p>
-								</div>
-								<div>
-									<Label>Last Updated</Label>
-									<p className="mt-1 text-sm text-muted-foreground">
-										{new Date(
-											event.updated_at.secs_since_epoch * 1000,
-										).toLocaleString()}
-									</p>
-								</div>
-							</div>
-						</CardContent>
-					</Card>
-
-					{/* Inputs - Show saved inputs and drift detection */}
-					{event.node_id && (
-						<Card>
-							<CardHeader>
-								<div className="flex items-center justify-between">
-									<div className="flex items-center gap-2">
-										<FormInputIcon className="h-5 w-5" />
-										<CardTitle>Inputs</CardTitle>
-										{inputsDrift?.hasDrift && (
-											<Badge variant="destructive" className="ml-2">
-												<AlertTriangle className="h-3 w-3 mr-1" />
-												Drift Detected
-											</Badge>
-										)}
-									</div>
-									<Button
-										variant="outline"
-										size="sm"
-										onClick={handleRefreshInputs}
-										disabled={isRefreshingInputs}
-										className="gap-2"
-									>
-										{isRefreshingInputs ? (
-											<Loader2 className="h-4 w-4 animate-spin" />
-										) : (
-											<RefreshCw className="h-4 w-4" />
-										)}
-										Refresh from Node
-									</Button>
-								</div>
-								<CardDescription>
-									Input pins captured at publish time. Changes to the node since
-									then are shown below.
-								</CardDescription>
-							</CardHeader>
-							<CardContent className="space-y-4">
-								{inputsDrift?.isEmpty && !inputsDrift?.hasDrift && (
-									<p className="text-sm text-muted-foreground">
-										No input pins were captured for this event. Click "Refresh
-										from Node" to sync.
-									</p>
-								)}
-
-								{inputsDrift?.hasDrift && (
-									<div className="space-y-3 p-3 bg-destructive/10 rounded-md border border-destructive/20">
-										<p className="text-sm font-medium text-destructive">
-											The node's inputs have changed since this event was
-											published:
-										</p>
-										{inputsDrift.added.length > 0 && (
-											<div className="text-sm">
-												<span className="font-medium text-green-600">
-													Added:{" "}
-												</span>
-												{inputsDrift.added
-													.map((p) => p.friendly_name || p.name)
-													.join(", ")}
+										{/* Board Version Selection */}
+										<div className="space-y-4">
+											<div className="space-y-2">
+												<Label htmlFor="board">Flow Version</Label>
+												<Select
+													value={formData.board_version?.join(".") ?? "latest"}
+													onValueChange={(value) => {
+														handleInputChange(
+															"board_version",
+															value === "latest"
+																? undefined
+																: normalizeBoardVersion(
+																		value.split(".").map(Number),
+																	),
+														);
+														handleInputChange("node_id", undefined);
+													}}
+												>
+													<SelectTrigger>
+														<SelectValue />
+													</SelectTrigger>
+													<SelectContent>
+														<SelectItem value="latest">Latest</SelectItem>
+														{versions.data?.map((board) => (
+															<SelectItem
+																key={board.join(".")}
+																value={board.join(".")}
+															>
+																v{board.join(".")}
+															</SelectItem>
+														))}
+													</SelectContent>
+												</Select>
 											</div>
-										)}
-										{inputsDrift.removed.length > 0 && (
-											<div className="text-sm">
-												<span className="font-medium text-red-600">
-													Removed:{" "}
-												</span>
-												{inputsDrift.removed
-													.map((i) => i.friendly_name || i.name)
-													.join(", ")}
-											</div>
-										)}
-										{inputsDrift.changed.length > 0 && (
-											<div className="text-sm">
-												<span className="font-medium text-yellow-600">
-													Changed:{" "}
-												</span>
-												{inputsDrift.changed
-													.map((c) => `${c.name} (${c.field})`)
-													.join(", ")}
-											</div>
-										)}
-									</div>
-								)}
+										</div>
 
-								{(event.inputs ?? []).length > 0 && (
-									<div className="space-y-2">
-										<Label className="text-sm font-medium">
-											Captured Inputs ({event.inputs?.length ?? 0})
-										</Label>
-										<div className="grid gap-2">
-											{(event.inputs ?? []).map((input) => {
-												// Don't show description if it looks like an ID (all digits) or is too long
-												const showDescription =
-													input.description &&
-													!/^\d+$/.test(input.description) &&
-													input.description.length < 100;
-												return (
-													<div
-														key={input.id}
-														className="flex items-start gap-3 p-3 bg-muted/50 rounded-md text-sm"
+										{/* Node and Board Selection */}
+										{board.data && (
+											<div className="space-y-4">
+												<div className="space-y-2">
+													<Label htmlFor="node">Node</Label>
+													<Select
+														value={formData.node_id}
+														onValueChange={(value) =>
+															handleInputChange("node_id", value)
+														}
 													>
-														<div className="flex items-center gap-2 shrink-0">
-															<span className="font-medium">
-																{input.friendly_name || input.name}
-															</span>
-															<Badge variant="secondary" className="text-xs">
-																{input.data_type}
-															</Badge>
-															{input.value_type !== "Normal" && (
-																<Badge variant="outline" className="text-xs">
-																	{input.value_type}
-																</Badge>
-															)}
-														</div>
-														{showDescription && (
-															<span className="text-muted-foreground text-xs">
-																{input.description}
-															</span>
-														)}
-													</div>
-												);
-											})}
+														<SelectTrigger>
+															<SelectValue placeholder="Select a node" />
+														</SelectTrigger>
+														<SelectContent>
+															{Object.values(board.data.nodes)
+																.filter((node) => node.start)
+																.map((node) => (
+																	<SelectItem key={node.id} value={node.id}>
+																		{node?.friendly_name || node?.name}
+																	</SelectItem>
+																))}
+														</SelectContent>
+													</Select>
+												</div>
+											</div>
+										)}
+									</CardContent>
+								)}
+							</Card>
+						)}
+
+						{activeSection === "release" && (
+							<Card>
+								<CardHeader>
+									<CardTitle className="flex items-center gap-2">
+										<GitBranchIcon className="h-5 w-5" />
+										Version Information
+									</CardTitle>
+								</CardHeader>
+								<CardContent>
+									<div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+										<div>
+											<Label>Event Version</Label>
+											<p className="mt-1 text-sm text-muted-foreground">
+												{event.event_version.join(".")}
+											</p>
+										</div>
+										<div>
+											<Label>Created</Label>
+											<p className="mt-1 text-sm text-muted-foreground">
+												{new Date(
+													event.created_at.secs_since_epoch * 1000,
+												).toLocaleString()}
+											</p>
+										</div>
+										<div>
+											<Label>Last Updated</Label>
+											<p className="mt-1 text-sm text-muted-foreground">
+												{new Date(
+													event.updated_at.secs_since_epoch * 1000,
+												).toLocaleString()}
+											</p>
 										</div>
 									</div>
-								)}
-							</CardContent>
-						</Card>
-					)}
+								</CardContent>
+							</Card>
+						)}
 
-					{/* Variables - Full width due to potential size */}
-					<Card>
-						<CardHeader>
-							<div className="flex items-center justify-between">
-								<CardTitle className="flex flex-row items-center gap-2">
-									<CodeIcon className="h-5 w-5" />
-									<p>Variables</p>
-								</CardTitle>
-								{isEditing && (
-									<Dialog>
-										<DialogTrigger asChild>
-											<Button variant="outline" className="gap-2 ml-2">
-												<Plus className="h-4 w-4" />
-												Add Flow Variables
-											</Button>
-										</DialogTrigger>
-										<DialogContent className="max-w-lg">
-											<DialogHeader>
-												<DialogTitle>Add Flow Variables</DialogTitle>
-												<DialogDescription>
-													Select flow variables to override in this event
-													configuration
-												</DialogDescription>
-											</DialogHeader>
-											<div className="space-y-2 max-h-80 overflow-y-auto">
-												{board.data?.variables &&
-													Object.entries(board.data.variables)
-														.filter(([_, variable]) => variable.exposed)
-														.map(([key, variable]) => {
-															const isAlreadyAdded =
-																formData.variables.hasOwnProperty(key);
-															return (
-																<div
-																	key={key}
-																	className="flex items-center justify-between p-3 border rounded"
-																>
-																	<div className="flex-1">
-																		<div className="flex flex-row items-center gap-2">
-																			<VariableTypeIndicator
-																				valueType={variable.data_type}
-																				type={variable.value_type}
-																			/>
-																			<div className="font-medium text-sm">
-																				{variable.name}
-																			</div>
-																		</div>
-																		{variable.default_value && (
-																			<div className="text-xs text-muted-foreground mt-1">
-																				Default:{" "}
-																				<span>
-																					{String(
-																						parseUint8ArrayToJson(
-																							variable.default_value,
-																						),
-																					)}
-																				</span>
-																			</div>
-																		)}
-																	</div>
-																	<Button
-																		variant={
-																			isAlreadyAdded ? "outline" : "default"
-																		}
-																		size="sm"
-																		onClick={() => {
-																			if (isAlreadyAdded) {
-																				const newVars = {
-																					...formData.variables,
-																				};
-																				delete newVars[key];
-																				handleInputChange("variables", newVars);
-																			} else {
-																				handleInputChange("variables", {
-																					...formData.variables,
-																					[key]: variable,
-																				});
-																			}
-																		}}
-																	>
-																		{isAlreadyAdded ? "Remove" : "Add"}
-																	</Button>
-																</div>
-															);
-														})}
-												{(!board.data?.variables ||
-													Object.keys(board.data.variables).length === 0) && (
-													<div className="text-center py-8 text-muted-foreground">
-														No board variables available
-													</div>
-												)}
+						{/* Inputs - Show saved inputs and drift detection */}
+						{activeSection === "inputs" && event.node_id && (
+							<Card>
+								<CardHeader>
+									<div className="flex items-center justify-between">
+										<div className="flex items-center gap-2">
+											<FormInputIcon className="h-5 w-5" />
+											<CardTitle>Inputs</CardTitle>
+											{inputsDrift?.hasDrift && (
+												<Badge variant="destructive" className="ml-2">
+													<AlertTriangle className="h-3 w-3 mr-1" />
+													Drift Detected
+												</Badge>
+											)}
+										</div>
+										<Button
+											variant="outline"
+											size="sm"
+											onClick={handleRefreshInputs}
+											disabled={isRefreshingInputs}
+											className="gap-2"
+										>
+											{isRefreshingInputs ? (
+												<Loader2 className="h-4 w-4 animate-spin" />
+											) : (
+												<RefreshCw className="h-4 w-4" />
+											)}
+											Refresh from Node
+										</Button>
+									</div>
+									<CardDescription>
+										Input pins captured at publish time. Changes to the node
+										since then are shown below.
+									</CardDescription>
+								</CardHeader>
+								<CardContent className="space-y-4">
+									{inputsDrift?.isEmpty && !inputsDrift?.hasDrift && (
+										<p className="text-sm text-muted-foreground">
+											No input pins were captured for this event. Click "Refresh
+											from Node" to sync.
+										</p>
+									)}
+
+									{inputsDrift?.hasDrift && (
+										<div className="space-y-3 p-3 bg-destructive/10 rounded-md border border-destructive/20">
+											<p className="text-sm font-medium text-destructive">
+												The node's inputs have changed since this event was
+												published:
+											</p>
+											{inputsDrift.added.length > 0 && (
+												<div className="text-sm">
+													<span className="font-medium text-green-600">
+														Added:{" "}
+													</span>
+													{inputsDrift.added
+														.map((p) => p.friendly_name || p.name)
+														.join(", ")}
+												</div>
+											)}
+											{inputsDrift.removed.length > 0 && (
+												<div className="text-sm">
+													<span className="font-medium text-red-600">
+														Removed:{" "}
+													</span>
+													{inputsDrift.removed
+														.map((i) => i.friendly_name || i.name)
+														.join(", ")}
+												</div>
+											)}
+											{inputsDrift.changed.length > 0 && (
+												<div className="text-sm">
+													<span className="font-medium text-yellow-600">
+														Changed:{" "}
+													</span>
+													{inputsDrift.changed
+														.map((c) => `${c.name} (${c.field})`)
+														.join(", ")}
+												</div>
+											)}
+										</div>
+									)}
+
+									{(event.inputs ?? []).length > 0 && (
+										<div className="space-y-2">
+											<Label className="text-sm font-medium">
+												Captured Inputs ({event.inputs?.length ?? 0})
+											</Label>
+											<div className="grid gap-2">
+												{(event.inputs ?? []).map((input) => {
+													// Don't show description if it looks like an ID (all digits) or is too long
+													const showDescription =
+														input.description &&
+														!/^\d+$/.test(input.description) &&
+														input.description.length < 100;
+													return (
+														<div
+															key={input.id}
+															className="flex items-start gap-3 p-3 bg-muted/50 rounded-md text-sm"
+														>
+															<div className="flex items-center gap-2 shrink-0">
+																<span className="font-medium">
+																	{input.friendly_name || input.name}
+																</span>
+																<Badge variant="secondary" className="text-xs">
+																	{input.data_type}
+																</Badge>
+																{input.value_type !== "Normal" && (
+																	<Badge variant="outline" className="text-xs">
+																		{input.value_type}
+																	</Badge>
+																)}
+															</div>
+															{showDescription && (
+																<span className="text-muted-foreground text-xs">
+																	{input.description}
+																</span>
+															)}
+														</div>
+													);
+												})}
 											</div>
-										</DialogContent>
-									</Dialog>
-								)}
-							</div>
-						</CardHeader>
-						<CardContent>
-							{Object.keys(formData.variables).length > 0 ? (
-								<div className="space-y-2">
-									{Object.entries(formData.variables).map(([key, value]) => (
-										<VariableConfigCard
-											disabled={!isEditing}
-											key={key}
-											variable={value}
-											onUpdate={async (variable) => {
-												if (!isEditing) setIsEditing(true);
-												const newVars = {
-													...formData.variables,
-													[key]: {
-														...variable,
-														default_value: variable.default_value,
-													},
-												};
-												handleInputChange("variables", newVars);
-											}}
+										</div>
+									)}
+								</CardContent>
+							</Card>
+						)}
+
+						{/* Variables - Full width due to potential size */}
+						{activeSection === "variables" && (
+							<Card>
+								<CardHeader>
+									<div className="flex items-center justify-between">
+										<CardTitle className="flex flex-row items-center gap-2">
+											<CodeIcon className="h-5 w-5" />
+											<p>Variables</p>
+										</CardTitle>
+										{isEditing && (
+											<Dialog>
+												<DialogTrigger asChild>
+													<Button variant="outline" className="gap-2 ml-2">
+														<Plus className="h-4 w-4" />
+														Add Flow Variables
+													</Button>
+												</DialogTrigger>
+												<DialogContent className="max-w-lg">
+													<DialogHeader>
+														<DialogTitle>Add Flow Variables</DialogTitle>
+														<DialogDescription>
+															Select flow variables to override in this event
+															configuration
+														</DialogDescription>
+													</DialogHeader>
+													<div className="space-y-2 max-h-80 overflow-y-auto">
+														{board.data?.variables &&
+															Object.entries(board.data.variables)
+																.filter(([_, variable]) => variable.exposed)
+																.map(([key, variable]) => {
+																	const isAlreadyAdded =
+																		formData.variables.hasOwnProperty(key);
+																	return (
+																		<div
+																			key={key}
+																			className="flex items-center justify-between p-3 border rounded"
+																		>
+																			<div className="flex-1">
+																				<div className="flex flex-row items-center gap-2">
+																					<VariableTypeIndicator
+																						valueType={variable.data_type}
+																						type={variable.value_type}
+																					/>
+																					<div className="font-medium text-sm">
+																						{variable.name}
+																					</div>
+																				</div>
+																				{variable.default_value && (
+																					<div className="text-xs text-muted-foreground mt-1">
+																						Default:{" "}
+																						<span>
+																							{String(
+																								parseUint8ArrayToJson(
+																									variable.default_value,
+																								),
+																							)}
+																						</span>
+																					</div>
+																				)}
+																			</div>
+																			<Button
+																				variant={
+																					isAlreadyAdded ? "outline" : "default"
+																				}
+																				size="sm"
+																				onClick={() => {
+																					if (isAlreadyAdded) {
+																						const newVars = {
+																							...formData.variables,
+																						};
+																						delete newVars[key];
+																						handleInputChange(
+																							"variables",
+																							newVars,
+																						);
+																					} else {
+																						handleInputChange("variables", {
+																							...formData.variables,
+																							[key]: variable,
+																						});
+																					}
+																				}}
+																			>
+																				{isAlreadyAdded ? "Remove" : "Add"}
+																			</Button>
+																		</div>
+																	);
+																})}
+														{(!board.data?.variables ||
+															Object.keys(board.data.variables).length ===
+																0) && (
+															<div className="text-center py-8 text-muted-foreground">
+																No board variables available
+															</div>
+														)}
+													</div>
+												</DialogContent>
+											</Dialog>
+										)}
+									</div>
+								</CardHeader>
+								<CardContent>
+									{Object.keys(formData.variables).length > 0 ? (
+										<div className="space-y-2">
+											{Object.entries(formData.variables).map(
+												([key, value]) => (
+													<VariableConfigCard
+														disabled={!isEditing}
+														key={key}
+														variable={value}
+														onUpdate={async (variable) => {
+															if (!isEditing) setIsEditing(true);
+															const newVars = {
+																...formData.variables,
+																[key]: {
+																	...variable,
+																	default_value: variable.default_value,
+																},
+															};
+															handleInputChange("variables", newVars);
+														}}
+													/>
+												),
+											)}
+										</div>
+									) : (
+										<p className="text-sm text-muted-foreground">
+											{isEditing
+												? "No variables configured. Click 'Add Flow Variables' to get started."
+												: "No variables configured"}
+										</p>
+									)}
+								</CardContent>
+							</Card>
+						)}
+
+						{/* Node Specific Configuration - Full width due to potential size */}
+						{isTriggerSection(activeSection) && board.data && (
+							<Card>
+								<CardHeader>
+									<CardTitle className="flex items-center gap-2">
+										<CogIcon className="h-5 w-5" />
+										Node Configuration
+									</CardTitle>
+								</CardHeader>
+								{/* Always interactive. Gating these behind edit mode made every
+								    control `disabled`, and disabled controls emit no pointer
+								    events — so clicking one to "start editing" did nothing at
+								    all. Edit mode now begins at the first real change. */}
+								<CardContent className="space-y-4 flex flex-col items-start">
+									<EventTranslation
+										section={activeSection}
+										appId={appId}
+										eventType={formData.event_type}
+										eventConfig={eventMapping}
+										editing
+										// The working copy, not the saved event — otherwise the
+										// fields render the last-saved values and Discard has
+										// nothing to reset them to.
+										config={parsedConfig}
+										board={board.data}
+										nodeId={formData.node_id}
+										hub={hub}
+										eventId={event.id}
+										canExecuteLocally={canExecuteLocally}
+										eventExecutionMode={
+											formData.execution_mode ?? IEventExecutionMode.Local
+										}
+										onUpdate={(config) => {
+											if (!isEditing) setIsEditing(true);
+											handleInputChange(
+												"config",
+												convertJsonToUint8Array(config),
+											);
+										}}
+									/>
+								</CardContent>
+							</Card>
+						)}
+
+						{/* Trigger is the landing section, so it must never be blank. */}
+						{isTriggerSection(activeSection) && !board.data && (
+							<Card>
+								<CardContent className="py-10 text-center text-sm text-muted-foreground">
+									{formData.board_id
+										? "Loading the flow this event is bound to…"
+										: "This event isn't bound to a flow yet, so there is nothing type-specific to configure. Pick one under Flow & target."}
+								</CardContent>
+							</Card>
+						)}
+
+						{/* Notes — release notes live with the version they describe */}
+						{activeSection === "release" && (
+							<Card>
+								<CardHeader>
+									<CardTitle className="flex items-center gap-2">
+										<StickyNote className="h-5 w-5" />
+										Notes
+									</CardTitle>
+								</CardHeader>
+								<CardContent>
+									{isEditing ? (
+										<Textarea
+											value={formData.notes?.NOTES ?? ""}
+											onChange={(e) =>
+												handleInputChange("notes", { NOTES: e.target.value })
+											}
+											placeholder="Add notes about this event..."
+											rows={4}
 										/>
-									))}
-								</div>
-							) : (
-								<p className="text-sm text-muted-foreground">
-									{isEditing
-										? "No variables configured. Click 'Add Flow Variables' to get started."
-										: "No variables configured"}
-								</p>
-							)}
-						</CardContent>
-					</Card>
+									) : (
+										<button
+											type="button"
+											className="text-sm text-muted-foreground whitespace-pre-wrap text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
+											onClick={enterEdit}
+										>
+											{event.notes?.NOTES ?? "Click to add notes..."}
+										</button>
+									)}
+								</CardContent>
+							</Card>
+						)}
+					</div>
 
-					{/* Node Specific Configuration - Full width due to potential size */}
-					{board.data && (
-						<Card>
-							<CardHeader>
-								<CardTitle className="flex items-center gap-2">
-									<CogIcon className="h-5 w-5" />
-									Node Configuration
-								</CardTitle>
-							</CardHeader>
-							<CardContent
-								className={`space-y-4 flex flex-col items-start ${!isEditing ? "cursor-pointer" : ""}`}
-								onClick={!isEditing ? enterEdit : undefined}
-							>
-								<EventTranslation
-									appId={appId}
-									eventType={formData.event_type}
-									eventConfig={eventMapping}
-									editing={isEditing}
-									config={parseUint8ArrayToJson(event.config ?? []) ?? {}}
-									board={board.data}
-									nodeId={formData.node_id}
-									hub={hub}
-									eventId={event.id}
-									canExecuteLocally={canExecuteLocally}
-									eventExecutionMode={
-										formData.execution_mode ?? IEventExecutionMode.Local
-									}
-									onUpdate={(config) => {
-										console.dir(config);
-										if (!isEditing) setIsEditing(true);
-										handleInputChange(
-											"config",
-											convertJsonToUint8Array(config),
-										);
-									}}
-								/>
-							</CardContent>
-						</Card>
-					)}
-
-					{/* Notes */}
-					<Card>
-						<CardHeader>
-							<CardTitle className="flex items-center gap-2">
-								<StickyNote className="h-5 w-5" />
-								Notes
-							</CardTitle>
-						</CardHeader>
-						<CardContent>
-							{isEditing ? (
-								<Textarea
-									value={formData.notes?.NOTES ?? ""}
-									onChange={(e) =>
-										handleInputChange("notes", { NOTES: e.target.value })
-									}
-									placeholder="Add notes about this event..."
-									rows={4}
-								/>
-							) : (
-								<button
-									type="button"
-									className="text-sm text-muted-foreground whitespace-pre-wrap text-left w-full rounded px-2 py-1 -mx-2 hover:bg-muted/60 transition-colors"
-									onClick={enterEdit}
-								>
-									{event.notes?.NOTES ?? "Click to add notes..."}
-								</button>
-							)}
-						</CardContent>
-					</Card>
+					<aside className="hidden min-w-0 flex-col gap-3 xl:flex">
+						<SetupChecklist
+							event={formData}
+							config={parsedConfig}
+							onNavigate={setActiveSection}
+						/>
+					</aside>
 				</div>
 			</div>
 
-			{/* Floating Save Bar */}
-			{isEditing && (
+			{/* Floating Save Bar — driven by actual changes, since the config
+			    surface is always interactive and "edit mode" no longer means the
+			    user has changed anything. */}
+			{(isDirty || isEditing) && (
 				<div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
 					<div className="container mx-auto flex items-center justify-between py-3 px-4">
 						<p className="text-sm text-muted-foreground">
@@ -2248,1304 +2357,6 @@ function EventConfiguration({
 				onConfirmAll={handleOAuthConfirmAll}
 				onCancel={handleOAuthCancel}
 			/>
-		</div>
-	);
-}
-
-// Helper component for activate sink button in table
-function TableActivateSinkButton({
-	event,
-	appId,
-	onActivated,
-	tokenStore,
-	consentStore,
-	hub,
-	onStartOAuth,
-	onRefreshToken,
-}: {
-	event: IEvent;
-	appId: string;
-	onActivated: () => void;
-	tokenStore?: IOAuthTokenStoreWithPending;
-	consentStore?: IOAuthConsentStore;
-	hub?: IHub;
-	onStartOAuth?: (provider: IOAuthProvider) => Promise<void>;
-	onRefreshToken?: (
-		provider: IOAuthProvider,
-		token: IStoredOAuthToken,
-	) => Promise<IStoredOAuthToken>;
-}) {
-	const backend = useBackend();
-	const [showDialog, setShowDialog] = useState(false);
-
-	// OAuth consent dialog state
-	const [showOAuthConsent, setShowOAuthConsent] = useState(false);
-	const [missingProviders, setMissingProviders] = useState<IOAuthProvider[]>(
-		[],
-	);
-	const [authorizedProviders, setAuthorizedProviders] = useState<Set<string>>(
-		new Set(),
-	);
-	const [preAuthorizedProviders, setPreAuthorizedProviders] = useState<
-		Set<string>
-	>(new Set());
-	const [pendingOAuthTokens, setPendingOAuthTokens] = useState<
-		Record<string, IOAuthToken>
-	>({});
-
-	const handleActivate = async (
-		patOrOAuthTokens?: string | Record<string, IOAuthToken>,
-	) => {
-		try {
-			// Determine if we got a PAT string or OAuth tokens
-			const pat =
-				typeof patOrOAuthTokens === "string" ? patOrOAuthTokens : undefined;
-			const oauthTokens =
-				typeof patOrOAuthTokens === "object" ? patOrOAuthTokens : undefined;
-
-			// Ensure the event is set to active before upserting
-			const activeEvent = { ...event, active: true };
-			await backend.eventState.upsertEvent(
-				appId,
-				activeEvent,
-				undefined,
-				pat,
-				oauthTokens,
-			);
-			setShowDialog(false);
-			setShowOAuthConsent(false);
-			onActivated();
-		} catch (error) {
-			console.error("Failed to activate sink:", error);
-		}
-	};
-
-	const handleClick = async () => {
-		const isOffline = await backend.isOffline(appId);
-
-		// Check OAuth requirements if tokenStore is provided
-		if (!isOffline && tokenStore) {
-			try {
-				let oauthResult:
-					| Awaited<ReturnType<typeof checkOAuthTokens>>
-					| undefined;
-
-				// Try board first, fallback to prerun for execute-only permissions
-				const board = await backend.boardState
-					.getBoard(
-						appId,
-						event.board_id,
-						event.board_version as [number, number, number] | undefined,
-					)
-					.catch(() => undefined);
-
-				if (board) {
-					oauthResult = await checkOAuthTokens(board, tokenStore, hub, {
-						refreshToken: onRefreshToken,
-					});
-				} else if (backend.eventState.prerunEvent) {
-					const prerun = await backend.eventState.prerunEvent(
-						appId,
-						event.id,
-						event.board_version as [number, number, number] | undefined,
-					);
-					oauthResult = await checkOAuthTokensFromPrerun(
-						prerun.oauth_requirements,
-						tokenStore,
-						hub,
-						{ refreshToken: onRefreshToken },
-					);
-				}
-
-				if (oauthResult && oauthResult.requiredProviders.length > 0) {
-					// Check consent for providers that have tokens but might not have consent for this app
-					const consentedIds = consentStore
-						? await consentStore.getConsentedProviderIds(appId)
-						: new Set<string>();
-					const providersNeedingConsent: IOAuthProvider[] = [];
-					const hasTokenNeedsConsent: Set<string> = new Set();
-
-					// Add providers that are missing tokens
-					providersNeedingConsent.push(...oauthResult.missingProviders);
-
-					// Also add providers that have tokens but no consent for this specific app
-					for (const provider of oauthResult.requiredProviders) {
-						const hasToken = oauthResult.tokens[provider.id] !== undefined;
-						const hasConsent = consentedIds.has(provider.id);
-
-						if (hasToken && !hasConsent) {
-							hasTokenNeedsConsent.add(provider.id);
-							providersNeedingConsent.push(provider);
-						}
-					}
-
-					if (providersNeedingConsent.length > 0) {
-						// Store tokens for later use and show OAuth consent dialog
-						setPendingOAuthTokens(oauthResult.tokens);
-						setMissingProviders(providersNeedingConsent);
-						setPreAuthorizedProviders(hasTokenNeedsConsent);
-						setAuthorizedProviders(new Set());
-						setShowOAuthConsent(true);
-						return;
-					}
-
-					// All OAuth is satisfied, proceed with activation
-					if (Object.keys(oauthResult.tokens).length > 0) {
-						await handleActivate(oauthResult.tokens);
-						return;
-					}
-				}
-			} catch (error) {
-				console.error("Failed to check OAuth:", error);
-			}
-		}
-
-		if (!isOffline) {
-			// Online project - show PAT dialog
-			setShowDialog(true);
-		} else {
-			// Offline project - directly activate without PAT
-			await handleActivate();
-		}
-	};
-
-	const handleOAuthAuthorize = async (providerId: string) => {
-		const provider = missingProviders.find((p) => p.id === providerId);
-		if (!provider || !onStartOAuth) return;
-		await onStartOAuth(provider);
-	};
-
-	const handleOAuthConfirmAll = async (rememberConsent: boolean) => {
-		if (rememberConsent && consentStore) {
-			for (const provider of missingProviders) {
-				await consentStore.setConsent(appId, provider.id, provider.scopes);
-			}
-		}
-
-		setShowOAuthConsent(false);
-
-		// Collect all tokens (pending + newly authorized)
-		const allTokens = { ...pendingOAuthTokens };
-		for (const providerId of authorizedProviders) {
-			if (tokenStore) {
-				const token = await tokenStore.getToken(providerId);
-				if (token && !tokenStore.isExpired(token)) {
-					allTokens[providerId] = {
-						access_token: token.access_token,
-						refresh_token: token.refresh_token,
-						expires_at: token.expires_at
-							? Math.floor(token.expires_at / 1000)
-							: undefined,
-						token_type: token.token_type ?? "Bearer",
-					};
-				}
-			}
-		}
-
-		if (Object.keys(allTokens).length > 0) {
-			await handleActivate(allTokens);
-		} else {
-			// No OAuth tokens needed, show PAT dialog
-			setShowDialog(true);
-		}
-	};
-
-	const handleOAuthCancel = () => {
-		setShowOAuthConsent(false);
-		setMissingProviders([]);
-		setAuthorizedProviders(new Set());
-		setPreAuthorizedProviders(new Set());
-		setPendingOAuthTokens({});
-	};
-
-	// Poll for OAuth token updates while the consent dialog is open
-	useEffect(() => {
-		if (!showOAuthConsent || !tokenStore || missingProviders.length === 0) {
-			return;
-		}
-
-		const checkTokens = async () => {
-			const newlyAuthorized = new Set(authorizedProviders);
-			const newTokens = { ...pendingOAuthTokens };
-
-			for (const provider of missingProviders) {
-				if (
-					newlyAuthorized.has(provider.id) ||
-					preAuthorizedProviders.has(provider.id)
-				) {
-					continue;
-				}
-
-				const token = await tokenStore.getToken(provider.id);
-				if (token && !tokenStore.isExpired(token)) {
-					newlyAuthorized.add(provider.id);
-					newTokens[provider.id] = {
-						access_token: token.access_token,
-						refresh_token: token.refresh_token,
-						expires_at: token.expires_at
-							? Math.floor(token.expires_at / 1000)
-							: undefined,
-						token_type: token.token_type ?? "Bearer",
-					};
-				}
-			}
-
-			if (newlyAuthorized.size !== authorizedProviders.size) {
-				setAuthorizedProviders(newlyAuthorized);
-				setPendingOAuthTokens(newTokens);
-			}
-		};
-
-		// Check immediately and then poll every second
-		checkTokens();
-		const interval = setInterval(checkTokens, 1000);
-		return () => clearInterval(interval);
-	}, [
-		showOAuthConsent,
-		tokenStore,
-		missingProviders,
-		authorizedProviders,
-		preAuthorizedProviders,
-		pendingOAuthTokens,
-	]);
-
-	return (
-		<>
-			<Button
-				variant="ghost"
-				size="sm"
-				className="h-6 px-2 text-xs gap-1"
-				onClick={handleClick}
-			>
-				<Play className="h-3 w-3" />
-				Activate
-			</Button>
-			<PatSelectorDialog
-				open={showDialog}
-				onOpenChange={setShowDialog}
-				onPatSelected={handleActivate}
-				title="Activate Event Sink"
-				description="Select or create a Personal Access Token to activate this event sink."
-			/>
-			<OAuthConsentDialog
-				open={showOAuthConsent}
-				onOpenChange={setShowOAuthConsent}
-				providers={missingProviders}
-				authorizedProviders={authorizedProviders}
-				preAuthorizedProviders={preAuthorizedProviders}
-				onAuthorize={handleOAuthAuthorize}
-				onConfirmAll={handleOAuthConfirmAll}
-				onCancel={handleOAuthCancel}
-			/>
-		</>
-	);
-}
-
-interface IEventsTableProps {
-	events: IEvent[];
-	boardsMap: Map<string, string>;
-	appId: string;
-	eventMapping: IEventMapping;
-	/** Optional list of event types that are UI-capable and should have a route path. */
-	uiEventTypes?: string[];
-	onEdit: (event: IEvent) => void;
-	onDelete: (eventId: string) => void;
-	onNavigateToNode: (event: IEvent, nodeId: string) => void;
-	onCreateEvent: () => void;
-	/** Token store for OAuth checks. If not provided, OAuth checks are skipped. */
-	tokenStore?: IOAuthTokenStoreWithPending;
-	/** Consent store for OAuth consent tracking. */
-	consentStore?: IOAuthConsentStore;
-	/** Hub configuration for OAuth provider resolution */
-	hub?: IHub;
-	/** Whether the app is offline (local-only) */
-	isOffline?: boolean;
-	/** Callback to start OAuth authorization for a provider */
-	onStartOAuth?: (provider: IOAuthProvider) => Promise<void>;
-	/** Optional callback to refresh expired tokens */
-	onRefreshToken?: (
-		provider: IOAuthProvider,
-		token: IStoredOAuthToken,
-	) => Promise<IStoredOAuthToken>;
-}
-
-function EventsTable({
-	events,
-	boardsMap,
-	appId,
-	eventMapping,
-	uiEventTypes,
-	onEdit,
-	onDelete,
-	onNavigateToNode,
-	onCreateEvent,
-	tokenStore,
-	consentStore,
-	hub,
-	onStartOAuth,
-	onRefreshToken,
-	isOffline,
-}: Readonly<IEventsTableProps>) {
-	const backend = useBackend();
-	const invalidate = useInvalidateInvoke();
-	const uiEventTypeSet = useMemo(
-		() => new Set(uiEventTypes ?? []),
-		[uiEventTypes],
-	);
-	const normalizePath = useCallback((path: unknown): string => {
-		const raw = String(path ?? "").trim();
-		if (!raw) return "/";
-		const withoutQuery = raw.split("?")[0] ?? raw;
-		if (!withoutQuery || withoutQuery === "/") return "/";
-		return withoutQuery.startsWith("/") ? withoutQuery : `/${withoutQuery}`;
-	}, []);
-	const [currentPage, setCurrentPage] = useState(1);
-	const [pageSize, setPageSize] = useState(50);
-	const [searchTerm, setSearchTerm] = useState("");
-	const [viewMode, setViewMode] = useState<ViewMode>("list");
-	const [sinkStatuses, setSinkStatuses] = useState<Map<string, boolean>>(
-		new Map(),
-	);
-	const [eventNodeNames, setEventNodeNames] = useState<Map<string, string>>(
-		new Map(),
-	);
-
-	const routes = useInvoke(
-		backend.routeState.getRoutes,
-		backend.routeState,
-		[appId],
-		(appId ?? "") !== "",
-	);
-
-	const routeByEventId = useMemo(() => {
-		const map = new Map<string, string>();
-		routes.data?.forEach((r) => {
-			map.set(r.eventId, normalizePath(r.path));
-		});
-		return map;
-	}, [routes.data, normalizePath]);
-
-	// Fetch boards to get node names for events
-	useEffect(() => {
-		const fetchNodeNames = async () => {
-			const nodeNamesMap = new Map<string, string>();
-			const uniqueBoardIds = [...new Set(events.map((e) => e.board_id))];
-
-			for (const boardId of uniqueBoardIds) {
-				try {
-					const board = await backend.boardState.getBoard(appId, boardId);
-					// Map each event to its node name
-					events.forEach((event) => {
-						if (event.board_id === boardId && event.node_id) {
-							const node = board?.nodes?.[event.node_id];
-							if (node?.name) {
-								nodeNamesMap.set(event.id, node.name);
-							}
-						}
-					});
-				} catch (error) {
-					console.error(`Failed to fetch board ${boardId}:`, error);
-				}
-			}
-			setEventNodeNames(nodeNamesMap);
-		};
-
-		if (events.length > 0) {
-			fetchNodeNames();
-		}
-	}, [events, appId, backend.boardState]);
-
-	const filteredEvents = useMemo(() => {
-		if (!searchTerm) return events;
-		return events.filter(
-			(event) =>
-				event.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-				event.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-				event.event_type.toLowerCase().includes(searchTerm.toLowerCase()) ||
-				(routeByEventId.get(event.id) ?? "")
-					.toLowerCase()
-					.includes(searchTerm.toLowerCase()) ||
-				(boardsMap.get(event.board_id) ?? "")
-					.toLowerCase()
-					.includes(searchTerm.toLowerCase()),
-		);
-	}, [events, searchTerm, boardsMap]);
-
-	const orderedEvents = useMemo(() => {
-		const copy = [...filteredEvents];
-		copy.sort((a, b) => {
-			const aIsUi = uiEventTypeSet.has(a.event_type);
-			const bIsUi = uiEventTypeSet.has(b.event_type);
-			if (aIsUi !== bIsUi) return aIsUi ? -1 : 1;
-			return (a.priority ?? 0) - (b.priority ?? 0);
-		});
-		return copy;
-	}, [filteredEvents, uiEventTypeSet]);
-
-	const totalPages = Math.ceil(orderedEvents.length / pageSize);
-	const startIndex = (currentPage - 1) * pageSize;
-	const paginatedEvents = orderedEvents.slice(
-		startIndex,
-		startIndex + pageSize,
-	);
-
-	// Check sink status for events that require it
-	useEffect(() => {
-		const checkSinkStatuses = async () => {
-			const statuses = new Map<string, boolean>();
-			const eventIds = paginatedEvents.map((e) => e.id).join(",");
-
-			for (const event of paginatedEvents) {
-				const nodeName = eventNodeNames.get(event.id);
-				if (eventRequiresSink(eventMapping, event, nodeName)) {
-					try {
-						const isActive = await backend.eventState.isEventSinkActive(
-							event.id,
-						);
-						statuses.set(event.id, isActive);
-					} catch (error) {
-						console.error(
-							`Failed to check sink status for event ${event.id}:`,
-							error,
-						);
-						statuses.set(event.id, false);
-					}
-				}
-			}
-			setSinkStatuses(statuses);
-		};
-
-		if (paginatedEvents.length > 0 && eventNodeNames.size > 0) {
-			checkSinkStatuses();
-		}
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [
-		paginatedEvents.map((e) => e.id).join(","),
-		eventNodeNames.size,
-		backend.eventState,
-	]);
-
-	const formatRelativeTime = useCallback((timestamp: number) => {
-		const now = Date.now();
-		const eventTime = timestamp * 1000;
-		const diffMs = now - eventTime;
-		const diffHours = diffMs / (1000 * 60 * 60);
-		const diffDays = diffMs / (1000 * 60 * 60 * 24);
-
-		if (diffHours < 24) {
-			return `${Math.floor(diffHours)}h ago`;
-		}
-		if (diffDays < 7) {
-			return `${Math.floor(diffDays)}d ago`;
-		}
-		return new Date(eventTime).toLocaleDateString();
-	}, []);
-
-	const truncateText = useCallback(
-		(text: string, maxLength = 50) =>
-			text.length > maxLength ? `${text.slice(0, maxLength)}...` : text,
-		[],
-	);
-
-	useEffect(() => {
-		setCurrentPage(1);
-	}, [searchTerm]);
-
-	// Compact, non-card list item for all screens
-	const ListEventItem = ({ event }: { event: IEvent }) => {
-		const nodeName = eventNodeNames.get(event.id);
-		const requiresSink = eventRequiresSink(eventMapping, event, nodeName);
-		const sinkActive = sinkStatuses.get(event.id);
-		const isPageTargetEvent = !!event.default_page_id;
-		const isUiEvent = uiEventTypeSet.has(event.event_type) || isPageTargetEvent;
-		const routePath = routeByEventId.get(event.id);
-		const [showActivateDialog, setShowActivateDialog] = useState(false);
-		const [isEditingRoute, setIsEditingRoute] = useState(false);
-		const [routeInput, setRouteInput] = useState(routePath ?? "");
-		const [routeSaving, setRouteSaving] = useState(false);
-
-		// OAuth consent dialog state
-		const [showOAuthConsent, setShowOAuthConsent] = useState(false);
-		const [missingProviders, setMissingProviders] = useState<IOAuthProvider[]>(
-			[],
-		);
-		const [authorizedProviders, setAuthorizedProviders] = useState<Set<string>>(
-			new Set(),
-		);
-		const [preAuthorizedProviders, setPreAuthorizedProviders] = useState<
-			Set<string>
-		>(new Set());
-		const [pendingOAuthTokens, setPendingOAuthTokens] = useState<
-			Record<string, IOAuthToken>
-		>({});
-
-		const handleRouteSave = async () => {
-			if (!appId) return;
-			setRouteSaving(true);
-			try {
-				const normalized = normalizePath(routeInput.trim());
-				if (normalized) {
-					// Delete old route if it exists and is different
-					if (routePath && routePath !== normalized) {
-						await backend.routeState.deleteRouteByPath(appId, routePath);
-					}
-					await backend.routeState.setRoute(appId, normalized, event.id);
-				} else if (routePath) {
-					// Remove route if input is empty
-					await backend.routeState.deleteRouteByPath(appId, routePath);
-				}
-				await invalidate(backend.routeState.getRoutes, [appId]);
-			} catch (error) {
-				console.error("Failed to save route:", error);
-			} finally {
-				setRouteSaving(false);
-				setIsEditingRoute(false);
-			}
-		};
-
-		const handleActivateSink = async (
-			patOrOAuthTokens?: string | Record<string, IOAuthToken>,
-		) => {
-			try {
-				// Determine if we got a PAT string or OAuth tokens
-				const pat =
-					typeof patOrOAuthTokens === "string" ? patOrOAuthTokens : undefined;
-				const oauthTokens =
-					typeof patOrOAuthTokens === "object" ? patOrOAuthTokens : undefined;
-
-				// Ensure the event is set to active before upserting
-				const activeEvent = { ...event, active: true };
-				await backend.eventState.upsertEvent(
-					appId,
-					activeEvent,
-					undefined,
-					pat,
-					oauthTokens,
-				);
-				setShowActivateDialog(false);
-				setShowOAuthConsent(false);
-				// Trigger a re-check of sink statuses
-				const checkStatus = async () => {
-					const statuses = new Map<string, boolean>();
-					for (const ev of paginatedEvents) {
-						const evNodeName = eventNodeNames.get(ev.id);
-						if (eventRequiresSink(eventMapping, ev, evNodeName)) {
-							try {
-								const isActive = await backend.eventState.isEventSinkActive(
-									ev.id,
-								);
-								statuses.set(ev.id, isActive);
-							} catch (error) {
-								console.error(
-									`Failed to check sink status for event ${ev.id}:`,
-									error,
-								);
-								statuses.set(ev.id, false);
-							}
-						}
-					}
-					setSinkStatuses(statuses);
-				};
-				await checkStatus();
-			} catch (error) {
-				console.error("Failed to activate sink:", error);
-			}
-		};
-
-		const handleActivateClick = async () => {
-			const isOffline = await backend.isOffline(appId);
-
-			// Check OAuth requirements if tokenStore is provided
-			if (!isOffline && tokenStore) {
-				try {
-					let oauthResult:
-						| Awaited<ReturnType<typeof checkOAuthTokens>>
-						| undefined;
-
-					// Try board first, fallback to prerun for execute-only permissions
-					const board = await backend.boardState
-						.getBoard(
-							appId,
-							event.board_id,
-							event.board_version as [number, number, number] | undefined,
-						)
-						.catch(() => undefined);
-
-					if (board) {
-						oauthResult = await checkOAuthTokens(board, tokenStore, hub, {
-							refreshToken: onRefreshToken,
-						});
-					} else if (backend.eventState.prerunEvent) {
-						const prerun = await backend.eventState.prerunEvent(
-							appId,
-							event.id,
-							event.board_version as [number, number, number] | undefined,
-						);
-						oauthResult = await checkOAuthTokensFromPrerun(
-							prerun.oauth_requirements,
-							tokenStore,
-							hub,
-							{ refreshToken: onRefreshToken },
-						);
-					}
-
-					if (oauthResult && oauthResult.requiredProviders.length > 0) {
-						// Check consent for providers that have tokens but might not have consent for this app
-						const consentedIds = consentStore
-							? await consentStore.getConsentedProviderIds(appId)
-							: new Set<string>();
-						const providersNeedingConsent: IOAuthProvider[] = [];
-						const hasTokenNeedsConsent: Set<string> = new Set();
-
-						// Add providers that are missing tokens
-						providersNeedingConsent.push(...oauthResult.missingProviders);
-
-						// Also add providers that have tokens but no consent for this specific app
-						for (const provider of oauthResult.requiredProviders) {
-							const hasToken = oauthResult.tokens[provider.id] !== undefined;
-							const hasConsent = consentedIds.has(provider.id);
-
-							if (hasToken && !hasConsent) {
-								hasTokenNeedsConsent.add(provider.id);
-								providersNeedingConsent.push(provider);
-							}
-						}
-
-						if (providersNeedingConsent.length > 0) {
-							// Store tokens for later use and show OAuth consent dialog
-							setPendingOAuthTokens(oauthResult.tokens);
-							setMissingProviders(providersNeedingConsent);
-							setPreAuthorizedProviders(hasTokenNeedsConsent);
-							setAuthorizedProviders(new Set());
-							setShowOAuthConsent(true);
-							return;
-						}
-
-						// All OAuth is satisfied, proceed with activation
-						if (Object.keys(oauthResult.tokens).length > 0) {
-							await handleActivateSink(oauthResult.tokens);
-							return;
-						}
-					}
-				} catch (error) {
-					console.error("Failed to check OAuth:", error);
-				}
-			}
-
-			if (!isOffline) {
-				// Online project - show PAT dialog
-				setShowActivateDialog(true);
-			} else {
-				// Offline project - directly activate without PAT
-				await handleActivateSink();
-			}
-		};
-
-		const handleOAuthAuthorize = async (providerId: string) => {
-			const provider = missingProviders.find((p) => p.id === providerId);
-			if (!provider || !onStartOAuth) return;
-			await onStartOAuth(provider);
-		};
-
-		const handleOAuthConfirmAll = async (rememberConsent: boolean) => {
-			if (rememberConsent && consentStore) {
-				for (const provider of missingProviders) {
-					await consentStore.setConsent(appId, provider.id, provider.scopes);
-				}
-			}
-
-			setShowOAuthConsent(false);
-
-			// Collect all tokens (pending + newly authorized)
-			const allTokens = { ...pendingOAuthTokens };
-			for (const providerId of authorizedProviders) {
-				if (tokenStore) {
-					const token = await tokenStore.getToken(providerId);
-					if (token && !tokenStore.isExpired(token)) {
-						allTokens[providerId] = {
-							access_token: token.access_token,
-							refresh_token: token.refresh_token,
-							expires_at: token.expires_at
-								? Math.floor(token.expires_at / 1000)
-								: undefined,
-							token_type: token.token_type ?? "Bearer",
-						};
-					}
-				}
-			}
-
-			if (Object.keys(allTokens).length > 0) {
-				await handleActivateSink(allTokens);
-			} else {
-				// No OAuth tokens needed, show PAT dialog
-				setShowActivateDialog(true);
-			}
-		};
-
-		const handleOAuthCancel = () => {
-			setShowOAuthConsent(false);
-			setMissingProviders([]);
-			setAuthorizedProviders(new Set());
-			setPreAuthorizedProviders(new Set());
-			setPendingOAuthTokens({});
-		};
-
-		// Poll for OAuth token updates while the consent dialog is open
-		useEffect(() => {
-			if (!showOAuthConsent || !tokenStore || missingProviders.length === 0) {
-				return;
-			}
-
-			const checkTokens = async () => {
-				const newlyAuthorized = new Set(authorizedProviders);
-				const newTokens = { ...pendingOAuthTokens };
-
-				for (const provider of missingProviders) {
-					if (
-						newlyAuthorized.has(provider.id) ||
-						preAuthorizedProviders.has(provider.id)
-					) {
-						continue;
-					}
-
-					const token = await tokenStore.getToken(provider.id);
-					if (token && !tokenStore.isExpired(token)) {
-						newlyAuthorized.add(provider.id);
-						newTokens[provider.id] = {
-							access_token: token.access_token,
-							refresh_token: token.refresh_token,
-							expires_at: token.expires_at
-								? Math.floor(token.expires_at / 1000)
-								: undefined,
-							token_type: token.token_type ?? "Bearer",
-						};
-					}
-				}
-
-				if (newlyAuthorized.size !== authorizedProviders.size) {
-					setAuthorizedProviders(newlyAuthorized);
-					setPendingOAuthTokens(newTokens);
-				}
-			};
-
-			// Check immediately and then poll every second
-			checkTokens();
-			const interval = setInterval(checkTokens, 1000);
-			return () => clearInterval(interval);
-		}, [
-			showOAuthConsent,
-			tokenStore,
-			missingProviders,
-			authorizedProviders,
-			preAuthorizedProviders,
-			pendingOAuthTokens,
-		]);
-
-		return (
-			<>
-				<div className="px-3 py-2.5 border-b hover:bg-muted/50 transition-colors">
-					{/* Single row layout */}
-					<div className="flex items-center gap-3">
-						{/* Status indicator */}
-						<div
-							className={`w-2 h-2 rounded-full shrink-0 ${event.active ? "bg-green-500" : "bg-orange-500"}`}
-						/>
-
-						{/* Name + type */}
-						<div className="min-w-0 flex-1">
-							<div className="flex items-center gap-2">
-								<span className="font-medium truncate">{event.name}</span>
-								<span className="text-xs px-1.5 py-0.5 rounded bg-secondary text-secondary-foreground shrink-0">
-									{formatEventTypeLabel(event.event_type)}
-								</span>
-								{requiresSink && (
-									<span
-										className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${sinkActive ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"}`}
-									>
-										{sinkActive ? "Active" : "Inactive"}
-									</span>
-								)}
-								{requiresSink && (
-									<span
-										className={`text-xs px-1.5 py-0.5 rounded shrink-0 inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
-									>
-										{isOffline ? (
-											<>
-												<Monitor className="h-3 w-3" /> Local
-											</>
-										) : (
-											<>
-												<Cloud className="h-3 w-3" /> Online
-											</>
-										)}
-									</span>
-								)}
-							</div>
-							{event.description && (
-								<div className="text-xs text-muted-foreground truncate mt-0.5">
-									{truncateText(event.description, 80)}
-								</div>
-							)}
-						</div>
-
-						{/* Route (inline editable for UI events) */}
-						{isUiEvent && (
-							<div className="shrink-0 flex items-center gap-1">
-								{isEditingRoute ? (
-									<div className="flex items-center gap-1">
-										<Input
-											value={routeInput}
-											onChange={(e) => setRouteInput(e.target.value)}
-											onKeyDown={(e) => {
-												if (e.key === "Enter") handleRouteSave();
-												if (e.key === "Escape") {
-													setRouteInput(routePath ?? "");
-													setIsEditingRoute(false);
-												}
-											}}
-											onBlur={handleRouteSave}
-											placeholder="/route"
-											className="h-7 w-32 font-mono text-xs"
-											autoFocus
-											disabled={routeSaving}
-										/>
-									</div>
-								) : (
-									<button
-										type="button"
-										onClick={() => {
-											setRouteInput(routePath ?? "");
-											setIsEditingRoute(true);
-										}}
-										className={`text-xs px-2 py-1 rounded font-mono cursor-pointer hover:opacity-80 transition-opacity ${
-											routePath
-												? "bg-primary/10 text-primary border border-primary/20"
-												: "bg-destructive/10 text-destructive border border-destructive/20"
-										}`}
-										title="Click to edit route"
-									>
-										{routePath ?? "No route"}
-									</button>
-								)}
-							</div>
-						)}
-
-						{/* Flow info */}
-						<div className="text-xs text-muted-foreground shrink-0 text-right hidden md:block">
-							{boardsMap.get(event.board_id) ?? "Unknown"}
-						</div>
-
-						{/* Actions */}
-						<div className="flex items-center gap-1 shrink-0">
-							{requiresSink && !sinkActive && (
-								<Button
-									variant="ghost"
-									size="sm"
-									className="h-7 px-2 text-xs gap-1"
-									onClick={handleActivateClick}
-								>
-									<Play className="h-3 w-3" />
-								</Button>
-							)}
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-7 w-7 p-0"
-								onClick={() => onEdit(event)}
-								title="Edit event"
-							>
-								<EditIcon className="h-4 w-4" />
-							</Button>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-7 w-7 p-0"
-								onClick={() => onNavigateToNode(event, event.node_id)}
-								title="Open in flow"
-							>
-								<ExternalLinkIcon className="h-4 w-4" />
-							</Button>
-							<Button
-								variant="ghost"
-								size="sm"
-								className="h-7 w-7 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
-								onClick={() => onDelete(event.id)}
-								title="Delete event"
-							>
-								<Trash2 className="h-4 w-4" />
-							</Button>
-						</div>
-					</div>
-				</div>
-
-				{/* PAT Selector Dialog for Activation */}
-				<PatSelectorDialog
-					open={showActivateDialog}
-					onOpenChange={setShowActivateDialog}
-					onPatSelected={handleActivateSink}
-					title="Activate Event Sink"
-					description="Select or create a Personal Access Token to activate this event sink."
-				/>
-
-				{/* OAuth Consent Dialog for Activation */}
-				<OAuthConsentDialog
-					open={showOAuthConsent}
-					onOpenChange={setShowOAuthConsent}
-					providers={missingProviders}
-					onAuthorize={handleOAuthAuthorize}
-					onConfirmAll={handleOAuthConfirmAll}
-					onCancel={handleOAuthCancel}
-					authorizedProviders={authorizedProviders}
-					preAuthorizedProviders={preAuthorizedProviders}
-				/>
-			</>
-		);
-	};
-
-	return (
-		<div className="flex flex-col h-full min-h-0">
-			<div className="flex items-center justify-between gap-4 mb-4 shrink-0 flex-wrap">
-				<div className="flex items-center gap-2 flex-1 min-w-60">
-					<Input
-						placeholder="Search events..."
-						value={searchTerm}
-						onChange={(e) => setSearchTerm(e.target.value)}
-						className="w-full sm:w-64"
-					/>
-					<div className="text-sm text-muted-foreground hidden sm:block">
-						{filteredEvents.length} of {events.length} events
-					</div>
-				</div>
-				<div className="flex items-center gap-2 flex-wrap">
-					<div className="text-sm text-muted-foreground sm:hidden w-full">
-						{filteredEvents.length} of {events.length} events
-					</div>
-					<Button onClick={onCreateEvent} className="gap-2 w-full sm:w-auto">
-						<Plus className="h-4 w-4" />
-						Create Event
-					</Button>
-					<div className="hidden sm:flex items-center gap-2">
-						<Label htmlFor="pageSize" className="text-sm">
-							Show:
-						</Label>
-						<Select
-							value={pageSize.toString()}
-							onValueChange={(value) => setPageSize(Number(value))}
-						>
-							<SelectTrigger className="w-20">
-								<SelectValue />
-							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="25">25</SelectItem>
-								<SelectItem value="50">50</SelectItem>
-								<SelectItem value="100">100</SelectItem>
-								<SelectItem value="200">200</SelectItem>
-							</SelectContent>
-						</Select>
-					</div>
-					<div className="flex items-center">
-						<div className="inline-flex rounded-md border p-1">
-							<Button
-								variant={viewMode === "list" ? "default" : "ghost"}
-								size="sm"
-								onClick={() => setViewMode("list")}
-							>
-								List
-							</Button>
-							<Button
-								variant={viewMode === "table" ? "default" : "ghost"}
-								size="sm"
-								onClick={() => setViewMode("table")}
-							>
-								Table
-							</Button>
-						</div>
-					</div>
-				</div>
-			</div>
-
-			<div className="flex-1 min-h-0 rounded-md overflow-hidden flex flex-col">
-				{filteredEvents.length === 0 ? (
-					<div className="flex-1 flex items-center justify-center text-sm text-muted-foreground">
-						No matching events
-					</div>
-				) : viewMode === "list" ? (
-					<div className="flex-1 min-h-0 overflow-auto">
-						<div className="divide-y">
-							{(() => {
-								const isUiOrPageEvent = (e: IEvent) =>
-									uiEventTypeSet.has(e.event_type) || !!e.default_page_id;
-								const ui = paginatedEvents.filter(isUiOrPageEvent);
-								const backendOnly = paginatedEvents.filter(
-									(e) => !isUiOrPageEvent(e),
-								);
-
-								return (
-									<>
-										{ui.length > 0 && (
-											<div className="px-3 py-2 text-xs font-semibold text-muted-foreground bg-muted/30">
-												UI Events
-											</div>
-										)}
-										{ui.map((event) => (
-											<ListEventItem key={event.id} event={event} />
-										))}
-										{backendOnly.length > 0 && (
-											<div className="px-3 py-2 text-xs font-semibold text-muted-foreground bg-muted/30">
-												Backend-only Events
-											</div>
-										)}
-										{backendOnly.map((event) => (
-											<ListEventItem key={event.id} event={event} />
-										))}
-									</>
-								);
-							})()}
-						</div>
-					</div>
-				) : (
-					<div className="flex-1 min-h-0 overflow-auto">
-						<div className="overflow-x-auto">
-							<Table>
-								<TableHeader className="sticky top-0 bg-background z-10 border-b">
-									<TableRow>
-										<TableHead className="w-12">Status</TableHead>
-										<TableHead className="min-w-[200px]">Name</TableHead>
-										<TableHead className="min-w-[300px] hidden xl:table-cell">
-											Description
-										</TableHead>
-										<TableHead className="min-w-[150px] hidden lg:table-cell">
-											Flow
-										</TableHead>
-										<TableHead className="w-32">Event Type</TableHead>
-										<TableHead className="w-32">Last Updated</TableHead>
-										<TableHead className="w-24">Actions</TableHead>
-									</TableRow>
-								</TableHeader>
-								<TableBody>
-									{paginatedEvents.map((event) => {
-										const nodeName = eventNodeNames.get(event.id);
-										const requiresSink = eventRequiresSink(
-											eventMapping,
-											event,
-											nodeName,
-										);
-										const sinkActive = sinkStatuses.get(event.id);
-										const isPageTargetEvent = !!event.default_page_id;
-										const isUiEvent =
-											uiEventTypeSet.has(event.event_type) || isPageTargetEvent;
-										const routePath = routeByEventId.get(event.id);
-
-										return (
-											<TableRow key={event.id} className="hover:bg-muted/50">
-												<TableCell>
-													<div className="flex items-center">
-														<div
-															className={`w-2 h-2 rounded-full ${event.active ? "bg-green-500" : "bg-orange-500"}`}
-														/>
-													</div>
-												</TableCell>
-												<TableCell>
-													<div className="font-medium">{event.name}</div>
-													<div className="text-xs text-muted-foreground font-mono">
-														{event.id.slice(0, 8)}...
-													</div>
-													{isUiEvent && (
-														<div className="mt-1">
-															<span
-																className={`text-xs px-2 py-0.5 rounded-full font-mono inline-block ${routePath ? "bg-secondary text-secondary-foreground" : "bg-destructive/10 text-destructive"}`}
-															>
-																{routePath ?? "No route"}
-															</span>
-														</div>
-													)}
-													{!isUiEvent && (
-														<div className="mt-1">
-															<span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground inline-block">
-																Backend-only
-															</span>
-														</div>
-													)}
-													{requiresSink && (
-														<div className="flex items-center gap-2 mt-1">
-															<div
-																className={`text-xs px-2 py-0.5 rounded-full inline-block ${sinkActive ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300" : "bg-yellow-100 text-yellow-700 dark:bg-yellow-900 dark:text-yellow-300"}`}
-															>
-																{sinkActive ? "Sink Active" : "Sink Inactive"}
-															</div>
-															<div
-																className={`text-xs px-2 py-0.5 rounded-full inline-flex items-center gap-1 ${isOffline ? "bg-muted text-muted-foreground" : "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300"}`}
-															>
-																{isOffline ? (
-																	<>
-																		<Monitor className="h-3 w-3" /> Local
-																	</>
-																) : (
-																	<>
-																		<Cloud className="h-3 w-3" /> Online
-																	</>
-																)}
-															</div>
-															{!sinkActive && (
-																<TableActivateSinkButton
-																	event={event}
-																	appId={appId}
-																	tokenStore={tokenStore}
-																	consentStore={consentStore}
-																	hub={hub}
-																	onStartOAuth={onStartOAuth}
-																	onRefreshToken={onRefreshToken}
-																	onActivated={async () => {
-																		// Refresh sink status after activation
-																		try {
-																			const isActive =
-																				await backend.eventState.isEventSinkActive(
-																					event.id,
-																				);
-																			setSinkStatuses((prev) =>
-																				new Map(prev).set(event.id, isActive),
-																			);
-																		} catch (error) {
-																			console.error(
-																				"Failed to refresh sink status:",
-																				error,
-																			);
-																		}
-																	}}
-																/>
-															)}
-														</div>
-													)}
-												</TableCell>
-												<TableCell className="hidden xl:table-cell">
-													<div className="text-sm text-muted-foreground">
-														{event.description
-															? truncateText(event.description, 80)
-															: "No description"}
-													</div>
-												</TableCell>
-												<TableCell className="hidden lg:table-cell">
-													<div className="text-sm">
-														{boardsMap.get(event.board_id) ?? "Unknown"}
-													</div>
-													<div className="text-xs text-muted-foreground">
-														{event.board_version
-															? `v${event.board_version.join(".")}`
-															: "Latest"}
-													</div>
-												</TableCell>
-												<TableCell>
-													<div className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-secondary text-secondary-foreground">
-														{formatEventTypeLabel(event.event_type)}
-													</div>
-												</TableCell>
-												<TableCell>
-													<div className="text-sm text-muted-foreground">
-														{formatRelativeTime(
-															event.updated_at.secs_since_epoch,
-														)}
-													</div>
-												</TableCell>
-												<TableCell>
-													<div className="flex items-center gap-1">
-														<Button
-															variant="ghost"
-															size="sm"
-															onClick={() => onEdit(event)}
-															className="h-8 w-8 p-0"
-															aria-label="Edit"
-														>
-															<EditIcon className="h-4 w-4" />
-														</Button>
-														<Button
-															variant="ghost"
-															size="sm"
-															onClick={() =>
-																onNavigateToNode(event, event.node_id)
-															}
-															className="h-8 w-8 p-0"
-															aria-label="Open"
-														>
-															<ExternalLinkIcon className="h-4 w-4" />
-														</Button>
-														<Button
-															variant="ghost"
-															size="sm"
-															onClick={() => onDelete(event.id)}
-															className="h-8 w-8 p-0 text-destructive hover:text-destructive"
-															aria-label="Delete"
-														>
-															<Trash2 className="h-4 w-4" />
-														</Button>
-													</div>
-												</TableCell>
-											</TableRow>
-										);
-									})}
-								</TableBody>
-							</Table>
-						</div>
-					</div>
-				)}
-
-				{totalPages > 1 && (
-					<div className="border-t bg-background p-4 shrink-0">
-						<div className="flex items-center justify-between">
-							<div className="text-sm text-muted-foreground">
-								Showing {startIndex + 1} to{" "}
-								{Math.min(startIndex + pageSize, filteredEvents.length)} of{" "}
-								{filteredEvents.length} results
-							</div>
-							<div className="flex items-center gap-2">
-								<Button
-									variant="outline"
-									size="sm"
-									onClick={() =>
-										setCurrentPage((prev) => Math.max(1, prev - 1))
-									}
-									disabled={currentPage === 1}
-								>
-									Previous
-								</Button>
-								<div className="flex items-center gap-1">
-									{Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
-										let pageNum: number;
-										if (totalPages <= 5) pageNum = i + 1;
-										else if (currentPage <= 3) pageNum = i + 1;
-										else if (currentPage >= totalPages - 2)
-											pageNum = totalPages - 4 + i;
-										else pageNum = currentPage - 2 + i;
-
-										return (
-											<Button
-												key={pageNum}
-												variant={
-													currentPage === pageNum ? "default" : "outline"
-												}
-												size="sm"
-												onClick={() => setCurrentPage(pageNum)}
-												className="w-8 h-8 p-0"
-											>
-												{pageNum}
-											</Button>
-										);
-									})}
-								</div>
-								<Button
-									variant="outline"
-									size="sm"
-									onClick={() =>
-										setCurrentPage((prev) => Math.min(totalPages, prev + 1))
-									}
-									disabled={currentPage === totalPages}
-								>
-									Next
-								</Button>
-							</div>
-						</div>
-					</div>
-				)}
-			</div>
 		</div>
 	);
 }

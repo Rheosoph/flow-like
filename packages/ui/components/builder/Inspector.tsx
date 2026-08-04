@@ -1,31 +1,57 @@
 "use client";
 
-import { ChevronDown, Plus, Trash2 } from "lucide-react";
+import {
+	type ContractInput,
+	type WidgetContract,
+	validateInputValue,
+} from "@flow-like/widget-sdk";
+import {
+	ChevronDown,
+	ChevronUp,
+	Package,
+	Plus,
+	Trash2,
+	Zap,
+} from "lucide-react";
 import {
 	type CSSProperties,
 	type ReactNode,
 	useCallback,
+	useEffect,
+	useId,
 	useMemo,
 	useState,
 } from "react";
 import { cn } from "../../lib";
-import { normalizeStyleUpdate } from "../a2ui/style-updates";
+import {
+	createContractInputValue,
+	updateWidgetContractProps,
+} from "../../lib/widget-contract-form";
+import { homogeneousArrayItemSchema } from "../../lib/widget-schema-form";
+import {
+	type ComponentEventDefinition,
+	getComponentEventDefinitions,
+} from "../a2ui/component-event-manifest";
 import {
 	NIVO_CHART_DEFAULTS,
 	NIVO_SAMPLE_DATA,
 } from "../a2ui/display/nivo-data";
+import { WILDCARD_EVENT } from "../a2ui/event-handlers";
 import { getModel3DView } from "../a2ui/game/model3d-view-registry";
 import {
 	inferFileName,
 	inferFileType,
 	inferMimeTypeFromSource,
 } from "../a2ui/media-source";
+import { normalizeStyleUpdate } from "../a2ui/style-updates";
 import type {
+	A2UIComponent,
 	BoundValue,
 	BreakpointStyle,
 	ChartAxis,
 	ChartSeries,
 	ChartType,
+	MicroWidgetInstanceComponent,
 	Overflow,
 	Position,
 	ResponsiveOverrides,
@@ -58,6 +84,7 @@ import { Slider } from "../ui/slider";
 import { Switch } from "../ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
+import { WidgetSchemaListEditor } from "../widget-contract/WidgetSchemaListEditor";
 import { AssetPicker, type AssetPickerProps } from "./AssetPicker";
 import { useBuilder } from "./BuilderContext";
 import { getDefaultProps } from "./componentDefaults";
@@ -444,6 +471,12 @@ function PropertyEditor({ component, onUpdate }: PropertyEditorProps) {
 		);
 	}
 
+	// Package micro widgets: code widgets are not editable as a component tree.
+	// Contract events are configured in the Actions tab.
+	if (componentType === "microWidgetInstance") {
+		return <MicroWidgetEditor component={component} onUpdate={onUpdate} />;
+	}
+
 	// Render different editors based on component type
 	return (
 		<div className="min-w-0 max-w-full space-y-4">
@@ -481,6 +514,439 @@ function PropertyEditor({ component, onUpdate }: PropertyEditorProps) {
 					/>
 				);
 			})}
+		</div>
+	);
+}
+
+interface JsonContractFieldProps {
+	id: string;
+	input: ContractInput;
+	value: unknown;
+	disabled: boolean;
+	labelledBy: string;
+	describedBy?: string;
+	onCommit: (value: unknown) => void;
+}
+
+// Commit-on-blur JSON editor so re-serialization never fights the caret.
+function JsonContractField({
+	id,
+	input,
+	value,
+	disabled,
+	labelledBy,
+	describedBy,
+	onCommit,
+}: JsonContractFieldProps) {
+	const serialized = useMemo(
+		() => JSON.stringify(value ?? null, null, 2),
+		[value],
+	);
+	const [text, setText] = useState(serialized);
+	const [errors, setErrors] = useState<string[]>([]);
+	const errorId = `${id}-draft-error`;
+
+	useEffect(() => {
+		setText(serialized);
+		setErrors([]);
+	}, [serialized]);
+
+	const commit = useCallback(() => {
+		try {
+			const parsed = JSON.parse(text);
+			const validation = validateInputValue(input, parsed);
+			if (!validation.valid) {
+				setErrors(validation.errors);
+				return;
+			}
+			setErrors([]);
+			if (JSON.stringify(parsed) !== JSON.stringify(value ?? null)) {
+				onCommit(parsed);
+			}
+		} catch (error) {
+			setErrors([
+				`Invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
+			]);
+		}
+	}, [input, text, value, onCommit]);
+
+	return (
+		<div className="space-y-1">
+			<Textarea
+				id={id}
+				value={text}
+				onChange={(e) => setText(e.target.value)}
+				onBlur={commit}
+				disabled={disabled}
+				rows={4}
+				spellCheck={false}
+				aria-labelledby={labelledBy}
+				aria-invalid={errors.length > 0}
+				aria-describedby={
+					[describedBy, errors.length > 0 ? errorId : undefined]
+						.filter(Boolean)
+						.join(" ") || undefined
+				}
+				className={cn(
+					"font-mono text-xs",
+					errors.length > 0 &&
+						"border-destructive focus-visible:ring-destructive",
+				)}
+				style={FIXED_FIELD_SIZING_STYLE}
+			/>
+			{errors.length > 0 && (
+				<div id={errorId} className="space-y-0.5" role="alert">
+					{[...new Set(errors)].map((error) => (
+						<p key={error} className="text-[10px] text-destructive">
+							{error.replace(/^\$(?:\.|:\s*)?/, "")}
+						</p>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+interface ContractInputFieldProps {
+	name: string;
+	input: ContractInput;
+	value: unknown;
+	present: boolean;
+	onChange: (value: unknown) => void;
+}
+
+function enumOptionValue(choice: string): string {
+	return JSON.stringify(choice);
+}
+
+function ContractInputField({
+	name,
+	input,
+	value,
+	present,
+	onChange,
+}: ContractInputFieldProps) {
+	const id = useId();
+	const labelId = `${id}-label`;
+	const descriptionId = input.description ? `${id}-description` : undefined;
+	const validation = validateInputValue(input, present ? value : undefined);
+	const [draftErrors, setDraftErrors] = useState<string[]>([]);
+	const controlValue = present ? value : createContractInputValue(input);
+	const listItemSchema =
+		input.type === "json" ? homogeneousArrayItemSchema(input.schema) : null;
+	const isList = listItemSchema !== null && Array.isArray(controlValue);
+	const disabled = input.optional === true && !present;
+	const errorId = `${id}-error`;
+	const errors = [...new Set([...validation.errors, ...draftErrors])];
+	const describedBy = [descriptionId, errors.length > 0 ? errorId : undefined]
+		.filter(Boolean)
+		.join(" ");
+
+	const renderControl = () => {
+		switch (input.type) {
+			case "boolean":
+				return (
+					<Switch
+						id={id}
+						checked={controlValue === true}
+						onCheckedChange={(checked) => onChange(checked)}
+						disabled={disabled}
+						aria-invalid={errors.length > 0}
+						aria-describedby={describedBy || undefined}
+					/>
+				);
+			case "number":
+			case "integer":
+				return (
+					<Input
+						id={id}
+						type="number"
+						className="h-8 text-sm"
+						value={typeof controlValue === "number" ? controlValue : ""}
+						min={
+							input.min === undefined
+								? undefined
+								: input.type === "integer"
+									? Math.ceil(input.min)
+									: input.min
+						}
+						max={
+							input.max === undefined
+								? undefined
+								: input.type === "integer"
+									? Math.floor(input.max)
+									: input.max
+						}
+						step={input.type === "integer" ? 1 : "any"}
+						disabled={disabled}
+						aria-invalid={errors.length > 0}
+						aria-describedby={describedBy || undefined}
+						onChange={(e) => {
+							if (e.target.value === "") {
+								setDraftErrors(["$: value is required"]);
+								return;
+							}
+							const parsed = Number(e.target.value);
+							const nextValidation = validateInputValue(input, parsed);
+							setDraftErrors(nextValidation.errors);
+							if (nextValidation.valid) onChange(parsed);
+						}}
+					/>
+				);
+			case "enum":
+				return (
+					<Select
+						value={
+							typeof controlValue === "string"
+								? enumOptionValue(controlValue)
+								: undefined
+						}
+						onValueChange={(encoded) => onChange(JSON.parse(encoded))}
+						disabled={disabled}
+					>
+						<SelectTrigger
+							id={id}
+							className="h-8 text-sm"
+							aria-invalid={errors.length > 0}
+							aria-describedby={describedBy || undefined}
+						>
+							<SelectValue placeholder="Select…" />
+						</SelectTrigger>
+						<SelectContent>
+							{[...new Set(input.choices ?? [])].map((choice) => (
+								<SelectItem
+									key={enumOptionValue(choice)}
+									value={enumOptionValue(choice)}
+								>
+									{choice || "Empty string"}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				);
+			case "json": {
+				if (input.schema && isList) {
+					return (
+						<WidgetSchemaListEditor
+							fieldName={name}
+							id={id}
+							labelledBy={labelId}
+							schema={input.schema}
+							value={controlValue}
+							disabled={disabled}
+							describedBy={describedBy || undefined}
+							onChange={(nextValue) => {
+								const nextValidation = validateInputValue(input, nextValue);
+								setDraftErrors(nextValidation.errors);
+								const onlyNeedsMoreItems =
+									!nextValidation.valid &&
+									nextValidation.errors.length > 0 &&
+									nextValidation.errors.every((error) =>
+										error.includes("array has fewer than minItems"),
+									);
+								if (nextValidation.valid || onlyNeedsMoreItems)
+									onChange(nextValue);
+							}}
+						/>
+					);
+				}
+				return (
+					<JsonContractField
+						id={id}
+						input={input}
+						value={controlValue}
+						disabled={disabled}
+						labelledBy={labelId}
+						describedBy={describedBy || undefined}
+						onCommit={onChange}
+					/>
+				);
+			}
+			default:
+				return (
+					<Input
+						id={id}
+						className="h-8 text-sm"
+						value={typeof controlValue === "string" ? controlValue : ""}
+						disabled={disabled}
+						aria-invalid={errors.length > 0}
+						aria-describedby={describedBy || undefined}
+						onChange={(e) => onChange(e.target.value)}
+					/>
+				);
+		}
+	};
+
+	return (
+		<div className={INSPECTOR_FIELD_CLASS}>
+			<div className="flex items-center justify-between gap-2">
+				{isList ? (
+					<span id={labelId} className="text-xs font-medium">
+						{name}
+					</span>
+				) : (
+					<Label id={labelId} htmlFor={id} className="text-xs font-medium">
+						{name}
+					</Label>
+				)}
+				{input.optional && (
+					<span className="text-[10px] text-muted-foreground">optional</span>
+				)}
+			</div>
+			{input.description && (
+				<p
+					id={descriptionId}
+					className="text-[10px] leading-4 text-muted-foreground"
+				>
+					{input.description}
+				</p>
+			)}
+			{input.optional && (
+				<div className="flex items-center gap-2">
+					<Switch
+						id={`${id}-included`}
+						checked={present}
+						onCheckedChange={(included) =>
+							onChange(included ? createContractInputValue(input) : undefined)
+						}
+					/>
+					<Label
+						htmlFor={`${id}-included`}
+						className="text-[10px] font-normal text-muted-foreground"
+					>
+						Include value
+					</Label>
+				</div>
+			)}
+			{!input.optional && !present && !isList ? (
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={() => onChange(controlValue)}
+				>
+					Set value
+				</Button>
+			) : (
+				renderControl()
+			)}
+			{errors.length > 0 && (
+				<div id={errorId} className="space-y-0.5" role="alert">
+					{errors.map((error) => (
+						<p key={error} className="text-[10px] text-destructive">
+							{error.replace(/^\$(?:\.|:\s*)?/, "")}
+						</p>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
+interface MicroWidgetEditorProps {
+	component: SurfaceComponent;
+	onUpdate: (updates: Partial<SurfaceComponent>) => void;
+}
+
+/**
+ * Inspector for package micro widgets: provenance header, contract-typed
+ * input controls writing static values into `component.props`, plus the
+ * contract's read-only queries. Contract events live in the Actions tab.
+ */
+function MicroWidgetEditor({ component, onUpdate }: MicroWidgetEditorProps) {
+	const micro = component.component as unknown as MicroWidgetInstanceComponent;
+	const contract = (micro.contract ?? null) as WidgetContract | null;
+	const props = micro.props ?? {};
+	const inputs = useMemo(
+		() => Object.entries(contract?.inputs ?? {}),
+		[contract],
+	);
+	const queries = useMemo(
+		() => Object.entries(contract?.queries ?? {}),
+		[contract],
+	);
+
+	const setProp = useCallback(
+		(key: string, value: unknown) => {
+			const current =
+				(component.component as unknown as MicroWidgetInstanceComponent)
+					.props ?? {};
+			onUpdate({
+				component: {
+					...component.component,
+					props: updateWidgetContractProps(current, key, value),
+				} as SurfaceComponent["component"],
+			});
+		},
+		[component.component, onUpdate],
+	);
+
+	return (
+		<div className="min-w-0 max-w-full space-y-4">
+			<div className="space-y-1 rounded-md border bg-muted/40 p-3 dark:border-white/15">
+				<div className="flex items-center gap-1.5 text-xs font-medium">
+					<Package className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+					<span className="truncate" title={micro.packageId}>
+						{micro.packageId}
+						{micro.packageVersion ? `@${micro.packageVersion}` : ""}
+					</span>
+				</div>
+				<p className="text-[10px] text-muted-foreground">
+					Widget “{micro.widgetId}” — rendered in a sandbox; its internals are
+					not editable in the builder.
+				</p>
+			</div>
+
+			<div className={INSPECTOR_FIELD_CLASS}>
+				<Label className="text-xs">Component ID</Label>
+				<Input
+					value={component.id}
+					onChange={(e) => onUpdate({ id: e.target.value })}
+					className="h-8 text-sm"
+				/>
+			</div>
+
+			<div className="space-y-3">
+				<Label className="text-xs font-semibold">Inputs</Label>
+				{inputs.length === 0 ? (
+					<p className="text-xs text-muted-foreground">
+						This widget declares no inputs.
+					</p>
+				) : (
+					inputs.map(([name, input]) => (
+						<ContractInputField
+							key={`${contract?.id ?? "widget"}-${name}`}
+							name={name}
+							input={input}
+							value={props[name]}
+							present={Object.hasOwn(props, name)}
+							onChange={(value) => setProp(name, value)}
+						/>
+					))
+				)}
+			</div>
+
+			{queries.length > 0 && (
+				<div className="space-y-2">
+					<Label className="text-xs font-semibold">Queries</Label>
+					<p className="text-[10px] text-muted-foreground">
+						Callable from flows by connecting Get Element to Query Widget.
+					</p>
+					{queries.map(([name, spec]) => (
+						<div
+							key={name}
+							className="rounded-md border px-2.5 py-1.5 dark:border-white/10"
+						>
+							<span className="text-xs font-medium">{name}</span>
+							{spec.description && (
+								<p className="mt-0.5 text-[10px] text-muted-foreground">
+									{spec.description}
+								</p>
+							)}
+						</div>
+					))}
+				</div>
+			)}
 		</div>
 	);
 }
@@ -4644,28 +5110,196 @@ interface ActionValue {
 	context?: Record<string, unknown>;
 }
 
-function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
-	const { actionContext } = useBuilder();
-	const componentData = component.component as { actions?: ActionValue[] };
-	const actions = componentData.actions ?? [];
-	const action = actions[0] ?? null;
+type ComponentActionData = {
+	actions?: ActionValue[];
+	actionBindings?: Record<string, unknown>;
+	eventHandlers?: Record<string, ActionValue[]>;
+};
 
-	const setAction = (newAction: ActionValue | null) => {
-		onUpdate({
-			component: {
-				...component.component,
-				actions: newAction ? [newAction] : undefined,
-			} as SurfaceComponent["component"],
-		});
-	};
+function ownsHandler(
+	handlers: Record<string, unknown>,
+	eventName: string,
+): boolean {
+	return Object.prototype.hasOwnProperty.call(handlers, eventName);
+}
 
-	const currentType = action?.name as ActionType | undefined;
-	const context = action?.context ?? {};
-	const widgetActions = actionContext?.widgetActions;
-	const isWidgetMode = widgetActions !== undefined;
+function cloneActions(actions: ActionValue[]): ActionValue[] {
+	return actions.map((action) => ({
+		...action,
+		context: action.context ? { ...action.context } : {},
+	}));
+}
+
+function createInitialAction(
+	widgetActions: readonly { id: string }[] | undefined,
+): ActionValue {
+	return widgetActions !== undefined
+		? {
+				name: "widget_event",
+				context: widgetActions[0] ? { actionId: widgetActions[0].id } : {},
+			}
+		: { name: "workflow_event", context: {} };
+}
+
+function actionTypeLabel(name: string): string {
+	return (
+		{
+			widget_event: "Widget event",
+			navigate_page: "Navigate to page",
+			external_link: "External link",
+			workflow_event: "Trigger workflow",
+		}[name] ?? name
+	);
+}
+
+function HandlerStatus({
+	exact,
+	actions,
+	fallbackLabel,
+}: {
+	exact: boolean;
+	actions: ActionValue[];
+	fallbackLabel?: string;
+}) {
+	const label = exact
+		? actions.length === 0
+			? "Disabled"
+			: `${actions.length} action${actions.length === 1 ? "" : "s"}`
+		: (fallbackLabel ?? "Uses default");
 
 	return (
-		<div className="space-y-4">
+		<span className="shrink-0 rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+			{label}
+		</span>
+	);
+}
+
+interface OrderedActionsEditorProps {
+	actions: ActionValue[];
+	onChange: (actions: ActionValue[]) => void;
+}
+
+function OrderedActionsEditor({
+	actions,
+	onChange,
+}: OrderedActionsEditorProps) {
+	const { actionContext } = useBuilder();
+	const widgetActions = actionContext?.widgetActions;
+
+	const addAction = () => {
+		const nextAction = createInitialAction(widgetActions);
+		onChange([...actions, nextAction]);
+	};
+
+	const updateAction = (index: number, action: ActionValue | null) => {
+		if (action === null) {
+			onChange(actions.filter((_, actionIndex) => actionIndex !== index));
+			return;
+		}
+		onChange(
+			actions.map((current, actionIndex) =>
+				actionIndex === index ? action : current,
+			),
+		);
+	};
+
+	const moveAction = (index: number, direction: -1 | 1) => {
+		const target = index + direction;
+		if (target < 0 || target >= actions.length) return;
+		const next = [...actions];
+		[next[index], next[target]] = [next[target], next[index]];
+		onChange(next);
+	};
+
+	return (
+		<div className="space-y-3">
+			{actions.length === 0 && (
+				<div className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+					This event is explicitly disabled. Add an action to enable it.
+				</div>
+			)}
+			{actions.map((action, index) => (
+				<div
+					key={`${index}-${action.name}`}
+					className="space-y-3 rounded-md border p-2.5 dark:border-white/10"
+				>
+					<div className="flex items-center gap-1">
+						<span className="min-w-0 flex-1 truncate text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+							{index + 1}. {actionTypeLabel(action.name)}
+						</span>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="h-6 w-6"
+							disabled={index === 0}
+							onClick={() => moveAction(index, -1)}
+							aria-label={`Move action ${index + 1} up`}
+						>
+							<ChevronUp className="h-3.5 w-3.5" />
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="h-6 w-6"
+							disabled={index === actions.length - 1}
+							onClick={() => moveAction(index, 1)}
+							aria-label={`Move action ${index + 1} down`}
+						>
+							<ChevronDown className="h-3.5 w-3.5" />
+						</Button>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="h-6 w-6 text-destructive hover:text-destructive"
+							onClick={() => updateAction(index, null)}
+							aria-label={`Remove action ${index + 1}`}
+						>
+							<Trash2 className="h-3.5 w-3.5" />
+						</Button>
+					</div>
+					<ActionValueEditor
+						action={action}
+						onChange={(nextAction) => updateAction(index, nextAction)}
+					/>
+				</div>
+			))}
+			<Button
+				type="button"
+				variant="outline"
+				size="sm"
+				className="h-7 w-full text-xs"
+				onClick={addAction}
+			>
+				<Plus className="mr-1 h-3.5 w-3.5" />
+				Add action
+			</Button>
+		</div>
+	);
+}
+
+function ActionValueEditor({
+	action,
+	onChange,
+}: {
+	action: ActionValue;
+	onChange: (action: ActionValue | null) => void;
+}) {
+	const { actionContext } = useBuilder();
+	const currentType = action.name as ActionType;
+	const context = action.context ?? {};
+	const widgetActions = actionContext?.widgetActions;
+	const isWidgetMode = widgetActions !== undefined;
+	const knownActionTypes: string[] = [
+		"navigate_page",
+		"external_link",
+		"workflow_event",
+	];
+
+	return (
+		<div className="space-y-3">
 			<div className="space-y-2">
 				<Label className="text-xs font-medium">
 					{isWidgetMode ? "Widget Event" : "Action Type"}
@@ -4679,14 +5313,17 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 						<Select
 							value={
 								currentType === "widget_event"
-									? ((context.actionId as string) ?? "")
+									? (context.actionId as string) || "none"
 									: "none"
 							}
-							onValueChange={(v) => {
-								if (v === "none") {
-									setAction(null);
+							onValueChange={(value) => {
+								if (value === "none") {
+									onChange(null);
 								} else {
-									setAction({ name: "widget_event", context: { actionId: v } });
+									onChange({
+										name: "widget_event",
+										context: { actionId: value },
+									});
 								}
 							}}
 						>
@@ -4695,9 +5332,9 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 							</SelectTrigger>
 							<SelectContent>
 								<SelectItem value="none">No event</SelectItem>
-								{widgetActions.map((wa) => (
-									<SelectItem key={wa.id} value={wa.id}>
-										{wa.label}
+								{widgetActions.map((widgetAction) => (
+									<SelectItem key={widgetAction.id} value={widgetAction.id}>
+										{widgetAction.label}
 									</SelectItem>
 								))}
 							</SelectContent>
@@ -4705,12 +5342,12 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 					)
 				) : (
 					<Select
-						value={currentType ?? "none"}
-						onValueChange={(v) => {
-							if (v === "none") {
-								setAction(null);
+						value={currentType || "none"}
+						onValueChange={(value) => {
+							if (value === "none") {
+								onChange(null);
 							} else {
-								setAction({ name: v, context: {} });
+								onChange({ name: value, context: {} });
 							}
 						}}
 					>
@@ -4719,6 +5356,11 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 						</SelectTrigger>
 						<SelectContent>
 							<SelectItem value="none">No action</SelectItem>
+							{currentType && !knownActionTypes.includes(currentType) && (
+								<SelectItem value={currentType}>
+									Custom: {currentType}
+								</SelectItem>
+							)}
 							<SelectItem value="navigate_page">Navigate to Page</SelectItem>
 							<SelectItem value="external_link">External Link</SelectItem>
 							<SelectItem value="workflow_event">Trigger Workflow</SelectItem>
@@ -4728,13 +5370,15 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 			</div>
 
 			{currentType === "widget_event" && (
-				<div className="space-y-1 pl-2 border-l-2 border-muted">
-					{widgetActions?.find((wa) => wa.id === (context.actionId as string))
-						?.description && (
+				<div className="space-y-1 border-l-2 border-muted pl-2">
+					{widgetActions?.find(
+						(widgetAction) => widgetAction.id === (context.actionId as string),
+					)?.description && (
 						<p className="text-xs text-muted-foreground">
 							{
 								widgetActions.find(
-									(wa) => wa.id === (context.actionId as string),
+									(widgetAction) =>
+										widgetAction.id === (context.actionId as string),
 								)?.description
 							}
 						</p>
@@ -4747,33 +5391,33 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 			)}
 
 			{currentType === "navigate_page" && (
-				<div className="space-y-2 pl-2 border-l-2 border-muted">
+				<div className="space-y-2 border-l-2 border-muted pl-2">
 					<Label className="text-xs text-muted-foreground">Route</Label>
 					<Input
 						className="h-8 text-sm"
 						placeholder="/about"
 						value={(context.route as string) ?? ""}
-						onChange={(e) =>
-							setAction({
+						onChange={(event) =>
+							onChange({
 								name: currentType,
-								context: { ...context, route: e.target.value },
+								context: { ...context, route: event.target.value },
 							})
 						}
 					/>
 					<p className="text-xs text-muted-foreground">
 						Relative path to navigate to (e.g., /contact, /products/123)
 					</p>
-					<Label className="text-xs text-muted-foreground mt-2">
+					<Label className="mt-2 text-xs text-muted-foreground">
 						Query Params (JSON)
 					</Label>
 					<Input
 						className="h-8 text-sm font-mono"
 						placeholder='{"id": "123"}'
 						value={(context.queryParams as string) ?? ""}
-						onChange={(e) =>
-							setAction({
+						onChange={(event) =>
+							onChange({
 								name: currentType,
-								context: { ...context, queryParams: e.target.value },
+								context: { ...context, queryParams: event.target.value },
 							})
 						}
 					/>
@@ -4784,16 +5428,16 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 			)}
 
 			{currentType === "external_link" && (
-				<div className="space-y-2 pl-2 border-l-2 border-muted">
+				<div className="space-y-2 border-l-2 border-muted pl-2">
 					<Label className="text-xs text-muted-foreground">URL</Label>
 					<Input
 						className="h-8 text-sm"
 						placeholder="https://example.com"
 						value={(context.url as string) ?? ""}
-						onChange={(e) =>
-							setAction({
+						onChange={(event) =>
+							onChange({
 								name: currentType,
-								context: { url: e.target.value },
+								context: { ...context, url: event.target.value },
 							})
 						}
 					/>
@@ -4802,16 +5446,17 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 			)}
 
 			{currentType === "workflow_event" && (
-				<div className="space-y-2 pl-2 border-l-2 border-muted">
+				<div className="space-y-2 border-l-2 border-muted pl-2">
 					<Label className="text-xs text-muted-foreground">
 						Workflow Event
 					</Label>
 					<Select
 						value={(context.nodeId as string) ?? ""}
 						onValueChange={(nodeId) =>
-							setAction({
+							onChange({
 								name: currentType,
 								context: {
+									...context,
 									nodeId,
 									appId: actionContext?.appId,
 									boardId: actionContext?.boardId,
@@ -4824,13 +5469,16 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 						</SelectTrigger>
 						<SelectContent>
 							{actionContext?.workflowEvents?.length ? (
-								actionContext.workflowEvents.map((event) => (
-									<SelectItem key={event.nodeId} value={event.nodeId}>
-										{event.name}
+								actionContext.workflowEvents.map((workflowEvent) => (
+									<SelectItem
+										key={workflowEvent.nodeId}
+										value={workflowEvent.nodeId}
+									>
+										{workflowEvent.name}
 									</SelectItem>
 								))
 							) : (
-								<div className="p-2 text-sm text-muted-foreground text-center">
+								<div className="p-2 text-center text-sm text-muted-foreground">
 									No workflow events available
 								</div>
 							)}
@@ -4838,6 +5486,329 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 					</Select>
 				</div>
 			)}
+		</div>
+	);
+}
+
+function NamedEventHandlerEditor({
+	definition,
+	exact,
+	actions,
+	fallbackActions,
+	fallbackLabel,
+	hasExistingWorkflowBinding,
+	onSet,
+	onDelete,
+}: {
+	definition: ComponentEventDefinition;
+	exact: boolean;
+	actions: ActionValue[];
+	fallbackActions: ActionValue[];
+	fallbackLabel: string;
+	hasExistingWorkflowBinding: boolean;
+	onSet: (actions: ActionValue[]) => void;
+	onDelete: () => void;
+}) {
+	const { actionContext } = useBuilder();
+	const customizeActions = () =>
+		onSet(
+			fallbackActions.length > 0
+				? cloneActions(fallbackActions)
+				: [createInitialAction(actionContext?.widgetActions)],
+		);
+
+	return (
+		<Collapsible defaultOpen={exact} className="group rounded-md border">
+			<CollapsibleTrigger className="flex w-full items-start gap-2 px-2.5 py-2 text-left hover:bg-muted/40">
+				<ChevronDown className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+				<Zap className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+				<div className="min-w-0 flex-1">
+					<div className="truncate text-xs font-medium">{definition.label}</div>
+					<div className="truncate font-mono text-[10px] text-muted-foreground">
+						{definition.id}
+					</div>
+					{hasExistingWorkflowBinding && (
+						<div className="mt-0.5 text-[10px] text-amber-600 dark:text-amber-400">
+							Existing workflow binding
+						</div>
+					)}
+				</div>
+				<HandlerStatus
+					exact={exact}
+					actions={actions}
+					fallbackLabel={fallbackLabel}
+				/>
+			</CollapsibleTrigger>
+			<CollapsibleContent className="space-y-3 border-t px-2.5 py-3">
+				<p className="text-xs text-muted-foreground">
+					{definition.description}
+				</p>
+				{hasExistingWorkflowBinding && (
+					<div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[10px] text-muted-foreground">
+						This legacy widget workflow binding is preserved. Adding an exact
+						handler may override it at runtime.
+					</div>
+				)}
+				{exact ? (
+					<>
+						<OrderedActionsEditor actions={actions} onChange={onSet} />
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							className="h-7 w-full text-xs"
+							onClick={onDelete}
+						>
+							Use default
+						</Button>
+					</>
+				) : (
+					<div className="space-y-2">
+						<p className="text-[10px] text-muted-foreground">
+							No exact handler is stored. This event currently{" "}
+							{fallbackLabel.toLowerCase()}.
+						</p>
+						<div className="grid grid-cols-2 gap-2">
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="h-7 text-xs"
+								onClick={customizeActions}
+							>
+								Customize
+							</Button>
+							<Button
+								type="button"
+								variant="outline"
+								size="sm"
+								className="h-7 text-xs"
+								onClick={() => onSet([])}
+							>
+								Disable
+							</Button>
+						</div>
+					</div>
+				)}
+			</CollapsibleContent>
+		</Collapsible>
+	);
+}
+
+function LegacyDefaultEditor({
+	actions,
+	onChange,
+}: {
+	actions: ActionValue[];
+	onChange: (action: ActionValue | null) => void;
+}) {
+	const { actionContext } = useBuilder();
+	const legacyAction = actions[0];
+	const dormantCount = Math.max(0, actions.length - 1);
+	const widgetActions = actionContext?.widgetActions;
+
+	return (
+		<Collapsible
+			defaultOpen={Boolean(legacyAction)}
+			className="group rounded-md border"
+		>
+			<CollapsibleTrigger className="flex w-full items-start gap-2 px-2.5 py-2 text-left hover:bg-muted/40">
+				<ChevronDown className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
+				<div className="min-w-0 flex-1">
+					<div className="text-xs font-medium">Default / legacy fallback</div>
+					<div className="font-mono text-[10px] text-muted-foreground">
+						actions[0] · only the first legacy action runs
+					</div>
+				</div>
+				<span className="shrink-0 rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground">
+					{legacyAction ? actionTypeLabel(legacyAction.name) : "Unconfigured"}
+				</span>
+			</CollapsibleTrigger>
+			<CollapsibleContent className="space-y-3 border-t px-2.5 py-3">
+				<p className="text-xs text-muted-foreground">
+					This preserves the original single-action behavior. Exact named and
+					wildcard handlers take precedence.
+				</p>
+				{dormantCount > 0 && (
+					<p className="rounded-md bg-muted/40 px-2.5 py-2 text-[10px] text-muted-foreground">
+						{dormantCount} inactive legacy{" "}
+						{dormantCount === 1 ? "entry" : "entries"}
+						preserved while this action is edited. Removing the default clears
+						them too.
+					</p>
+				)}
+				{legacyAction ? (
+					<>
+						<ActionValueEditor action={legacyAction} onChange={onChange} />
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							className="h-7 w-full text-xs text-destructive hover:text-destructive"
+							onClick={() => onChange(null)}
+						>
+							Remove legacy default
+						</Button>
+					</>
+				) : (
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="h-7 w-full text-xs"
+						onClick={() => onChange(createInitialAction(widgetActions))}
+					>
+						Configure legacy default
+					</Button>
+				)}
+			</CollapsibleContent>
+		</Collapsible>
+	);
+}
+
+function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
+	const componentData = component.component as ComponentActionData;
+	const legacyActions = componentData.actions ?? [];
+	const actionBindings = componentData.actionBindings ?? {};
+	const handlers = componentData.eventHandlers ?? {};
+	const wildcardExact = ownsHandler(handlers, WILDCARD_EVENT);
+	const wildcardActions = wildcardExact ? (handlers[WILDCARD_EVENT] ?? []) : [];
+	const legacyAction = legacyActions[0];
+
+	const definitions = useMemo(() => {
+		const declared = getComponentEventDefinitions(
+			component.component as A2UIComponent,
+		);
+		const declaredIds = new Set(declared.map((definition) => definition.id));
+		const savedEventIds = new Set([
+			...Object.keys(handlers),
+			...Object.keys(actionBindings),
+		]);
+		const configuredOnly = [...savedEventIds]
+			.filter(
+				(eventName) =>
+					eventName !== WILDCARD_EVENT && !declaredIds.has(eventName),
+			)
+			.map(
+				(eventName): ComponentEventDefinition => ({
+					id: eventName,
+					label: eventName,
+					description:
+						"This handler is configured but is not declared by the current component contract.",
+					legacyFallback: true,
+				}),
+			);
+		const definitions = [...declared, ...configuredOnly];
+		if (definitions.length > 0 || savedEventIds.has(WILDCARD_EVENT)) {
+			definitions.push({
+				id: WILDCARD_EVENT,
+				label: "Wildcard default",
+				description:
+					"Runs for named events that do not have an exact handler. This modern fallback supports an ordered action list.",
+				legacyFallback: true,
+			});
+		}
+		return definitions;
+	}, [actionBindings, component.component, handlers]);
+
+	const updateHandler = (eventName: string, actions: ActionValue[] | null) => {
+		const next = { ...handlers };
+		if (actions === null) {
+			delete next[eventName];
+		} else {
+			next[eventName] = actions;
+		}
+
+		onUpdate({
+			component: {
+				...component.component,
+				eventHandlers: Object.keys(next).length > 0 ? next : undefined,
+			} as SurfaceComponent["component"],
+		});
+	};
+
+	const updateLegacyAction = (action: ActionValue | null) => {
+		onUpdate({
+			component: {
+				...component.component,
+				actions: action ? [action, ...legacyActions.slice(1)] : undefined,
+			} as SurfaceComponent["component"],
+		});
+	};
+
+	const hasAnyConfiguration =
+		legacyActions.length > 0 ||
+		Object.keys(handlers).length > 0 ||
+		Object.keys(actionBindings).length > 0;
+
+	if (definitions.length === 0 && !hasAnyConfiguration) {
+		return (
+			<div className="rounded-md border border-dashed px-3 py-4 text-center text-xs text-muted-foreground">
+				This component does not expose configurable events.
+			</div>
+		);
+	}
+
+	return (
+		<div className="space-y-4">
+			{definitions.length > 0 && (
+				<div className="space-y-2">
+					<div>
+						<Label className="text-xs font-semibold">Events</Label>
+						<p className="mt-1 text-[10px] text-muted-foreground">
+							Each event can run an ordered list of actions. An exact empty list
+							disables only that event.
+						</p>
+					</div>
+					{definitions.map((definition) => {
+						const exact = ownsHandler(handlers, definition.id);
+						const actions = exact ? (handlers[definition.id] ?? []) : [];
+						const hasExistingWorkflowBinding = ownsHandler(
+							actionBindings,
+							definition.id,
+						);
+						const fallbackActions = wildcardExact
+							? wildcardActions
+							: hasExistingWorkflowBinding
+								? []
+								: definition.legacyFallback && legacyAction
+									? [legacyAction]
+									: [];
+						const fallbackLabel = wildcardExact
+							? wildcardActions.length === 0
+								? "Disabled by default"
+								: "Uses default"
+							: hasExistingWorkflowBinding
+								? "Uses existing workflow binding"
+								: definition.legacyFallback && legacyAction
+									? "Uses legacy fallback"
+									: "Unconfigured";
+
+						return (
+							<NamedEventHandlerEditor
+								key={definition.id}
+								definition={definition}
+								exact={exact}
+								actions={actions}
+								fallbackActions={fallbackActions}
+								fallbackLabel={fallbackLabel}
+								hasExistingWorkflowBinding={hasExistingWorkflowBinding}
+								onSet={(nextActions) =>
+									updateHandler(definition.id, nextActions)
+								}
+								onDelete={() => updateHandler(definition.id, null)}
+							/>
+						);
+					})}
+				</div>
+			)}
+
+			<div className="space-y-2 border-t pt-4">
+				<LegacyDefaultEditor
+					actions={legacyActions}
+					onChange={updateLegacyAction}
+				/>
+			</div>
 		</div>
 	);
 }

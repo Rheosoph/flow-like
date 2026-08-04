@@ -16,6 +16,7 @@ import {
 	TabsContent,
 	TabsList,
 	TabsTrigger,
+	useSearch,
 } from "@flow-like/flow-like-ui";
 import {
 	Avatar,
@@ -352,14 +353,15 @@ function InstalledContent() {
 		[installedPackages.data],
 	);
 
-	const filteredPackages = registryPackages.filter((pkg) => {
-		if (!searchQuery) return true;
-		const query = searchQuery.toLowerCase();
-		return (
-			pkg.manifest.name.toLowerCase().includes(query) ||
-			pkg.manifest.description.toLowerCase().includes(query) ||
-			pkg.manifest.keywords.some((kw) => kw.toLowerCase().includes(query))
-		);
+	const filteredPackages = useSearch(registryPackages, searchQuery, {
+		fields: [
+			"manifest.name",
+			"manifest.id",
+			"manifest.description",
+			"manifest.keywords",
+			"manifest.authors",
+		],
+		boost: { "manifest.name": 3, "manifest.id": 2, "manifest.keywords": 1.5 },
 	});
 
 	const hasUpdates = (availableUpdates.data?.length ?? 0) > 0;

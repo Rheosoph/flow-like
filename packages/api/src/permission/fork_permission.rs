@@ -303,6 +303,7 @@ mod tests {
             allow_forking: true,
             forked_at: None,
             forked_from: None,
+            app_type: None,
         }
     }
 

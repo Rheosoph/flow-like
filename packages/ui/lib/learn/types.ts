@@ -1,4 +1,8 @@
-export type CourseDifficulty = "BEGINNER" | "INTERMEDIATE" | "ADVANCED" | "EXPERT";
+export type CourseDifficulty =
+	| "BEGINNER"
+	| "INTERMEDIATE"
+	| "ADVANCED"
+	| "EXPERT";
 
 export type CourseCategory =
 	| "GENERAL"
@@ -133,11 +137,7 @@ export interface ChoiceChallengePayload {
 export interface BoardRiddlePayload {
 	readonly boardId?: string;
 	readonly predicates: ReadonlyArray<{
-		readonly op:
-			| "requires_nodes"
-			| "forbids_nodes"
-			| "max_nodes"
-			| "min_nodes";
+		readonly op: "requires_nodes" | "forbids_nodes" | "max_nodes" | "min_nodes";
 		readonly args: ReadonlyArray<string | number>;
 	}>;
 }

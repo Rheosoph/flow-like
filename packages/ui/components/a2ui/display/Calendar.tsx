@@ -41,7 +41,7 @@ import {
 	PopoverTrigger,
 } from "../../ui/index";
 import {
-	useComponentActionTrigger,
+	useComponentEventTrigger,
 	useIsComponentTriggering,
 } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
@@ -252,7 +252,7 @@ export function A2UICalendar({
 	style,
 }: ComponentProps<CalendarComponent>) {
 	const containerRef = useRef<HTMLDivElement>(null);
-	const trigger = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
 
 	const rawEvents = useResolved<unknown>(component.events);
@@ -341,9 +341,9 @@ export function A2UICalendar({
 
 	const fire = useCallback(
 		(interaction: string, extra: Record<string, unknown>) => {
-			void trigger(component.actions, { interaction, ...extra });
+			void triggerEvent(interaction, component, { interaction, ...extra });
 		},
-		[trigger, component.actions],
+		[triggerEvent, component],
 	);
 
 	const [dialogState, setDialogState] = useState<EventDialogState | null>(null);

@@ -68,7 +68,9 @@ export type BoardBridgeMessage =
 	| BoardBridgeReadyMessage
 	| BoardBridgeStateMessage;
 
-export function isBoardBridgeMessage(value: unknown): value is BoardBridgeMessage {
+export function isBoardBridgeMessage(
+	value: unknown,
+): value is BoardBridgeMessage {
 	return (
 		typeof value === "object" &&
 		value !== null &&
@@ -81,10 +83,7 @@ export function isBoardBridgeMessage(value: unknown): value is BoardBridgeMessag
  * Convert a saved IBoard model into the snapshot shape the validator expects.
  * Used both by the in-frame responder and by REST-based fallback paths.
  */
-export function snapshotFromBoard(
-	appId: string,
-	board: IBoard,
-): BoardSnapshot {
+export function snapshotFromBoard(appId: string, board: IBoard): BoardSnapshot {
 	const nodes: BoardSnapshotNode[] = Object.values(board.nodes ?? {}).map(
 		(n) => {
 			const pins: Record<string, { value?: unknown }> = {};

@@ -1,7 +1,7 @@
 //! Stateful tool surface for planning, building, validating, and atomically committing typed IR.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -1616,14 +1616,15 @@ impl FlowIrDraftStore {
             response.code = Some("FLOWSCRIPT_NO_CHANGES".to_string());
             return response;
         }
-        let mut message = if retained.evaluation.review_notes.is_empty() {
+        let human_review_notes = human_review_note_count(&retained.evaluation.review_notes);
+        let mut message = if human_review_notes == 0 {
             "FlowScript is valid and its exact command batch is retained for commit.".to_string()
         } else {
             format!(
-                "FlowScript is valid and its exact command batch is retained for commit. Commit may proceed; {} non-blocking acceptance review note(s) will be surfaced in the human review.",
-                retained.evaluation.review_notes.len()
+                "FlowScript is valid and its exact command batch is retained for commit. Commit may proceed; {human_review_notes} non-blocking acceptance review note(s) will be surfaced in the human review."
             )
         };
+        append_prohibited_node_directive(&mut message, &retained.evaluation.review_notes);
         append_omitted_prohibition_notice(&mut message, &retained.request_acceptance_contract);
         FlowScriptDraftResponse::for_draft("valid", message, args.draft_id, &retained)
     }
@@ -1879,12 +1880,13 @@ impl FlowIrDraftStore {
                 retained.revision
             ));
         }
-        if !retained.evaluation.review_notes.is_empty() {
+        let human_review_notes = human_review_note_count(&retained.evaluation.review_notes);
+        if human_review_notes > 0 {
             message.push_str(&format!(
-                " {} non-blocking acceptance review note(s) accompany this batch for the human review.",
-                retained.evaluation.review_notes.len()
+                " {human_review_notes} non-blocking acceptance review note(s) accompany this batch for the human review."
             ));
         }
+        append_prohibited_node_directive(&mut message, &retained.evaluation.review_notes);
         append_omitted_prohibition_notice(&mut message, &retained.request_acceptance_contract);
         let mut response =
             FlowScriptDraftResponse::for_draft("queued", message, args.draft_id, &retained);
@@ -4578,6 +4580,40 @@ fn flowscript_request_mismatch_response(
 
 /// Surface the prohibitions the machine could not enforce exactly where the batch is handed
 /// onward, so the human review sees which bans it alone must verify.
+/// Review notes destined for the human reviewer. Prohibited-node findings are excluded: they are
+/// addressed to the model and carry their own directive, so counting them here would tell the model
+/// its own outstanding work is somebody else's to look at.
+fn human_review_note_count(review_notes: &[FlowScriptDiagnostic]) -> usize {
+    review_notes
+        .iter()
+        .filter(|note| note.code != FlowScriptDiagnosticCode::FsProhibitedNode)
+        .count()
+}
+
+/// Turn prohibited-node review notes into an explicit instruction to write another revision. The
+/// batch still commits — stranding a whole edit over a replaceable node costs more than the node
+/// does — so without this the model reads "valid" and stops with the wrong nodes on the board.
+fn append_prohibited_node_directive(message: &mut String, review_notes: &[FlowScriptDiagnostic]) {
+    let prohibited = review_notes
+        .iter()
+        .filter(|note| note.code == FlowScriptDiagnosticCode::FsProhibitedNode)
+        .collect::<Vec<_>>();
+    if prohibited.is_empty() {
+        return;
+    }
+    let repairs = prohibited
+        .iter()
+        .filter_map(|note| note.fix.as_ref().map(|fix| fix.summary.as_str()))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect::<Vec<_>>()
+        .join(" ");
+    message.push_str(&format!(
+        " NOT DONE: {} prohibited node(s) remain on the board and must be replaced before you finish — this is your work, not the human reviewer's. Write a corrected revision now: {repairs}",
+        prohibited.len()
+    ));
+}
+
 fn append_omitted_prohibition_notice(message: &mut String, contract: &RequestAcceptanceContract) {
     if contract.omitted_prohibitions.is_empty() {
         return;

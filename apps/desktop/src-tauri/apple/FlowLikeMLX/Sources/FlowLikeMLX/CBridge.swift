@@ -44,9 +44,15 @@ public func flow_like_mlx_generate(
 ) -> Int32 {
     guard let requestJSON, let context else { return 1 }
 
-    let payload = String(cString: requestJSON)
-    guard let data = payload.data(using: .utf8),
-        let command = try? JSONDecoder().decode(FlowLikeMLXCommand.self, from: data),
+    // Rust keeps the CString alive for this synchronous bridge call. Decode
+    // directly from that storage so large requests (notably base64 VLM images)
+    // do not also exist as a Swift String and a copied Data buffer.
+    let data = Data(
+        bytesNoCopy: UnsafeMutableRawPointer(mutating: requestJSON),
+        count: strlen(requestJSON),
+        deallocator: .none
+    )
+    guard let command = try? JSONDecoder().decode(FlowLikeMLXCommand.self, from: data),
         (try? command.validatedGenerate()) != nil
     else {
         // Rust owns and will reclaim `context` when a nonzero result is

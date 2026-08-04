@@ -1,4 +1,4 @@
-import type { IGenericCommand } from "@flow-like/flow-like-ui";
+import type { IGenericCommand, INode } from "@flow-like/flow-like-ui";
 
 /**
  * Keep a complete logical mutation below every production ingress limit. The AWS API
@@ -145,6 +145,103 @@ export function chunkLegacyCommandsForRecovery(
 
 	if (current.length > 0) chunks.push(current);
 	return chunks;
+}
+
+const PIN_RESOLVING_COMMAND_TYPES = new Set(["ConnectPin", "DisconnectPin"]);
+const NODE_STATE_COMMAND_TYPES = new Set(["AddNode", "UpdateNode"]);
+
+/**
+ * Rebuild a command batch that no other machine can replay.
+ *
+ * Pins minted inside `on_update` — function-call mirrors, `string_format` placeholders — get a
+ * fresh id wherever they are derived. Batches authored before the apply planner shipped that
+ * derived node state carry `ConnectPin` commands whose pin ids exist only on the machine that
+ * created them, so the Hub rejects the whole batch forever ("Pin not found in container") and the
+ * ordered outbox wedges behind it.
+ *
+ * The local board is authoritative and still holds those exact ids, so the missing node state can
+ * be restated as `UpdateNode` commands placed before the first command that resolves a pin.
+ * `on_update` reconciles mirrored pins by name, so replaying explicit node state keeps the ids
+ * stable instead of minting a second set.
+ *
+ * Returns undefined when the batch is already replayable, or when the local board can no longer
+ * supply every referenced pin — a partial repair would push a half-connected board, which is worse
+ * than a visible failure.
+ */
+export function findUnresolvedPinReferences(commands: IGenericCommand[]): {
+	missing: Map<string, Set<string>>;
+	firstUnresolvedIndex: number;
+} {
+	const provided = new Map<string, Set<string>>();
+	const missing = new Map<string, Set<string>>();
+	let firstUnresolvedIndex = -1;
+
+	const provide = (containerId?: string, pins?: Record<string, unknown>) => {
+		if (!containerId) return;
+		const known = provided.get(containerId) ?? new Set<string>();
+		for (const pinId of Object.keys(pins ?? {})) known.add(pinId);
+		provided.set(containerId, known);
+	};
+
+	commands.forEach((command, index) => {
+		if (NODE_STATE_COMMAND_TYPES.has(command.command_type)) {
+			provide(command.node?.id, command.node?.pins);
+			return;
+		}
+		// A connection may target a Function layer's boundary pins, which arrive with the layer
+		// itself. Missing that would report every layer edge as unrepairable.
+		if (command.command_type === "UpsertLayer") {
+			provide(command.layer?.id, command.layer?.pins);
+			for (const node of Object.values(command.layer?.nodes ?? {})) {
+				provide(node?.id, node?.pins);
+			}
+			return;
+		}
+		if (!PIN_RESOLVING_COMMAND_TYPES.has(command.command_type)) return;
+
+		for (const [nodeId, pinId] of [
+			[command.from_node, command.from_pin],
+			[command.to_node, command.to_pin],
+		] as const) {
+			if (!nodeId || !pinId) continue;
+			if (provided.get(nodeId)?.has(pinId)) continue;
+			const pins = missing.get(nodeId) ?? new Set<string>();
+			pins.add(pinId);
+			missing.set(nodeId, pins);
+			if (firstUnresolvedIndex < 0) firstUnresolvedIndex = index;
+		}
+	});
+
+	return { missing, firstUnresolvedIndex };
+}
+
+export function repairUnreplayableCommandBatch(
+	commands: IGenericCommand[],
+	localNodes: Record<string, INode>,
+): IGenericCommand[] | undefined {
+	const { missing, firstUnresolvedIndex } =
+		findUnresolvedPinReferences(commands);
+	if (missing.size === 0 || firstUnresolvedIndex < 0) return undefined;
+
+	const restatements: IGenericCommand[] = [];
+	for (const [nodeId, pinIds] of missing) {
+		const node = localNodes[nodeId];
+		if (!node) return undefined;
+		for (const pinId of pinIds) {
+			if (!node.pins?.[pinId]) return undefined;
+		}
+		restatements.push({
+			command_type: "UpdateNode",
+			node,
+			old_node: null,
+		} as IGenericCommand);
+	}
+
+	return [
+		...commands.slice(0, firstUnresolvedIndex),
+		...restatements,
+		...commands.slice(firstUnresolvedIndex),
+	];
 }
 
 export interface SystemTimeLike {

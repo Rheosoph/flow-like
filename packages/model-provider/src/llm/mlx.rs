@@ -1,4 +1,4 @@
-use std::any::Any;
+use std::{any::Any, sync::Arc};
 
 use flow_like_types::{Cacheable, Result, Value, async_trait};
 
@@ -22,6 +22,24 @@ pub struct MlxModel {
 
 impl MlxModel {
     pub async fn new(provider: &ModelProvider, port: u16, bearer_token: &str) -> Result<Self> {
+        Self::new_inner(provider, port, bearer_token, None).await
+    }
+
+    pub async fn new_with_keepalive(
+        provider: &ModelProvider,
+        port: u16,
+        bearer_token: &str,
+        keepalive: Arc<dyn Send + Sync>,
+    ) -> Result<Self> {
+        Self::new_inner(provider, port, bearer_token, Some(keepalive)).await
+    }
+
+    async fn new_inner(
+        provider: &ModelProvider,
+        port: u16,
+        bearer_token: &str,
+        keepalive: Option<Arc<dyn Send + Sync>>,
+    ) -> Result<Self> {
         let additional_params = provider.params.clone().and_then(|mut params| {
             // These fields are owned by the local OpenAI transport and must not
             // be replaced by persistent provider configuration.
@@ -31,11 +49,16 @@ impl MlxModel {
             (!params.is_empty()).then(|| Value::Object(params.into_iter().collect()))
         });
 
+        let mut client = LlamaCppClient::new_with_bearer_token(
+            &format!("http://127.0.0.1:{port}"),
+            bearer_token,
+        );
+        if let Some(keepalive) = keepalive {
+            client = client.with_keepalive(keepalive);
+        }
+
         Ok(Self {
-            client: LlamaCppClient::new_with_bearer_token(
-                &format!("http://127.0.0.1:{port}"),
-                bearer_token,
-            ),
+            client,
             _provider: provider.clone(),
             additional_params,
             default_model: provider.model_id.clone(),
@@ -88,6 +111,15 @@ mod tests {
     use super::*;
     use flow_like_types::{json::json, tokio};
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct DropProbe(Arc<AtomicBool>);
+
+    impl Drop for DropProbe {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
 
     #[tokio::test]
     async fn forwards_generation_defaults_but_filters_transport_fields() {
@@ -107,5 +139,27 @@ mod tests {
         assert_eq!(params["max_kv_size"], 4096);
         assert!(params.get("stream").is_none());
         assert!(params.get("messages").is_none());
+    }
+
+    #[tokio::test]
+    async fn returned_client_keeps_runtime_lease_alive() {
+        let provider = ModelProvider {
+            provider_name: "MLX".to_string(),
+            model_id: Some("test-model".to_string()),
+            version: None,
+            params: None,
+        };
+        let dropped = Arc::new(AtomicBool::new(false));
+        let keepalive: Arc<dyn Send + Sync> = Arc::new(DropProbe(dropped.clone()));
+        let model = MlxModel::new_with_keepalive(&provider, 1, "test-token", keepalive)
+            .await
+            .unwrap();
+        let client = model.provider().await.unwrap().into_client();
+
+        drop(model);
+        assert!(!dropped.load(Ordering::Acquire));
+
+        drop(client);
+        assert!(dropped.load(Ordering::Acquire));
     }
 }

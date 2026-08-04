@@ -903,9 +903,9 @@ Common a2ui calls (confirm exact signatures with `get_declarations`):
   pushes a DataFusion result straight into a table element (or pass `csv` text). For incremental
   edits use `a2uiUpdateTable` (set/append/replace rows). DataFusion's `.table` output is built
   exactly for these table/chart pins, so prefer it over hand-iterating rows when filling a grid.
-- Data-path updates: `a2uiDataUpdate({ surfaceId, path, value })` is a LAST RESORT for a custom
-  `$.data.*` binding that no element setter covers — prefer the element-level setters above (see
-  the a2ui page rules).
+- Data-path updates: `a2uiDataUpdate({ surfaceId, path, value })` is FORBIDDEN. Writing a surface
+  data path does not change what the page renders; use the element setters and widget nodes above
+  (see the a2ui page rules).
 - Screen control: end a render path with `a2uiShowScreen()`; route with `a2uiNavigateTo({ route })`;
   read URL params with `a2uiGetQueryParams({ paramName }).value`.
 
@@ -943,12 +943,13 @@ event block. See the dashboard examples below.
 
 /// A2UI page contract: how board logic pushes values into a live UI page. Prevents two recurring
 /// mistakes: using page/global state (a scratch store) to drive the screen, and using the generic
-/// `a2uiDataUpdate` data-path node where an element-level setter exists.
+/// `a2uiDataUpdate` data-path node instead of an element setter or a widget instance. A leftover
+/// `a2uiDataUpdate` does not block the commit; it returns an `FS_PROHIBITED_NODE` review note whose
+/// directive sends the model back for another revision.
 pub const A2UI_STATE_GUIDANCE: &str = r#"
 ## A2UI PAGES: UPDATING WHAT AN ELEMENT SHOWS
-When a board drives an a2ui page (page-load or action event handlers writing to a UI surface),
-write to the ELEMENT with its element-level setter. That is the correct pattern essentially
-always:
+A board never pushes data into a page's data model. It writes to the ELEMENT with that element's
+setter, or it instantiates/updates a WIDGET with typed inputs. There is no third option:
 
 - Text/labels/status: `a2uiSetElementText` (Set Element Text), `a2uiSetMarkdownContent`,
   `a2uiSetBadgeContent`, `a2uiSetProgress`.
@@ -957,16 +958,41 @@ always:
 - Tables: `a2uiWriteCsvToTable` (Push CSV to Table) for full data, `a2uiUpdateTable` for
   incremental row edits.
 - Charts: `a2uiPushCsvToChart` (Push Data to Chart).
-Target them with the `ui_inspect` element ref (`"<page_id>/<element_id>"`) directly or via
+- Package widgets: `a2uiInstantiateWidget` with one `dyn*` input per contract field, then
+  `a2uiPushChild` / `a2uiPushToContainer`; `a2uiWidgetUpdateInputs` to patch a live instance.
+Target elements with the `ui_inspect` element ref (`"<page_id>/<element_id>"`) directly or via
 `a2uiGetElement({ elementRef }).element`.
 
-- **Data Update** (`a2uiDataUpdate`) is a LAST RESORT, not a dashboard-update mechanism. Use it
-  ONLY for a pure `$.data.<path>` binding on a custom component prop that no element-level setter
-  covers. If a setter above matches the element (text, markdown, badge, progress, value, select,
-  slider, table, chart), use that setter instead — never `a2uiDataUpdate`. When it is genuinely
-  required, its `path` is the binding path WITHOUT the `$.` prefix and with `/` separators
-  (`$.data.temperature` -> `path: "data/temperature"`), and `surfaceId` is the surface the widget
-  lives on (defaults to `"main"`).
+### Rendering a list of records
+Never assemble a data blob and write it at a path. Clear the container, loop the records, read each
+field with `structGet`, instantiate one widget per record with those fields on its generated `dyn*`
+input pins, and push each instance into the container:
+```ts
+function renderSources(rows: Struct[]) {
+    const grid = a2uiGetElement({ elementRef: "<page_id>/sources-list" }).element
+    a2uiClearChildren({ containerRef: grid })
+    for (const row of rows) {
+        const instance = a2uiInstantiateWidget({
+            widgetSelector: "Knowledge Source Card",
+            instanceId: structGet({ struct: row, field: "id" }).value,
+            dynPathDocument: structGet({ struct: row, field: "document" }).value,
+            dynPathChunkCount: structGet({ struct: row, field: "chunk_count" }).value,
+        })
+        a2uiPushChild({ containerRef: grid, childRef: instance.elementRef })
+    }
+}
+```
+The generated input pin names differ per widget — `ui_inspect` (operation `widget`) lists the exact
+ones for the selected widget; never guess them. Re-rendering the same list repeats this loop;
+changing one field on an already mounted instance uses `a2uiWidgetUpdateInputs` against that
+instance's element ref.
+
+- **Data Update** (`a2uiDataUpdate`) is FORBIDDEN. Writing `$.data.<path>` does not change what the
+  page renders — elements own their own state and widget instances read typed contract inputs, so
+  neither observes the write. Every case it looks right for is one of the setters or widget nodes
+  above. Each one left on the board returns an `FS_PROHIBITED_NODE` review note: the batch still
+  commits, but the work is NOT done until you write a further revision that replaces it. Never
+  report a board as finished while such a note stands.
 - **Set Page State** (`a2uiSetPageState`) does NOT touch `$.data.*` bindings and will NOT update the
   screen. Page state is a separate per-page key/value store that widgets never read; its value only
   travels back to the board on the NEXT event, where **Get Page State** (`a2uiGetPageState`) reads
@@ -975,10 +1001,10 @@ Target them with the `ui_inspect` element ref (`"<page_id>/<element_id>"`) direc
 - **Set/Get Global State** behave like page state but shared across pages — same rule, not for
   display.
 
-Rule of thumb: value must be visible now -> the element-level setter for that element type. Value
-must survive to a later event/handler -> page/global state. `a2uiDataUpdate` only when no setter
-exists for the bound prop. When unsure, call `get_declarations` for the setter names above and
-read the signatures before writing.
+Rule of thumb: value must be visible now -> the setter for that element type, or a widget instance
+carrying it as an input. Value must survive to a later event/handler -> page/global state. When
+unsure which setter an element takes, call `get_declarations` for the names above and read the
+signatures before writing.
 "#;
 
 /// Board size/organization contract shared by board prompts. Mirrored by a reconcile-time
@@ -3619,17 +3645,22 @@ mod tests {
         ];
         for prompt in prompts {
             assert!(prompt.contains("## A2UI PAGES: UPDATING WHAT AN ELEMENT SHOWS"));
-            assert!(prompt.contains("write to the ELEMENT with its element-level setter"));
+            assert!(prompt.contains("It writes to the ELEMENT with that element's\nsetter"));
             for setter in [
                 "a2uiSetElementText",
                 "a2uiSetElementValue",
                 "a2uiWriteCsvToTable",
                 "a2uiPushCsvToChart",
+                "a2uiInstantiateWidget",
+                "a2uiWidgetUpdateInputs",
+                "a2uiPushChild",
             ] {
                 assert!(prompt.contains(setter), "missing element setter: {setter}");
             }
-            assert!(prompt.contains("`a2uiDataUpdate`) is a LAST RESORT"));
-            assert!(prompt.contains("no element-level setter\n  covers"));
+            assert!(prompt.contains("`a2uiDataUpdate`) is FORBIDDEN"));
+            assert!(prompt.contains("FS_PROHIBITED_NODE"));
+            assert!(!prompt.contains("`a2uiDataUpdate` is a LAST RESORT"));
+            assert!(!prompt.contains("`a2uiDataUpdate`) is a LAST RESORT"));
             assert!(!prompt.contains("This is the ONLY node that updates the live UI"));
             assert!(!prompt.contains("visible now -> `a2uiDataUpdate`"));
         }

@@ -2,12 +2,13 @@ use crate::error::{WasmError, WasmResult};
 use crate::host_functions::HostState;
 use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use crate::llm_message::sdk_message_content;
+use crate::wasi::{isolated_wasi_ctx_builder, IsolatedWasiCtxBuilder};
 use futures::StreamExt;
 use serde_json::Value;
 use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::component::Linker;
-use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::p2::{WasiHttpCtxView, WasiHttpView};
 use wasmtime_wasi_http::WasiHttpCtx;
 
@@ -18,50 +19,47 @@ pub struct ComponentStoreData {
     pub resource_table: wasmtime::component::ResourceTable,
 }
 
+pub(super) fn configure_guest_network(
+    builder: &mut IsolatedWasiCtxBuilder,
+    security: &WasmSecurityConfig,
+) {
+    let caps = security.capabilities;
+    let has_socket_caps =
+        caps.intersects(WasmCapabilities::TCP | WasmCapabilities::UDP | WasmCapabilities::DNS);
+
+    if security.allow_wasi_network || has_socket_caps {
+        if let Some(ref hosts) = security.allowed_hosts {
+            let allowed: std::collections::HashSet<String> = hosts.iter().cloned().collect();
+            builder.socket_addr_check(move |addr, _use| {
+                let ip = addr.ip().to_string();
+                let allowed = allowed.clone();
+                Box::pin(async move { allowed.contains(&ip) })
+                    as Pin<Box<dyn std::future::Future<Output = bool> + Send + Sync>>
+            });
+        } else {
+            builder.inherit_network();
+        }
+    }
+
+    // Wasmtime enables TCP and UDP protocol use by default (while denying all
+    // addresses). Once an address policy is opened above, absent protocols
+    // must therefore be disabled explicitly to preserve capability precision.
+    builder
+        .allow_ip_name_lookup(security.allow_wasi_network || caps.intersects(WasmCapabilities::DNS))
+        .allow_tcp(security.allow_wasi_network || caps.intersects(WasmCapabilities::TCP))
+        .allow_udp(security.allow_wasi_network || caps.intersects(WasmCapabilities::UDP));
+}
+
 impl ComponentStoreData {
     pub fn new(security: &WasmSecurityConfig) -> Self {
-        let mut builder = WasiCtxBuilder::new();
+        let mut builder = isolated_wasi_ctx_builder();
 
-        let caps = security.capabilities;
-        let has_network_caps = caps.intersects(WasmCapabilities::NETWORK_ALL);
-
-        // Provide stdio/env/args so Component Model runtimes (C#, TypeScript)
-        // that target wasi:cli/command can function correctly.
-        builder.inherit_stdio();
-        builder.inherit_env();
+        // Provide output streams and args so Component Model runtimes (C#,
+        // TypeScript) that target wasi:cli/command can function correctly.
+        // Stdin stays closed and the guest environment remains empty.
+        builder.inherit_output();
+        configure_guest_network(&mut builder, security);
         builder.args(&["flow-like-wasm-node"]);
-
-        if security.allow_wasi_network || has_network_caps {
-            if let Some(ref hosts) = security.allowed_hosts {
-                let allowed: std::collections::HashSet<String> = hosts.iter().cloned().collect();
-                builder.socket_addr_check(move |addr, _use| {
-                    let ip = addr.ip().to_string();
-                    let allowed = allowed.clone();
-                    Box::pin(async move { allowed.contains(&ip) })
-                        as Pin<Box<dyn std::future::Future<Output = bool> + Send + Sync>>
-                });
-            } else {
-                builder.inherit_network();
-            }
-        }
-
-        // DNS lookups require explicit opt-in
-        if security.allow_wasi_network
-            || caps.intersects(WasmCapabilities::DNS)
-            || caps.intersects(WasmCapabilities::NETWORK_ALL)
-        {
-            builder.allow_ip_name_lookup(true);
-        }
-
-        // TCP sockets
-        if security.allow_wasi_network || caps.intersects(WasmCapabilities::TCP) {
-            builder.allow_tcp(true);
-        }
-
-        // UDP sockets
-        if security.allow_wasi_network || caps.intersects(WasmCapabilities::UDP) {
-            builder.allow_udp(true);
-        }
 
         Self {
             host_state: HostState::new(security.capabilities),
@@ -91,15 +89,79 @@ impl WasiHttpView for ComponentStoreData {
     }
 }
 
+fn allows_standard_wasi_http(security: &WasmSecurityConfig) -> bool {
+    // Wasmtime's standard wasi:http implementation cannot enforce Flow-Like's
+    // per-method capabilities or host allowlist. Only expose it when every HTTP
+    // method is granted and no host restriction needs to be enforced.
+    security.capabilities.contains(WasmCapabilities::HTTP_ALL) && security.allowed_hosts.is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasmtime_wasi::cli::WasiCliView;
+    use wasmtime_wasi::p2::bindings::cli::environment::Host;
+
+    fn guest_environment(security: &WasmSecurityConfig) -> Vec<(String, String)> {
+        let mut data = ComponentStoreData::new(security);
+        let mut cli = data.cli();
+        Host::get_environment(&mut cli).expect("WASI environment should be readable")
+    }
+
+    #[test]
+    fn host_environment_is_not_visible_to_component_guests() {
+        let sentinel_value = std::env::var("PATH").expect("test host should define PATH");
+        assert!(
+            !sentinel_value.is_empty(),
+            "test host PATH should not be empty"
+        );
+
+        for (name, security) in [
+            ("restrictive", WasmSecurityConfig::restrictive()),
+            ("permissive", WasmSecurityConfig::permissive()),
+        ] {
+            let environment = guest_environment(&security);
+            assert!(
+                environment.is_empty(),
+                "{name} component guest inherited host environment, including the PATH sentinel"
+            );
+        }
+    }
+
+    #[test]
+    fn standard_http_requires_an_http_capability_without_an_allowlist() {
+        assert!(!allows_standard_wasi_http(
+            &WasmSecurityConfig::restrictive()
+        ));
+        assert!(!allows_standard_wasi_http(
+            &WasmSecurityConfig::default().with_capabilities(WasmCapabilities::TCP)
+        ));
+        assert!(allows_standard_wasi_http(
+            &WasmSecurityConfig::default().with_capabilities(WasmCapabilities::HTTP_ALL)
+        ));
+        assert!(!allows_standard_wasi_http(
+            &WasmSecurityConfig::default().with_capabilities(WasmCapabilities::HTTP_GET)
+        ));
+        assert!(!allows_standard_wasi_http(
+            &WasmSecurityConfig::default()
+                .with_capabilities(WasmCapabilities::HTTP_GET)
+                .with_allowed_hosts(vec!["example.com".to_string()])
+        ));
+    }
+}
+
 pub fn register_component_host_functions(
     linker: &mut Linker<ComponentStoreData>,
+    security: &WasmSecurityConfig,
 ) -> WasmResult<()> {
     wasmtime_wasi::p2::add_to_linker_async(linker).map_err(|e| {
         WasmError::Initialization(format!("Failed to register WASI functions: {}", e))
     })?;
-    wasmtime_wasi_http::p2::add_only_http_to_linker_async(linker).map_err(|e| {
-        WasmError::Initialization(format!("Failed to register WASI HTTP functions: {}", e))
-    })?;
+    if allows_standard_wasi_http(security) {
+        wasmtime_wasi_http::p2::add_only_http_to_linker_async(linker).map_err(|e| {
+            WasmError::Initialization(format!("Failed to register WASI HTTP functions: {}", e))
+        })?;
+    }
     register_logging(linker)?;
     register_pins(linker)?;
     register_variables(linker)?;

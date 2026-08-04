@@ -175,6 +175,9 @@ pub async fn handle_compilation_callback(
             wasm_path: Set(version_record.wasm_path.clone()),
             wasm_hash: Set(version_record.wasm_hash.clone()),
             wasm_size: Set(version_record.wasm_size),
+            widgets: Set(version_record.widgets.clone()),
+            widget_bundle_hash: Set(version_record.widget_bundle_hash.clone()),
+            widget_bundle_size: Set(version_record.widget_bundle_size),
             updated_at: Set(now),
             ..Default::default()
         };

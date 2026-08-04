@@ -84,6 +84,27 @@ export interface ChartInput {
 
 const DEFAULT_NIVO_MARGIN = { top: 30, right: 30, bottom: 50, left: 60 };
 
+/** Nivo derives these from a continuous scale, so a categorical palette throws. */
+const CONTINUOUS_COLOR_CHART_TYPES = new Set(["heatmap"]);
+
+export function isContinuousColorChart(chartType: string): boolean {
+	return CONTINUOUS_COLOR_CHART_TYPES.has(chartType);
+}
+
+/**
+ * Coerces a cell to a chart value. Anything non-numeric becomes `null`, which
+ * Nivo renders as a gap — feeding it through would reach the scales as `NaN`
+ * and emit an unparseable SVG path.
+ */
+function toChartNumber(value: unknown): number | null {
+	if (typeof value === "number") return Number.isFinite(value) ? value : null;
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	if (!trimmed) return null;
+	const parsed = Number(trimmed);
+	return Number.isFinite(parsed) ? parsed : null;
+}
+
 function nivoLegend(
 	position: NonNullable<CSVConfig["legendPosition"]>,
 ): Record<string, unknown> {
@@ -221,6 +242,19 @@ function plotlyLegend(
 // CSV PARSING
 // ============================================================================
 
+const FENCE_LINE = /^\s*(?:`{3,}|~{3,})\s*\w*\s*$/;
+
+/**
+ * Drops fence markers that survived markdown deserialization — a leaked closing
+ * fence would otherwise parse as a data row and show up as an axis category.
+ */
+function stripFenceLines(content: string): string {
+	return content
+		.split("\n")
+		.filter((line) => !FENCE_LINE.test(line))
+		.join("\n");
+}
+
 /**
  * Parse CSV string into headers and rows
  */
@@ -339,7 +373,7 @@ export function csvToNivoBar(data: CSVData): unknown[] {
 	return data.rows.map((row) => {
 		const item: Record<string, string | number> = { [indexKey]: row[0] };
 		valueKeys.forEach((key, i) => {
-			item[key] = row[i + 1] ?? 0;
+			item[key] = toChartNumber(row[i + 1]) ?? 0;
 		});
 		return item;
 	});
@@ -357,7 +391,7 @@ export function csvToNivoLine(data: CSVData): unknown[] {
 			const yIndex = data.headers.indexOf(seriesId);
 			return {
 				x: row[xIndex],
-				y: row[yIndex] ?? 0,
+				y: toChartNumber(row[yIndex]),
 			};
 		}),
 	}));
@@ -370,7 +404,7 @@ export function csvToNivoPie(data: CSVData): unknown[] {
 	return data.rows.map((row) => ({
 		id: String(row[0]),
 		label: String(row[0]),
-		value: typeof row[1] === "number" ? row[1] : 0,
+		value: toChartNumber(row[1]) ?? 0,
 	}));
 }
 
@@ -382,7 +416,7 @@ export function csvToNivoRadar(data: CSVData): unknown[] {
 	return data.rows.map((row) => {
 		const item: Record<string, string | number> = { [indexKey]: row[0] };
 		valueKeys.forEach((key, i) => {
-			item[key] = row[i + 1] ?? 0;
+			item[key] = toChartNumber(row[i + 1]) ?? 0;
 		});
 		return item;
 	});
@@ -397,7 +431,7 @@ export function csvToNivoHeatmap(data: CSVData): unknown[] {
 		id: String(row[0]),
 		data: colLabels.map((col, i) => ({
 			x: col,
-			y: typeof row[i + 1] === "number" ? row[i + 1] : 0,
+			y: toChartNumber(row[i + 1]),
 		})),
 	}));
 }
@@ -408,7 +442,7 @@ export function csvToNivoHeatmap(data: CSVData): unknown[] {
 export function csvToNivoFunnel(data: CSVData): unknown[] {
 	return data.rows.map((row, index) => ({
 		id: `step_${index}`,
-		value: typeof row[1] === "number" ? row[1] : 0,
+		value: toChartNumber(row[1]) ?? 0,
 		label: String(row[0]),
 	}));
 }
@@ -422,8 +456,9 @@ export function csvToNivoScatter(data: CSVData): unknown[] {
 
 	for (const row of data.rows) {
 		const group = String(row[0]);
-		const x = typeof row[1] === "number" ? row[1] : 0;
-		const y = typeof row[2] === "number" ? row[2] : 0;
+		const x = toChartNumber(row[1]);
+		const y = toChartNumber(row[2]);
+		if (x === null || y === null) continue;
 
 		const points = groups.get(group);
 		if (points) points.push({ x, y });
@@ -442,6 +477,7 @@ export function csvToNivoScatter(data: CSVData): unknown[] {
 export function csvToPlotly(
 	data: CSVData,
 	chartType: string,
+	stacked?: boolean,
 ): { data: unknown[]; layout: Record<string, unknown> } {
 	const [xKey, ...yKeys] = data.headers;
 	const x = data.rows.map((row) => row[0]);
@@ -458,8 +494,12 @@ export function csvToPlotly(
 		};
 
 		if (chartType === "area") {
-			trace.fill = i === 0 ? "tozeroy" : "tonexty";
 			trace.mode = "lines";
+			// `tonexty` fills to the previous trace's raw values, which only reads
+			// as a stack when the series are already cumulative. `stackgroup` makes
+			// Plotly do the accumulation; unstacked areas each fill to zero.
+			if (stacked === false) trace.fill = "tozeroy";
+			else trace.stackgroup = "one";
 		}
 		if (chartType === "line") {
 			trace.mode = "lines+markers";
@@ -505,7 +545,7 @@ export function parseChartData(
 	content: string,
 	language: "nivo" | "plotly",
 ): ChartInput {
-	const trimmed = content.trim();
+	const trimmed = stripFenceLines(content).trim();
 
 	// Check if it's JSON mode
 	if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
@@ -547,6 +587,90 @@ export function parseChartData(
 }
 
 /**
+ * Maps a configured colour to what the chart's scale accepts. Continuous charts
+ * need a `{ type: "sequential" }` config; a bare array or scheme name throws.
+ * Returns `null` when the configuration cannot produce a valid scale, so the
+ * renderer's themed default applies instead.
+ */
+export function normalizeNivoColors(
+	chartType: string,
+	colors: string | string[],
+): unknown {
+	if (!isContinuousColorChart(chartType)) {
+		return Array.isArray(colors) ? colors : { scheme: colors };
+	}
+	if (!Array.isArray(colors)) return { type: "sequential", scheme: colors };
+
+	const stops = colors.filter(
+		(color) => typeof color === "string" && color.trim().length > 0,
+	);
+	if (stops.length < 2) return null;
+	return { type: "sequential", colors: [stops[0], stops[stops.length - 1]] };
+}
+
+function isContinuousColorConfig(value: unknown): boolean {
+	if (typeof value === "function") return true;
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const type = (value as { type?: unknown }).type;
+	return type === "sequential" || type === "diverging" || type === "quantize";
+}
+
+/**
+ * Hand-written JSON blocks routinely carry a categorical `colors` array, which
+ * a continuous chart throws on. Convert what can be converted, drop the rest so
+ * the renderer's themed default takes over.
+ */
+function sanitizeContinuousColors(
+	chartType: string,
+	props: Record<string, unknown>,
+): Record<string, unknown> {
+	if (!isContinuousColorChart(chartType) || !("colors" in props)) return props;
+
+	const colors = props.colors;
+	if (isContinuousColorConfig(colors)) return props;
+
+	// Omit rather than blank the key: `colors: undefined` would still override
+	// the renderer's default once the props are spread over it.
+	const { colors: _dropped, ...withoutColors } = props;
+	const normalized =
+		typeof colors === "string" || Array.isArray(colors)
+			? normalizeNivoColors(chartType, colors as string | string[])
+			: null;
+
+	return normalized ? { ...withoutColors, colors: normalized } : withoutColors;
+}
+
+function isRenderablePoint(point: unknown): boolean {
+	if (!point || typeof point !== "object") return false;
+	const { x, y } = point as { x?: unknown; y?: unknown };
+	return x !== null && x !== undefined && y !== null && y !== undefined;
+}
+
+/**
+ * Whether Nivo can draw the dataset. Series with no plottable point make its
+ * path generators return `null`, which reaches the DOM as `d="null"` — so a
+ * partially streamed or empty code block must render a placeholder instead.
+ */
+export function hasRenderableNivoData(data: unknown): boolean {
+	if (Array.isArray(data)) {
+		if (data.length === 0) return false;
+		const series = data.filter(
+			(entry): entry is { data: unknown[] } =>
+				Boolean(entry) &&
+				typeof entry === "object" &&
+				Array.isArray((entry as { data?: unknown }).data),
+		);
+		if (series.length === 0) return true;
+		return series.some((entry) => entry.data.some(isRenderablePoint));
+	}
+	if (data && typeof data === "object") {
+		const nodes = (data as { nodes?: unknown }).nodes;
+		return Array.isArray(nodes) ? nodes.length > 0 : true;
+	}
+	return false;
+}
+
+/**
  * Transform ChartInput to Nivo data format
  */
 export function toNivoData(input: ChartInput): {
@@ -561,7 +685,7 @@ export function toNivoData(input: ChartInput): {
 		return {
 			data: rest.data ?? input.jsonData,
 			chartType,
-			props: rest,
+			props: sanitizeContinuousColors(chartType, rest),
 		};
 	}
 
@@ -612,9 +736,8 @@ export function toNivoData(input: ChartInput): {
 
 	// Apply common config
 	if (input.config.colors) {
-		props.colors = Array.isArray(input.config.colors)
-			? input.config.colors
-			: { scheme: input.config.colors };
+		const colors = normalizeNivoColors(chartType, input.config.colors);
+		if (colors) props.colors = colors;
 	}
 	if (input.config.xLabel) {
 		props.axisBottom = {
@@ -664,7 +787,7 @@ export function toPlotlyData(input: ChartInput): {
 	const chartType = input.config.type || "bar";
 	const csvData = input.csvData;
 	if (!csvData) throw new Error("CSV chart data is missing.");
-	const result = csvToPlotly(csvData, chartType);
+	const result = csvToPlotly(csvData, chartType, input.config.stacked);
 
 	// Apply config
 	const layout: Record<string, unknown> = {
@@ -731,8 +854,10 @@ export function toPlotlyData(input: ChartInput): {
 		layout,
 		config: {
 			responsive: true,
-			displayModeBar: true,
+			// Hover-only: a pinned toolbar covers the title and the top of the plot.
+			displayModeBar: "hover",
 			displaylogo: false,
+			modeBarButtonsToRemove: ["lasso2d", "select2d"],
 		},
 	};
 }

@@ -5,10 +5,14 @@ import { Loader2 } from "lucide-react";
 import { useRef } from "react";
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
-import { useExecuteAction, useIsComponentTriggering } from "../ActionHandler";
+import {
+	useComponentEventTrigger,
+	useIsComponentTriggering,
+} from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { firstEventAction } from "../event-handlers";
 import type { BoundValue, ButtonComponent } from "../types";
 
 const variantMap: Record<
@@ -72,7 +76,7 @@ export function A2UIButton({
 	const sizeValue = useResolved<string>(component.size);
 	const icon = useResolved<string>(component.icon);
 	const iconPosition = useResolved<string>(component.iconPosition) ?? "left";
-	const { executeAction } = useExecuteAction();
+	const triggerEvent = useComponentEventTrigger(componentId);
 
 	const variant = variantMap[variantValue ?? "default"] ?? "default";
 	const size = sizeMap[sizeValue ?? "md"] ?? "default";
@@ -95,15 +99,19 @@ export function A2UIButton({
 		pointerActivationAtRef.current = 0;
 		keyboardActivationAtRef.current = 0;
 
-		const action = component.actions?.[0];
+		const action = firstEventAction(
+			component.eventHandlers,
+			"click",
+			component.actions,
+		);
 		console.log("[A2UI Button] handleClick:", {
 			componentId,
 			action,
-			hasActions: !!component.actions,
-			actionsLength: component.actions?.length,
+			hasResolvedAction: Boolean(action),
+			legacyActionsLength: component.actions?.length,
 		});
 		if (action) {
-			executeAction(action, componentId);
+			void triggerEvent("click", component);
 		} else if (onAction) {
 			onAction({
 				type: "userAction",

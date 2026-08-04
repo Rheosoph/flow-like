@@ -120,6 +120,9 @@ pub struct A2UIElement {
     /// Actions that can be triggered on this component
     #[serde(skip_serializing_if = "Option::is_none")]
     pub actions: Option<Vec<Action>>,
+    /// Ordered actions bound to named component events. Legacy `actions` remains the fallback.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_handlers: Option<HashMap<String, Vec<Action>>>,
     /// Internal element ID for workflow operations (added at runtime)
     #[serde(rename = "__element_id", skip_serializing_if = "Option::is_none")]
     pub element_id: Option<String>,

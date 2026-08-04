@@ -2,6 +2,7 @@ pub mod component;
 pub mod components;
 pub mod copilot;
 pub mod data;
+pub mod micro_widget;
 pub mod style;
 pub mod surface;
 pub mod widget;

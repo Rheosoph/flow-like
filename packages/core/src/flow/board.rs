@@ -14,6 +14,7 @@ use crate::{
     },
 };
 use commands::GenericCommand;
+use commands::nodes::update_node::UpdateNodeCommand;
 use flow_like_storage::object_store::{self, ObjectStore, UpdateVersion, path::Path};
 use flow_like_types::proto;
 use flow_like_types::{FromProto, ToProto, create_id, sync::Mutex};
@@ -269,6 +270,13 @@ fn execution_mode_marker(mode: &ExecutionMode) -> u8 {
         ExecutionMode::Remote => 1,
         ExecutionMode::Local => 2,
     }
+}
+
+/// Pin ids are the only part of a node another machine cannot re-derive: everything else
+/// `on_update` produces is a deterministic function of the board it already replayed.
+fn pin_ids_match(current: &Node, previous: &Node) -> bool {
+    current.pins.len() == previous.pins.len()
+        && current.pins.keys().all(|id| previous.pins.contains_key(id))
 }
 
 impl Board {
@@ -544,6 +552,26 @@ impl Board {
         self.hash = Some(hasher.finalize64());
     }
 
+    /// Recompute catalog-derived node schemas for an already-open board.
+    ///
+    /// Hosts call this when their node/widget registry becomes available or is
+    /// replaced after the board was loaded. The refresh is deliberately
+    /// in-memory only: it must not make the board look user-edited or persist
+    /// schema-only changes behind the user's back.
+    pub async fn refresh_node_definitions(&mut self, state: Arc<FlowLikeState>) {
+        let updated_at = self.updated_at;
+        let hash = self.hash;
+
+        // A registry replacement can also replace NodeLogic implementations.
+        // Do not let the board's per-node logic cache pin it to the old one.
+        self.logic_nodes.clear();
+        self.node_updates(state).await;
+        self.cleanup();
+
+        self.updated_at = updated_at;
+        self.hash = hash;
+    }
+
     async fn node_updates(&mut self, state: Arc<FlowLikeState>) {
         let registry = state.node_registry().clone();
         let registry = registry.read().await;
@@ -716,12 +744,79 @@ impl Board {
         Ok(command)
     }
 
+    /// Restate every node whose pin identities `on_update` derived rather than the batch itself.
+    ///
+    /// Pins minted inside `on_update` — function-call mirrors, `string_format` placeholders — are
+    /// allocated with `create_id()`, so any machine that re-derives them gets *different* ids. The
+    /// returned batch is not only local undo history: the desktop ships it to the Hub and replays it
+    /// there verbatim. A `ConnectPin` that targets such a pin therefore only resolves if the batch
+    /// also carries the node state that owns it.
+    ///
+    /// `on_update` implementations reconcile mirrored pins by name, so replaying explicit node state
+    /// makes the replayer adopt these ids instead of minting a second set.
+    fn derived_node_state_commands(
+        &self,
+        before: &HashMap<String, Node>,
+        executed: &[GenericCommand],
+    ) -> Vec<GenericCommand> {
+        let mut described = HashMap::<&str, &Node>::new();
+        for command in executed {
+            match command {
+                GenericCommand::AddNode(command) => {
+                    described.insert(command.node.id.as_str(), &command.node);
+                }
+                GenericCommand::UpdateNode(command) => {
+                    described.insert(command.node.id.as_str(), &command.node);
+                }
+                GenericCommand::CopyPaste(command) => {
+                    for node in &command.new_nodes {
+                        described.insert(node.id.as_str(), node);
+                    }
+                }
+                GenericCommand::UpsertLayer(command) => {
+                    for node in command.layer.nodes.values() {
+                        described.insert(node.id.as_str(), node);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let mut restated = self
+            .nodes
+            .iter()
+            .filter_map(|(node_id, current)| {
+                // `node_updates` runs `on_update` on every node, so a layer edit can re-mint pins on
+                // a node no command in this batch mentions.
+                let previous = described
+                    .get(node_id.as_str())
+                    .copied()
+                    .or_else(|| before.get(node_id))?;
+                if pin_ids_match(current, previous) {
+                    return None;
+                }
+                Some((
+                    node_id.clone(),
+                    GenericCommand::UpdateNode(UpdateNodeCommand {
+                        node: current.clone(),
+                        old_node: Some(previous.clone()),
+                    }),
+                ))
+            })
+            .collect::<Vec<_>>();
+        // Map iteration order is randomized, and the remote retry identity is a digest of the exact
+        // payload — an unstable order would turn every retry into an idempotency conflict.
+        restated.sort_by(|(left, _), (right, _)| left.cmp(right));
+        restated.into_iter().map(|(_, command)| command).collect()
+    }
+
     pub async fn execute_commands(
         &mut self,
         commands: Vec<GenericCommand>,
         state: Arc<FlowLikeState>,
     ) -> flow_like_types::Result<Vec<GenericCommand>> {
         let mut commands = commands;
+        let nodes_before = self.nodes.clone();
         for index in 0..commands.len() {
             if let Err(error) = commands[index].validate(self, state.clone()).await {
                 let recovery_errors = self
@@ -761,6 +856,8 @@ impl Board {
         self.node_updates(state).await;
         self.cleanup();
         self.mark_changed();
+        let derived = self.derived_node_state_commands(&nodes_before, &commands);
+        commands.extend(derived);
         Ok(commands)
     }
 
@@ -2194,6 +2291,55 @@ mod tests {
         let http_client = HTTPClient::new_without_refetch();
         let flow_like_state = crate::state::FlowLikeState::new(config, http_client);
         Arc::new(flow_like_state)
+    }
+
+    struct RefreshDefinitionLogic {
+        label: &'static str,
+    }
+
+    #[flow_like_types::async_trait]
+    impl crate::flow::node::NodeLogic for RefreshDefinitionLogic {
+        fn get_node(&self) -> crate::flow::node::Node {
+            crate::flow::node::Node::new("refresh_definition_test", self.label, "", "test")
+        }
+
+        async fn run(
+            &self,
+            _: &mut crate::flow::execution::context::ExecutionContext,
+        ) -> flow_like_types::Result<()> {
+            Ok(())
+        }
+
+        async fn on_update(&self, node: &mut crate::flow::node::Node, _: &super::Board) {
+            node.friendly_name = self.label.to_string();
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_node_definitions_uses_current_registry_without_marking_board_dirty() {
+        use crate::flow::node::NodeLogic;
+
+        let state = flow_state().await;
+        let old_logic: Arc<dyn NodeLogic> = Arc::new(RefreshDefinitionLogic { label: "Old logic" });
+        let new_logic: Arc<dyn NodeLogic> = Arc::new(RefreshDefinitionLogic { label: "New logic" });
+
+        let mut board = super::Board::new(None, Path::from("boards"), state.clone());
+        let node = old_logic.get_node();
+        let node_id = node.id.clone();
+        board.nodes.insert(node_id.clone(), node);
+        board
+            .logic_nodes
+            .insert("refresh_definition_test".to_string(), old_logic);
+
+        state.node_registry().write().await.push_node(new_logic);
+        let updated_at = board.updated_at;
+        board.hash = Some(0xdead_beef);
+
+        board.refresh_node_definitions(state).await;
+
+        assert_eq!(board.nodes[&node_id].friendly_name, "New logic");
+        assert_eq!(board.updated_at, updated_at);
+        assert_eq!(board.hash, Some(0xdead_beef));
     }
 
     #[tokio::test]

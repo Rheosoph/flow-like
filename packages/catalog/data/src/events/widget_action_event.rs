@@ -1,3 +1,4 @@
+use flow_like::a2ui::micro_widget::{ResolvedWidget, WidgetProvider, decode_package_widget_ref};
 use flow_like::a2ui::widget::{ActionContextPayload, InputValuesPayload, Widget};
 use flow_like::app::App;
 use flow_like::flow::{
@@ -179,6 +180,58 @@ impl NodeLogic for WidgetActionEvent {
                 .and_then(|v| flow_like_types::json::from_slice::<String>(v).ok());
 
             if let Some(widget_selector) = selected_widget {
+                // Package widget: contract events take the place of widget actions
+                if decode_package_widget_ref(&widget_selector).is_some() {
+                    let provider = WidgetProvider::from_board(board).await;
+                    if let Some(ResolvedWidget::Package(entry)) = provider.resolve(&widget_selector)
+                        && let Ok(contract) = entry.parsed_contract()
+                    {
+                        let event_names: Vec<String> = contract.events.keys().cloned().collect();
+
+                        if let Some(pin) = node.get_pin_mut_by_name("action_id") {
+                            pin.set_options(
+                                PinOptions::new()
+                                    .set_valid_values(event_names.clone())
+                                    .build(),
+                            );
+                        }
+
+                        let action_id = node
+                            .get_pin_by_name("action_id")
+                            .and_then(|p| p.default_value.as_ref())
+                            .and_then(|v| flow_like_types::json::from_slice::<String>(v).ok())
+                            .unwrap_or_default();
+
+                        if !action_id.is_empty()
+                            && !event_names.is_empty()
+                            && !event_names.contains(&action_id)
+                        {
+                            node.error = Some(format!(
+                                "Event '{}' is not defined on widget '{}'",
+                                action_id, entry.name
+                            ));
+                        }
+
+                        // Type the payload output pin with the contract event's payloadSchema
+                        let payload_schema = contract
+                            .events
+                            .get(&action_id)
+                            .and_then(|event| event.payload_schema.clone())
+                            .filter(|schema| !schema.is_null());
+                        if let Some(pin) = node.get_pin_mut_by_name("action_context") {
+                            match payload_schema {
+                                Some(schema) => {
+                                    pin.schema = flow_like_types::json::to_string(&schema).ok();
+                                }
+                                None => {
+                                    pin.set_schema::<ActionContextPayload>();
+                                }
+                            }
+                        }
+                    }
+                    return;
+                }
+
                 // Load the app's widgets to get available actions
                 if let Some(app_state) = &board.app_state {
                     let app_id = board.board_dir.filename().unwrap_or_default().to_string();
@@ -213,6 +266,11 @@ impl NodeLogic for WidgetActionEvent {
                                     "Action '{}' is not defined on widget '{}'",
                                     action_id, widget.name
                                 ));
+                            }
+
+                            // Declarative widgets use the generic action context payload
+                            if let Some(pin) = node.get_pin_mut_by_name("action_context") {
+                                pin.set_schema::<ActionContextPayload>();
                             }
 
                             return;

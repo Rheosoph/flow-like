@@ -4,7 +4,7 @@ import { GlobalChatView } from "@flow-like/flow-like-ui/components/global-chat/g
 
 export default function ChatPage() {
 	return (
-		<main className="flex flex-col flex-1 w-full min-h-0 overflow-hidden">
+		<main className="flex flex-col flex-1 w-full min-h-0 overflow-hidden bg-background">
 			<GlobalChatView />
 		</main>
 	);

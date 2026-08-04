@@ -7,8 +7,8 @@ import { faker } from "@faker-js/faker";
 import { usePluginOption } from "platejs/react";
 
 import { useBackend } from "../../state/backend-state";
-import { AIUsageAppContext } from "./ai-usage-context";
 import { streamEditorChat } from "./ai-transport";
+import { AIUsageAppContext } from "./ai-usage-context";
 import { aiChatPlugin } from "./plugins/ai-kit";
 
 export const useChat = () => {

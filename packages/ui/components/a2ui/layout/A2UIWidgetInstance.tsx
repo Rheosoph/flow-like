@@ -8,7 +8,14 @@ import {
 	getComponentRenderer,
 } from "../ComponentRegistry";
 import { useWidgetRefs } from "../WidgetRefsContext";
-import type { A2UIComponent, ActionBinding, Style } from "../types";
+import { resolveEventActions } from "../event-handlers";
+import type {
+	A2UIComponent,
+	Action,
+	ActionBinding,
+	EventHandlers,
+	Style,
+} from "../types";
 
 export interface InlineWidgetDef {
 	name: string;
@@ -130,14 +137,21 @@ export interface WidgetInstanceComponentProps {
 	exposedPropValues?: Record<string, unknown>;
 	styleOverride?: Record<string, unknown>;
 	actionBindings?: Record<string, ActionBinding>;
+	actions?: Action[];
+	eventHandlers?: EventHandlers;
 	style?: Style;
 	inlineWidgetDef?: InlineWidgetDef;
 }
 
-interface WidgetInstanceContextValue {
+export interface WidgetInstanceContextValue {
 	instanceId: string;
 	widgetId: string;
 	actionBindings: Record<string, ActionBinding>;
+	/** Outer declarative component id used while executing its configured actions. */
+	componentId?: string;
+	/** Only declarative widget instances expose these; micro widgets route them first. */
+	actions?: Action[];
+	eventHandlers?: EventHandlers;
 }
 
 const WidgetInstanceContext = createContext<WidgetInstanceContextValue | null>(
@@ -146,6 +160,79 @@ const WidgetInstanceContext = createContext<WidgetInstanceContextValue | null>(
 
 export function useWidgetInstance(): WidgetInstanceContextValue | null {
 	return useContext(WidgetInstanceContext);
+}
+
+export type WidgetInstanceEventRoute =
+	| { kind: "actions"; actions: Action[] }
+	| { kind: "binding"; binding: ActionBinding }
+	| { kind: "diagnostic" };
+
+/**
+ * Resolve a declarative widget event in compatibility order. Named handlers
+ * (including an explicit empty list) override classic instance bindings;
+ * legacy component actions are considered only when no binding exists.
+ */
+export function resolveWidgetInstanceEventRoute(
+	widgetInstance: WidgetInstanceContextValue | null,
+	actionId: string,
+): WidgetInstanceEventRoute {
+	const named = resolveEventActions(
+		widgetInstance?.eventHandlers,
+		actionId,
+		undefined,
+		false,
+	);
+	if (named.source !== "none") {
+		return { kind: "actions", actions: named.actions };
+	}
+
+	const binding = widgetInstance?.actionBindings[actionId];
+	if (binding) return { kind: "binding", binding };
+
+	const legacyAction = widgetInstance?.actions?.[0];
+	if (legacyAction) return { kind: "actions", actions: [legacyAction] };
+
+	return { kind: "diagnostic" };
+}
+
+/**
+ * Provides the widget-instance scope consumed by `useExecuteAction`'s
+ * `widget_event` dispatch (action bindings resolved by actionId). Shared by
+ * declarative widget instances and sandboxed micro widget instances.
+ */
+export function WidgetInstanceProvider({
+	instanceId,
+	widgetId,
+	actionBindings,
+	componentId,
+	actions,
+	eventHandlers,
+	children,
+}: {
+	instanceId: string;
+	widgetId: string;
+	actionBindings: Record<string, ActionBinding>;
+	componentId?: string;
+	actions?: Action[];
+	eventHandlers?: EventHandlers;
+	children: React.ReactNode;
+}) {
+	const value = useMemo(
+		() => ({
+			instanceId,
+			widgetId,
+			actionBindings,
+			componentId,
+			actions,
+			eventHandlers,
+		}),
+		[instanceId, widgetId, actionBindings, componentId, actions, eventHandlers],
+	);
+	return (
+		<WidgetInstanceContext.Provider value={value}>
+			{children}
+		</WidgetInstanceContext.Provider>
+	);
 }
 
 /**
@@ -280,12 +367,13 @@ export function A2UIWidgetInstance({
 	}
 
 	return (
-		<WidgetInstanceContext.Provider
-			value={{
-				instanceId,
-				widgetId,
-				actionBindings: actionBindings ?? {},
-			}}
+		<WidgetInstanceProvider
+			instanceId={instanceId}
+			widgetId={widgetId}
+			actionBindings={actionBindings ?? {}}
+			componentId={componentId}
+			actions={props.actions}
+			eventHandlers={props.eventHandlers}
 		>
 			<div
 				data-widget-instance={instanceId}
@@ -297,6 +385,6 @@ export function A2UIWidgetInstance({
 					resolvedWidgetDef ?? widgetDef,
 				)}
 			</div>
-		</WidgetInstanceContext.Provider>
+		</WidgetInstanceProvider>
 	);
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
-import { useExecuteAction } from "../ActionHandler";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -21,7 +21,7 @@ export function A2UIImageHotspot({
 	surfaceId,
 	componentId,
 }: ComponentProps<ImageHotspotComponent>) {
-	const { executeAction } = useExecuteAction();
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const imageRef = useRef<HTMLImageElement>(null);
 
@@ -123,13 +123,8 @@ export function A2UIImageHotspot({
 			setActiveHotspot(hotspot.id);
 			setTimeout(() => setActiveHotspot(null), 300);
 
-			const action = component.actions?.[0];
-			if (action) {
-				void executeAction(action, componentId, {
-					hotspot,
-					hotspotId: hotspot.id,
-				});
-			}
+			const context = { hotspot, hotspotId: hotspot.id };
+			void triggerEvent("hotspotClick", component, context);
 
 			// Also fire hotspot-specific action if defined
 			if (hotspot.action && onAction) {
@@ -139,11 +134,18 @@ export function A2UIImageHotspot({
 					surfaceId,
 					sourceComponentId: componentId,
 					timestamp: Date.now(),
-					context: { hotspot, hotspotId: hotspot.id },
+					context,
+				});
+			}
+
+			const literalEvent = hotspot.action?.trim();
+			if (literalEvent && literalEvent !== "hotspotClick") {
+				void triggerEvent(literalEvent, component, context, {
+					legacyFallback: false,
 				});
 			}
 		},
-		[component.actions, componentId, executeAction, onAction, surfaceId],
+		[component, componentId, onAction, surfaceId, triggerEvent],
 	);
 
 	const getMarkerClasses = (

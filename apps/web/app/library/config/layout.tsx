@@ -1059,7 +1059,7 @@ export default function Id({
 						</CardContent>
 					</Card>
 
-					<div className="flex flex-col max-h-full md:hidden overflow-auto ">
+					<div className="min-w-0 flex flex-col max-h-full overflow-x-hidden overflow-y-auto px-3 pb-4 md:hidden">
 						<Suspense
 							fallback={
 								<div className="space-y-4">

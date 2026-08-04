@@ -16,6 +16,11 @@ const TREND_BUCKETS = 12;
  * app from firing dozens of queries a minute.
  */
 const MAX_BOARDS_SAMPLED = 25;
+/**
+ * How many runs `recent` carries. Sized for the flows-overview timeline, which
+ * groups them by recency; callers wanting a shorter list slice it themselves.
+ */
+const RECENT_RUNS_LIMIT = 24;
 
 export interface ProjectRun {
 	runId: string;
@@ -42,6 +47,8 @@ export interface SurfaceRunHealth {
 	failed: number;
 	/** Epoch milliseconds of the newest run for this surface. */
 	lastAt: number | null;
+	/** Runs bucketed into the same 12 slots as the project trend, oldest first. */
+	trend: number[];
 }
 
 export interface ProjectRunHealth {
@@ -67,6 +74,8 @@ export interface ProjectRunHealth {
 	byEvent: Map<string, SurfaceRunHealth>;
 	/** Runs bucketed into 12 two-hour slots across the window, oldest first. */
 	trend: number[];
+	/** Failed runs in the same 12 slots, so a chart can stack them on `trend`. */
+	trendFailed: number[];
 }
 
 function percentile(sorted: number[], p: number): number | null {
@@ -175,20 +184,24 @@ export function toRuns(
 		.sort((a, b) => b.startedAt - a.startedAt);
 }
 
+function slotFor(startedAt: number, cutoff: number): number {
+	const span = WINDOW_MS / TREND_BUCKETS;
+	return Math.min(
+		TREND_BUCKETS - 1,
+		Math.max(0, Math.floor((startedAt - cutoff) / span)),
+	);
+}
+
 function bucketize(runs: ProjectRun[], cutoff: number): number[] {
 	const buckets = new Array<number>(TREND_BUCKETS).fill(0);
-	const span = WINDOW_MS / TREND_BUCKETS;
-	for (const run of runs) {
-		const slot = Math.min(
-			TREND_BUCKETS - 1,
-			Math.max(0, Math.floor((run.startedAt - cutoff) / span)),
-		);
-		buckets[slot] += 1;
-	}
+	for (const run of runs) buckets[slotFor(run.startedAt, cutoff)] += 1;
 	return buckets;
 }
 
-function groupRuns(runs: ProjectRun[]): {
+function groupRuns(
+	runs: ProjectRun[],
+	cutoff: number,
+): {
 	byBoard: Map<string, BoardRunHealth>;
 	byEvent: Map<string, SurfaceRunHealth>;
 } {
@@ -210,10 +223,12 @@ function groupRuns(runs: ProjectRun[]): {
 			total: 0,
 			failed: 0,
 			lastAt: null,
+			trend: new Array<number>(TREND_BUCKETS).fill(0),
 		};
 		surface.total += 1;
 		if (run.failed) surface.failed += 1;
 		surface.lastAt = Math.max(surface.lastAt ?? 0, run.startedAt);
+		surface.trend[slotFor(run.startedAt, cutoff)] += 1;
 		byEvent.set(run.eventId, surface);
 	}
 
@@ -229,7 +244,7 @@ export function summarize(
 	const durations = windowed
 		.map((run) => run.durationMicros)
 		.sort((a, b) => a - b);
-	const { byBoard, byEvent } = groupRuns(windowed);
+	const { byBoard, byEvent } = groupRuns(windowed, cutoff);
 
 	return {
 		windowRuns: windowed.length,
@@ -242,9 +257,13 @@ export function summarize(
 		lastRunAt: runs[0]?.startedAt ?? null,
 		hasEverRun: runs.length > 0,
 		hasEverSucceeded: runs.some((run) => !run.failed),
-		recent: runs.slice(0, 8),
+		recent: runs.slice(0, RECENT_RUNS_LIMIT),
 		byBoard,
 		byEvent,
 		trend: bucketize(windowed, cutoff),
+		trendFailed: bucketize(
+			windowed.filter((run) => run.failed),
+			cutoff,
+		),
 	};
 }

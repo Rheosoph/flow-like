@@ -163,7 +163,11 @@ storage, and AI processing happen in the flow.
 ### Actions -> named board events
 Interactive components carry actions INSIDE the component object:
 `"actions": [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]`
-(actions[0] fires on the component's primary interaction).
+(legacy fallback: only actions[0] fires when no named handler exists).
+- Components with multiple interactions use `eventHandlers`, keyed by the documented event name:
+  `"eventHandlers": { "open": [{ "name": "workflow_event", "context": { "nodeId": "<open-event>" } }], "delete": [{ "name": "workflow_event", "context": { "nodeId": "<delete-event>" } }] }`.
+  Each list executes in order. An exact named list overrides `actions[0]`; an explicit empty list
+  disables that event without falling back. Keep `actions` intact when updating older surfaces.
 - Create ONE named board event per purpose (e.g. dashboard-load, add-target, refresh-status).
   Never route several buttons through one generic catch-all event.
 - The action context carries routing ids ONLY (nodeId, optional boardId/appId). Do NOT push
@@ -172,8 +176,8 @@ Interactive components carry actions INSIDE the component object:
   (`a2uiGetElementValue`), and Get File Input Files (`a2uiGetFileInputFiles`).
 - Other built-in action names: "navigate_page" (context.route, optional context.queryParams)
   and "external_link" (context.url).
-- A board can set or re-point an element's action later with Set Element Action
-  (`a2uiSetElementAction`, action_type "workflow_event" + node_id).
+- A board can set or re-point an element's default or named action later with Set Element Action
+  (`a2uiSetElementAction`, optional event_name + action_type "workflow_event" + node_id).
 
 ### Displaying workflow data -> element-level setters
 When a workflow must change what a component SHOWS, target the element directly:
@@ -185,8 +189,11 @@ When a workflow must change what a component SHOWS, target the element directly:
 - chart: Push Data to Chart (`a2uiPushCsvToChart`), styled via `a2uiSetNivoConfig` /
   `a2uiSetChartLayout`
 - progress: Set Progress (`a2uiSetProgress`)
-Data Update (`a2uiDataUpdate`) is almost never the right node for display updates - reach for an
-element-level setter first and reserve it for a `$.data.*` binding no setter covers.
+- package widget: Instantiate Widget (`a2uiInstantiateWidget`) with the record's fields on its
+  generated `dyn*` inputs, pushed in with Push Child (`a2uiPushChild`); Update Widget Inputs
+  (`a2uiWidgetUpdateInputs`) to patch a mounted instance
+Data Update (`a2uiDataUpdate`) is never the right node for display updates - a `$.data.*` write is
+not observed by elements or widget instances, so use the setters and widget nodes above.
 
 "##;
 

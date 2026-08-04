@@ -315,7 +315,18 @@ pub async fn execute_commands(
     }
     sanitize_wasm_command_metadata(&mut params.commands, &wasm_nodes, &builtin_nodes)?;
 
-    let commands = board.execute_commands(params.commands, flow_state).await?;
+    // A rejected batch is a property of the payload, not a server fault: the client will resubmit
+    // the identical bytes forever. Falling through the generic `Error` conversion would answer 500
+    // "Internal Server Error" with the real reason stripped, leaving the client unable to tell a
+    // permanently unapplicable batch from an outage.
+    let commands = board
+        .execute_commands(params.commands, flow_state)
+        .await
+        .map_err(|error| {
+            ApiError::unprocessable(format!(
+                "The command batch could not be applied to this board: {error}"
+            ))
+        })?;
 
     if let Some((key, digest)) = idempotency_key.zip(digest) {
         // Reserve the new entry before inserting so the persisted set never exceeds the cap.

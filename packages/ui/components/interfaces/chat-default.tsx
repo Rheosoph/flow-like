@@ -54,8 +54,8 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 } from "../ui";
-import { fileToAttachment } from "./chat-default/attachment";
 import { ChatAppearance } from "./chat-default/appearance";
+import { fileToAttachment } from "./chat-default/attachment";
 import { Chat, type IChatRef } from "./chat-default/chat";
 import {
 	type IAttachment,
@@ -1781,6 +1781,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						event={event}
 						config={config}
 						isSending={isSendingFromWelcome}
+						appId={appId}
 					/>
 				) : (
 					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>

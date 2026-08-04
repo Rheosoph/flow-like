@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getPlotlyChartLayout, useChartTokens } from "../../../lib/chart-theme";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
@@ -73,7 +74,8 @@ function resolveDataSource(
 
 const DEFAULT_CONFIG = {
 	responsive: true,
-	displayModeBar: true,
+	// Hover-only: a pinned toolbar covers the title and the top of the plot.
+	displayModeBar: "hover",
 	displaylogo: false,
 };
 
@@ -101,6 +103,11 @@ export function A2UIPlotlyChart({
 	const containerRef = useRef<HTMLDivElement>(null);
 	const plotlyRef = useRef<PlotlyModule | null>(null);
 	const { resolve } = useData();
+
+	// Plotly paints to canvas and cannot read CSS variables, so the chat tokens
+	// are resolved against the chart's own node and re-resolved on theme change.
+	const [themeNode, setThemeNode] = useState<HTMLDivElement | null>(null);
+	const tokens = useChartTokens(themeNode);
 
 	// Resolve simple props
 	const chartTitle = useResolved<string>(component.title);
@@ -140,12 +147,12 @@ export function A2UIPlotlyChart({
 					type: "scatter",
 					mode: "lines+markers",
 					name: "Sample Data",
-					marker: { color: "#6366f1" },
+					marker: { color: tokens.palette[0] },
 				},
 			];
 		}
 
-		return component.series.map((series: ChartSeries) => {
+		return component.series.map((series: ChartSeries, index: number) => {
 			const { x: xData, y: yData } = resolveDataSource(
 				series.dataSource,
 				resolve,
@@ -157,7 +164,9 @@ export function A2UIPlotlyChart({
 				y: yData,
 				type: plotlyType,
 				name: series.name || "Series",
-				marker: { color: series.color || "#6366f1" },
+				marker: {
+					color: series.color ?? tokens.palette[index % tokens.palette.length],
+				},
 			};
 
 			// Add mode for line/scatter types
@@ -173,7 +182,7 @@ export function A2UIPlotlyChart({
 
 			return trace;
 		});
-	}, [rawData, component.series, resolve]);
+	}, [rawData, component.series, resolve, tokens]);
 
 	// Build layout from structured axis config or raw layout
 	const layout = useMemo(() => {
@@ -193,21 +202,25 @@ export function A2UIPlotlyChart({
 			right: { orientation: "v", x: 1.05, y: 0.5, yanchor: "middle" },
 		};
 
+		const themed = getPlotlyChartLayout(tokens);
+
 		const base: Record<string, unknown> = {
+			...themed,
 			title: chartTitle || undefined,
-			paper_bgcolor: "transparent",
-			plot_bgcolor: "transparent",
-			font: { color: "#888" },
 			margin: { t: chartTitle ? 50 : 20, r: 20, b: 50, l: 50 },
 			autosize: true,
 			showlegend: showLegend,
-			legend:
-				legendOrientationMap[legendPosition] || legendOrientationMap.bottom,
+			legend: {
+				...themed.legend,
+				...(legendOrientationMap[legendPosition] ||
+					legendOrientationMap.bottom),
+			},
 		};
 
 		// Build xaxis config
 		const xAxis = component.xAxis;
 		base.xaxis = {
+			...themed.xaxis,
 			title: xAxis?.title || undefined,
 			type: xAxis?.type || undefined,
 			range:
@@ -215,8 +228,6 @@ export function A2UIPlotlyChart({
 					? [xAxis.min, xAxis.max]
 					: undefined,
 			showgrid: xAxis?.showGrid ?? true,
-			gridcolor: "#333",
-			zerolinecolor: "#333",
 			automargin: true,
 			tickformat: xAxis?.tickFormat || undefined,
 		};
@@ -224,6 +235,7 @@ export function A2UIPlotlyChart({
 		// Build yaxis config
 		const yAxis = component.yAxis;
 		base.yaxis = {
+			...themed.yaxis,
 			title: yAxis?.title || undefined,
 			type: yAxis?.type || undefined,
 			range:
@@ -231,8 +243,6 @@ export function A2UIPlotlyChart({
 					? [yAxis.min, yAxis.max]
 					: undefined,
 			showgrid: yAxis?.showGrid ?? true,
-			gridcolor: "#333",
-			zerolinecolor: "#333",
 			automargin: true,
 			tickformat: yAxis?.tickFormat || undefined,
 		};
@@ -257,6 +267,7 @@ export function A2UIPlotlyChart({
 		component.xAxis,
 		component.yAxis,
 		rawLayout,
+		tokens,
 	]);
 
 	// Build config
@@ -292,6 +303,15 @@ export function A2UIPlotlyChart({
 		}, 100);
 	}, []);
 
+	// `useResolved` re-parses `literalJson` into fresh objects every render and
+	// `resolve` changes with the data store, so the payload identity churns even
+	// when nothing about the plot changed. Key the render on its serialized
+	// content instead — re-running `react` on every render fights the user's pan.
+	const payloadRef = useRef({ data, layout, config });
+	payloadRef.current = { data, layout, config };
+	const payloadKey = JSON.stringify(payloadRef.current);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: payloadKey is the stable identity of the plot payload
 	useEffect(() => {
 		let mounted = true;
 
@@ -305,11 +325,12 @@ export function A2UIPlotlyChart({
 
 			if (!mounted || !containerRef.current) return;
 
+			const payload = payloadRef.current;
 			await plotlyRef.current.react(
 				containerRef.current,
-				data as unknown[],
-				{ ...layout, autosize: true } as Record<string, unknown>,
-				config as Record<string, unknown>,
+				payload.data as unknown[],
+				{ ...payload.layout, autosize: true } as Record<string, unknown>,
+				payload.config as Record<string, unknown>,
 			);
 		};
 
@@ -320,11 +341,19 @@ export function A2UIPlotlyChart({
 			if (resizeTimeoutRef.current) {
 				clearTimeout(resizeTimeoutRef.current);
 			}
-			if (containerRef.current && plotlyRef.current) {
-				plotlyRef.current.purge(containerRef.current);
+		};
+	}, [payloadKey]);
+
+	// Purge on unmount only — tearing the plot down between renders would also
+	// discard the pan and zoom the user has applied.
+	useEffect(() => {
+		const container = containerRef.current;
+		return () => {
+			if (container && plotlyRef.current) {
+				plotlyRef.current.purge(container);
 			}
 		};
-	}, [data, layout, config]);
+	}, []);
 
 	// ResizeObserver for responsive behavior
 	useEffect(() => {
@@ -341,9 +370,12 @@ export function A2UIPlotlyChart({
 		};
 	}, [handleResize]);
 
+	// The theme node stays outside the graph div: Plotly writes its own classes
+	// and inline styles onto the node it renders into, which the token observer
+	// would otherwise read back as a theme change.
 	return (
 		<div
-			ref={containerRef}
+			ref={setThemeNode}
 			className={cn("w-full min-h-0", resolveStyle(style))}
 			style={{
 				...resolveInlineStyle(style),
@@ -351,6 +383,8 @@ export function A2UIPlotlyChart({
 				height,
 				minWidth: 0,
 			}}
-		/>
+		>
+			<div ref={containerRef} className="h-full w-full min-w-0" />
+		</div>
 	);
 }

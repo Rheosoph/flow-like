@@ -1,0 +1,79 @@
+{
+	"schema": "flow-like.doc-screenshot-plan/v1",
+	"app": "web",
+	"outputDir": "tmp/doc-screenshots/upgrade-dialog",
+	"defaults": {
+		"viewport": {
+			"width": 1624,
+			"height": 1060,
+			"deviceScaleFactor": 2
+		},
+		"theme": "dark",
+		"format": "webp",
+		"timeoutMs": 120000,
+		"settleMs": 400,
+		"disableAnimations": true,
+		"hideScrollbars": true
+	},
+	"scenarios": [
+		{
+			"name": "upgrade-dialog-consumer",
+			"path": "/debug/upgrade",
+			"query": {
+				"reason": "project-limit"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Most popular"
+				},
+				{
+					"type": "waitFor",
+					"text": "Upgrade to Pro"
+				},
+				{
+					"type": "capture",
+					"name": "upgrade-dialog-consumer"
+				}
+			]
+		},
+		{
+			"name": "upgrade-dialog-model-tier",
+			"path": "/debug/upgrade",
+			"query": {
+				"reason": "model-tier"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "Unlock more powerful AI models"
+				},
+				{
+					"type": "waitFor",
+					"text": "Most popular"
+				},
+				{
+					"type": "capture",
+					"name": "upgrade-dialog-model-tier"
+				}
+			]
+		},
+		{
+			"name": "upgrade-dialog-enterprise",
+			"path": "/debug/upgrade",
+			"query": {
+				"mode": "enterprise"
+			},
+			"steps": [
+				{
+					"type": "waitFor",
+					"text": "managed by your organization"
+				},
+				{
+					"type": "capture",
+					"name": "upgrade-dialog-enterprise"
+				}
+			]
+		}
+	]
+}

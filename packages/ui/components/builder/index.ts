@@ -23,9 +23,11 @@ export {
 	COMPONENT_DND_TYPE,
 	COMPONENT_MOVE_TYPE,
 	WIDGET_DND_TYPE,
+	PACKAGE_WIDGET_DND_TYPE,
 	type ComponentDragData,
 	type ComponentMoveData,
 	type WidgetDragData,
+	type PackageWidgetDragData,
 	type DropData,
 } from "./BuilderDndContext";
 export { BuilderDragOverlay } from "./BuilderDragOverlay";

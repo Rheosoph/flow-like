@@ -1,19 +1,19 @@
 "use client";
 import { ExternalLink, Plus, Sparkles, Target } from "lucide-react";
 import { useMemo } from "react";
-import type {
-	LessonAction,
-	LessonAppRef,
-} from "../../lib/learn/types";
+import type { LessonAction, LessonAppRef } from "../../lib/learn/types";
 import { Button } from "../ui/button";
 
-export interface LessonActionDispatcher {
-	(action: LessonAction): Promise<void> | void;
-}
+export type LessonActionDispatcher = (
+	action: LessonAction,
+) => Promise<void> | void;
 
 interface LessonActionButtonProps {
 	readonly appRef: LessonAppRef;
-	readonly resolveAppId: (appAlias: string | null, fallbackAppId: string | null) => string | null;
+	readonly resolveAppId: (
+		appAlias: string | null,
+		fallbackAppId: string | null,
+	) => string | null;
 	readonly dispatch: LessonActionDispatcher;
 }
 
@@ -35,7 +35,10 @@ const defaultLabel: Record<string, string> = {
 
 export function buildLessonAction(
 	appRef: LessonAppRef,
-	resolveAppId: (appAlias: string | null, fallbackAppId: string | null) => string | null,
+	resolveAppId: (
+		appAlias: string | null,
+		fallbackAppId: string | null,
+	) => string | null,
 ): LessonAction | null {
 	const appAlias = appRef.app_alias ?? undefined;
 	const linkedAppId = resolveAppId(appRef.app_alias, null);

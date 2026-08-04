@@ -91,9 +91,74 @@ pub struct PlatformContextInput<'a> {
     pub attachments: &'a [AttachmentManifestEntry],
 }
 
-/// System prompt for the global (platform-level) FlowPilot assistant. Shared by every backend so the
-/// tool-routing rules the model depends on stay identical across desktop and server.
+/// How the running backend reaches the public web. The tool-driven backends (Claude Code, Codex,
+/// GitHub Copilot) delegate to the nested `Research` scope; the rig/Bits loop cannot host a nested
+/// scope and therefore holds `internet_search` / `open_url` / `archive_lookup` itself. The prompt
+/// must describe whichever set the model was actually handed — telling a Bits run it has no web
+/// tools makes it delegate to a specialist that backend cannot start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WebResearchCapability {
+    /// Web tools live in the nested `research_agent` specialist.
+    Delegated,
+    /// Web tools are advertised directly on this loop's toolset.
+    Inline,
+}
+
+/// Sentences that only hold when a `research_agent` specialist exists. Rewritten verbatim for the
+/// inline backend so both variants stay one prompt with one set of routing rules; the unit tests
+/// below fail if an edit to the prompt orphans an anchor.
+const INLINE_WEB_RESEARCH_REWRITES: &[(&str, &str)] = &[
+    // The fifth boundary stops being a specialist on this backend, so the count that introduces the
+    // list has to move with it — a model that reads "five specialists" and finds four looks for the
+    // missing one.
+    (
+        "Five specialists are hard capability boundaries:",
+        "Four specialists are hard capability boundaries, plus the public web you research yourself:",
+    ),
+    (
+        "PUBLIC-WEB research — current external facts, docs, products, news → `research_agent`, which holds the only search and page-reading tools.",
+        "PUBLIC-WEB research — current external facts, docs, products, news → your OWN `internet_search`, `open_url` and `archive_lookup` tools, which you run yourself in this turn.",
+    ),
+    (
+        "Do NOT delegate such a request to `research_agent` unless the user explicitly asked to search the web.",
+        "Do NOT search the public web for such a request unless the user explicitly asked you to.",
+    ),
+    (
+        "`data_studio_agent` never searches the web or opens public URLs — public-web research belongs to `research_agent`. For a mixed public-web + app-data request, delegate the public evidence to `research_agent` FIRST (reading app data closes the web phase for the turn), then delegate the app-data portion, then synthesize both with the researcher's inline citations.",
+        "`data_studio_agent` never searches the web or opens public URLs — public-web research is yours. For a mixed public-web + app-data request, gather the public evidence with your own web tools FIRST (reading app data closes the web phase for the turn), then delegate the app-data portion, then synthesize both with the inline citations you collected.",
+    ),
+    (
+        "- You have NO public-web tools. Any question about current external facts — documentation, products, prices, news, standards, third-party APIs — goes to `research_agent`, which holds the only search/page-read/archive tools. Never claim you cannot look something up; delegate it. Never answer a factual public-web question from memory alone when it is checkable.",
+        "- You HOLD the public-web tools yourself: `internet_search`, `open_url` and `archive_lookup`. Any question about current external facts — documentation, products, prices, news, standards, third-party APIs — you research yourself: search first, then open the pages you intend to rely on. There is no research specialist to hand it to. Never claim you cannot look something up, and never answer a checkable factual question from memory alone.",
+    ),
+    (
+        "- Relay the researcher's citations EXACTLY as returned, and preserve its \"what I could not establish\" section — that caveat is part of the answer, not padding to trim. Never invent, alter, shorten or re-title a link, and never present a claim as verified that the researcher flagged as single-sourced or unverified.",
+        "- Cite the pages you actually opened as inline markdown links, and state explicitly what you could NOT establish — that caveat is part of the answer, not padding to trim. Never invent, alter or re-title a link, and never present a single-sourced or unverified claim as verified.",
+    ),
+    (
+        "- RESEARCH BEFORE PRIVATE DATA. Reading app databases, storage, files or memory closes the public-web phase for the rest of the turn, and delegating does not reopen it — that boundary is what stops private data being laundered into an outbound query. When a task needs both, delegate the research FIRST, then read the app and combine the results.",
+        "- RESEARCH BEFORE PRIVATE DATA. Reading app databases, storage, files or memory closes the public-web phase for the rest of the turn — that boundary is what stops private data being laundered into an outbound query. When a task needs both, run your searches and page reads FIRST, then read the app and combine the results.",
+    ),
+    (
+        "- Never put private app data, secrets, file contents or credentials into a `research_agent` question. Describe what you need in neutral terms.",
+        "- Never put private app data, secrets, file contents or credentials into a search query or an outbound URL. Describe what you need in neutral terms.",
+    ),
+    (
+        "- For a request spanning several genuinely separate questions, emit several `research_agent` calls in ONE turn. They share one research budget for the turn, so do not split a single question into near-duplicate calls.",
+        "- For a request spanning several genuinely separate questions, emit several `internet_search` calls in ONE turn. They share one research budget for the turn, so do not split a single question into near-duplicate calls.",
+    ),
+];
+
+/// System prompt for the global (platform-level) FlowPilot assistant, for backends that delegate
+/// public-web research to the `research_agent` specialist.
 pub fn global_assistant_system_prompt() -> String {
+    global_assistant_system_prompt_for(WebResearchCapability::Delegated)
+}
+
+/// System prompt for the global (platform-level) FlowPilot assistant. Shared by every backend so the
+/// tool-routing rules the model depends on stay identical across desktop and server; only the
+/// public-web guidance follows the backend's actual [`WebResearchCapability`].
+pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> String {
     let mut prompt = r#"You are FlowPilot, the built-in AI assistant of Flow-Like — a visual automation platform where users build node-based "boards", group them into "apps", and run them locally or in the cloud.
 
 You operate at the PLATFORM level (not inside a single board). Your job:
@@ -212,6 +277,11 @@ Examples of good tool use:
 - "Show me my briefings" or "What does my briefing app say today?" → `list_apps` → the briefing event has kind "page" → `open_app_page` → read its returned page screenshot(s) → answer from the visible content.
 - "What's in my knowledge base about X?" → `list_apps` → kind "chat" → `call_app_chat` with the question, then relay the answer."#
         .to_string();
+    if capability == WebResearchCapability::Inline {
+        for (delegated, inline) in INLINE_WEB_RESEARCH_REWRITES {
+            prompt = prompt.replace(delegated, inline);
+        }
+    }
     prompt.push('\n');
     prompt.push_str(PRIOR_ART_GUIDANCE.trim());
     prompt.push_str(&format!(
@@ -483,10 +553,13 @@ pub async fn run_platform_chat<F>(
 where
     F: Fn(String) + Send + Sync + 'static,
 {
+    // This wrapper always drives the rig/Bits loop, which advertises the public-web tools directly
+    // instead of the `research_agent` specialist it cannot start.
+    let base_prompt = global_assistant_system_prompt_for(WebResearchCapability::Inline);
     let system_prompt = if context.trim().is_empty() {
-        global_assistant_system_prompt()
+        base_prompt
     } else {
-        format!("{}\n\n{}", global_assistant_system_prompt(), context)
+        format!("{base_prompt}\n\n{context}")
     };
 
     let assistant = PlatformCopilot::new(state, profile);
@@ -508,6 +581,43 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every rewrite must still find its anchor. Without this, editing a web-research sentence in
+    /// the shared prompt would silently leave the inline backend telling itself to delegate to a
+    /// specialist it cannot start.
+    #[test]
+    fn inline_web_rewrites_all_apply() {
+        let delegated = global_assistant_system_prompt();
+        for (anchor, replacement) in INLINE_WEB_RESEARCH_REWRITES {
+            assert!(
+                delegated.contains(anchor),
+                "orphaned inline-web rewrite anchor: {anchor}"
+            );
+            assert!(
+                !delegated.contains(replacement),
+                "inline replacement leaked into the delegated prompt: {replacement}"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_prompt_never_mentions_the_research_specialist() {
+        let inline = global_assistant_system_prompt_for(WebResearchCapability::Inline);
+        assert!(!inline.contains("research_agent"));
+        assert!(!inline.contains("Five specialists"));
+        assert!(inline.contains("Four specialists are hard capability boundaries"));
+        assert!(inline.contains("You HOLD the public-web tools yourself"));
+        assert!(inline.contains("`internet_search`, `open_url` and `archive_lookup`"));
+        // The privacy ordering rule survives the rewrite: it constrains the inline tools too.
+        assert!(inline.contains("RESEARCH BEFORE PRIVATE DATA"));
+    }
+
+    #[test]
+    fn delegated_prompt_keeps_the_research_specialist() {
+        let delegated = global_assistant_system_prompt();
+        assert!(delegated.contains("You have NO public-web tools"));
+        assert!(delegated.contains("`research_agent`"));
+    }
 
     #[test]
     fn scheduled_app_recipe_separates_simple_entry_from_cron_setup() {

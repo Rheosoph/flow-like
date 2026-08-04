@@ -3,9 +3,9 @@
 import { Fragment } from "react";
 import { cn } from "../../../lib/utils";
 import type { ComponentProps } from "../ComponentRegistry";
-import { resolveChildSpecs } from "../children";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { resolveChildSpecs } from "../children";
 import type { GridComponent } from "../types";
 
 export function A2UIGrid({

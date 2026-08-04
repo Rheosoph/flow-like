@@ -21,6 +21,9 @@ pub const OPEN_URL_TOOL: &str = "open_url";
 pub const ARCHIVE_LOOKUP_TOOL: &str = "archive_lookup";
 pub const MEMORY_STORE_TOOL: &str = "_memory_store";
 pub const MEMORY_SEARCH_TOOL: &str = "_memory_search";
+/// Delegating web-research tool. Only backends that can host the nested `Research` scope may
+/// advertise it; the rig/Bits loop holds [`public_web_tool_specs`] directly instead.
+pub const RESEARCH_AGENT_TOOL: &str = "research_agent";
 
 /// The externally observable effect of a platform tool call. This is deliberately independent of
 /// when approval is requested: deferred-approval tools are still ordered mutations while they
@@ -1162,7 +1165,7 @@ For a request spanning several distinct functional areas, call this SEVERAL time
             timeout_secs: 900,
         },
         PlatformToolSpec {
-            name: "research_agent",
+            name: RESEARCH_AGENT_TOOL,
             description: r#"Research the PUBLIC WEB. Delegates to the Research specialist, a read-only researcher holding the only public-web tools in the system: search, page reading, and Internet Archive lookup.
 
 You cannot browse yourself — this tool is how any question about current external facts, documentation, prices, news, standards or third-party products gets answered. Use it whenever the answer is not already in the user's apps and not something you reliably know.

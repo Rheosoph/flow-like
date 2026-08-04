@@ -9,7 +9,7 @@ use crate::{
     middleware::jwt::AppUser,
     routes::course::access::ensure_challenge_course_readable,
     routes::execution::progress::get_state_store,
-    state::AppState,
+    state::{AppState, course_attempt_lock_id},
 };
 use axum::{
     Extension, Json,
@@ -18,8 +18,7 @@ use axum::{
 use flow_like::flow::{board::Board, pin::PinType};
 use flow_like_types::{Value, create_id};
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait,
-    IntoActiveModel, QueryFilter, Statement, TransactionTrait,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -668,16 +667,12 @@ pub async fn submit_attempt(
     let now = chrono::Utc::now().naive_utc();
     let challenge = ensure_challenge_course_readable(&state, &user, &challenge_id).await?;
     let course_id = course_id_for_challenge(&state, &challenge).await?;
-    let txn = state.db.begin().await?;
-
-    // Score calculation must be serialized per learner/challenge; otherwise
-    // concurrent correct submissions could both observe zero prior points.
-    txn.execute(Statement::from_sql_and_values(
-        DatabaseBackend::Postgres,
-        "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
-        [sub.clone().into(), challenge_id.clone().into()],
-    ))
-    .await?;
+    // Score calculation must be serialized per learner. Duplicate submissions for one challenge
+    // can otherwise both observe zero prior points, while submissions for different challenges can
+    // race the learner's aggregate leaderboard total.
+    let txn = state
+        .mutation_transaction(course_attempt_lock_id(&sub))
+        .await?;
 
     let (is_correct, explanation_override) = match challenge.kind {
         ChallengeKind::SingleChoice | ChallengeKind::MultipleChoice => {

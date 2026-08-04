@@ -17,9 +17,9 @@ import remarkBreaks from "remark-breaks";
 import remarkEmoji from "remark-emoji";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { AIUsageAppContext } from "../editor/ai-usage-context";
 import { BaseEditorKit } from "../editor/editor-base-kit";
 import { createEditorKit } from "../editor/editor-kit";
-import { AIUsageAppContext } from "../editor/ai-usage-context";
 import {
 	type MentionItem,
 	MentionItemsProvider,

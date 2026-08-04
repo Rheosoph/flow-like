@@ -94,6 +94,9 @@ export const EVENT_CONFIG: IEventMapping = {
 	},
 	events_mail: {
 		configInterfaces: {
+			// Keyed by event type: eventTypes is ["email"], so a `user_mail` key
+			// resolves to nothing and the mail config never renders.
+			email: UserMailConfig,
 			user_mail: UserMailConfig,
 		},
 		defaultEventType: "email",

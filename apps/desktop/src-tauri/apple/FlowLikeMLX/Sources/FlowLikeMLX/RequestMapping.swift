@@ -46,14 +46,14 @@ public enum FlowLikeMLXRequestMapper {
             {
                 throw FlowLikeMLXError.unsupported(
                     "VLM assistant tool_calls in input history cannot be represented "
-                        + "by mlx-swift-lm 3.31.3 structured multimodal Chat.Message; "
+                        + "by Flow-Like's structured multimodal Chat.Message mapping; "
                         + "use an LLM MLX model for tool-loop turns"
                 )
             }
             if modelKind == .vlm, message.toolCallID != nil {
                 throw FlowLikeMLXError.unsupported(
-                    "VLM tool_call_id history cannot be represented by mlx-swift-lm "
-                        + "3.31.3 structured multimodal Chat.Message"
+                    "VLM tool_call_id history cannot be represented by Flow-Like's "
+                        + "structured multimodal Chat.Message mapping"
                 )
             }
 
@@ -182,7 +182,7 @@ public enum FlowLikeMLXRequestMapper {
 
         return UserInput(
             chat: chat,
-            // ChatSession in mlx-swift-lm 3.31.3 uses the same conservative
+            // ChatSession uses the same conservative
             // 512x512 default. Individual VLM processors can further adapt it.
             processing: .init(resize: CGSize(width: 512, height: 512)),
             tools: tools
@@ -193,6 +193,13 @@ public enum FlowLikeMLXRequestMapper {
         _ request: OpenAIChatCompletionRequest
     ) throws -> GenerateParameters {
         var parameters = GenerateParameters()
+
+        #if os(iOS)
+            // Keep prompt-prefill submissions short on iOS. Besides reducing the
+            // peak working set, this bounds how long generation can remain inside
+            // one Metal submission before observing lifecycle cancellation.
+            parameters.prefillStepSize = 128
+        #endif
 
         if let maxTokens = request.maxCompletionTokens ?? request.maxTokens {
             guard maxTokens > 0 else {

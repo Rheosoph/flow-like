@@ -12,6 +12,7 @@ import {
 	useSensor,
 	useSensors,
 } from "@dnd-kit/core";
+import { type WidgetContract, contractDefaults } from "@flow-like/widget-sdk";
 import {
 	type ReactNode,
 	createContext,
@@ -29,6 +30,7 @@ import { useBuilder } from "./BuilderContext";
 export const COMPONENT_DND_TYPE = "a2ui-component";
 export const COMPONENT_MOVE_TYPE = "a2ui-component-move";
 export const WIDGET_DND_TYPE = "a2ui-widget";
+export const PACKAGE_WIDGET_DND_TYPE = "a2ui-package-widget";
 
 export interface ComponentDragData {
 	type: typeof COMPONENT_DND_TYPE;
@@ -49,7 +51,26 @@ export interface WidgetDragData {
 	rootComponentId?: string;
 }
 
-export type DragData = ComponentDragData | ComponentMoveData | WidgetDragData;
+/**
+ * A widget shipped by a package added to the app (§6.1). Carries the full
+ * contract so dropping needs no backend round-trip — the placed
+ * `microWidgetInstance` is self-contained.
+ */
+export interface PackageWidgetDragData {
+	type: typeof PACKAGE_WIDGET_DND_TYPE;
+	packageId: string;
+	widgetId: string;
+	packageVersion: string;
+	bundleHash?: string;
+	name: string;
+	contract: WidgetContract;
+}
+
+export type DragData =
+	| ComponentDragData
+	| ComponentMoveData
+	| WidgetDragData
+	| PackageWidgetDragData;
 
 export interface DropData {
 	type: "container" | "drop-zone";
@@ -343,6 +364,59 @@ export function BuilderDndProvider({
 		],
 	);
 
+	// Insert a package-shipped micro widget instance (self-contained component,
+	// contract + defaults embedded — no widgetRef, no backend fetch).
+	const insertPackageWidgetInstance = useCallback(
+		(
+			widgetData: PackageWidgetDragData,
+			parentId: string,
+			insertIndex?: number,
+		) => {
+			const parent = components.get(parentId);
+			if (!parent) return;
+
+			const instanceId = `micro-${widgetData.widgetId}-${Date.now()}`;
+			const componentId = `microWidgetInstance-${instanceId}`;
+
+			addComponent({
+				id: componentId,
+				component: {
+					type: "microWidgetInstance",
+					instanceId,
+					packageId: widgetData.packageId,
+					widgetId: widgetData.widgetId,
+					packageVersion: widgetData.packageVersion,
+					bundleHash: widgetData.bundleHash,
+					contract: widgetData.contract,
+					props: contractDefaults(widgetData.contract),
+					actionBindings: {},
+				} as A2UIComponent,
+			});
+
+			const parentChildren = (
+				parent.component as unknown as Record<string, unknown>
+			)?.children as Children | undefined;
+			const existingChildren =
+				parentChildren && "explicitList" in parentChildren
+					? [...parentChildren.explicitList]
+					: [];
+
+			if (insertIndex !== undefined) {
+				existingChildren.splice(insertIndex, 0, componentId);
+			} else {
+				existingChildren.push(componentId);
+			}
+
+			updateComponent(parentId, {
+				component: {
+					...parent.component,
+					children: { explicitList: existingChildren },
+				} as A2UIComponent,
+			});
+		},
+		[components, addComponent, updateComponent],
+	);
+
 	const handleDragEnd = useCallback(
 		(event: DragEndEvent) => {
 			const { active, over } = event;
@@ -383,6 +457,8 @@ export function BuilderDndProvider({
 
 			if (dragData.type === WIDGET_DND_TYPE) {
 				insertWidgetInstance(dragData, parentId, index);
+			} else if (dragData.type === PACKAGE_WIDGET_DND_TYPE) {
+				insertPackageWidgetInstance(dragData, parentId, index);
 			} else if (dragData.type === COMPONENT_DND_TYPE) {
 				const newId = `${dragData.componentType}-${Date.now()}`;
 				const defaultStyle = getDefaultStyle(dragData.componentType);
@@ -420,6 +496,7 @@ export function BuilderDndProvider({
 			updateComponent,
 			moveComponent,
 			insertWidgetInstance,
+			insertPackageWidgetInstance,
 		],
 	);
 

@@ -121,7 +121,7 @@ function PanelHeader({
 	saving?: boolean;
 }>) {
 	return (
-		<div className="flex items-start gap-3 border-b pb-3">
+		<div className="flex flex-col gap-3 border-b pb-3 sm:flex-row sm:items-start">
 			<div className="min-w-0 flex-1">
 				<h3 className="text-sm font-semibold">{title}</h3>
 				<p className="text-xs text-muted-foreground">{description}</p>
@@ -257,8 +257,8 @@ export function SettingsInspector({
 					<SheetTitle>Settings</SheetTitle>
 				</SheetHeader>
 
-				<div className="flex min-h-0 flex-1">
-					<nav className="w-42 shrink-0 overflow-y-auto border-r py-2">
+				<div className="flex min-h-0 flex-1 flex-col sm:flex-row">
+					<nav className="flex shrink-0 overflow-x-auto border-b py-2 sm:block sm:w-42 sm:overflow-x-hidden sm:overflow-y-auto sm:border-r sm:border-b-0">
 						{PANELS.map((entry) => {
 							const Icon = entry.icon;
 							const dirty = draft.isPanelDirty(entry.id);
@@ -268,7 +268,7 @@ export function SettingsInspector({
 									type="button"
 									onClick={() => onPanelChange(entry.id)}
 									className={cn(
-										"flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors",
+										"flex w-auto shrink-0 items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-xs transition-colors sm:w-full sm:whitespace-normal",
 										entry.id === panel
 											? "bg-primary/10 font-medium text-primary"
 											: "text-muted-foreground hover:bg-muted hover:text-foreground",
@@ -285,7 +285,7 @@ export function SettingsInspector({
 						})}
 					</nav>
 
-					<div className="min-w-0 flex-1 overflow-y-auto p-5">
+					<div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-3 sm:p-5">
 						<div className="space-y-4">
 							<PanelHeader
 								title={active.label}

@@ -1,0 +1,22 @@
+{
+	"name": "flow-like-widget-preact",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Flow-Like widget framework group (Preact)",
+	"scripts": {
+		"dev": "bun --bun vite",
+		"build": "bun --bun vite build"
+	},
+	"dependencies": {
+		"@flow-like/widget-sdk": "^0.1.0",
+		"@nanostores/preact": "^1.1.0",
+		"preact": "^10.29.0"
+	},
+	"devDependencies": {
+		"@flow-like/widget-bundler": "^0.1.0",
+		"@preact/preset-vite": "^2.10.6",
+		"typescript": "^5.7.3",
+		"vite": "^6.3.5"
+	}
+}

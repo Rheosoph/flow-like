@@ -41,6 +41,7 @@ import type {
 	Surface,
 	SurfaceComponent,
 } from "../a2ui/types";
+import { handleWidgetQueryMessage } from "../a2ui/widget-query-handler";
 import { ScopedCustomCss } from "../scoped-custom-css";
 import type { IUseInterfaceProps } from "./interfaces";
 import { PageLoadingSkeleton } from "./page-loading-skeleton";
@@ -374,6 +375,10 @@ function PageInterfaceInner({
 	const handleA2UIMessage = useCallback(
 		(message: A2UIServerMessage) => {
 			console.log("[PageInterface] A2UI message:", message.type, message);
+
+			if (handleWidgetQueryMessage(message)) {
+				return;
+			}
 
 			// Reveal the current screen while the workflow continues running.
 			if (message.type === "showScreen") {

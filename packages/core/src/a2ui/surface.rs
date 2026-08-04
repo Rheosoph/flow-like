@@ -206,6 +206,17 @@ pub enum A2UIServerMessage {
     RequestElements {
         element_ids: Vec<String>,
     },
+    /// Live run→frontend request: execute a contract query against a rendered
+    /// micro widget instance. The frontend answers out-of-band through the
+    /// host (Tauri command / API), resolving the pending request by id.
+    WidgetQuery {
+        request_id: String,
+        instance_id: String,
+        query: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        args: Option<Value>,
+        timeout_ms: u64,
+    },
     ShowScreen,
     UpsertElement {
         element_id: String,
@@ -308,6 +319,22 @@ impl A2UIServerMessage {
 
     pub fn request_elements(element_ids: Vec<String>) -> Self {
         Self::RequestElements { element_ids }
+    }
+
+    pub fn widget_query(
+        request_id: &str,
+        instance_id: &str,
+        query: &str,
+        args: Option<Value>,
+        timeout_ms: u64,
+    ) -> Self {
+        Self::WidgetQuery {
+            request_id: request_id.to_string(),
+            instance_id: instance_id.to_string(),
+            query: query.to_string(),
+            args,
+            timeout_ms,
+        }
     }
 
     pub fn show_screen() -> Self {

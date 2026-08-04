@@ -136,6 +136,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 
 	const isPublicPath =
 		pathname === "/debug/markdown" ||
+		pathname === "/debug/upgrade" ||
 		PUBLIC_PATHS.some((path) => pathname?.startsWith(path));
 
 	// Listen for auth changes from other tabs

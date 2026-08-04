@@ -1,12 +1,13 @@
 //! Registry client for fetching, caching, and publishing WASM packages
 
 use crate::{
-    manifest::PackageManifest,
+    manifest::{PackageManifest, PackageWidgetEntry},
     registry::{
         CachedPackage, DownloadRequest, DownloadResponse, InstalledPackage, InstalledVersion,
         LocalRegistryState, PackageSource, PackageVersion, PublishRequest, PublishResponse,
         RegistryConfig, RegistryEntry, SearchFilters, SearchResults,
     },
+    widget_bundle::{sha256_hex, widget_store_dir, WidgetBundleReader},
 };
 use anyhow::{anyhow, Result};
 use chrono::Utc;
@@ -118,6 +119,152 @@ impl RegistryClient {
             .join(package_id)
             .join(version)
             .join("node.wasm")
+    }
+
+    fn versioned_widget_bundle_path(&self, package_id: &str, version: &str) -> PathBuf {
+        self.config
+            .cache_dir
+            .join("wasm")
+            .join("nodes")
+            .join(package_id)
+            .join(version)
+            .join("widgets.flwb")
+    }
+
+    /// Whether the manifest ships a WASM node artifact. Widgets-only packages
+    /// declare widgets but carry no (or an empty) wasm path/hash.
+    fn manifest_has_wasm(manifest: &PackageManifest) -> bool {
+        manifest.widgets.is_empty()
+            || manifest.wasm_hash.as_deref().is_some_and(|h| !h.is_empty())
+            || manifest.wasm_path.as_deref().is_some_and(|p| !p.is_empty())
+    }
+
+    /// Verify a widget bundle against `expected_hash` (when given) and unpack
+    /// it into the content-addressed widget store. Returns the bundle hash and
+    /// the unpacked directory. Skips unpacking when the store dir already
+    /// exists for that hash.
+    fn verify_and_unpack_widget_bundle(
+        cache_dir: &Path,
+        package_id: &str,
+        bundle_bytes: Vec<u8>,
+        expected_hash: Option<&str>,
+    ) -> Result<(String, PathBuf)> {
+        let actual_hash = sha256_hex(&bundle_bytes);
+        if let Some(expected) = expected_hash.filter(|h| !h.is_empty()) {
+            if expected != actual_hash {
+                return Err(anyhow!(
+                    "Widget bundle hash mismatch for '{}': manifest declares {}, downloaded bundle is {}",
+                    package_id,
+                    expected,
+                    actual_hash
+                ));
+            }
+        }
+
+        let dest = widget_store_dir(cache_dir, package_id, &actual_hash);
+        if dest.is_dir() {
+            return Ok((actual_hash, dest));
+        }
+
+        let mut reader = WidgetBundleReader::from_bytes(bundle_bytes)?;
+        reader.unpack(&dest)?;
+        Ok((actual_hash, dest))
+    }
+
+    async fn install_widget_bundle(
+        &self,
+        package_id: &str,
+        bundle_bytes: Vec<u8>,
+        expected_hash: Option<String>,
+    ) -> Result<(String, PathBuf)> {
+        let cache_dir = self.config.cache_dir.clone();
+        let package_id = package_id.to_string();
+        tokio::task::spawn_blocking(move || {
+            Self::verify_and_unpack_widget_bundle(
+                &cache_dir,
+                &package_id,
+                bundle_bytes,
+                expected_hash.as_deref(),
+            )
+        })
+        .await?
+    }
+
+    fn installed_version_ready(&self, package_id: &str, iv: &InstalledVersion) -> bool {
+        let wasm_ready = !Self::manifest_has_wasm(&iv.manifest) || iv.wasm_path.exists();
+        let widgets_ready = iv.manifest.widgets.is_empty()
+            || iv
+                .widget_bundle_hash
+                .as_ref()
+                .map(|h| widget_store_dir(&self.config.cache_dir, package_id, h).is_dir())
+                .unwrap_or(false);
+        wasm_ready && widgets_ready
+    }
+
+    fn installed_package_ready(&self, installed: &InstalledPackage) -> bool {
+        let wasm_ready =
+            !Self::manifest_has_wasm(&installed.manifest) || installed.wasm_path.exists();
+        let widgets_ready = installed.manifest.widgets.is_empty() || {
+            let hash = installed
+                .versions
+                .get(&installed.version)
+                .and_then(|iv| iv.widget_bundle_hash.clone())
+                .or_else(|| installed.manifest.widget_bundle_hash.clone());
+            hash.map(|h| widget_store_dir(&self.config.cache_dir, &installed.id, &h).is_dir())
+                .unwrap_or(false)
+        };
+        wasm_ready && widgets_ready
+    }
+
+    /// Remove unpacked widget-store directories for a package that are no
+    /// longer referenced by any installed version. Best-effort.
+    async fn prune_widget_store(&self, package_id: &str) {
+        let referenced: std::collections::HashSet<String> = {
+            let state = self.state.read().await;
+            state
+                .installed
+                .get(package_id)
+                .map(|pkg| {
+                    let mut set: std::collections::HashSet<String> = pkg
+                        .versions
+                        .values()
+                        .filter_map(|iv| iv.widget_bundle_hash.clone())
+                        .collect();
+                    if let Some(hash) = pkg
+                        .manifest
+                        .widget_bundle_hash
+                        .clone()
+                        .filter(|h| !h.is_empty())
+                    {
+                        set.insert(hash);
+                    }
+                    set
+                })
+                .unwrap_or_default()
+        };
+
+        let package_dir = self.config.cache_dir.join("widgets").join(package_id);
+        let mut entries = match tokio::fs::read_dir(&package_dir).await {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if referenced.contains(&name) {
+                continue;
+            }
+            if let Err(e) = tokio::fs::remove_dir_all(entry.path()).await {
+                tracing::warn!(
+                    "Failed to prune widget store dir {:?} for '{}': {}",
+                    entry.path(),
+                    package_id,
+                    e
+                );
+            }
+        }
+        if referenced.is_empty() {
+            let _ = tokio::fs::remove_dir(&package_dir).await;
+        }
     }
 
     async fn load_state(&self) -> Result<()> {
@@ -236,9 +383,14 @@ impl RegistryClient {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
             if (version.is_none() || version == Some(&installed.version))
-                && installed.wasm_path.exists()
+                && self.installed_package_ready(installed)
             {
-                let wasm_data = tokio::fs::read(&installed.wasm_path).await?;
+                let wasm_data = if Self::manifest_has_wasm(&installed.manifest) {
+                    tokio::fs::read(&installed.wasm_path).await?
+                } else {
+                    Vec::new()
+                };
+                let installed_version = installed.versions.get(&installed.version);
                 return Ok(CachedPackage {
                     entry: RegistryEntry {
                         id: installed.id.clone(),
@@ -253,6 +405,9 @@ impl RegistryClient {
                             min_flow_like_version: None,
                             release_notes: None,
                             yanked: false,
+                            widget_bundle_hash: installed_version
+                                .and_then(|iv| iv.widget_bundle_hash.clone()),
+                            widget_bundle_size: None,
                         }],
                         status: crate::registry::PackageStatus::Active,
                         download_count: 0,
@@ -290,9 +445,12 @@ impl RegistryClient {
         }
 
         let download: DownloadResponse = response.json().await?;
+        let has_wasm = Self::manifest_has_wasm(&download.manifest);
 
         // Fetch WASM data - either from download_url or decode from base64
-        let wasm_data = if let Some(download_url) = &download.download_url {
+        let wasm_data = if !has_wasm {
+            Vec::new()
+        } else if let Some(download_url) = &download.download_url {
             // Download from CDN/signed URL
             let wasm_response = self.http_client.get(download_url).send().await?;
             if !wasm_response.status().is_success() {
@@ -314,28 +472,75 @@ impl RegistryClient {
         if let Some(parent) = wasm_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
-        tokio::fs::write(&wasm_path, &wasm_data).await?;
+        if has_wasm {
+            tokio::fs::write(&wasm_path, &wasm_data).await?;
 
-        // If the server provided a precompiled .cwasm, download and store it
-        // alongside the raw .wasm so `load_nodes` can inject it into the AOT cache.
-        if let Some(cwasm_url) = &download.cwasm_download_url {
-            match self
-                .download_cwasm(cwasm_url, download.cwasm_checksum.as_deref(), &wasm_path)
-                .await
-            {
-                Ok(()) => {
-                    tracing::info!("Downloaded precompiled cwasm for {}", download.package_id)
+            // If the server provided a precompiled .cwasm, download and store it
+            // alongside the raw .wasm so `load_nodes` can inject it into the AOT cache.
+            if let Some(cwasm_url) = &download.cwasm_download_url {
+                match self
+                    .download_cwasm(cwasm_url, download.cwasm_checksum.as_deref(), &wasm_path)
+                    .await
+                {
+                    Ok(()) => {
+                        tracing::info!("Downloaded precompiled cwasm for {}", download.package_id)
+                    }
+                    Err(e) => tracing::error!(
+                        "Failed to download cwasm for {}: {}",
+                        download.package_id,
+                        e
+                    ),
                 }
-                Err(e) => tracing::error!(
-                    "Failed to download cwasm for {}: {}",
-                    download.package_id,
-                    e
-                ),
             }
         }
 
+        // Download, verify, and unpack the widget bundle when the manifest declares widgets
+        let mut widget_bundle_path: Option<PathBuf> = None;
+        let mut widget_bundle_hash: Option<String> = None;
+        let mut widget_bundle_size: Option<u64> = None;
+        if !download.manifest.widgets.is_empty() {
+            let expected_hash = download
+                .manifest
+                .widget_bundle_hash
+                .clone()
+                .filter(|h| !h.is_empty())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Package '{}' declares widgets but its manifest carries no widget_bundle_hash",
+                        download.package_id
+                    )
+                })?;
+            let bundle_url = download.widget_bundle_download_url.as_ref().ok_or_else(|| {
+                anyhow!(
+                    "Package '{}' declares widgets but the registry returned no widget bundle download URL",
+                    download.package_id
+                )
+            })?;
+
+            let bundle_response = self.http_client.get(bundle_url).send().await?;
+            if !bundle_response.status().is_success() {
+                return Err(Self::http_response_error(
+                    "Failed to download widget bundle",
+                    bundle_response,
+                )
+                .await);
+            }
+            let bundle_bytes = bundle_response.bytes().await?.to_vec();
+            widget_bundle_size = Some(bundle_bytes.len() as u64);
+
+            let bundle_path =
+                self.versioned_widget_bundle_path(&download.package_id, &download.version);
+            tokio::fs::write(&bundle_path, &bundle_bytes).await?;
+
+            let (hash, _store_dir) = self
+                .install_widget_bundle(&download.package_id, bundle_bytes, Some(expected_hash))
+                .await?;
+            widget_bundle_path = Some(bundle_path);
+            widget_bundle_hash = Some(hash);
+        }
+
         let now = Utc::now();
-        let wasm_hash = Some(calculate_hash(&wasm_data));
+        let wasm_hash = has_wasm.then(|| calculate_hash(&wasm_data));
         let installed_version = InstalledVersion {
             version: download.version.clone(),
             wasm_path: wasm_path.clone(),
@@ -343,6 +548,8 @@ impl RegistryClient {
             manifest: download.manifest.clone(),
             metadata: download.metadata.clone(),
             wasm_hash: wasm_hash.clone(),
+            widget_bundle_path,
+            widget_bundle_hash: widget_bundle_hash.clone(),
         };
 
         let mut state = self.state.write().await;
@@ -376,6 +583,7 @@ impl RegistryClient {
         }
         drop(state);
         self.save_state().await?;
+        self.prune_widget_store(&download.package_id).await;
 
         Ok(CachedPackage {
             entry: RegistryEntry {
@@ -391,6 +599,8 @@ impl RegistryClient {
                     min_flow_like_version: None,
                     release_notes: None,
                     yanked: false,
+                    widget_bundle_hash,
+                    widget_bundle_size,
                 }],
                 status: crate::registry::PackageStatus::Active,
                 download_count: 0,
@@ -427,8 +637,12 @@ impl RegistryClient {
         let state = self.state.read().await;
         if let Some(installed) = state.installed.get(package_id) {
             if let Some(iv) = installed.get_version(version) {
-                if iv.wasm_path.exists() {
-                    let wasm_data = tokio::fs::read(&iv.wasm_path).await?;
+                if self.installed_version_ready(package_id, iv) {
+                    let wasm_data = if Self::manifest_has_wasm(&iv.manifest) {
+                        tokio::fs::read(&iv.wasm_path).await?
+                    } else {
+                        Vec::new()
+                    };
                     return Ok(self.cached_package_from_version(installed, iv, wasm_data));
                 }
             }
@@ -462,11 +676,21 @@ impl RegistryClient {
             if installed.wasm_path.exists() {
                 tokio::fs::remove_file(&installed.wasm_path).await?;
             }
+            for iv in installed.versions.values() {
+                if let Some(bundle_path) = &iv.widget_bundle_path {
+                    // Only delete bundles inside our cache; local dev bundles
+                    // live in the developer's project and must be preserved.
+                    if bundle_path.starts_with(&self.config.cache_dir) && bundle_path.exists() {
+                        let _ = tokio::fs::remove_file(bundle_path).await;
+                    }
+                }
+            }
         }
 
         state.cache_metadata.remove(package_id);
         drop(state);
         self.save_state().await?;
+        self.prune_widget_store(package_id).await;
         Ok(())
     }
 
@@ -620,6 +844,8 @@ impl RegistryClient {
                 min_flow_like_version: None,
                 release_notes: None,
                 yanked: false,
+                widget_bundle_hash: manifest.widget_bundle_hash.clone(),
+                widget_bundle_size: None,
             }],
             status: crate::registry::PackageStatus::Active,
             download_count: 0,
@@ -641,16 +867,35 @@ impl RegistryClient {
 
     /// Register a local package in the installed list without downloading.
     /// Used for developer projects so they appear in `list_installed()`.
+    ///
+    /// When the manifest points at a local widget bundle
+    /// (`manifest.widget_bundle_path`, resolved relative to the wasm file's
+    /// directory) it is read and unpacked into the content-addressed widget
+    /// store. On re-registration after a rebuild the bundle hash changes and
+    /// the bundle is re-unpacked under the new hash; stale hashes are pruned.
+    /// The bundle's widget entries and actual hash are written back into the
+    /// stored manifest, which is where widget consumers read contracts from.
     pub async fn register_local_package(
         &self,
         wasm_path: &Path,
-        manifest: PackageManifest,
+        mut manifest: PackageManifest,
     ) -> Result<InstalledPackage> {
         let now = Utc::now();
         let wasm_hash = match tokio::fs::read(wasm_path).await {
             Ok(bytes) => Some(blake3::hash(&bytes).to_hex().to_string()),
             Err(_) => None,
         };
+
+        let (widget_bundle_path, widget_bundle_hash, bundle_widgets) = self
+            .prepare_local_widget_bundle(wasm_path, &manifest)
+            .await?;
+        if !bundle_widgets.is_empty() {
+            manifest.widgets = bundle_widgets;
+        }
+        if let Some(hash) = &widget_bundle_hash {
+            manifest.widget_bundle_hash = Some(hash.clone());
+        }
+
         let version_entry = InstalledVersion {
             version: manifest.version.clone(),
             wasm_path: wasm_path.to_path_buf(),
@@ -658,6 +903,8 @@ impl RegistryClient {
             manifest: manifest.clone(),
             metadata: None,
             wasm_hash: wasm_hash.clone(),
+            widget_bundle_path,
+            widget_bundle_hash,
         };
         let installed = InstalledPackage {
             id: manifest.id.clone(),
@@ -679,8 +926,82 @@ impl RegistryClient {
             .insert(installed.id.clone(), installed.clone());
         drop(state);
         self.save_state().await?;
+        self.prune_widget_store(&installed.id).await;
 
         Ok(installed)
+    }
+
+    /// Resolve, verify, and unpack the widget bundle of a local developer
+    /// package. Returns `(bundle_path, bundle_hash, widget_entries)` when the
+    /// manifest points at a bundle, `(None, None, [])` otherwise. The entries
+    /// are derived from the bundle itself so manifests that only declare
+    /// `widget_bundle_path` (the scaffolded `flow-like.toml` shape) still end
+    /// up with typed widget contracts.
+    async fn prepare_local_widget_bundle(
+        &self,
+        wasm_path: &Path,
+        manifest: &PackageManifest,
+    ) -> Result<(Option<PathBuf>, Option<String>, Vec<PackageWidgetEntry>)> {
+        let declared_path = manifest
+            .widget_bundle_path
+            .as_deref()
+            .filter(|p| !p.is_empty());
+
+        let Some(rel_path) = declared_path else {
+            if manifest.widgets.is_empty() {
+                return Ok((None, None, Vec::new()));
+            }
+            return Err(anyhow!(
+                "Package '{}' declares widgets but no widget_bundle_path in its manifest",
+                manifest.id
+            ));
+        };
+
+        let candidate = Path::new(rel_path);
+        let bundle_path = if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else {
+            wasm_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(candidate)
+        };
+
+        let bundle_bytes = tokio::fs::read(&bundle_path).await.map_err(|e| {
+            anyhow!(
+                "Failed to read widget bundle for '{}' at {:?}: {}",
+                manifest.id,
+                bundle_path,
+                e
+            )
+        })?;
+
+        let widgets = {
+            let bytes = bundle_bytes.clone();
+            let declared = manifest.widgets.clone();
+            let package_id = manifest.id.clone();
+            tokio::task::spawn_blocking(move || -> Result<Vec<PackageWidgetEntry>> {
+                let mut reader = WidgetBundleReader::from_bytes(bytes)?;
+                reader.manifest_widgets(&declared)
+            })
+            .await?
+            .map_err(|e| {
+                anyhow!(
+                    "Failed to read widget contracts from the bundle of '{}' at {:?}: {}",
+                    package_id,
+                    bundle_path,
+                    e
+                )
+            })?
+        };
+
+        // Local dev: the manifest hash may be stale after a rebuild, so the
+        // bundle is keyed by its actual content hash instead of being rejected.
+        let (hash, _store_dir) = self
+            .install_widget_bundle(&manifest.id, bundle_bytes, None)
+            .await?;
+
+        Ok((Some(bundle_path), Some(hash), widgets))
     }
 
     /// Unregister a local package without deleting its WASM file.
@@ -698,6 +1019,7 @@ impl RegistryClient {
         state.cache_metadata.remove(package_id);
         drop(state);
         self.save_state().await?;
+        self.prune_widget_store(package_id).await;
         Ok(true)
     }
 
@@ -707,6 +1029,11 @@ impl RegistryClient {
         if packages_dir.exists() {
             tokio::fs::remove_dir_all(&packages_dir).await?;
             tokio::fs::create_dir_all(&packages_dir).await?;
+        }
+
+        let widgets_dir = self.config.cache_dir.join("widgets");
+        if widgets_dir.exists() {
+            tokio::fs::remove_dir_all(&widgets_dir).await?;
         }
 
         let mut state = self.state.write().await;
@@ -750,6 +1077,8 @@ impl RegistryClient {
                     min_flow_like_version: None,
                     release_notes: None,
                     yanked: false,
+                    widget_bundle_hash: iv.widget_bundle_hash.clone(),
+                    widget_bundle_size: None,
                 }],
                 status: crate::registry::PackageStatus::Active,
                 download_count: 0,
@@ -775,6 +1104,10 @@ impl RegistryClient {
             .get_installed(package_id)
             .await
             .ok_or_else(|| anyhow!("Package '{}' is not installed", package_id))?;
+
+        if !Self::manifest_has_wasm(&installed.manifest) {
+            return Ok(Vec::new());
+        }
 
         let wasm_bytes = tokio::fs::read(&installed.wasm_path).await.map_err(|e| {
             anyhow!(
@@ -835,6 +1168,10 @@ impl RegistryClient {
         let iv = installed
             .get_version(version)
             .ok_or_else(|| anyhow!("Version '{}' not installed for '{}'", version, package_id))?;
+
+        if !Self::manifest_has_wasm(&iv.manifest) {
+            return Ok(Vec::new());
+        }
 
         let wasm_bytes = tokio::fs::read(&iv.wasm_path).await?;
         let manifest_security = iv.manifest.permissions.to_security_config();
@@ -1018,6 +1355,8 @@ async fn calculate_dir_size(path: &Path) -> Result<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widget::WidgetContract;
+    use crate::widget_bundle::{BuilderWidget, WidgetBundleBuilder};
 
     #[test]
     fn test_hash() {
@@ -1032,5 +1371,259 @@ mod tests {
             sanitize_filename("https://example.com"),
             "https___example_com"
         );
+    }
+
+    fn build_test_bundle(package_id: &str, widget_id: &str, body: &str) -> (Vec<u8>, String) {
+        WidgetBundleBuilder::new(package_id, "1.0.0")
+            .created_at("2026-07-31T00:00:00Z")
+            .add_widget(BuilderWidget {
+                id: widget_id.to_string(),
+                name: widget_id.to_string(),
+                description: "test widget".into(),
+                framework: Some("vanilla".into()),
+                entry_html: format!("<html><body>{}</body></html>", body).into_bytes(),
+                contract: WidgetContract::new(widget_id),
+                assets: vec![],
+                thumbnail: None,
+            })
+            .build()
+            .unwrap()
+    }
+
+    fn widgets_only_manifest(package_id: &str, widget_id: &str) -> PackageManifest {
+        let mut manifest = PackageManifest::new(package_id, "Test Widgets", "1.0.0", "widgets");
+        manifest.widgets.push(crate::manifest::PackageWidgetEntry {
+            id: widget_id.to_string(),
+            name: widget_id.to_string(),
+            description: "test widget".into(),
+            icon: None,
+            thumbnail: None,
+            contract: WidgetContract::new(widget_id),
+            keywords: vec![],
+        });
+        manifest.widget_bundle_path = Some("widgets.flwb".into());
+        manifest
+    }
+
+    fn test_client(cache_dir: &Path) -> RegistryClient {
+        let config = RegistryConfig {
+            cache_dir: cache_dir.to_path_buf(),
+            ..Default::default()
+        };
+        RegistryClient::new(config).unwrap()
+    }
+
+    #[test]
+    fn test_verify_and_unpack_rejects_hash_mismatch() {
+        let temp = tempfile::tempdir().unwrap();
+        let (bytes, _hash) = build_test_bundle("com.example.tamper", "kpi-card", "v1");
+
+        let err = RegistryClient::verify_and_unpack_widget_bundle(
+            temp.path(),
+            "com.example.tamper",
+            bytes,
+            Some("deadbeef"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("hash mismatch"));
+        assert!(!temp.path().join("widgets").exists());
+    }
+
+    #[test]
+    fn test_verify_and_unpack_rejects_tampered_bundle() {
+        let temp = tempfile::tempdir().unwrap();
+        let (mut bytes, _hash) = build_test_bundle("com.example.tamper", "kpi-card", "v1");
+
+        // Flip a byte in the middle of the archive; pass the recomputed
+        // whole-file hash so the per-entry verification has to catch it.
+        let mid = bytes.len() / 2;
+        bytes[mid] ^= 0xff;
+        let tampered_hash = sha256_hex(&bytes);
+
+        let result = RegistryClient::verify_and_unpack_widget_bundle(
+            temp.path(),
+            "com.example.tamper",
+            bytes,
+            Some(&tampered_hash),
+        );
+        assert!(result.is_err());
+        assert!(
+            !widget_store_dir(temp.path(), "com.example.tamper", &tampered_hash).exists(),
+            "tampered bundle must not land in the widget store"
+        );
+    }
+
+    #[test]
+    fn test_verify_and_unpack_success() {
+        let temp = tempfile::tempdir().unwrap();
+        let (bytes, hash) = build_test_bundle("com.example.ok", "kpi-card", "v1");
+
+        let (actual, dest) = RegistryClient::verify_and_unpack_widget_bundle(
+            temp.path(),
+            "com.example.ok",
+            bytes,
+            Some(&hash),
+        )
+        .unwrap();
+        assert_eq!(actual, hash);
+        assert_eq!(dest, widget_store_dir(temp.path(), "com.example.ok", &hash));
+        assert!(dest.join("bundle.json").exists());
+        assert!(dest.join("widgets/kpi-card/index.html").exists());
+        assert!(dest.join("widgets/kpi-card/contract.json").exists());
+    }
+
+    #[tokio::test]
+    async fn test_widgets_only_local_package_install_reload_and_gc() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let client = test_client(&cache_dir);
+        client.init().await.unwrap();
+
+        let package_id = "com.example.widgetsonly";
+        let (bundle_v1, hash_v1) = build_test_bundle(package_id, "kpi-card", "v1");
+        std::fs::write(project_dir.join("widgets.flwb"), &bundle_v1).unwrap();
+
+        let manifest = widgets_only_manifest(package_id, "kpi-card");
+        // Widgets-only: node.wasm does not exist in the project.
+        let wasm_path = project_dir.join("node.wasm");
+        let installed = client
+            .register_local_package(&wasm_path, manifest.clone())
+            .await
+            .unwrap();
+
+        let iv = installed.versions.get("1.0.0").unwrap();
+        assert_eq!(iv.widget_bundle_hash.as_deref(), Some(hash_v1.as_str()));
+        assert_eq!(
+            iv.widget_bundle_path.as_deref(),
+            Some(project_dir.join("widgets.flwb").as_path())
+        );
+        let store_v1 = widget_store_dir(&cache_dir, package_id, &hash_v1);
+        assert!(store_v1.join("widgets/kpi-card/index.html").exists());
+
+        // Reload after a rebuild: changed bundle re-unpacks under the new
+        // hash and the stale hash dir is pruned.
+        let (bundle_v2, hash_v2) = build_test_bundle(package_id, "kpi-card", "v2");
+        assert_ne!(hash_v1, hash_v2);
+        std::fs::write(project_dir.join("widgets.flwb"), &bundle_v2).unwrap();
+
+        let installed = client
+            .register_local_package(&wasm_path, manifest)
+            .await
+            .unwrap();
+        let iv = installed.versions.get("1.0.0").unwrap();
+        assert_eq!(iv.widget_bundle_hash.as_deref(), Some(hash_v2.as_str()));
+        let store_v2 = widget_store_dir(&cache_dir, package_id, &hash_v2);
+        assert!(store_v2.join("widgets/kpi-card/index.html").exists());
+        assert!(
+            !store_v1.exists(),
+            "stale widget store dir must be pruned on reload"
+        );
+
+        // Uninstall removes the package's widget store entirely.
+        client.uninstall(package_id).await.unwrap();
+        assert!(!cache_dir.join("widgets").join(package_id).exists());
+        // The developer's bundle file is preserved.
+        assert!(project_dir.join("widgets.flwb").exists());
+    }
+
+    #[tokio::test]
+    async fn test_local_package_backfills_widgets_from_bundle() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let client = test_client(&cache_dir);
+        client.init().await.unwrap();
+
+        let package_id = "com.example.backfill";
+        let (bundle, hash) = build_test_bundle(package_id, "kpi-card", "v1");
+        std::fs::write(project_dir.join("widgets.flwb"), &bundle).unwrap();
+
+        // Scaffolded `flow-like.toml` shape: a bundle path, no [[widgets]].
+        let mut manifest = PackageManifest::new(package_id, "Backfill", "1.0.0", "widgets");
+        manifest.widget_bundle_path = Some("widgets.flwb".into());
+
+        let installed = client
+            .register_local_package(&project_dir.join("node.wasm"), manifest)
+            .await
+            .unwrap();
+
+        assert_eq!(installed.manifest.widgets.len(), 1);
+        let widget = &installed.manifest.widgets[0];
+        assert_eq!(widget.id, "kpi-card");
+        assert_eq!(widget.contract.id, "kpi-card");
+        assert_eq!(
+            installed.manifest.widget_bundle_hash.as_deref(),
+            Some(hash.as_str())
+        );
+        assert_eq!(
+            installed
+                .versions
+                .get("1.0.0")
+                .unwrap()
+                .manifest
+                .widgets
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_local_package_missing_declared_bundle_fails() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let client = test_client(&cache_dir);
+        client.init().await.unwrap();
+
+        let manifest = widgets_only_manifest("com.example.missing", "kpi-card");
+        let err = client
+            .register_local_package(&project_dir.join("node.wasm"), manifest)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("Failed to read widget bundle"));
+    }
+
+    #[tokio::test]
+    async fn test_widgets_only_state_roundtrip_and_ready_checks() {
+        let temp = tempfile::tempdir().unwrap();
+        let cache_dir = temp.path().join("cache");
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let package_id = "com.example.ready";
+        let (bundle, hash) = build_test_bundle(package_id, "kpi-card", "v1");
+        std::fs::write(project_dir.join("widgets.flwb"), &bundle).unwrap();
+
+        {
+            let client = test_client(&cache_dir);
+            client.init().await.unwrap();
+            client
+                .register_local_package(
+                    &project_dir.join("node.wasm"),
+                    widgets_only_manifest(package_id, "kpi-card"),
+                )
+                .await
+                .unwrap();
+        }
+
+        // Fresh client loads the persisted state and considers the package ready.
+        let client = test_client(&cache_dir);
+        client.init().await.unwrap();
+        let installed = client.get_installed(package_id).await.unwrap();
+        assert!(!RegistryClient::manifest_has_wasm(&installed.manifest));
+        assert!(client.installed_package_ready(&installed));
+        let iv = installed.versions.get("1.0.0").unwrap();
+        assert!(client.installed_version_ready(package_id, iv));
+
+        // Wiping the unpacked store makes it not-ready (forces re-unpack path).
+        std::fs::remove_dir_all(widget_store_dir(&cache_dir, package_id, &hash)).unwrap();
+        assert!(!client.installed_package_ready(&installed));
     }
 }

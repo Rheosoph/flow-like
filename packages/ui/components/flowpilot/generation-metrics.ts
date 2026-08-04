@@ -1,4 +1,5 @@
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
+import type { FlowIrCommitToken } from "../../lib/schema/copilot";
 import {
 	type AgentDebugOutcome,
 	type AgentGenerationReviewDisposition,
@@ -8,7 +9,6 @@ import {
 	finalizeAgentGenerationMetrics,
 	recordAgentGenerationMetricEvent,
 } from "../../state/global-chat/agent-debug-report";
-import type { FlowIrCommitToken } from "../../lib/schema/copilot";
 
 /**
  * Aggregate-only generation telemetry for the direct FlowPilot surface.

@@ -109,35 +109,54 @@ pub async fn download(
     }
 
     // If the client specified a target platform, try to provide a presigned cwasm URL + checksum
-    let (cwasm_download_url, cwasm_checksum) =
-        if let Some(ref target_platform) = request.target_platform {
-            match registry
-                .sign_cwasm_url(&request.package_id, &version, target_platform)
-                .await
-            {
-                Ok((cwasm, checksum)) => (Some(cwasm), Some(checksum)),
-                Err(e) => {
-                    tracing::warn!(
-                        "Failed to sign cwasm URL for {} ({}): {}",
-                        request.package_id,
-                        target_platform,
-                        e
-                    );
-                    (None, None)
-                }
+    let (cwasm_download_url, cwasm_checksum) = if download_url.is_some()
+        && let Some(ref target_platform) = request.target_platform
+    {
+        match registry
+            .sign_cwasm_url(&request.package_id, &version, target_platform)
+            .await
+        {
+            Ok((cwasm, checksum)) => (Some(cwasm), Some(checksum)),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to sign cwasm URL for {} ({}): {}",
+                    request.package_id,
+                    target_platform,
+                    e
+                );
+                (None, None)
             }
-        } else {
-            (None, None)
-        };
+        }
+    } else {
+        (None, None)
+    };
+
+    // Presign the widget bundle when the version ships widgets
+    let widget_bundle_download_url = match registry
+        .sign_widget_bundle_url(&request.package_id, &version)
+        .await
+    {
+        Ok(url) => url,
+        Err(e) => {
+            tracing::warn!(
+                "Failed to sign widget bundle URL for {} ({}): {}",
+                request.package_id,
+                version,
+                e
+            );
+            None
+        }
+    };
 
     Ok(Json(DownloadResponse {
         package_id,
         version,
         wasm_base64: String::new(),
-        download_url: Some(download_url),
+        download_url,
         manifest,
         metadata,
         cwasm_download_url,
         cwasm_checksum,
+        widget_bundle_download_url,
     }))
 }

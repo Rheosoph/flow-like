@@ -4,9 +4,9 @@ import { Fragment } from "react";
 import { cn } from "../../../lib/utils";
 import { ScrollArea } from "../../ui/scroll-area";
 import type { ComponentProps } from "../ComponentRegistry";
-import { resolveChildSpecs } from "../children";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { resolveChildSpecs } from "../children";
 import type { BoundValue, ScrollAreaComponent } from "../types";
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {

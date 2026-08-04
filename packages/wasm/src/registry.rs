@@ -64,6 +64,12 @@ pub struct PackageVersion {
     /// Whether this version is yanked
     #[serde(default)]
     pub yanked: bool,
+    /// Widget bundle (`.flwb`) sha256 hash, when this version ships widgets
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_hash: Option<String>,
+    /// Widget bundle size in bytes, when this version ships widgets
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_size: Option<u64>,
 }
 
 /// Full registry entry for a package
@@ -363,6 +369,31 @@ pub struct DownloadResponse {
     /// Blake3 checksum of the `.cwasm` artifact (when target_platform was provided)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwasm_checksum: Option<String>,
+    /// Presigned URL for the widget bundle (`.flwb`) when the version ships widgets
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_download_url: Option<String>,
+}
+
+/// Request for presigned upload URLs (two-step publish, step 1)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UploadUrlRequest {
+    pub id: String,
+    pub version: String,
+    /// Also request an upload slot for the widget bundle (`.flwb`)
+    #[serde(default)]
+    pub widget_bundle: bool,
+}
+
+/// Presigned upload URLs (two-step publish, step 1)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct UploadUrlResponse {
+    pub upload_url: String,
+    pub expires_in_secs: u64,
+    /// Presigned PUT URL for the widget bundle (present when requested)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_upload_url: Option<String>,
 }
 
 /// Registry API error
@@ -396,6 +427,12 @@ pub struct InstalledVersion {
     pub metadata: Option<MetaSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wasm_hash: Option<String>,
+    /// Local path of the downloaded widget bundle (`.flwb`), if any
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_path: Option<PathBuf>,
+    /// sha256 hash of the widget bundle; also keys the unpacked widget store dir
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_bundle_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -512,6 +549,8 @@ mod tests {
                     min_flow_like_version: None,
                     release_notes: None,
                     yanked: true,
+                    widget_bundle_hash: None,
+                    widget_bundle_size: None,
                 },
                 PackageVersion {
                     version: "1.0.0".to_string(),
@@ -522,6 +561,8 @@ mod tests {
                     min_flow_like_version: None,
                     release_notes: None,
                     yanked: false,
+                    widget_bundle_hash: None,
+                    widget_bundle_size: None,
                 },
             ],
             status: PackageStatus::Active,
@@ -563,6 +604,8 @@ mod tests {
                     min_flow_like_version: None,
                     release_notes: None,
                     yanked: false,
+                    widget_bundle_hash: None,
+                    widget_bundle_size: None,
                 },
                 PackageVersion {
                     version: "1.0.0".to_string(),
@@ -573,6 +616,8 @@ mod tests {
                     min_flow_like_version: None,
                     release_notes: None,
                     yanked: false,
+                    widget_bundle_hash: None,
+                    widget_bundle_size: None,
                 },
             ],
             status: PackageStatus::Active,
@@ -679,6 +724,35 @@ mod tests {
         let parsed: PublishResponse = serde_json::from_str(&json).unwrap();
         assert!(parsed.success);
         assert_eq!(parsed.package_id, "test.package");
+    }
+
+    #[test]
+    fn test_installed_version_deserializes_without_widget_fields() {
+        let legacy = r#"{
+            "version": "1.0.0",
+            "wasm_path": "/cache/wasm/nodes/pkg/1.0.0/node.wasm",
+            "installed_at": "2026-01-01T00:00:00Z",
+            "manifest": {
+                "manifest_version": 1,
+                "id": "com.example.legacy",
+                "name": "Legacy",
+                "version": "1.0.0",
+                "description": "pre-widget state file"
+            }
+        }"#;
+        let iv: InstalledVersion = serde_json::from_str(legacy).unwrap();
+        assert!(iv.widget_bundle_path.is_none());
+        assert!(iv.widget_bundle_hash.is_none());
+
+        let legacy_version = r#"{
+            "version": "1.0.0",
+            "wasm_hash": "abc",
+            "wasm_size": 10,
+            "published_at": "2026-01-01T00:00:00Z"
+        }"#;
+        let pv: PackageVersion = serde_json::from_str(legacy_version).unwrap();
+        assert!(pv.widget_bundle_hash.is_none());
+        assert!(pv.widget_bundle_size.is_none());
     }
 
     #[test]

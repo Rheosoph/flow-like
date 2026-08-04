@@ -8,7 +8,54 @@ import MLXVLM
 import UIKit
 #endif
 
+#if os(iOS)
+import os
+#endif
+
+#if os(iOS)
+private let flowLikeMLXDefaultCacheLimit = 20 * 1024 * 1024
+#else
+private let flowLikeMLXDefaultCacheLimit = 128 * 1024 * 1024
+#endif
+
 public typealias FlowLikeMLXEventHandler = @Sendable (String) -> Void
+
+/// A synchronous admission gate closes before the asynchronous lifecycle task
+/// reaches the engine actor. The epoch prevents a delayed deactivation task
+/// from cancelling work submitted after a rapid foreground reactivation.
+final class FlowLikeMLXForegroundGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = true
+    private var epoch: UInt64 = 0
+
+    var allowsExecution: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return active
+    }
+
+    @discardableResult
+    func deactivate() -> UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        active = false
+        epoch &+= 1
+        return epoch
+    }
+
+    func activate() {
+        lock.lock()
+        active = true
+        epoch &+= 1
+        lock.unlock()
+    }
+
+    func isCurrentDeactivation(_ candidate: UInt64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return !active && epoch == candidate
+    }
+}
 
 /// Public façade shared by the iOS C ABI and the macOS NDJSON executable.
 ///
@@ -18,12 +65,17 @@ public typealias FlowLikeMLXEventHandler = @Sendable (String) -> Void
 public final class FlowLikeMLXRuntime: @unchecked Sendable {
     public static let shared = FlowLikeMLXRuntime()
 
-    private let engine = FlowLikeMLXEngine()
+    private let foregroundGate: FlowLikeMLXForegroundGate
+    private let engine: FlowLikeMLXEngine
     private let lifecycleLock = NSLock()
     private var lifecyclePrepared = false
     private var lifecycleObservers: [NSObjectProtocol] = []
 
-    private init() {}
+    private init() {
+        let foregroundGate = FlowLikeMLXForegroundGate()
+        self.foregroundGate = foregroundGate
+        self.engine = FlowLikeMLXEngine(foregroundGate: foregroundGate)
+    }
 
     public static var isAvailable: Bool {
         #if targetEnvironment(simulator)
@@ -50,13 +102,9 @@ public final class FlowLikeMLXRuntime: @unchecked Sendable {
         guard !lifecyclePrepared else { return }
         lifecyclePrepared = true
 
-        #if os(iOS)
-            // The official MLX iOS guidance uses a 20 MiB recyclable-buffer
-            // cache as a conservative starting point for jetsam-limited apps.
-            MLX.Memory.cacheLimit = 20 * 1024 * 1024
-        #else
-            MLX.Memory.cacheLimit = 128 * 1024 * 1024
-        #endif
+        // The official MLX iOS guidance uses a 20 MiB recyclable-buffer
+        // cache as a conservative starting point for jetsam-limited apps.
+        MLX.Memory.cacheLimit = flowLikeMLXDefaultCacheLimit
 
         #if canImport(UIKit)
             lifecycleObservers.append(
@@ -66,22 +114,34 @@ public final class FlowLikeMLXRuntime: @unchecked Sendable {
                     queue: .main
                 ) { [engine] _ in
                     Task {
-                        await engine.releaseForMemoryPressure(
-                            reason: "iOS memory warning"
-                        )
+                        await engine.handleMemoryWarning()
                     }
                 }
             )
             lifecycleObservers.append(
                 NotificationCenter.default.addObserver(
-                    forName: UIApplication.didEnterBackgroundNotification,
+                    // Stop submitting GPU work before iOS backgrounds the app.
+                    // Waiting for didEnterBackground is too late when a prompt
+                    // prefill already has Metal command buffers in flight.
+                    forName: UIApplication.willResignActiveNotification,
                     object: nil,
                     queue: .main
-                ) { [engine] _ in
+                ) { [engine, foregroundGate] _ in
+                    let deactivation = foregroundGate.deactivate()
                     Task {
-                        await engine.releaseForMemoryPressure(
-                            reason: "application entered the background"
-                        )
+                        await engine.releaseForAppDeactivation(deactivation)
+                    }
+                }
+            )
+            lifecycleObservers.append(
+                NotificationCenter.default.addObserver(
+                    forName: UIApplication.didBecomeActiveNotification,
+                    object: nil,
+                    queue: .main
+                ) { [engine, foregroundGate] _ in
+                    foregroundGate.activate()
+                    Task {
+                        await engine.resumeAfterAppActivation()
                     }
                 }
             )
@@ -160,6 +220,49 @@ final class FlowLikeMLXEventEmitter: @unchecked Sendable {
     }
 }
 
+/// MLX's `AsyncStream` is backed by a separate producer task. Cancelling or
+/// breaking out of the consumer does not mean that producer has stopped using
+/// its model/KV cache yet, so every exit must cancel and join it before the
+/// engine clears memory or starts another request.
+func cancelAndJoinMLXProducer(_ producer: Task<Void, Never>) async {
+    producer.cancel()
+    await producer.value
+}
+
+enum FlowLikeMLXMemoryWarningAction: Equatable, Sendable {
+    case releaseImmediately
+    case releaseWhenIdle
+    case cancelAndRelease
+}
+
+/// A foreground memory warning is a request to discard reclaimable state, not
+/// proof that the active user operation must fail. Give each request one
+/// warning in which to settle naturally; a repeated warning for that same
+/// request escalates so sustained pressure still has a path to release weights.
+struct FlowLikeMLXMemoryWarningPolicy: Sendable {
+    private var warnedActiveRequestID: String?
+
+    mutating func action(
+        activeRequestID: String?
+    ) -> FlowLikeMLXMemoryWarningAction {
+        guard let activeRequestID else {
+            warnedActiveRequestID = nil
+            return .releaseImmediately
+        }
+        guard warnedActiveRequestID == activeRequestID else {
+            warnedActiveRequestID = activeRequestID
+            return .releaseWhenIdle
+        }
+        return .cancelAndRelease
+    }
+
+    mutating func requestDidFinish(_ requestID: String) {
+        if warnedActiveRequestID == requestID {
+            warnedActiveRequestID = nil
+        }
+    }
+}
+
 private actor FlowLikeMLXEngine {
     private struct Job: Sendable {
         let command: FlowLikeMLXCommand
@@ -169,6 +272,7 @@ private actor FlowLikeMLXEngine {
     private struct ActiveJob: Sendable {
         let job: Job
         let task: Task<Void, Never>
+        var cancellationMessage: String?
     }
 
     private struct ModelCacheKey: Hashable, Sendable {
@@ -188,8 +292,18 @@ private actor FlowLikeMLXEngine {
     private var idleWaiters: [CheckedContinuation<Void, Never>] = []
     private var cancelledBeforeSubmission: Set<String> = []
     private var cancellationOrder: [String] = []
+    private var deferredModelUnloads: Set<String> = []
+    private var releaseAllModelsWhenIdle = false
+    private var clearCacheWhenIdle = false
+    private var restoreCacheLimitWhenIdle = false
+    private var memoryWarningPolicy = FlowLikeMLXMemoryWarningPolicy()
+    private let foregroundGate: FlowLikeMLXForegroundGate
 
     private static let maximumRememberedEarlyCancellations = 256
+
+    init(foregroundGate: FlowLikeMLXForegroundGate) {
+        self.foregroundGate = foregroundGate
+    }
 
     private var maximumCachedModels: Int {
         #if os(iOS)
@@ -204,6 +318,13 @@ private actor FlowLikeMLXEngine {
         eventHandler: @escaping FlowLikeMLXEventHandler
     ) {
         let emitter = FlowLikeMLXEventEmitter(handler: eventHandler)
+        guard foregroundGate.allowsExecution else {
+            emitter.error(
+                id: command.id,
+                message: "MLX generation is unavailable while the application is inactive"
+            )
+            return
+        }
         do {
             _ = try command.validatedGenerate()
         } catch {
@@ -237,7 +358,9 @@ private actor FlowLikeMLXEngine {
 
     func cancel(requestID: String) {
         if let active, active.job.command.id == requestID {
-            active.task.cancel()
+            cancelActive(
+                message: "MLX generation was cancelled"
+            )
             return
         }
 
@@ -256,7 +379,11 @@ private actor FlowLikeMLXEngine {
         if let active,
             normalizedPath(active.job.command.modelDirectory ?? "") == normalizedDirectory
         {
-            active.task.cancel()
+            deferredModelUnloads.insert(normalizedDirectory)
+            clearCacheWhenIdle = true
+            cancelActive(
+                message: "MLX generation cancelled: model was unloaded"
+            )
         }
 
         let cancelled = pending.filter {
@@ -272,17 +399,52 @@ private actor FlowLikeMLXEngine {
             )
         }
 
-        models = models.filter { $0.key.directory != normalizedDirectory }
-        MLX.Memory.clearCache()
+        if active == nil {
+            models = models.filter { $0.key.directory != normalizedDirectory }
+            MLX.Memory.clearCache()
+        } else {
+            deferredModelUnloads.insert(normalizedDirectory)
+            clearCacheWhenIdle = true
+        }
         resumeIdleWaitersIfNeeded()
     }
 
     func clearCache() {
+        guard active == nil else {
+            clearCacheWhenIdle = true
+            return
+        }
         MLX.Memory.clearCache()
     }
 
+    func handleMemoryWarning() {
+        // Applying a zero limit is non-destructive: MLX returns recyclable
+        // buffers as they are deallocated, while model weights and in-flight
+        // command buffers stay alive until the producer has quiesced.
+        reduceCacheForMemoryPressure()
+        switch memoryWarningPolicy.action(
+            activeRequestID: active?.job.command.id
+        ) {
+        case .releaseImmediately:
+            models.removeAll(keepingCapacity: false)
+            deferredModelUnloads.removeAll(keepingCapacity: false)
+            releaseAllModelsWhenIdle = false
+            clearCacheWhenIdle = false
+            MLX.Memory.clearCache()
+            restoreCacheLimitAfterMemoryPressure()
+
+        case .releaseWhenIdle:
+            releaseAllModelsWhenIdle = true
+            clearCacheWhenIdle = true
+
+        case .cancelAndRelease:
+            releaseForMemoryPressure(reason: "repeated iOS memory warning")
+        }
+    }
+
     func releaseForMemoryPressure(reason: String) {
-        active?.task.cancel()
+        reduceCacheForMemoryPressure()
+        cancelActive(message: "MLX generation cancelled: \(reason)")
         let cancelled = pending
         pending.removeAll(keepingCapacity: false)
         for job in cancelled {
@@ -291,9 +453,25 @@ private actor FlowLikeMLXEngine {
                 message: "MLX generation cancelled: \(reason)"
             )
         }
-        models.removeAll(keepingCapacity: false)
-        MLX.Memory.clearCache()
+        if active == nil {
+            models.removeAll(keepingCapacity: false)
+            MLX.Memory.clearCache()
+            restoreCacheLimitAfterMemoryPressure()
+        } else {
+            releaseAllModelsWhenIdle = true
+            clearCacheWhenIdle = true
+        }
         resumeIdleWaitersIfNeeded()
+    }
+
+    func releaseForAppDeactivation(_ deactivation: UInt64) {
+        guard foregroundGate.isCurrentDeactivation(deactivation) else { return }
+        releaseForMemoryPressure(reason: "application is leaving the foreground")
+    }
+
+    func resumeAfterAppActivation() {
+        guard foregroundGate.allowsExecution else { return }
+        startNextIfNeeded()
     }
 
     func waitUntilIdle() async {
@@ -322,20 +500,26 @@ private actor FlowLikeMLXEngine {
     }
 
     private func startNextIfNeeded() {
-        guard active == nil, !pending.isEmpty else { return }
+        guard foregroundGate.allowsExecution, active == nil, !pending.isEmpty else { return }
         let job = pending.removeFirst()
         let task = Task<Void, Never> { [weak self] in
             guard let self else { return }
             await self.run(job)
         }
-        active = ActiveJob(job: job, task: task)
+        active = ActiveJob(
+            job: job,
+            task: task,
+            cancellationMessage: nil
+        )
     }
 
     private func run(_ job: Job) async {
         defer {
+            memoryWarningPolicy.requestDidFinish(job.command.id)
             if active?.job.command.id == job.command.id {
                 active = nil
             }
+            performDeferredCleanupIfIdle()
             startNextIfNeeded()
             resumeIdleWaitersIfNeeded()
         }
@@ -350,13 +534,13 @@ private actor FlowLikeMLXEngine {
                 request: validated.request
             )
         } catch is CancellationError {
-            MLX.Memory.clearCache()
+            clearCacheWhenIdle = true
             job.emitter.error(
                 id: job.command.id,
-                message: "MLX generation was cancelled"
+                message: activeCancellationMessage(for: job.command.id)
             )
         } catch {
-            MLX.Memory.clearCache()
+            clearCacheWhenIdle = true
             job.emitter.error(
                 id: job.command.id,
                 message: error.localizedDescription
@@ -386,13 +570,25 @@ private actor FlowLikeMLXEngine {
         try Task.checkCancellation()
 
         let prepared = try await container.prepare(input: userInput)
-        // Read before `prepared` is consumed by generate(); a stop sequence ends
-        // the loop before the terminal info event carries these counts.
+        try Task.checkCancellation()
+        // Read before `prepared` is consumed by TokenIterator; a stop sequence
+        // ends the loop before the terminal info event carries these counts.
         let promptTokenCount = prepared.text.tokens.size
-        let generations = try await container.generate(
-            input: prepared,
-            parameters: parameters
-        )
+        let (generations, generationTask) = try await container.perform(
+            nonSendable: prepared
+        ) { context, input in
+            let iterator = try TokenIterator(
+                input: input,
+                model: context.model,
+                parameters: parameters
+            )
+            return MLXLMCommon.generateTask(
+                promptTokenCount: promptTokenCount,
+                modelConfiguration: context.configuration,
+                tokenizer: context.tokenizer,
+                iterator: iterator
+            )
+        }
 
         let responseID = "chatcmpl-\(job.command.id)"
         let created = Int(Date().timeIntervalSince1970)
@@ -424,14 +620,43 @@ private actor FlowLikeMLXEngine {
         var completionInfo: GenerateCompletionInfo?
         var stoppedBySequence = false
 
-        generationLoop: for await generation in generations {
-            try Task.checkCancellation()
-            switch generation {
-            case .chunk(let text):
-                generatedText += text
-                let filtered = filter.consume(text)
-                if !filtered.isEmpty {
-                    content += filtered
+        do {
+            generationLoop: for await generation in generations {
+                try Task.checkCancellation()
+                switch generation {
+                case .chunk(let text):
+                    generatedText += text
+                    let filtered = filter.consume(text)
+                    if !filtered.isEmpty {
+                        content += filtered
+                        if streaming {
+                            job.emitter.chunk(
+                                id: job.command.id,
+                                data: makeChunk(
+                                    id: responseID,
+                                    created: created,
+                                    model: modelName,
+                                    delta: OpenAIChunkDelta(
+                                        role: nil,
+                                        content: filtered,
+                                        toolCalls: nil
+                                    )
+                                )
+                            )
+                        }
+                    }
+                    if filter.didStop {
+                        stoppedBySequence = true
+                        break generationLoop
+                    }
+
+                case .toolCall(let toolCall):
+                    let responseToolCall = try makeToolCall(
+                        toolCall,
+                        requestID: job.command.id,
+                        index: toolCalls.count
+                    )
+                    toolCalls.append(responseToolCall)
                     if streaming {
                         job.emitter.chunk(
                             id: job.command.id,
@@ -441,55 +666,32 @@ private actor FlowLikeMLXEngine {
                                 model: modelName,
                                 delta: OpenAIChunkDelta(
                                     role: nil,
-                                    content: filtered,
-                                    toolCalls: nil
+                                    content: nil,
+                                    toolCalls: [
+                                        OpenAIChunkToolCall(
+                                            index: toolCalls.count - 1,
+                                            id: responseToolCall.id,
+                                            type: responseToolCall.type,
+                                            function: OpenAIChunkToolCall.Function(
+                                                name: responseToolCall.function.name,
+                                                arguments: responseToolCall.function.arguments
+                                            )
+                                        )
+                                    ]
                                 )
                             )
                         )
                     }
-                }
-                if filter.didStop {
-                    stoppedBySequence = true
-                    break generationLoop
-                }
 
-            case .toolCall(let toolCall):
-                let responseToolCall = try makeToolCall(
-                    toolCall,
-                    requestID: job.command.id,
-                    index: toolCalls.count
-                )
-                toolCalls.append(responseToolCall)
-                if streaming {
-                    job.emitter.chunk(
-                        id: job.command.id,
-                        data: makeChunk(
-                            id: responseID,
-                            created: created,
-                            model: modelName,
-                            delta: OpenAIChunkDelta(
-                                role: nil,
-                                content: nil,
-                                toolCalls: [
-                                    OpenAIChunkToolCall(
-                                        index: toolCalls.count - 1,
-                                        id: responseToolCall.id,
-                                        type: responseToolCall.type,
-                                        function: OpenAIChunkToolCall.Function(
-                                            name: responseToolCall.function.name,
-                                            arguments: responseToolCall.function.arguments
-                                        )
-                                    )
-                                ]
-                            )
-                        )
-                    )
+                case .info(let info):
+                    completionInfo = info
                 }
-
-            case .info(let info):
-                completionInfo = info
             }
+        } catch {
+            await cancelAndJoinMLXProducer(generationTask)
+            throw error
         }
+        await cancelAndJoinMLXProducer(generationTask)
 
         try Task.checkCancellation()
         if !stoppedBySequence {
@@ -621,6 +823,10 @@ private actor FlowLikeMLXEngine {
             MLX.Memory.clearCache()
         }
 
+        #if os(iOS)
+            try validateIOSModelFitsAvailableMemory(modelURL)
+        #endif
+
         let tokenizerLoader = FlowLikeLocalTokenizerLoader()
         let container: ModelContainer
         switch kind {
@@ -688,11 +894,94 @@ private actor FlowLikeMLXEngine {
         return directory
     }
 
+    #if os(iOS)
+        /// Reject a checkpoint whose weight files alone exceed the process's
+        /// current allocation headroom. This is deliberately a one-sided test:
+        /// passing does not promise that transient/KV memory will fit, while
+        /// failing means eager `eval(model)` cannot make the weights resident.
+        private func validateIOSModelFitsAvailableMemory(_ directory: URL) throws {
+            let availableBytes = UInt64(os_proc_available_memory())
+            guard availableBytes > 0 else { return }
+
+            let enumerator = FileManager.default.enumerator(
+                at: directory,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            )
+            var weightBytes: UInt64 = 0
+            while let file = enumerator?.nextObject() as? URL {
+                guard file.pathExtension.lowercased() == "safetensors" else { continue }
+                let values = try file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard values.isRegularFile == true, let fileSize = values.fileSize else { continue }
+                let (sum, overflow) = weightBytes.addingReportingOverflow(UInt64(fileSize))
+                weightBytes = overflow ? UInt64.max : sum
+                if overflow { break }
+            }
+
+            guard weightBytes > availableBytes else { return }
+            let formatter = ByteCountFormatter()
+            formatter.countStyle = .memory
+            throw FlowLikeMLXError.unsupported(
+                "MLX model weights require at least \(formatter.string(fromByteCount: Int64(clamping: weightBytes))), "
+                    + "but iOS currently reports only "
+                    + "\(formatter.string(fromByteCount: Int64(clamping: availableBytes))) available; "
+                    + "choose a smaller quantized model"
+            )
+        }
+    #endif
+
     private func normalizedPath(_ path: String) -> String {
         URL(fileURLWithPath: path, isDirectory: true)
             .standardizedFileURL
             .resolvingSymlinksInPath()
             .path
+    }
+
+    private func performDeferredCleanupIfIdle() {
+        guard active == nil else { return }
+
+        if releaseAllModelsWhenIdle {
+            models.removeAll(keepingCapacity: false)
+            deferredModelUnloads.removeAll(keepingCapacity: false)
+            releaseAllModelsWhenIdle = false
+        } else if !deferredModelUnloads.isEmpty {
+            models = models.filter {
+                !deferredModelUnloads.contains($0.key.directory)
+            }
+            deferredModelUnloads.removeAll(keepingCapacity: false)
+        }
+
+        if clearCacheWhenIdle {
+            MLX.Memory.clearCache()
+            clearCacheWhenIdle = false
+        }
+        restoreCacheLimitAfterMemoryPressure()
+    }
+
+    private func reduceCacheForMemoryPressure() {
+        MLX.Memory.cacheLimit = 0
+        restoreCacheLimitWhenIdle = true
+    }
+
+    private func restoreCacheLimitAfterMemoryPressure() {
+        guard restoreCacheLimitWhenIdle else { return }
+        MLX.Memory.cacheLimit = flowLikeMLXDefaultCacheLimit
+        restoreCacheLimitWhenIdle = false
+    }
+
+    private func cancelActive(message: String) {
+        guard active != nil else { return }
+        if active?.cancellationMessage == nil {
+            active?.cancellationMessage = message
+        }
+        active?.task.cancel()
+    }
+
+    private func activeCancellationMessage(for requestID: String) -> String {
+        guard active?.job.command.id == requestID else {
+            return "MLX generation was cancelled"
+        }
+        return active?.cancellationMessage ?? "MLX generation was cancelled"
     }
 
     private func makeChunk(

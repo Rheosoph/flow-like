@@ -20,7 +20,6 @@ pub struct SubscribeResponse {
 }
 
 const ENTERPRISE_TIER: &str = "ENTERPRISE";
-const ENTERPRISE_CONTACT_EMAIL: &str = "enterprise@flow-like.com";
 
 #[utoipa::path(
     post,
@@ -43,9 +42,14 @@ pub async fn create_subscription_checkout(
     Json(request): Json<SubscribeRequest>,
 ) -> Result<Json<SubscribeResponse>, ApiError> {
     if request.tier.eq_ignore_ascii_case(ENTERPRISE_TIER) {
+        let conversion = &state.platform_config.conversion;
+        let contact = conversion
+            .contact
+            .as_ref()
+            .unwrap_or(&state.platform_config.contact);
         return Err(ApiError::bad_request(format!(
             "Enterprise plans require a custom agreement. Contact {}.",
-            ENTERPRISE_CONTACT_EMAIL
+            contact.preferred_reference()
         )));
     }
 

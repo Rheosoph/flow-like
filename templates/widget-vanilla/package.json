@@ -1,0 +1,19 @@
+{
+	"name": "flow-like-widget-vanilla",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Flow-Like widget framework group (vanilla TypeScript)",
+	"scripts": {
+		"dev": "bun --bun vite",
+		"build": "bun --bun vite build"
+	},
+	"dependencies": {
+		"@flow-like/widget-sdk": "^0.1.0"
+	},
+	"devDependencies": {
+		"@flow-like/widget-bundler": "^0.1.0",
+		"typescript": "^5.7.3",
+		"vite": "^6.3.5"
+	}
+}

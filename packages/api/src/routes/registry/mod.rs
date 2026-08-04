@@ -17,6 +17,7 @@ pub mod server;
 pub mod types;
 pub mod upload;
 pub mod users;
+pub mod widget_asset;
 
 use crate::state::AppState;
 use axum::{
@@ -140,6 +141,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/package/{id}/restore", post(index::restore_package))
         .route("/package/{id}/versions", get(index::get_versions))
+        .route(
+            "/package/{package_id}/widget-asset/{version}/{*path}",
+            get(widget_asset::get_widget_asset),
+        )
         .route(
             "/package/{package_id}/readme",
             get(metadata::get_readme).put(metadata::update_readme),

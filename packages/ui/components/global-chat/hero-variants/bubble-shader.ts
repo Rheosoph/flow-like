@@ -31,6 +31,14 @@ uniform float u_sat;      // orbiting satellite bubbles
 uniform float u_pop;      // 1 → 0 acknowledge shockwave
 uniform float u_spin_mix; // how much the iridescence rides along with u_spin
 
+// ── satellite steering ──
+// Lets a caller fly the three satellites to fixed targets instead of leaving them on their
+// orbit. Same no-op-at-0 contract as the block above: every default reproduces the free orbit.
+uniform float u_sat_orbit;      // orbit radius; 0 keeps the built-in one
+uniform vec2 u_sat_pos[3];      // per-satellite destination, film space
+uniform float u_sat_dock[3];    // 0 free orbit … 1 parked on u_sat_pos
+uniform float u_sat_shrink[3];  // 0 present … 1 collapsed away
+
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
@@ -88,13 +96,23 @@ void main() {
 	// phase and each satellite swelling as it swings toward the viewer. Shell radii stay clear
 	// of the rim at every point of the cycle, so a satellite never merges into the nucleus.
 	float dsat = 8.0;
+	float orbitR = u_sat_orbit > 0.0 ? u_sat_orbit : 0.63;
 	for (int i = 0; i < 3; i++) {
 		float fi = float(i);
 		float oa = u_time * 1.15 + fi * 2.0944;
-		float rad = 0.63 + 0.05 * sin(u_time * 0.9 + fi * 2.1);
-		vec2 o = vec2(cos(oa), sin(oa)) * rad;
+		// Breathing scales with the orbit, so closing the orbit really does stack the satellites
+		// on the nucleus. At the default radius this is the same 0.05 amplitude as before.
+		float rad = orbitR * (1.0 + 0.0794 * sin(u_time * 0.9 + fi * 2.1));
+		vec2 o = mix(vec2(cos(oa), sin(oa)) * rad, u_sat_pos[i], u_sat_dock[i]);
 		float depth = 1.0 + 0.32 * sin(u_time * 1.3 + fi * 2.4);
-		dsat = min(dsat, length(p - o) - 0.046 * depth);
+		// Collapsing shrinks the shell, then drops it once it is a couple of pixels across.
+		// Letting the radius reach exactly 0 would leave a singular bright point on the target.
+		float shrink = clamp(u_sat_shrink[i], 0.0, 1.0);
+		float rsat = 0.046 * depth * (1.0 - shrink);
+		// A docking satellite crosses out of the film's wobble field into plain screen space, or
+		// the organic displacement baked into p would land it tens of pixels off its target.
+		vec2 psat = mix(p, uv, u_sat_dock[i]);
+		dsat = min(dsat, length(psat - o) - rsat + step(0.9, shrink) * 6.0);
 	}
 	d = min(d, dsat + (1.0 - clamp(u_sat, 0.0, 1.0)) * 6.0);
 

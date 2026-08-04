@@ -7,7 +7,10 @@ use flow_like::flow::node::{Node, NodeLogic, NodePermission, NodeWasm};
 use flow_like_wasm::abi::{WasmExecutionInput, WasmExecutionResult, WasmNodeDefinition};
 use flow_like_wasm::host_functions::ModelContext;
 use flow_like_wasm::manifest::PackageManifest;
-use flow_like_wasm::{WasmEngine, WasmNodeLogic, WasmSecurityConfig, build_node_from_definition};
+use flow_like_wasm::{
+    WasmEngine, WasmNodeLogic, WasmSecurityConfig, WidgetBundleReader, WidgetContract,
+    build_node_from_definition, sha256_hex, widget_store_dir,
+};
 use serde::{Deserialize, Serialize};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -16,7 +19,9 @@ use std::sync::{Arc, LazyLock};
 use std::time::SystemTime;
 use tauri::AppHandle;
 
-static INSPECTION_CACHE: LazyLock<DashMap<String, (SystemTime, PackageInspection)>> =
+type InspectionCacheEntry = (Option<SystemTime>, Option<SystemTime>, PackageInspection);
+
+static INSPECTION_CACHE: LazyLock<DashMap<String, InspectionCacheEntry>> =
     LazyLock::new(DashMap::new);
 
 fn wasm_file_mtime(path: &Path) -> Option<SystemTime> {
@@ -605,8 +610,145 @@ pub async fn developer_save_settings(
 #[serde(rename_all = "camelCase")]
 pub struct ScaffoldInput {
     pub target_dir: String,
-    pub language: String,
     pub project_name: String,
+    #[serde(default, alias = "language")]
+    pub node_language: Option<String>,
+    #[serde(default)]
+    pub widget_frameworks: Vec<String>,
+}
+
+const WIDGET_FRAMEWORKS: &[&str] = &[
+    "react", "preact", "svelte", "vue", "solid", "lit", "vanilla",
+];
+
+fn node_template_dir(language: &str) -> Result<&'static str, TauriFunctionError> {
+    match language {
+        "rust" => Ok("wasm-node-rust"),
+        "python" => Ok("wasm-node-python"),
+        "typescript" | "ts" => Ok("wasm-node-typescript"),
+        "assemblyscript" | "as" => Ok("wasm-node-assemblyscript"),
+        "go" => Ok("wasm-node-go"),
+        "cpp" | "c" | "c++" => Ok("wasm-node-cpp"),
+        "csharp" | "c#" => Ok("wasm-node-csharp"),
+        "kotlin" | "kt" => Ok("wasm-node-kotlin"),
+        "zig" => Ok("wasm-node-zig"),
+        "nim" => Ok("wasm-node-nim"),
+        "lua" => Ok("wasm-node-lua"),
+        "swift" => Ok("wasm-node-swift"),
+        "java" => Ok("wasm-node-java"),
+        "grain" => Ok("wasm-node-grain"),
+        "moonbit" => Ok("wasm-node-moonbit"),
+        other => Err(TauriFunctionError::new(&format!(
+            "Unsupported language: {}",
+            other
+        ))),
+    }
+}
+
+fn template_api_url(template_dir: &str) -> String {
+    format!(
+        "https://api.github.com/repos/Rheosoph/flow-like/contents/templates/{}?ref=dev",
+        template_dir
+    )
+}
+
+fn project_slug(project_name: &str) -> String {
+    project_name
+        .to_lowercase()
+        .replace(' ', "-")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '-')
+        .collect()
+}
+
+/// Resolve the node build's artifact path (relative to the project root) from
+/// the downloaded node template's own `flow-like.toml` `wasm_path`. Templates
+/// without a declared `wasm_path` (Rust, Swift) stage `node.wasm` at their root.
+fn node_artifact_path(node_dir: &Path) -> String {
+    let declared = std::fs::read_to_string(node_dir.join("flow-like.toml"))
+        .ok()
+        .and_then(|content| content.parse::<toml::Value>().ok())
+        .and_then(|doc| {
+            doc.get("wasm_path")
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+        });
+    format!("node/{}", declared.as_deref().unwrap_or("node.wasm"))
+}
+
+/// Root orchestrator `mise.toml` for monorepo scaffolds (design §8.2). The
+/// build stages the publishable artifacts at the project root: `./node.wasm`
+/// and/or `./widgets.flwb`.
+fn root_mise_toml(node_artifact: &str) -> String {
+    format!(
+        r#"[env]
+# Filled by the scaffolder from the selected node template's wasm_path;
+# some unchanged templates produce node/build/node.wasm instead.
+FLOW_LIKE_NODE_ARTIFACT = "{node_artifact}"
+
+[tasks."build:node"]
+description = "Build the WASM node (skips if no node/ dir)"
+run = """
+[ -d node ] || {{ echo "no node project — skipping"; exit 0; }}
+(cd node && mise run build)
+cp "$FLOW_LIKE_NODE_ARTIFACT" ./node.wasm
+"""
+
+[tasks."build:widgets"]
+description = "Build every framework group via its own package.json build script"
+run = """
+[ -d widgets ] || {{ echo "no widgets — skipping"; exit 0; }}
+for w in widgets/*/; do
+  echo "=== Building group $w ==="
+  (cd "$w" && bun install --frozen-lockfile && bun run build)
+done
+"""
+
+[tasks."bundle:widgets"]
+description = "Pack all widget dist outputs into the root widgets.flwb artifact"
+depends = ["build:widgets"]
+run = """
+[ -d widgets ] || exit 0
+bunx @flow-like/widget-bundler pack --project . --out widgets.flwb
+"""
+
+[tasks.build]
+depends = ["build:node", "bundle:widgets"]
+
+[tasks.dev]
+description = "Mock-host dev harness with live reload"
+run = "bunx flow-like-widgets dev"
+"#
+    )
+}
+
+fn write_merged_manifest(
+    target: &Path,
+    project_name: &str,
+    has_node: bool,
+    has_widgets: bool,
+) -> Result<(), TauriFunctionError> {
+    let slug = project_slug(project_name);
+    let mut manifest = format!(
+        r#"manifest_version = 2
+id = "com.custom.{slug}"
+name = "{name}"
+version = "0.1.0"
+description = "A Flow-Like package scaffolded by the creation wizard"
+keywords = []
+"#,
+        name = project_name.replace('"', "\\\""),
+    );
+    if has_node {
+        manifest.push_str("wasm_path = \"node.wasm\"\n");
+    }
+    if has_widgets {
+        manifest.push_str("widget_bundle_path = \"widgets.flwb\"\n");
+    }
+    manifest.push_str("\n[permissions]\nmemory = \"standard\"\ntimeout = \"standard\"\n");
+    std::fs::write(target.join("flow-like.toml"), manifest)
+        .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -614,33 +756,30 @@ pub async fn developer_scaffold_project(
     app_handle: AppHandle,
     input: ScaffoldInput,
 ) -> Result<DeveloperProject, TauriFunctionError> {
-    let template_dir = match input.language.as_str() {
-        "rust" => "wasm-node-rust",
-        "python" => "wasm-node-python",
-        "assemblyscript" | "as" => "wasm-node-assemblyscript",
-        "go" => "wasm-node-go",
-        "cpp" | "c" | "c++" => "wasm-node-cpp",
-        "csharp" | "c#" => "wasm-node-csharp",
-        "kotlin" | "kt" => "wasm-node-kotlin",
-        "zig" => "wasm-node-zig",
-        "nim" => "wasm-node-nim",
-        "lua" => "wasm-node-lua",
-        "swift" => "wasm-node-swift",
-        "java" => "wasm-node-java",
-        "grain" => "wasm-node-grain",
-        "moonbit" => "wasm-node-moonbit",
-        other => {
+    let mut frameworks: Vec<String> = Vec::new();
+    for framework in &input.widget_frameworks {
+        if !WIDGET_FRAMEWORKS.contains(&framework.as_str()) {
             return Err(TauriFunctionError::new(&format!(
-                "Unsupported language: {}",
-                other
+                "Unsupported widget framework: {}",
+                framework
             )));
         }
-    };
+        if !frameworks.contains(framework) {
+            frameworks.push(framework.clone());
+        }
+    }
 
-    let api_url = format!(
-        "https://api.github.com/repos/Rheosoph/flow-like/contents/templates/{}?ref=dev",
-        template_dir
-    );
+    let node_template = input
+        .node_language
+        .as_deref()
+        .map(node_template_dir)
+        .transpose()?;
+
+    if node_template.is_none() && frameworks.is_empty() {
+        return Err(TauriFunctionError::new(
+            "Select at least one capability: a node language or a widget framework",
+        ));
+    }
 
     let target = PathBuf::from(&input.target_dir);
     if target.exists()
@@ -652,13 +791,41 @@ pub async fn developer_scaffold_project(
     }
     std::fs::create_dir_all(&target).map_err(|e| TauriFunctionError::new(&e.to_string()))?;
 
-    download_github_dir(&api_url, &target).await?;
+    if frameworks.is_empty() {
+        // Node-only: keep the legacy flat layout so existing flows stay identical.
+        let template_dir = node_template.expect("node template checked above");
+        download_github_dir(&template_api_url(template_dir), &target).await?;
+        patch_manifest(&target, &input.project_name)?;
+    } else {
+        let node_artifact = if let Some(template_dir) = node_template {
+            let node_dir = target.join("node");
+            std::fs::create_dir_all(&node_dir)
+                .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+            download_github_dir(&template_api_url(template_dir), &node_dir).await?;
+            node_artifact_path(&node_dir)
+        } else {
+            "node/node.wasm".to_string()
+        };
 
-    patch_manifest(&target, &input.project_name)?;
+        for framework in &frameworks {
+            let widget_dir = target.join("widgets").join(framework);
+            std::fs::create_dir_all(&widget_dir)
+                .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+            download_github_dir(
+                &template_api_url(&format!("widget-{}", framework)),
+                &widget_dir,
+            )
+            .await?;
+        }
+
+        std::fs::write(target.join("mise.toml"), root_mise_toml(&node_artifact))
+            .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+        write_merged_manifest(&target, &input.project_name, node_template.is_some(), true)?;
+    }
 
     let add_input = AddProjectInput {
         path: target.to_string_lossy().to_string(),
-        language: input.language,
+        language: input.node_language.unwrap_or_else(|| "widgets".to_string()),
         name: input.project_name,
     };
     developer_add_project(app_handle, add_input).await
@@ -753,15 +920,14 @@ fn patch_manifest(target: &Path, project_name: &str) -> Result<(), TauriFunction
         .parse::<toml_edit::DocumentMut>()
         .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
 
+    let package_id = format!("com.custom.{}", project_slug(project_name));
     if let Some(pkg) = doc.get_mut("package").and_then(|v| v.as_table_mut()) {
-        let slug = project_name
-            .to_lowercase()
-            .replace(' ', "-")
-            .chars()
-            .filter(|c| c.is_alphanumeric() || *c == '-')
-            .collect::<String>();
         pkg["name"] = toml_edit::value(project_name);
-        pkg["id"] = toml_edit::value(format!("com.custom.{}", slug));
+        pkg["id"] = toml_edit::value(package_id);
+    } else {
+        // Node templates declare the manifest with top-level keys
+        doc["name"] = toml_edit::value(project_name);
+        doc["id"] = toml_edit::value(package_id);
     }
 
     std::fs::write(&manifest_path, doc.to_string())
@@ -804,11 +970,81 @@ pub async fn developer_inspect_node(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct WidgetInspection {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub input_count: usize,
+    pub event_count: usize,
+    pub query_count: usize,
+    pub contract: WidgetContract,
+}
+
+fn widget_inspections<R: std::io::Read + std::io::Seek>(
+    reader: &mut WidgetBundleReader<R>,
+) -> Result<Vec<WidgetInspection>, TauriFunctionError> {
+    let entries = reader.manifest().widgets.clone();
+    let mut widgets = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let contract = reader.contract(&entry.id).map_err(|e| {
+            TauriFunctionError::new(&format!(
+                "Failed to read contract for widget '{}': {}",
+                entry.id, e
+            ))
+        })?;
+        widgets.push(WidgetInspection {
+            id: entry.id,
+            name: entry.name,
+            description: entry.description,
+            input_count: contract.inputs.len(),
+            event_count: contract.events.len(),
+            query_count: contract.queries.len(),
+            contract,
+        });
+    }
+    Ok(widgets)
+}
+
+fn inspect_widget_bundle(bundle_path: &Path) -> Result<Vec<WidgetInspection>, TauriFunctionError> {
+    let mut reader = WidgetBundleReader::open(bundle_path).map_err(|e| {
+        TauriFunctionError::new(&format!(
+            "Failed to open widget bundle '{}': {}",
+            bundle_path.display(),
+            e
+        ))
+    })?;
+    widget_inspections(&mut reader)
+}
+
+/// Locate the project's widget bundle: manifest `widget_bundle_path` first,
+/// then the canonical root `widgets.flwb`.
+fn find_widget_bundle(project_path: &Path) -> Option<PathBuf> {
+    if let Ok(manifest) = load_manifest_typed(project_path)
+        && let Some(rel) = manifest
+            .widget_bundle_path
+            .as_deref()
+            .filter(|p| !p.is_empty())
+    {
+        let candidate = project_path.join(rel);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    let root = project_path.join("widgets.flwb");
+    root.exists().then_some(root)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PackageInspection {
     pub nodes: Vec<WasmNodeDefinition>,
     pub manifest: Option<PackageManifest>,
     pub is_package: bool,
     pub wasm_path: String,
+    #[serde(default)]
+    pub widgets: Vec<WidgetInspection>,
+    #[serde(default)]
+    pub widget_bundle_path: Option<String>,
 }
 
 #[tauri::command]
@@ -820,45 +1056,66 @@ pub async fn developer_inspect_package(
         .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
     tokio::spawn(async move {
         let project = PathBuf::from(&project_path);
-        let wasm_path = find_wasm_file(&project)?;
-
-        if let Some(mtime) = wasm_file_mtime(&wasm_path) {
-            let cache_key = wasm_path.to_string_lossy().to_string();
-            if let Some(entry) = INSPECTION_CACHE.get(&cache_key) {
-                let (cached_mtime, cached_result) = entry.value();
-                if *cached_mtime == mtime {
-                    return Ok(cached_result.clone());
+        let bundle_path = find_widget_bundle(&project);
+        let wasm_path = match find_wasm_file(&project) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                if bundle_path.is_none() {
+                    return Err(error);
                 }
+                None
+            }
+        };
+
+        let wasm_mtime = wasm_path.as_deref().and_then(wasm_file_mtime);
+        let bundle_mtime = bundle_path.as_deref().and_then(wasm_file_mtime);
+        if let Some(entry) = INSPECTION_CACHE.get(&project_path) {
+            let (cached_wasm, cached_bundle, cached_result) = entry.value();
+            if wasm_mtime.is_some() && *cached_wasm == wasm_mtime && *cached_bundle == bundle_mtime
+            {
+                return Ok(cached_result.clone());
             }
         }
 
         let manifest = load_manifest_typed(&project).ok();
-        let loaded = engine
-            .load_auto_from_file(&wasm_path)
-            .await
-            .map_err(|e| TauriFunctionError::new(&format!("Failed to load WASM module: {}", e)))?;
 
-        let security = WasmSecurityConfig::permissive();
-        let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
-            TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
-        })?;
+        let (nodes, is_package) = if let Some(wasm_path) = &wasm_path {
+            let loaded = engine.load_auto_from_file(wasm_path).await.map_err(|e| {
+                TauriFunctionError::new(&format!("Failed to load WASM module: {}", e))
+            })?;
 
-        let is_package = instance.is_package();
-        let nodes = instance.call_get_nodes().await.map_err(|e| {
-            TauriFunctionError::new(&format!("Failed to get node definitions: {}", e))
-        })?;
+            let security = WasmSecurityConfig::permissive();
+            let mut instance = loaded.instantiate(&engine, security).await.map_err(|e| {
+                TauriFunctionError::new(&format!("Failed to instantiate module: {}", e))
+            })?;
+
+            let is_package = instance.is_package();
+            let nodes = instance.call_get_nodes().await.map_err(|e| {
+                TauriFunctionError::new(&format!("Failed to get node definitions: {}", e))
+            })?;
+            (nodes, is_package)
+        } else {
+            (Vec::new(), false)
+        };
+
+        let widgets = match &bundle_path {
+            Some(path) => inspect_widget_bundle(path)?,
+            None => Vec::new(),
+        };
 
         let result = PackageInspection {
             nodes,
             manifest,
             is_package,
-            wasm_path: wasm_path.to_string_lossy().to_string(),
+            wasm_path: wasm_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            widgets,
+            widget_bundle_path: bundle_path.map(|p| p.to_string_lossy().to_string()),
         };
 
-        if let Some(mtime) = wasm_file_mtime(&wasm_path) {
-            let cache_key = wasm_path.to_string_lossy().to_string();
-            INSPECTION_CACHE.insert(cache_key, (mtime, result.clone()));
-        }
+        INSPECTION_CACHE.insert(project_path, (wasm_mtime, bundle_mtime, result.clone()));
 
         Ok(result)
     })
@@ -873,6 +1130,121 @@ pub async fn developer_find_publish_wasm(
     let project = PathBuf::from(&project_path);
     let wasm_path = find_wasm_for_publish(&project)?;
     Ok(wasm_path.to_string_lossy().to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublishArtifacts {
+    pub wasm: Option<String>,
+    pub widget_bundle: Option<String>,
+}
+
+#[tauri::command]
+pub async fn developer_find_publish_artifacts(
+    project_path: String,
+) -> Result<PublishArtifacts, TauriFunctionError> {
+    let project = PathBuf::from(&project_path);
+    let widget_bundle = find_widget_bundle(&project);
+
+    let wasm = match find_wasm_for_publish(&project) {
+        Ok(path) => Some(path),
+        Err(error) => {
+            let declares_node = load_manifest_typed(&project)
+                .ok()
+                .and_then(|m| m.wasm_path)
+                .is_some_and(|p| !p.is_empty())
+                || project.join("node").is_dir();
+            if widget_bundle.is_none() || declares_node {
+                return Err(error);
+            }
+            None
+        }
+    };
+
+    Ok(PublishArtifacts {
+        wasm: wasm.map(|p| p.to_string_lossy().to_string()),
+        widget_bundle: widget_bundle.map(|p| p.to_string_lossy().to_string()),
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WidgetPreviewBundle {
+    pub package_id: String,
+    pub package_version: String,
+    pub bundle_hash: String,
+    pub widgets: Vec<WidgetInspection>,
+}
+
+/// Verify the project's root `widgets.flwb` and unpack it into the
+/// content-addressed widget store served by the `flow-widget://` protocol,
+/// so the developer Test Widget view can render it through the real
+/// `A2UIMicroWidget` pipeline.
+#[tauri::command]
+pub async fn developer_prepare_widget_preview(
+    app_handle: AppHandle,
+    project_dir: String,
+) -> Result<WidgetPreviewBundle, TauriFunctionError> {
+    let project = PathBuf::from(&project_dir);
+    let bundle_path = find_widget_bundle(&project).ok_or_else(|| {
+        TauriFunctionError::new(&format!(
+            "No widgets.flwb found in '{}'. Run `mise run build` in the project first.",
+            project.display()
+        ))
+    })?;
+
+    let settings = TauriSettingsState::construct(&app_handle)
+        .await
+        .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
+    let cache_dir = {
+        let guard = settings.lock().await;
+        super::registry::wasm_registry_cache_dir(&guard.project_dir)
+    };
+
+    tokio::task::spawn_blocking(move || {
+        let bytes = std::fs::read(&bundle_path).map_err(|e| {
+            TauriFunctionError::new(&format!(
+                "Failed to read widget bundle '{}': {}",
+                bundle_path.display(),
+                e
+            ))
+        })?;
+        let bundle_hash = sha256_hex(&bytes);
+
+        let mut reader = WidgetBundleReader::from_bytes(bytes).map_err(|e| {
+            TauriFunctionError::new(&format!("Failed to open widget bundle: {}", e))
+        })?;
+        if let Err(errors) = reader.validate() {
+            return Err(TauriFunctionError::new(&format!(
+                "Invalid widget bundle: {}",
+                errors.join("; ")
+            )));
+        }
+
+        let package_id = reader.manifest().package_id.clone();
+        let package_version = reader.manifest().package_version.clone();
+
+        let dest = widget_store_dir(&cache_dir, &package_id, &bundle_hash);
+        if !dest.is_dir() {
+            reader.unpack(&dest).map_err(|e| {
+                TauriFunctionError::new(&format!(
+                    "Failed to unpack widget bundle into the widget store: {}",
+                    e
+                ))
+            })?;
+        }
+
+        let widgets = widget_inspections(&mut reader)?;
+
+        Ok(WidgetPreviewBundle {
+            package_id,
+            package_version,
+            bundle_hash,
+            widgets,
+        })
+    })
+    .await
+    .map_err(|e| TauriFunctionError::new(&format!("Task panicked: {}", e)))?
 }
 
 #[tauri::command]

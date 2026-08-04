@@ -92,6 +92,22 @@ pub enum AppGroupMemberStatus {
     Active,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AppType")]
+pub enum AppType {
+    #[sea_orm(string_value = "AGENT")]
+    Agent,
+    #[sea_orm(string_value = "CUSTOM_INTERFACE")]
+    CustomInterface,
+    #[sea_orm(string_value = "DATA_FOCUS")]
+    DataFocus,
+    #[sea_orm(string_value = "DATA_PIPELINE")]
+    DataPipeline,
+    #[sea_orm(string_value = "ANALYTICS")]
+    Analytics,
+    #[sea_orm(string_value = "FORM")]
+    Form,
+}
+#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AssetKind")]
 pub enum AssetKind {
     #[sea_orm(string_value = "IMAGE")]
@@ -164,22 +180,6 @@ pub enum BitType {
     Tts,
     #[sea_orm(string_value = "STT")]
     Stt,
-}
-#[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
-#[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "AppType")]
-pub enum AppType {
-    #[sea_orm(string_value = "AGENT")]
-    Agent,
-    #[sea_orm(string_value = "CUSTOM_INTERFACE")]
-    CustomInterface,
-    #[sea_orm(string_value = "DATA_FOCUS")]
-    DataFocus,
-    #[sea_orm(string_value = "DATA_PIPELINE")]
-    DataPipeline,
-    #[sea_orm(string_value = "ANALYTICS")]
-    Analytics,
-    #[sea_orm(string_value = "FORM")]
-    Form,
 }
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "Enum", enum_name = "Category")]

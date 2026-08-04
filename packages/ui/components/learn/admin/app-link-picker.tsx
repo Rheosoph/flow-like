@@ -34,9 +34,7 @@ export function AppLinkPicker({
 }: AppLinkPickerProps) {
 	const sortedApps = useMemo(
 		() =>
-			[...apps].sort((a, b) =>
-				(a.name ?? a.id).localeCompare(b.name ?? b.id),
-			),
+			[...apps].sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id)),
 		[apps],
 	);
 	return (

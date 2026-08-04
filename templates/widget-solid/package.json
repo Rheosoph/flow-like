@@ -1,0 +1,22 @@
+{
+	"name": "flow-like-widget-solid",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"description": "Flow-Like widget framework group (Solid)",
+	"scripts": {
+		"dev": "bun --bun vite",
+		"build": "bun --bun vite build"
+	},
+	"dependencies": {
+		"@flow-like/widget-sdk": "^0.1.0",
+		"@nanostores/solid": "^1.1.1",
+		"solid-js": "^1.9.14"
+	},
+	"devDependencies": {
+		"@flow-like/widget-bundler": "^0.1.0",
+		"typescript": "^5.7.3",
+		"vite": "^6.3.5",
+		"vite-plugin-solid": "^2.11.14"
+	}
+}

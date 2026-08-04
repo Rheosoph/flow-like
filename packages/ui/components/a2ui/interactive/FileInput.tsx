@@ -10,13 +10,14 @@ import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import {
 	useActionContext,
-	useExecuteAction,
+	useComponentEventTrigger,
 	useIsComponentTriggering,
 	useOnAction,
 } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { firstEventAction } from "../event-handlers";
 import type { BoundValue, FileInputComponent } from "../types";
 import {
 	limitUploadBatch,
@@ -106,7 +107,7 @@ export function A2UIFileInput({
 	surfaceId,
 }: ComponentProps<FileInputComponent>) {
 	const onAction = useOnAction();
-	const { executeAction } = useExecuteAction();
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const isTriggering = useIsComponentTriggering(componentId);
 	const inputRef = useRef<HTMLInputElement>(null);
 	const backend = useBackend();
@@ -202,7 +203,7 @@ export function A2UIFileInput({
 		);
 		const uploadResults: FileData[] = [];
 		const executionTarget = await resolveTemporaryUploadTarget?.(
-			component.actions?.[0],
+			firstEventAction(component.eventHandlers, "change", component.actions),
 		);
 		if (uploadOperationRef.current !== operationId) return;
 
@@ -301,12 +302,9 @@ export function A2UIFileInput({
 				},
 			});
 
-			const action = component.actions?.[0];
-			if (action) {
-				await executeAction(action, componentId, {
-					signedUrls: multiple ? urls : urls[0],
-				});
-			}
+			await triggerEvent("change", component, {
+				signedUrls: multiple ? urls : urls[0],
+			});
 		}
 
 		if (inputRef.current) inputRef.current.value = "";
@@ -341,12 +339,9 @@ export function A2UIFileInput({
 			},
 		});
 
-		const action = component.actions?.[0];
-		if (action) {
-			void executeAction(action, componentId, {
-				signedUrls: multiple ? urls : (urls[0] ?? null),
-			});
-		}
+		void triggerEvent("change", component, {
+			signedUrls: multiple ? urls : (urls[0] ?? null),
+		});
 	};
 
 	return (

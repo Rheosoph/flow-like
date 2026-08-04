@@ -3,7 +3,7 @@ import MLXLMCommon
 import Tokenizers
 
 /// Adapts Hugging Face's Swift tokenizer implementation to the protocol used
-/// by mlx-swift-lm 3.31.3.
+/// by the pinned mlx-swift-lm revision.
 ///
 /// Flow-Like only loads tokenizers from the Bit-materialized local model
 /// directory. No Hugging Face downloader is involved in native inference.

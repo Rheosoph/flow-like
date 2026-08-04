@@ -1040,7 +1040,7 @@ pub async fn apply_flow_ir_commit(
 
     // The distributed app+board guard excludes canonical API writers across replicas. Reload
     // immediately before save as an additional fail-closed check against an out-of-process writer
-    // that does not participate in that advisory-lock protocol.
+    // that does not participate in that database-lock protocol.
     let persisted_base = match state
         .master_board(&sub, &app_id, &board_id, &state, None)
         .await

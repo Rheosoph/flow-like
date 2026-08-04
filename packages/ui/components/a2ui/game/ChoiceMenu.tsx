@@ -2,7 +2,7 @@
 
 import { cn } from "../../../lib/utils";
 import { Button } from "../../ui/button";
-import { useComponentActionTrigger } from "../ActionHandler";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -27,12 +27,12 @@ export function A2UIChoiceMenu({
 	const choicesRaw = useResolved<ChoiceComponent[]>(component.choices);
 	const title = useResolved<string>(component.title);
 	const layout = useResolved<string>(component.layout) ?? "vertical";
-	const triggerAction = useComponentActionTrigger(componentId);
+	const triggerEvent = useComponentEventTrigger(componentId);
 
 	const choices = choicesRaw ?? [];
 
 	const handleChoiceClick = (choice: ChoiceComponent, index: number) => {
-		void triggerAction(component.actions, {
+		void triggerEvent("choiceSelect", component, {
 			choiceId: choice.id,
 			choiceIndex: index,
 		});

@@ -635,8 +635,8 @@ declare function a2uiCreateComponent({ componentId: string, componentType?: stri
 // === UI/Container ===
 
 /**
- * Creates a new widget instance for dynamic insertion into containers. Select a widget from the dropdown to auto-generate input pins for its exposed props and customizations.
- * @param widgetSelector — Select a widget from the project
+ * Creates a new widget instance for dynamic insertion into containers. The dropdown lists project widgets and widgets from packages added to the project; selecting one auto-generates typed input pins (exposed props and customizations for project widgets, contract inputs for package widgets).
+ * @param widgetSelector — Select a widget from the project or from packages added to the project
  * @param instanceId — Unique ID for this widget instance
  * @returns elementRef — Element reference for the instantiated widget (connect to Push To Container)
  * @impure has side effects / drives control flow
@@ -672,6 +672,15 @@ declare function a2uiRemoveFromContainer({ containerId: string, elementId: strin
 declare function a2uiWidgetGetElement({ elementRef: Struct, elementId: string }): { element: Struct, exists: bool };
 
 /**
+ * Reads a typed query result from a package widget instance. Connect Element Ref from Instantiate Widget, or Element from Get Element for a widget placed in the visual builder, then select a contract query.
+ * @param elementRef — Package widget reference from Instantiate Widget, or a visual-builder widget from Get Element
+ * @param query — Contract query to run on the widget instance
+ * @returns value — The query result, typed by the contract's result schema
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiWidgetQuery({ elementRef: Struct, query: string }): any;
+
+/**
  * Sets the text of an element inside a widget instance (from Instantiate Widget) before it is pushed to the frontend
  * @param elementRef — Widget instance reference (from Instantiate Widget)
  * @param elementId — ID of the element inside the widget (e.g. 'title-text')
@@ -680,6 +689,13 @@ declare function a2uiWidgetGetElement({ elementRef: Struct, elementId: string })
  * @impure has side effects / drives control flow
  */
 declare function a2uiWidgetSetText({ elementRef: Struct, elementId: string, text?: string }): Struct;
+
+/**
+ * Sends a typed input patch to a package widget instance. Connect the Element Ref from Instantiate Widget to generate one optional pin per contract input; only set pins are included in the patch.
+ * @param elementRef — Element reference of a package widget instance (from Instantiate Widget)
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiWidgetUpdateInputs({ elementRef: Struct }): void;
 
 
 // === UI/Data ===
@@ -768,8 +784,9 @@ declare function a2uiGetElementValue({ elementRef: Struct }): { value: any, exis
 declare function a2uiRemoveElement({ surfaceId: string, elementId: any }): void;
 
 /**
- * Dynamically sets the action of an interactive element (button, link, etc.)
+ * Dynamically sets the legacy default action or a named event action of an interactive element
  * @param elementRef — Reference to the element (ID string or element object from Get Element)
+ * @param eventName (optional) — Optional named component event (for example click, change, open, or delete). Leave empty to update the legacy default action.
  * @param actionType (optional) — Type of action: navigate_page, external_link, workflow_event, or clear to remove action
  * @param route — For navigate_page: the route path (e.g., /about, /products/123)
  * @param queryParams — For navigate_page: optional JSON object of query parameters
@@ -777,7 +794,7 @@ declare function a2uiRemoveElement({ surfaceId: string, elementId: any }): void;
  * @param nodeId — For workflow_event: the ID of the workflow node to trigger
  * @impure has side effects / drives control flow
  */
-declare function a2uiSetElementAction({ elementRef: Struct, actionType?: string, route: string, queryParams: string, url: string, nodeId: string }): void;
+declare function a2uiSetElementAction({ elementRef: Struct, eventName?: string, actionType?: string, route: string, queryParams: string, url: string, nodeId: string }): void;
 
 /**
  * Enables or disables an element
@@ -1364,11 +1381,11 @@ declare function a2uiGetRouteParams({ paramName: string }): { value: any, exists
 /**
  * Navigates to a page route
  * @param route — The route to navigate to (e.g., /dashboard, /users/123)
- * @param queryParams — Optional query parameters as key-value pairs (e.g., {"tab": "settings", "id": "123"})
- * @param replace — If true, replaces the current history entry instead of adding a new one
+ * @param queryParams (optional) — Optional query parameters as key-value pairs (e.g., {"tab": "settings", "id": "123"})
+ * @param replace (optional) — If true, replaces the current history entry instead of adding a new one
  * @impure has side effects / drives control flow
  */
-declare function a2uiNavigateTo({ route: string, queryParams: Struct, replace: bool }): void;
+declare function a2uiNavigateTo({ route: string, queryParams?: Struct, replace?: bool }): void;
 
 /**
  * Opens a route/page as a modal dialog overlay

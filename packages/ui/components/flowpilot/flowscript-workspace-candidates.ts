@@ -71,7 +71,9 @@ export function profileFlowScriptCandidate(
 	source: string,
 ): FlowScriptCandidateProfile {
 	const helperFunctions = new Set<string>();
-	for (const match of source.matchAll(/\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g)) {
+	for (const match of source.matchAll(
+		/\bfunction\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/g,
+	)) {
 		helperFunctions.add(normalizedSymbol(match[1] ?? ""));
 	}
 
@@ -90,7 +92,13 @@ export function profileFlowScriptCandidate(
 
 	for (const rawLine of source.replace(/\r\n/g, "\n").split("\n")) {
 		const line = rawLine.trim();
-		if (!line || line === "{" || line === "}" || line.startsWith("//") || line.startsWith("@")) {
+		if (
+			!line ||
+			line === "{" ||
+			line === "}" ||
+			line.startsWith("//") ||
+			line.startsWith("@")
+		) {
 			depth += braceDelta(rawLine);
 			if (activeHelper && depth < activeHelper.depth) activeHelper = undefined;
 			if (activeEvent && depth < activeEvent.depth) activeEvent = undefined;
@@ -108,9 +116,7 @@ export function profileFlowScriptCandidate(
 			/^interface\s+([A-Za-z_][A-Za-z0-9_]*)/,
 		);
 		if (depth === 0) {
-			const variable = line.match(
-				/^(?:const|let)\s+([A-Za-z_][A-Za-z0-9_]*)/,
-			);
+			const variable = line.match(/^(?:const|let)\s+([A-Za-z_][A-Za-z0-9_]*)/);
 			if (variable?.[1]) topLevelVariables.add(normalizedSymbol(variable[1]));
 		}
 		if (interfaceDeclaration?.[1]) {
@@ -150,7 +156,11 @@ export function profileFlowScriptCandidate(
 					helperDomainCallSites += 1;
 				}
 			}
-			if (activeEvent && helperFunctions.has(name) && !activeEvent.calledHelper) {
+			if (
+				activeEvent &&
+				helperFunctions.has(name) &&
+				!activeEvent.calledHelper
+			) {
 				activeEvent.calledHelper = true;
 				eventsCallingHelpers += 1;
 			}
@@ -217,9 +227,11 @@ export function detectFlowScriptCandidateRegression(
 		candidateSymbols.has(symbol),
 	).length;
 	const identityWasLost =
-		previousSymbols.size >= 2 && retainedScopeSymbols * 2 < previousSymbols.size;
+		previousSymbols.size >= 2 &&
+		retainedScopeSymbols * 2 < previousSymbols.size;
 	const multipleEventScopeWasLost =
-		previous.eventEntries >= 2 && candidate.eventEntries * 2 < previous.eventEntries;
+		previous.eventEntries >= 2 &&
+		candidate.eventEntries * 2 < previous.eventEntries;
 	if (!(identityWasLost || multipleEventScopeWasLost)) return undefined;
 
 	return {
@@ -470,8 +482,7 @@ export function protectFlowScriptCandidateCompleteness(
 		return {
 			...candidate,
 			completion: "partial_working_slice",
-			retained_full_source:
-				candidate.retained_full_source ?? previous.source,
+			retained_full_source: candidate.retained_full_source ?? previous.source,
 			regression: candidate.regression ?? { ...regression },
 		};
 	}
@@ -527,9 +538,10 @@ export function resolveFinalFlowScriptWorkspaceCandidate(
 ): FlowScriptWorkspaceCandidate | undefined {
 	const parsed = parseFlowScriptWorkspaceCandidate(workspace);
 	const resolved = resolveFlowScriptWorkspaceCandidate(history, parsed);
-	const validated = resolved && parsed && !parsed.status && hasValidatedCommands
-		? { ...resolved, status: "queued" }
-		: resolved;
+	const validated =
+		resolved && parsed && !parsed.status && hasValidatedCommands
+			? { ...resolved, status: "queued" }
+			: resolved;
 	return protectFlowScriptCandidateCompleteness(history, validated);
 }
 

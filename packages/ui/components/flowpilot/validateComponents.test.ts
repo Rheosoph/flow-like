@@ -85,6 +85,97 @@ describe("BASE_PROPS drift protection", () => {
 			["type", ...COMPONENT_BASE_PROPS].sort(),
 		);
 		expect(BASE_PROPS.has("hidden")).toBe(true);
+		expect(BASE_PROPS.has("eventHandlers")).toBe(true);
+	});
+});
+
+describe("named event handler validation", () => {
+	test("preserves ordered named handlers, explicit empty lists, and legacy actions", () => {
+		const legacyActions = [
+			{ name: "workflow_event", context: { nodeId: "legacy-node" } },
+			"legacy-extension-entry",
+		];
+		const result = validateComponents([
+			{
+				id: "calendar",
+				component: {
+					type: "calendar",
+					events: { literalJson: "[]" },
+					actions: legacyActions,
+					eventHandlers: {
+						open: [
+							{
+								name: "workflow_event",
+								context: { nodeId: "open-node" },
+							},
+							{
+								name: "navigate_page",
+								context: { route: "/details" },
+							},
+						],
+						delete: [],
+					},
+				},
+			},
+		] as unknown as SurfaceComponent[]);
+
+		const component = result.components[0]?.component as unknown as Record<
+			string,
+			unknown
+		>;
+		expect(component.actions).toEqual(legacyActions);
+		expect(component.eventHandlers).toEqual({
+			open: [
+				{
+					name: "workflow_event",
+					context: { nodeId: "open-node" },
+				},
+				{ name: "navigate_page", context: { route: "/details" } },
+			],
+			delete: [],
+		});
+		expect(result.warnings).toEqual([]);
+	});
+
+	test("removes malformed handler names, action arrays, and action entries", () => {
+		const result = validateComponents([
+			{
+				id: "gantt",
+				component: {
+					type: "gantt",
+					tasks: { literalJson: "[]" },
+					eventHandlers: {
+						"": [{ name: "workflow_event", context: {} }],
+						open: { name: "workflow_event", context: {} },
+						move: [
+							null,
+							{ name: "", context: {} },
+							{ name: "workflow_event", context: "invalid" },
+							{
+								name: "workflow_event",
+								context: { nodeId: "move-node" },
+								ignored: true,
+							},
+						],
+						resize: [{ name: "workflow_event" }],
+					},
+				},
+			},
+		] as unknown as SurfaceComponent[]);
+
+		const component = result.components[0]?.component as unknown as Record<
+			string,
+			unknown
+		>;
+		expect(component.eventHandlers).toEqual({
+			move: [
+				{
+					name: "workflow_event",
+					context: { nodeId: "move-node" },
+				},
+			],
+		});
+		expect(result.warnings.length).toBeGreaterThanOrEqual(5);
 	});
 });
 
