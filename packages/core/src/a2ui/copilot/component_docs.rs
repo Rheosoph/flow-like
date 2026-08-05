@@ -65,6 +65,8 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `table` - Data table with sorting/pagination
 - `plotlyChart` - Plotly.js charts (line, bar, scatter, pie, area, histogram)
 - `nivoChart` - Nivo charts (25+ chart types)
+- `graph` - Node/edge network graph on a WebGL canvas with legend, search and inspectors (props: nodes, edges, labelStyles, showToolbar, showSearch, showLegend, showInspector, height)
+- `ontologyGraph` - Live explorer for one of the project's ontologies: real data, neighbour expansion, path finding and governed ontology actions (props: ontologyId, appId, limit, allowExpand, allowSearch, allowPaths, allowActions, allowCypher, allowStyleEdit, allowLimitChange, showToolbar, showLegend, height)
 
 ### Planning Components
 - `calendar` - Interactive calendar (month/week/day/agenda) with detail/edit dialogs and right-click menus; fires create/update/move/resize/open/delete actions (props: events, view, date, title, density, editable, selectable, ...)
@@ -118,6 +120,7 @@ is a defect:
 - user draws/edits boxes ON an image (annotation input) -> `imageLabeler`; SHOW detection results -> `boundingBoxOverlay`; predefined clickable regions -> `imageHotspot`
 - maps/geodata -> `geoMap`; schedules/bookings -> `calendar`; project timelines -> `gantt`
 - values over time/categories -> `nivoChart` or `plotlyChart`; row-and-column records -> `table`
+- things connected to things (networks, relationships, dependency maps) -> `graph` with your own nodes/edges; the project's OWN ontology/knowledge graph -> `ontologyGraph` with its `ontologyId` (it loads live data itself — never re-fetch the ontology into a `graph`)
 - loading placeholder shaped like the layout -> `skeleton`; inline waiting -> `spinner`; known fraction -> `progress`
 Only types from this catalog exist. Never invent a type; if nothing fits, compose layout +
 display + input primitives and say in your summary what was approximated.

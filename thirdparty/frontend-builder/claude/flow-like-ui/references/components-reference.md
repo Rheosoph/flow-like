@@ -64,6 +64,8 @@ Layout values:
 | `nivoChart` | `chartType` | `chartType`, `title`, `data`, `height`, `colors`, `animate`, `showLegend`, `legendPosition`, `indexBy`, `keys`, `margin`, `axisBottom`, `axisLeft`, `axisTop`, `axisRight`, `config`, `barStyle`, `lineStyle`, `pieStyle`, `radarStyle`, `heatmapStyle`, `scatterStyle`, `funnelStyle`, `treemapStyle`, `sankeyStyle`, `calendarStyle`, `chordStyle` |
 | `boundingBoxOverlay` | `src`, `boxes` | `src`, `alt`, `boxes`, `showLabels`, `showConfidence`, `strokeWidth`, `fontSize`, `fit`, `normalized`, `interactive` |
 | `geoMap` | — | `viewport`, `markers`, `routes`, `showControls`, `showZoom`, `showCompass`, `showLocate`, `showFullscreen`, `interactive`, `controlPosition`, `clusterMarkers`, `clusterRadius`, `clusterMaxZoom` |
+| `graph` | `nodes` | `edges`, `labelStyles`, `showToolbar`, `showSearch`, `showLegend`, `showInspector`, `height` |
+| `ontologyGraph` | `ontologyId` | `appId`, `limit`, `allowExpand`, `allowSearch`, `allowPaths`, `allowActions`, `allowCypher`, `allowStyleEdit`, `allowLimitChange`, `showToolbar`, `showLegend`, `height` |
 | `calendar` | `events` | `events`, `view`, `date`, `title`, `density`, `editable`, `selectable`, `firstDayOfWeek`, `minTime`, `maxTime`, `slotDuration`, `showWeekends`, `showNowIndicator`, `showAllDay`, `showViewSwitcher`, `locale`, `height`, `responsive`, `compactBreakpoint` |
 | `gantt` | `tasks` | `tasks`, `view`, `title`, `density`, `editable`, `draggable`, `resizable`, `showDependencies`, `showProgress`, `showToday`, `showViewSwitcher`, `showTaskList`, `taskListWidth`, `shadeWeekends`, `rowHeight`, `columns`, `height`, `responsive`, `compactBreakpoint` |
 
