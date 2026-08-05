@@ -44,9 +44,15 @@ import type {
 	SurfaceComponent,
 } from "./types";
 import { handleWidgetQueryMessage } from "./widget-query-handler";
-import { compactWorkflowPayload } from "./workflow-payload";
+import {
+	buildFrontendContextPayload,
+	compactWorkflowPayload,
+} from "./workflow-payload";
 
-export { compactWorkflowPayload } from "./workflow-payload";
+export {
+	buildFrontendContextPayload,
+	compactWorkflowPayload,
+} from "./workflow-payload";
 
 type ActionHandler = (message: A2UIClientMessage) => void;
 type A2UIMessageHandler = (message: A2UIServerMessage) => void;
@@ -163,6 +169,9 @@ function mergeStoredElementValues(
 
 	return mergedElements;
 }
+
+/** Stable empty state for provider-less consumers, so hook deps stay steady. */
+const EMPTY_STATE: Record<string, unknown> = Object.freeze({});
 
 function decodePinDefaultValue(defaultValue: unknown): unknown {
 	if (!Array.isArray(defaultValue) || defaultValue.length === 0) {
@@ -665,6 +674,8 @@ export function useActionContext() {
 			surfaceId: "",
 			isPreviewMode: false,
 			resolveTemporaryUploadTarget: undefined,
+			globalState: EMPTY_STATE,
+			pageState: EMPTY_STATE,
 		};
 	}
 	return {
@@ -675,6 +686,8 @@ export function useActionContext() {
 		surfaceId: context.surfaceId,
 		isPreviewMode: context.isPreviewMode,
 		resolveTemporaryUploadTarget: context.resolveTemporaryUploadTarget,
+		globalState: context.globalState,
+		pageState: context.pageState,
 	};
 }
 
@@ -1428,19 +1441,6 @@ export function useExecuteAction() {
 									}
 								}
 
-								const currentPageId = pathname || "default";
-
-								// Extract query params from the current URL
-								const queryParams: Record<string, string> = {};
-								if (typeof window !== "undefined") {
-									const searchParams = new URLSearchParams(
-										window.location.search,
-									);
-									searchParams.forEach((value, key) => {
-										queryParams[key] = value;
-									});
-								}
-
 								const basePayload = compactWorkflowPayload({
 									id: nodeId,
 									payload: {
@@ -1448,14 +1448,11 @@ export function useExecuteAction() {
 										_input_values: inputValues,
 										_action_context: context,
 										_triggering_component_id: triggeringComponentId ?? "",
-										_route:
-											typeof window !== "undefined"
-												? window.location.pathname
-												: "",
-										_query_params: queryParams,
-										_page_id: currentPageId,
-										_global_state: globalState || {},
-										_page_state: pageState || {},
+										...buildFrontendContextPayload(
+											pathname,
+											globalState,
+											pageState,
+										),
 									},
 								}) as {
 									id: string;
@@ -1640,6 +1637,12 @@ export function useExecuteAction() {
 										_widget_instance_id: widgetInstance?.instanceId ?? "",
 										_action_id: actionId,
 										_action_context: context,
+										_triggering_component_id: triggeringComponentId ?? "",
+										...buildFrontendContextPayload(
+											pathname,
+											globalState,
+											pageState,
+										),
 									},
 								}) as { id: string; payload: Record<string, unknown> };
 								const payload = withBoardVersion(
