@@ -18,6 +18,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
+import { observeResize } from "../../lib/observe-resize";
 import { cn } from "../../lib/utils";
 
 // Check document class for theme (works with next-themes, etc.)
@@ -244,13 +245,13 @@ const Map = forwardRef<MapRef, MapProps>(function Map(
 			onViewportChangeRef.current?.(getViewport(map));
 		};
 
-		// ResizeObserver to handle container size changes
-		// This is critical for when the map is placed in flex containers
-		// that may not have dimensions at initialization time
-		const resizeObserver = new ResizeObserver(() => {
-			map.resize();
-		});
-		resizeObserver.observe(containerRef.current);
+		// Keeps the map sized to its container, which matters most in flex
+		// containers that have no dimensions yet at initialization time.
+		// `map.resize()` writes the canvas geometry inside the observed node, so
+		// it runs a frame after the notification instead of within it.
+		const unobserveResize = observeResize([containerRef.current], () =>
+			map.resize(),
+		);
 
 		map.on("load", loadHandler);
 		map.on("styledata", styleDataHandler);
@@ -258,7 +259,7 @@ const Map = forwardRef<MapRef, MapProps>(function Map(
 		setMapInstance(map);
 
 		return () => {
-			resizeObserver.disconnect();
+			unobserveResize();
 			clearStyleTimeout();
 			map.off("load", loadHandler);
 			map.off("styledata", styleDataHandler);

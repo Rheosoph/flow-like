@@ -259,7 +259,9 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 
 	const imageBlacklist = useCallback(async () => {
 		if (!foundBits.data) return;
-		const dependencies = await Promise.all(
+		// Best effort: a model whose dependencies cannot be resolved must not
+		// take down the whole catalog page with an unhandled rejection.
+		const dependencies = await Promise.allSettled(
 			foundBits.data
 				.filter((bit) => bit.type === IBitTypes.ImageEmbedding)
 				.map((bit) =>
@@ -267,11 +269,18 @@ export function AIModelPage({ webMode = false }: AIModelPageProps) {
 				),
 		);
 		const bl = new Set<string>(
-			dependencies.flatMap((dep) =>
-				dep.bits
+			dependencies.flatMap((result) => {
+				if (result.status === "rejected") {
+					console.warn(
+						"Failed to resolve image embedding dependencies",
+						result.reason,
+					);
+					return [];
+				}
+				return (result.value.bits ?? [])
 					.filter((bit) => bit.type !== IBitTypes.ImageEmbedding)
-					.map((bit) => bit.id),
-			),
+					.map((bit) => bit.id);
+			}),
 		);
 		setBlacklist(bl);
 	}, [backend, foundBits.data]);

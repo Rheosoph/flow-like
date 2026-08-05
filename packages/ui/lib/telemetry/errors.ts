@@ -78,6 +78,19 @@ const NATIVE_LOCATIONS = new Set([
 	"module code",
 ]);
 
+/**
+ * Browser notices that reach `window.onerror` without being application faults.
+ * The ResizeObserver ones carry no `error` object and no stack: the spec has the
+ * user agent report a resize delivery loop and then deliver the pending
+ * observations on the following frame, so nothing was actually lost. Reporting
+ * them buries real crashes under hundreds of duplicates and marks healthy
+ * sessions as crashed.
+ */
+const BENIGN_BROWSER_ERRORS = [
+	"resizeobserver loop completed with undelivered notifications",
+	"resizeobserver loop limit exceeded",
+];
+
 const SECRET_CONTEXT_KEYS = [
 	"password",
 	"passwd",
@@ -295,6 +308,19 @@ export function normalizeError(error: unknown): INormalizedTelemetryError {
 
 function sanitizeValue(value: string): string {
 	return sanitizeTelemetryMessage(value, MAX_VALUE_LENGTH);
+}
+
+/** True for user-agent noise that must never be reported as a crash. */
+export function isBenignBrowserError(error: unknown): boolean {
+	try {
+		const message =
+			typeof error === "string" ? error : safeRead(error, "message");
+		if (typeof message !== "string") return false;
+		const lowered = message.toLowerCase();
+		return BENIGN_BROWSER_ERRORS.some((pattern) => lowered.includes(pattern));
+	} catch {
+		return false;
+	}
 }
 
 function isSecretKey(key: string): boolean {

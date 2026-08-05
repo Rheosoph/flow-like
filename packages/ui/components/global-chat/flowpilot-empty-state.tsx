@@ -15,6 +15,7 @@ import {
 	createTypingResponse,
 	decayPerk,
 } from "../../lib/composer-activity";
+import { observeResize } from "../../lib/observe-resize";
 import { cn } from "../../lib/utils";
 import { type BubbleFilmUniforms, createBubbleFilm } from "./bubble-film";
 import {
@@ -299,12 +300,13 @@ export function FlowPilotEmptyState({
 		const canvas = canvasRef.current;
 		const parent = root?.parentElement;
 		if (!root || !canvas || !parent) return;
-		const observer = new ResizeObserver(measure);
-		observer.observe(parent);
-		observer.observe(canvas);
+		// `measure` sizes the canvas it observes, so the callback has to land a
+		// frame later — a same-frame write leaves the browser with undelivered
+		// resize notifications.
+		const unobserve = observeResize([parent, canvas], measure);
 		window.addEventListener("resize", measure);
 		return () => {
-			observer.disconnect();
+			unobserve();
 			window.removeEventListener("resize", measure);
 		};
 	}, [measure, suggestionsOnly]);

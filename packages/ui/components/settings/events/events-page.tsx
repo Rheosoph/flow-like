@@ -186,7 +186,6 @@ export default function EventsPage({
 	const [pendingEvent, setPendingEvent] = useState<IEvent | null>(null);
 	const [pendingRoutePath, setPendingRoutePath] = useState<string | null>(null);
 	const [isOffline, setIsOffline] = useState<boolean | null>(null);
-	const [routeCleanupDone, setRouteCleanupDone] = useState(false);
 	const uiEventTypeSet = useMemo(
 		() => new Set(uiEventTypes ?? []),
 		[uiEventTypes],
@@ -224,48 +223,12 @@ export default function EventsPage({
 		setEditingEvent(events.data?.find((event) => event.id === eventId) ?? null);
 	}, [editingEvent, id, eventId, events.data]);
 
-	// Clean up orphaned routes (routes pointing to deleted events)
-	useEffect(() => {
-		if (!id || !events.data) return;
-
-		const cleanupOrphanedRoutes = async () => {
-			try {
-				const routes = await backend.routeState.getRoutes(id);
-				const eventIds = new Set(events.data?.map((e) => e.id) ?? []);
-				let deletedAny = false;
-
-				console.log(
-					`[Route Cleanup] Found ${routes.length} routes, checking against ${eventIds.size} events`,
-				);
-
-				for (const route of routes) {
-					// Delete routes that point to non-existent events
-					if (!eventIds.has(route.eventId)) {
-						console.log(
-							`[Route Cleanup] Marking for deletion: route ${route.path} (eventId: ${route.eventId})`,
-						);
-						await backend.routeState.deleteRouteByPath(id, route.path);
-						deletedAny = true;
-					}
-				}
-
-				if (deletedAny) {
-					console.log(
-						"[Route Cleanup] Completed - deleted orphaned routes, invalidating cache",
-					);
-					await invalidate(backend.routeState.getRoutes, [id]);
-				} else {
-					console.log("[Route Cleanup] No orphaned routes found");
-				}
-			} catch (e) {
-				console.error("Failed to clean up orphaned routes:", e);
-			} finally {
-				setRouteCleanupDone(true);
-			}
-		};
-
-		cleanupOrphanedRoutes();
-	}, [id, events.data, backend.routeState, invalidate]);
+	// A route cannot be orphaned: server-side it is the `route` column on the
+	// event row itself, so it disappears with the event. Reconciling the two
+	// lists here only ever deleted live routes, because `GET /routes` is a
+	// superset of `GET /events` (which filters by type, active flag and
+	// permission) and because a failed event fetch is indistinguishable from an
+	// app with no events.
 
 	// Check if app is offline
 	useEffect(() => {
@@ -619,7 +582,7 @@ export default function EventsPage({
 						</DialogDescription>
 					</DialogHeader>
 					<DialogBody>
-						{id && routeCleanupDone && (
+						{id && (
 							<EventForm
 								eventConfig={eventMapping}
 								uiEventTypes={uiEventTypes}
@@ -757,11 +720,14 @@ function EventConfiguration({
 		return routes.data?.find((r) => r.eventId === event.id) ?? null;
 	}, [routes.data, event.id]);
 
+	// Until the route list has actually loaded, `routeForEvent` is null for an
+	// event that does have a route. Seeding the draft with "/" then would let a
+	// save overwrite the real path with the placeholder.
 	useEffect(() => {
-		if (isEditing) return;
+		if (isEditing || !routes.isSuccess) return;
 		setRoutePathDraft(routeForEvent?.path ?? "/");
 		setRoutePathError(null);
-	}, [routeForEvent?.path, isEditing]);
+	}, [routeForEvent?.path, isEditing, routes.isSuccess]);
 
 	// OAuth consent state
 	const [showOAuthConsent, setShowOAuthConsent] = useState(false);
@@ -898,6 +864,13 @@ function EventConfiguration({
 		const desiredRoutePath = shouldHaveRoute
 			? normalizePath(routePathDraft)
 			: null;
+
+		// The draft is only trustworthy once the existing routes are known —
+		// otherwise the placeholder "/" would be written over the real path.
+		if (shouldHaveRoute && !routes.isSuccess) {
+			setRoutePathError("Route path is still loading, please retry");
+			return;
+		}
 
 		const requiresSink = checkRequiresSink();
 

@@ -16,6 +16,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { IRole, cn } from "../../../lib";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
+import { observeResize } from "../../../lib/observe-resize";
 import {
 	Badge,
 	Button,
@@ -658,9 +659,10 @@ export const MessageComponent = memo(
 			};
 
 			evaluate();
-			const observer = new ResizeObserver(evaluate);
-			observer.observe(el);
-			return () => observer.disconnect();
+			// Collapsing caps the height of the observed element itself, so the
+			// re-measure has to happen a frame after the notification rather than
+			// inside it.
+			return observeResize([el], evaluate);
 		}, [message.inner, isUser]);
 
 		const handleFileClick = useCallback((file: ProcessedAttachment) => {

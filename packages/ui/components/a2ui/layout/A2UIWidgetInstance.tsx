@@ -28,7 +28,7 @@ export interface InlineWidgetDef {
 }
 
 /** Minimal shape of a widget's parameter declaration (mirrors ExposedProp in widget-state). */
-interface ExposedPropDef {
+export interface ExposedPropDef {
 	id: string;
 	targetComponentId: string;
 	/** Dot path on the target component, e.g. "content", "style.className", "data.rows". */
@@ -36,7 +36,7 @@ interface ExposedPropDef {
 	propType?: unknown;
 }
 
-type WidgetComponentDef = {
+export type WidgetComponentDef = {
 	id: string;
 	component?: Record<string, unknown>;
 	style?: unknown;
@@ -95,7 +95,7 @@ function setDeep(
  * when there is nothing to override (the common case), so unchanged widgets keep referential
  * identity and don't re-render.
  */
-function applyExposedProps<T extends WidgetComponentDef>(
+export function applyExposedProps<T extends WidgetComponentDef>(
 	components: T[],
 	exposedProps: ExposedPropDef[],
 	values: Record<string, unknown> | undefined,
