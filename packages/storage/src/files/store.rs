@@ -376,12 +376,18 @@ mod tests {
             "9bb58f26192e4ba00f01e2e7b136bbd8"
         );
         assert_eq!(unquote_etag("W/\"abc123\""), "abc123");
-        assert_eq!(unquote_etag("\"d41d8cd98f00b204e9800998ecf8427e-3\""), "d41d8cd98f00b204e9800998ecf8427e-3");
+        assert_eq!(
+            unquote_etag("\"d41d8cd98f00b204e9800998ecf8427e-3\""),
+            "d41d8cd98f00b204e9800998ecf8427e-3"
+        );
     }
 
     #[test]
     fn unquote_etag_leaves_unquoted_validators_untouched() {
-        assert_eq!(unquote_etag("1a2b3c-18f2c4d5e6-400"), "1a2b3c-18f2c4d5e6-400");
+        assert_eq!(
+            unquote_etag("1a2b3c-18f2c4d5e6-400"),
+            "1a2b3c-18f2c4d5e6-400"
+        );
         assert_eq!(unquote_etag(""), "");
         assert_eq!(unquote_etag("\""), "\"");
     }
