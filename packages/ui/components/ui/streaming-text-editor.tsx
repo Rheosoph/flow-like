@@ -1,49 +1,36 @@
 "use client";
 
-import { MarkdownPlugin, remarkMdx, remarkMention } from "@platejs/markdown";
-import { KEYS, type Value } from "platejs";
-import { Plate, PlateContent, usePlateEditor } from "platejs/react";
-import { memo, useEffect, useRef } from "react";
-import remarkBreaks from "remark-breaks";
-import remarkEmoji from "remark-emoji";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
+import { PlateStatic, type Value, createSlateEditor } from "platejs";
+import { memo, useMemo, useRef } from "react";
 import { BaseEditorKit } from "../editor/editor-base-kit";
-import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
-import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
-import { remarkUserMention } from "../editor/plugins/remark-user-mention";
-import { safeDeserialize } from "./text-editor";
-
-const streamingRemarkPlugins = [
-	remarkMath,
-	remarkGfm,
-	remarkBreaks,
-	remarkMdx,
-	remarkMention,
-	remarkEmoji as any,
-	remarkFocusNodes,
-	remarkUserMention,
-	remarkInlineSpoiler,
-];
+import { indexEditorPaths } from "./lazy-plate-static";
+import {
+	EMPTY_STREAMING_STATE,
+	parseStreamingMarkdown,
+} from "./streaming-markdown-blocks";
+import {
+	PROSE_WRAPPER_CLASSNAME,
+	STATIC_EDITOR_CLASSNAME,
+	createStaticProseHandlers,
+} from "./text-editor";
 
 const EMPTY_VALUE: Value = [{ type: "p", children: [{ text: "" }] }];
 
-function buildPlugins() {
-	return [
-		...BaseEditorKit.filter((p) => (p as any).key !== MarkdownPlugin.key),
-		MarkdownPlugin.configure({
-			options: {
-				disallowedNodes: [KEYS.suggestion],
-				remarkPlugins: streamingRemarkPlugins,
-			},
-		}),
-	];
-}
-
-let pluginsCache: ReturnType<typeof buildPlugins> | null = null;
-function getPlugins() {
-	if (!pluginsCache) pluginsCache = buildPlugins();
-	return pluginsCache;
+/**
+ * The deserializer needs an editor for its plugin context but never mutates it,
+ * and every use is synchronous within a render, so one module-level instance is
+ * shared by all mounted streaming editors.
+ */
+let parseWorker: ReturnType<typeof createSlateEditor> | null = null;
+function getParseWorker() {
+	if (!parseWorker) {
+		parseWorker = createSlateEditor({
+			plugins: BaseEditorKit,
+			value: EMPTY_VALUE,
+			nodeId: false,
+		});
+	}
+	return parseWorker;
 }
 
 function StreamingTextEditorInner({
@@ -55,62 +42,50 @@ function StreamingTextEditorInner({
 	onFocusNode?: (nodeId: string) => void;
 	onUserMention?: (sub: string) => void;
 }>) {
-	const lastContentRef = useRef("");
+	const editor = useMemo(
+		() =>
+			createSlateEditor({
+				id: "streaming-rendered-editor",
+				plugins: BaseEditorKit,
+				value: EMPTY_VALUE,
+				// Node ids are re-randomised per parse, which would defeat both the
+				// block cache and the identity memo — and nothing here reads them.
+				nodeId: false,
+			}),
+		[],
+	);
+	const stateRef = useRef(EMPTY_STREAMING_STATE);
 
-	const editor = usePlateEditor({
-		plugins: getPlugins(),
-		value: EMPTY_VALUE,
-	});
-
-	useEffect(() => {
-		if (content === lastContentRef.current) return;
-		lastContentRef.current = content;
-
-		if (!content) {
-			editor.tf.setValue(EMPTY_VALUE);
-			return;
-		}
-
-		const nodes = safeDeserialize(
-			editor,
+	// Parsing during render rather than in an effect is deliberate: the chat
+	// asserts that a content update is visible in the same commit. Assigning
+	// `editor.children` here is safe because parseStreamingMarkdown is
+	// idempotent — re-running it for the same content returns the same objects.
+	useMemo(() => {
+		const next = parseStreamingMarkdown(
+			getParseWorker(),
 			content,
-			true,
-			streamingRemarkPlugins,
+			stateRef.current,
 		);
-		editor.tf.setValue(nodes);
+		stateRef.current = next;
+		editor.children = next.blocks;
+		indexEditorPaths(editor, next.firstChangedBlock);
 	}, [content, editor]);
 
 	return (
 		<div
-			onClick={(e) => {
-				const target = e.target as HTMLElement;
-				const focusSpan = target.closest("[data-focus-node-id]");
-				if (focusSpan && onFocusNode) {
-					e.preventDefault();
-					const nodeId = focusSpan.getAttribute("data-focus-node-id");
-					if (nodeId) onFocusNode(nodeId);
-				}
-				const userMentionSpan = target.closest("[data-user-mention-sub]");
-				if (userMentionSpan && onUserMention) {
-					e.preventDefault();
-					const sub = userMentionSpan.getAttribute("data-user-mention-sub");
-					if (sub) onUserMention(sub);
-				}
-			}}
-			className="overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word"
+			{...createStaticProseHandlers({ onFocusNode, onUserMention })}
+			className={PROSE_WRAPPER_CLASSNAME}
 		>
-			<Plate editor={editor} readOnly>
-				<PlateContent
-					readOnly
-					className="py-0 outline-none [&>*:first-child_h1]:mt-0 [&>*:first-child_h2]:mt-0 [&>*:first-child_h3]:mt-0 [&>*:first-child_h4]:mt-0 [&>*:first-child_h5]:mt-0 [&>*:first-child_h6]:mt-0"
-				/>
-			</Plate>
+			<PlateStatic editor={editor} className={STATIC_EDITOR_CLASSNAME} />
 		</div>
 	);
 }
 
 export const StreamingTextEditor = memo(
 	StreamingTextEditorInner,
-	(prev, next) => prev.content === next.content,
+	(prev, next) =>
+		prev.content === next.content &&
+		prev.onFocusNode === next.onFocusNode &&
+		prev.onUserMention === next.onUserMention,
 );
 StreamingTextEditor.displayName = "StreamingTextEditor";

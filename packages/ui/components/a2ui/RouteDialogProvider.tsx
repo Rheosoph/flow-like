@@ -542,6 +542,22 @@ function RouteDialogRenderer({
 						...(alt !== undefined ? { alt: { literalString: alt } } : {}),
 					} as unknown as SurfaceComponent["component"],
 				};
+			} else {
+				// Same default as applyElementUpdate: property-shaped updates
+				// (setGraphNodes, setGeoMapMarkers, ...) land verbatim on the
+				// component. Without it a dialog silently drops them.
+				const { type: _type, ...rest } = updateValue;
+				const componentData = component.component as unknown as Record<
+					string,
+					unknown
+				>;
+				updatedComponent = {
+					...component,
+					component: {
+						...componentData,
+						...rest,
+					} as unknown as SurfaceComponent["component"],
+				};
 			}
 
 			return {

@@ -95,25 +95,50 @@ function estimateBlockHeight(block: Descendant): number {
  * indexed once up front. A miss then means the node genuinely is not in the
  * document and the answer is `undefined` — the same result the scan produces,
  * without the scan.
+ *
+ * Safe to call repeatedly on the same editor: the `findPath` override is
+ * installed once and the index behind it is swapped, so repeated calls cannot
+ * chain closures. Streaming callers that only appended blocks can pass
+ * `fromIndex` to re-index just the tail — valid only when every block before it
+ * kept both its object identity and its position.
  */
-export function indexEditorPaths(editor: SlateEditor): void {
-	const paths = new WeakMap<object, Path>();
+const PATH_INDEX = Symbol.for("flow-like.staticPathIndex");
+
+type PathIndexState = { map: WeakMap<object, Path> };
+
+export function indexEditorPaths(editor: SlateEditor, fromIndex = 0): void {
+	const holder = editor as unknown as Record<symbol, PathIndexState | undefined>;
+	let state = holder[PATH_INDEX];
+
+	if (!state) {
+		state = { map: new WeakMap<object, Path>() };
+		holder[PATH_INDEX] = state;
+
+		const installed = state;
+		const fallback = editor.api.findPath;
+		editor.api.findPath = (node, options) => {
+			// `options` narrows the search (`at`, `match`, …); leave those to Plate.
+			if (options) return fallback(node, options);
+			return installed.map.get(node as object);
+		};
+	}
+
+	if (fromIndex === 0) state.map = new WeakMap<object, Path>();
+	const paths = state.map;
 
 	const walk = (nodes: readonly Descendant[], base: Path) => {
 		nodes.forEach((node, index) => {
 			const path = [...base, index];
-			if (!paths.has(node)) paths.set(node, path);
+			paths.set(node, path);
 			if (ElementApi.isElement(node)) walk(node.children, path);
 		});
 	};
-	walk(editor.children, []);
 
-	const fallback = editor.api.findPath;
-	editor.api.findPath = (node, options) => {
-		// `options` narrows the search (`at`, `match`, …); leave those to Plate.
-		if (options) return fallback(node, options);
-		return paths.get(node as object);
-	};
+	for (let index = fromIndex; index < editor.children.length; index++) {
+		const node = editor.children[index];
+		paths.set(node, [index]);
+		if (ElementApi.isElement(node)) walk(node.children, [index]);
+	}
 }
 
 type ChunkDescriptor = {

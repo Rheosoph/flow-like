@@ -136,10 +136,10 @@ export function applyStyleToOverlay(
 	};
 }
 
-function syntheticStyle(label: string, index: number): LabelStyle {
-	const seed = labelSeed(label);
+/** Derived from the label alone, so a label keeps its colour whatever else the data contains. */
+function syntheticStyle(label: string): LabelStyle {
 	return {
-		color: SYNTHETIC_PALETTE[(seed + index) % SYNTHETIC_PALETTE.length],
+		color: SYNTHETIC_PALETTE[labelSeed(label) % SYNTHETIC_PALETTE.length],
 		icon: "circle",
 		size: { mode: "fixed", value: 6 },
 	};
@@ -147,7 +147,6 @@ function syntheticStyle(label: string, index: number): LabelStyle {
 
 function toNodeMapping(
 	label: string,
-	index: number,
 	styles?: Record<string, LabelStyle | undefined>,
 ): NodeLabelMapping {
 	return {
@@ -155,13 +154,12 @@ function toNodeMapping(
 		table: label,
 		id_column: "id",
 		property_columns: [],
-		style: styles?.[label] ?? syntheticStyle(label, index),
+		style: styles?.[label] ?? syntheticStyle(label),
 	};
 }
 
 function toEdgeMapping(
 	label: string,
-	index: number,
 	styles?: Record<string, LabelStyle | undefined>,
 ): EdgeLabelMapping {
 	return {
@@ -172,7 +170,7 @@ function toEdgeMapping(
 		src_label: "",
 		dst_label: "",
 		property_columns: [],
-		style: styles?.[label] ?? syntheticStyle(label, index),
+		style: styles?.[label] ?? syntheticStyle(label),
 	};
 }
 
@@ -210,11 +208,11 @@ export function buildOverlayFromSubgraph(
 		id: "inline",
 		name: options?.name ?? "Graph",
 		description: options?.description,
-		nodes: nodeLabels.map((label, index) =>
-			toNodeMapping(label, index, options?.labelStyles),
+		nodes: nodeLabels.map((label) =>
+			toNodeMapping(label, options?.labelStyles),
 		),
-		edges: edgeLabels.map((label, index) =>
-			toEdgeMapping(label, index, options?.labelStyles),
+		edges: edgeLabels.map((label) =>
+			toEdgeMapping(label, options?.labelStyles),
 		),
 		object_views: [],
 		actions: [],

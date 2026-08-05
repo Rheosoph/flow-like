@@ -33,14 +33,18 @@ describe("buildOverlayFromSubgraph", () => {
 		]);
 	});
 
-	test("keeps a label's generated colour stable across rebuilds", () => {
+	test("derives a label's colour from the label alone, not its position", () => {
 		const first = buildOverlayFromSubgraph([node("a", "Person")], []);
+		// "Person" now arrives second, and alongside different data.
 		const second = buildOverlayFromSubgraph(
-			[node("z", "Person"), node("y", "Team")],
-			[],
+			[node("y", "Team"), node("z", "Person")],
+			[edge("e1", "MEMBER_OF")],
 		);
 
-		expect(second.nodes[0].style.color).toBe(first.nodes[0].style.color);
+		const personStyle = second.nodes.find(
+			(mapping) => mapping.label === "Person",
+		)?.style;
+		expect(personStyle?.color).toBe(first.nodes[0].style.color);
 	});
 
 	test("applies supplied label styles over the generated ones", () => {
