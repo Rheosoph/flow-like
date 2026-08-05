@@ -3030,6 +3030,58 @@ fn catalog_object_schema_fields(schema: &str) -> Option<(Option<String>, Vec<Str
     fields(&root, &root, 0).map(|fields| (title, fields))
 }
 
+/// Platform structs whose property list is authoritative even though `schemars` emits an open
+/// object schema, so the generic permissive path above cannot reject anything. Reading an undeclared
+/// member off one of these is a silent `null` at runtime — `struct_get` reports `found = false` and
+/// keeps going — so the repair hint travels with the field list.
+///
+/// Keyed by the schema's root `title`. Entries are `(title, declared fields, repair hint)`.
+const CLOSED_PLATFORM_STRUCTS: &[(&str, &[&str], &str)] = &[(
+    "FlowPath",
+    &["path", "store_ref", "cache_store_ref"],
+    "a FlowPath is a store handle, not a file object; read file attributes with the `Data/Files/Path` \
+     accessors instead: `filename({ path })`, `extension({ path })`, `rawPath({ path })`, \
+     `parent({ path })`, `child({ parentPath, childName })`, `setFilename({ inPath, filename })`, \
+     `setExtension({ path, extension })`, `fromRawPath({ basePath, rawPath })`, \
+     `pathReplaceSegment({ inPath, from, to })`",
+)];
+
+fn closed_platform_struct(
+    schema: &str,
+) -> Option<&'static (&'static str, &'static [&'static str], &'static str)> {
+    let root = flow_like_types::json::from_str::<flow_like_types::Value>(schema).ok()?;
+    let title = root.get("title").and_then(flow_like_types::Value::as_str)?;
+    CLOSED_PLATFORM_STRUCTS
+        .iter()
+        .find(|(known, _, _)| *known == title)
+}
+
+/// `Some((title, hint))` when `field` is provably absent from a known closed platform struct.
+fn closed_platform_struct_rejection(
+    schema: &str,
+    field: &str,
+) -> Option<(&'static str, &'static str)> {
+    let (title, fields, hint) = closed_platform_struct(schema)?;
+    if fields
+        .iter()
+        .any(|declared| pin_name_matches(declared, field))
+    {
+        return None;
+    }
+    Some((title, hint))
+}
+
+/// The declared (serialized) spelling of a member on a known closed struct. Member access accepts
+/// the camel form, but the runtime reads the JSON key verbatim, so `.storeRef` has to be lowered as
+/// `store_ref` or it selects nothing.
+fn closed_platform_struct_field_name(schema: &str, field: &str) -> Option<&'static str> {
+    let (_, fields, _) = closed_platform_struct(schema)?;
+    fields
+        .iter()
+        .find(|declared| pin_name_matches(declared, field))
+        .copied()
+}
+
 #[derive(Debug, Clone)]
 enum SymbolValue {
     Source(ValueSource),
@@ -6443,6 +6495,18 @@ impl<'a> StructuralPlanner<'a> {
                 ));
                 continue;
             };
+            // An explicit `structGet`/`structSet` never reaches the member-access check, so the same
+            // closed-struct rejection has to guard the literal-call spelling of it.
+            if let Some((title, hint)) =
+                self.closed_struct_field_call_rejection(call, meta, input, &source, &output_pin)
+            {
+                let selected = self.literal_struct_field_argument(call).unwrap_or_default();
+                self.result.diagnostics.push(format!(
+                    "`{}` reads field `{selected}` from a `{title}`, which has no such field; {hint}",
+                    call.display
+                ));
+                continue;
+            }
             if !self.queue_validated_data_connection(
                 &source,
                 output_pin.clone(),
@@ -7588,6 +7652,40 @@ impl<'a> StructuralPlanner<'a> {
     /// Reject the generic `struct_get` fallback when catalog metadata proves it wrong.
     /// Schema-less scalar Struct and dynamic Generic/Normal outputs remain intentionally open;
     /// concrete scalars and collection containers are authoritative even without a schema.
+    /// The literal `field` argument of an explicit struct-field call, when it is a plain string.
+    fn literal_struct_field_argument(&self, call: &Call) -> Option<String> {
+        call.args
+            .iter()
+            .find(|candidate| candidate.name == "field")
+            .and_then(|candidate| literal_expr_to_value(&candidate.value))
+            .and_then(|value| value.as_str().map(str::to_string))
+    }
+
+    /// `Some((title, hint))` when an explicit `structGet`/`structSet` selects a member that a known
+    /// closed platform struct does not declare. Member-access sugar is covered separately by
+    /// [`Self::schema_allows_member_access`]; this is the literal-call spelling of the same mistake.
+    fn closed_struct_field_call_rejection(
+        &self,
+        call: &Call,
+        meta: &NodeMetadata,
+        input: &PinMetadata,
+        source: &ValueSource,
+        output_pin: &str,
+    ) -> Option<(&'static str, &'static str)> {
+        if !matches!(meta.name.as_str(), "struct_get" | "struct_set") {
+            return None;
+        }
+        if !matches!(input.name.as_str(), "struct" | "struct_in") {
+            return None;
+        }
+        let field = self.literal_struct_field_argument(call)?;
+        let shape = self.source_output_shape(&ValueSource {
+            node: source.node.clone(),
+            output_pin: Some(output_pin.to_string()),
+        })?;
+        closed_platform_struct_rejection(shape.schema.as_deref()?, &field)
+    }
+
     fn schema_allows_member_access(&mut self, source: &ValueSource, field: &str) -> bool {
         let Some(shape) = self.source_output_shape(source) else {
             return true;
@@ -7620,6 +7718,16 @@ impl<'a> StructuralPlanner<'a> {
         };
         if shape.value_type != "Normal" {
             return true;
+        }
+
+        // Platform structs the generic path cannot close, checked before it so an open schema does
+        // not wave through a member that silently resolves to null at runtime.
+        if let Some((title, hint)) = closed_platform_struct_rejection(schema, field) {
+            self.result.diagnostics.push(format!(
+                "catalog output `{}.{}` is a `{title}`, which has no field `{field}`; {hint}",
+                shape.node_type, shape.pin_name
+            ));
+            return false;
         }
 
         let Some((title, fields)) = catalog_object_schema_fields(schema) else {
@@ -7772,11 +7880,24 @@ impl<'a> StructuralPlanner<'a> {
         let meta = self.catalog.resolve_call(&probe).ok()?;
         let entity = self.queue_add_node(meta.clone(), target_layer);
 
+        // Member access accepts the camel spelling, but the runtime selects the JSON key verbatim,
+        // so a known struct's declared name wins over what the author typed.
+        let selector = self
+            .source_output_shape(&base)
+            .and_then(|shape| {
+                shape
+                    .schema
+                    .as_deref()
+                    .and_then(|schema| closed_platform_struct_field_name(schema, field))
+            })
+            .unwrap_or(field)
+            .to_string();
+
         if let Some(field_pin) = metadata_input_pin(&meta, "field") {
             self.queue_update_input(
                 &entity,
                 field_pin,
-                flow_like_types::Value::String(field.to_string()),
+                flow_like_types::Value::String(selector),
                 &meta,
             );
         }
@@ -11499,6 +11620,236 @@ simpleEvent() {   //@n:event
                 vec![pin_meta("exec_out", "Execution", PinType::Output)],
             ),
         ]
+    }
+
+    /// Deliberately OPEN, copied from the generated pin schema: the rejection must not depend on the
+    /// schema closing itself, because `schemars` never does for FlowPath.
+    const FLOW_PATH_PIN_SCHEMA: &str = r#"{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"FlowPath","type":"object","properties":{"path":{"type":"string"},"store_ref":{"type":"string"},"cache_store_ref":{"type":["string","null"]}},"required":["path","store_ref"]}"#;
+
+    fn flow_path_catalog() -> Vec<NodeMetadata> {
+        // Named `file`, not `path`: the real node's output pin IS `path`, which shadows the
+        // same-named struct member and would resolve to the pin before member access is reached.
+        let mut file = pin_meta("file", "Struct", PinType::Output);
+        file.enforce_schema = true;
+        file.schema = Some(FLOW_PATH_PIN_SCHEMA.to_string());
+        let mut open_struct = pin_meta("record", "Struct", PinType::Output);
+        open_struct.schema = Some(
+            r#"{"title":"Mail","type":"object","properties":{"subject":{"type":"string"}}}"#
+                .to_string(),
+        );
+        vec![
+            catalog_meta(
+                "events_simple",
+                "Simple Event",
+                Vec::new(),
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+            catalog_meta(
+                "path_from_upload_dir",
+                "Upload Dir",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![pin_meta("exec_out", "Execution", PinType::Output), file],
+            ),
+            catalog_meta(
+                "open_record",
+                "Open Record",
+                vec![pin_meta("exec_in", "Execution", PinType::Input)],
+                vec![
+                    pin_meta("exec_out", "Execution", PinType::Output),
+                    open_struct,
+                ],
+            ),
+            catalog_meta(
+                "struct_get",
+                "Get Field",
+                vec![
+                    pin_meta("struct", "Struct", PinType::Input),
+                    pin_meta("field", "String", PinType::Input),
+                ],
+                vec![pin_meta("value", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "variable_get",
+                "Variable Get",
+                vec![pin_meta("var_ref", "String", PinType::Input)],
+                vec![pin_meta("value_ref", "Generic", PinType::Output)],
+            ),
+            catalog_meta(
+                "log",
+                "Log",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("text", "Generic", PinType::Input),
+                ],
+                vec![pin_meta("exec_out", "Execution", PinType::Output)],
+            ),
+        ]
+    }
+
+    fn struct_get_added(result: &ReconcileResult) -> bool {
+        result.commands.iter().any(|command| {
+            matches!(command, BoardCommand::AddNode { node_type, .. } if node_type == "struct_get")
+        })
+    }
+
+    fn struct_get_field_literal(result: &ReconcileResult) -> Option<String> {
+        result.commands.iter().find_map(|command| match command {
+            BoardCommand::UpdateNodePin { pin_id, value, .. } if pin_id == "field" => {
+                value.as_str().map(str::to_string)
+            }
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn flow_path_member_access_is_rejected_with_accessor_hint() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const file = pathFromUploadDir({})
+    log({ text: file.filename })
+}
+"#,
+            &flow_path_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("`FlowPath`")
+                    && diagnostic.contains("has no field `filename`")
+                    && diagnostic.contains("filename({ path })")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+        assert!(!struct_get_added(&result));
+    }
+
+    #[test]
+    fn flow_path_declared_fields_still_resolve() {
+        for member in ["path", "storeRef", "cacheStoreRef"] {
+            let result = reconcile_text_with_catalog(
+                &empty_board(),
+                &format!(
+                    r#"eventsSimple() {{
+    const file = pathFromUploadDir({{}})
+    log({{ text: file.{member} }})
+}}
+"#
+                ),
+                &flow_path_catalog(),
+            );
+            assert!(
+                result.diagnostics.is_empty(),
+                "{member}: {:?}",
+                result.diagnostics
+            );
+            assert!(struct_get_added(&result), "{member}");
+        }
+    }
+
+    #[test]
+    fn flow_path_camel_member_lowers_to_the_declared_field_name() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const file = pathFromUploadDir({})
+    log({ text: file.storeRef })
+}
+"#,
+            &flow_path_catalog(),
+        );
+
+        // The runtime selects the JSON key verbatim, so `storeRef` has to be written as `store_ref`.
+        assert_eq!(
+            struct_get_field_literal(&result).as_deref(),
+            Some("store_ref"),
+            "{:?}",
+            result.commands
+        );
+    }
+
+    #[test]
+    fn explicit_struct_get_on_a_flow_path_field_is_rejected() {
+        let rejected = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const file = pathFromUploadDir({})
+    log({ text: structGet({ struct: file, field: "extension" }) })
+}
+"#,
+            &flow_path_catalog(),
+        );
+        assert!(
+            rejected.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("`FlowPath`")
+                    && diagnostic.contains("extension")
+                    && diagnostic.contains("extension({ path })")
+            }),
+            "{:?}",
+            rejected.diagnostics
+        );
+
+        let allowed = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const file = pathFromUploadDir({})
+    log({ text: structGet({ struct: file, field: "path" }) })
+}
+"#,
+            &flow_path_catalog(),
+        );
+        assert!(allowed.diagnostics.is_empty(), "{:?}", allowed.diagnostics);
+    }
+
+    /// KNOWN GAP: a FlowPath read from a board variable escapes the rejection. A FlowScript
+    /// `const file: Struct` declaration supplies its own title-less `{"type":"object"}` schema
+    /// (`packages/ast/src/schema.rs:386`), and that authored contract wins over the board
+    /// variable's real schema in `variable_value_contract`, so there is no `FlowPath` title left to
+    /// match. Fixing it means propagating pin schemas onto variable contracts — a separate change.
+    /// Node-output sources, which is how file values normally flow, are covered.
+    #[test]
+    #[ignore = "variable contracts drop the FlowPath schema; needs schema propagation first"]
+    fn flow_path_variable_member_access_is_rejected() {
+        let mut board = empty_board();
+        let mut variable = Variable::new("file", VariableType::Struct, ValueType::Normal);
+        variable.id = "var_file".to_string();
+        variable.schema = Some(FLOW_PATH_PIN_SCHEMA.to_string());
+        board.variables.insert(variable.id.clone(), variable);
+
+        let result = reconcile_text_with_catalog(
+            &board,
+            r#"const file: Struct = {}   //@v:var_file
+
+eventsSimple() {
+    log({ text: file.filename })
+}
+"#,
+            &flow_path_catalog(),
+        );
+
+        assert!(
+            result.diagnostics.iter().any(|diagnostic| {
+                diagnostic.contains("`FlowPath`") && diagnostic.contains("filename")
+            }),
+            "{:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn open_schema_structs_other_than_flow_path_still_accept_members() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"eventsSimple() {
+    const record = openRecord({})
+    log({ text: record.body })
+}
+"#,
+            &flow_path_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(struct_get_added(&result));
     }
 
     fn schema_member_catalog() -> Vec<NodeMetadata> {

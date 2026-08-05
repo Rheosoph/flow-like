@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	Select,
 	SelectContent,
@@ -14,6 +14,7 @@ import {
 	parseUint8ArrayToJson,
 } from "../../../../lib/uint8";
 import {
+	type FlowSelectorData,
 	type FlowSelectorDataRef,
 	bitDisplayName,
 	bitRef,
@@ -32,6 +33,7 @@ export function BitVariable({
 }>) {
 	const [open, setOpen] = useState(false);
 	const [, refreshSnapshot] = useState(0);
+	const requestedCacheRef = useRef<FlowSelectorData | undefined>(undefined);
 
 	const parsedValue = parseUint8ArrayToJson(value);
 	const selectedValue =
@@ -45,6 +47,22 @@ export function BitVariable({
 		bitDisplayName(selectedBit) ??
 		(selectedValue === undefined ? undefined : selectedValue.split(":").pop());
 	const loading = open && (selectorDataRef?.current.bitsLoading ?? false);
+	const needsBitLookup = selectedValue !== undefined && !selectedBit;
+
+	// A stored pin value is only a bit reference, so showing a name needs the same
+	// profile bit list the dropdown uses. The shared loader collapses this into a
+	// single request for the whole board; the cache flags stop every other bit pin
+	// from re-requesting an in-flight, finished, or failed load, and keying the
+	// guard on the cache object re-arms it when the board swaps caches.
+	useEffect(() => {
+		const cache = selectorDataRef?.current;
+		if (!cache || !needsBitLookup) return;
+		if (cache.bitsLoaded || cache.bitsLoading || cache.bitsError) return;
+		if (requestedCacheRef.current === cache) return;
+
+		requestedCacheRef.current = cache;
+		cache.loadBits().finally(() => refreshSnapshot((version) => version + 1));
+	});
 
 	const handleOpenChange = useCallback(
 		(isOpen: boolean) => {

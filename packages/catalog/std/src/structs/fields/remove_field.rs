@@ -52,7 +52,7 @@ impl NodeLogic for RemoveStructFieldNode {
         node.add_input_pin(
             "field",
             "Field",
-            "Field path to remove (e.g., 'message.content' or 'items[0]')",
+            "Field selector to remove (e.g., 'message.content' or 'items[0]')",
             VariableType::String,
         );
 

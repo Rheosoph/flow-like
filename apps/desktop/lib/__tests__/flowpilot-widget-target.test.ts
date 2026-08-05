@@ -27,6 +27,7 @@ describe("FlowPilot widget target resolution", () => {
 			mode: "create",
 			appId: "app-a",
 			surface: null,
+			pageTarget: null,
 		});
 	});
 
@@ -50,10 +51,11 @@ describe("FlowPilot widget target resolution", () => {
 			mode: "edit",
 			appId: "app-a",
 			surface: openPage,
+			pageTarget: null,
 		});
 	});
 
-	test("explicit edit verifies page and board identity", () => {
+	test("explicit edit of the open page stages, and of another page detaches", () => {
 		expect(
 			resolveFlowPilotWidgetTarget({
 				mode: "edit",
@@ -62,21 +64,138 @@ describe("FlowPilot widget target resolution", () => {
 				pageId: "page-1",
 				surface: openPage,
 			}),
-		).toMatchObject({ ok: true, mode: "edit" });
+		).toMatchObject({ ok: true, mode: "edit", surface: openPage });
+		// A board that the builder is not on names no page, so there is nothing to detach to.
 		expect(
 			resolveFlowPilotWidgetTarget({
 				mode: "edit",
 				boardId: "board-2",
 				surface: openPage,
 			}),
-		).toMatchObject({ ok: false });
+		).toMatchObject({
+			ok: false,
+			code: "FLOWPILOT_WIDGET_EDIT_TARGET_REQUIRED",
+		});
 		expect(
 			resolveFlowPilotWidgetTarget({
 				mode: "edit",
 				pageId: "page-2",
 				surface: openPage,
 			}),
-		).toMatchObject({ ok: false });
+		).toEqual({
+			ok: true,
+			mode: "edit",
+			appId: "app-a",
+			surface: null,
+			pageTarget: { pageId: "page-2", appIdFromSurface: true },
+		});
+	});
+
+	test("a persisted page can be edited with no builder open", () => {
+		expect(
+			resolveFlowPilotWidgetTarget({
+				mode: "edit",
+				appId: "app-a",
+				pageId: "page-9",
+			}),
+		).toEqual({
+			ok: true,
+			mode: "edit",
+			appId: "app-a",
+			surface: null,
+			pageTarget: { pageId: "page-9", appIdFromSurface: false },
+		});
+		expect(
+			resolveFlowPilotWidgetTarget({
+				mode: "edit",
+				appId: "app-a",
+				route: "/knowledge-sources",
+			}),
+		).toMatchObject({
+			ok: true,
+			mode: "edit",
+			surface: null,
+			pageTarget: { route: "/knowledge-sources" },
+		});
+		expect(
+			resolveFlowPilotWidgetTarget({
+				mode: "edit",
+				appId: "app-a",
+				pageName: "Knowledge Sources",
+			}),
+		).toMatchObject({
+			ok: true,
+			mode: "edit",
+			pageTarget: { pageName: "Knowledge Sources" },
+		});
+	});
+
+	test("an explicit app wins over the open builder's app", () => {
+		expect(
+			resolveFlowPilotWidgetTarget({
+				mode: "edit",
+				appId: "app-b",
+				pageId: "page-1",
+				surface: openPage,
+			}),
+		).toMatchObject({
+			ok: true,
+			mode: "edit",
+			appId: "app-b",
+			surface: null,
+			pageTarget: { pageId: "page-1", appIdFromSurface: false },
+		});
+	});
+
+	test("a route request is resolved against storage, never against the open builder", () => {
+		// The surface carries no route, so it can never be proven to be the named page.
+		expect(
+			resolveFlowPilotWidgetTarget({
+				mode: "edit",
+				route: "/whatever",
+				surface: openPage,
+			}),
+		).toMatchObject({
+			ok: true,
+			mode: "edit",
+			appId: "app-a",
+			surface: null,
+			pageTarget: { route: "/whatever", appIdFromSurface: true },
+		});
+	});
+
+	test("a reusable-widget builder does not block editing a persisted page", () => {
+		expect(
+			resolveFlowPilotWidgetTarget({
+				mode: "edit",
+				appId: "app-a",
+				pageId: "page-1",
+				surface: { kind: "widget", appId: "app-a", widgetId: "widget-1" },
+			}),
+		).toMatchObject({
+			ok: true,
+			mode: "edit",
+			surface: null,
+			pageTarget: { pageId: "page-1" },
+		});
+	});
+
+	test("a named page without an app scope is refused", () => {
+		expect(
+			resolveFlowPilotWidgetTarget({ mode: "edit", pageId: "page-9" }),
+		).toMatchObject({
+			ok: false,
+			code: "FLOWPILOT_WIDGET_EDIT_APP_ID_REQUIRED",
+		});
+	});
+
+	test("an unknown mode is rejected but casing is not", () => {
+		expect(
+			resolveFlowPilotWidgetTarget({ mode: "explain", surface: openPage }),
+		).toMatchObject({ ok: false, code: "FLOWPILOT_WIDGET_MODE_INVALID" });
+		expect(
+			resolveFlowPilotWidgetTarget({ mode: "EDIT", surface: openPage }),
+		).toMatchObject({ ok: true, mode: "edit", surface: openPage });
 	});
 
 	test("a reusable-widget builder cannot hijack explicit page creation", () => {
@@ -100,19 +219,36 @@ describe("FlowPilot widget target resolution", () => {
 		});
 	});
 
-	test("create requires an explicit app and edit requires a live surface", () => {
+	test("create requires an explicit app and edit requires a target", () => {
 		expect(
 			resolveFlowPilotWidgetTarget({
 				mode: "create",
 				pageId: "page-2",
 			}),
-		).toMatchObject({ ok: false });
+		).toMatchObject({
+			ok: false,
+			code: "FLOWPILOT_WIDGET_CREATE_APP_ID_REQUIRED",
+		});
+		// An app alone names no page: it must never fall back to "the app's only page".
 		expect(
 			resolveFlowPilotWidgetTarget({
 				mode: "edit",
 				appId: "app-a",
 			}),
-		).toMatchObject({ ok: false });
+		).toMatchObject({
+			ok: false,
+			code: "FLOWPILOT_WIDGET_EDIT_TARGET_REQUIRED",
+		});
+		expect(
+			resolveFlowPilotWidgetTarget({
+				mode: "edit",
+				appId: "app-a",
+				boardId: "board-1",
+			}),
+		).toMatchObject({
+			ok: false,
+			code: "FLOWPILOT_WIDGET_EDIT_TARGET_REQUIRED",
+		});
 	});
 });
 

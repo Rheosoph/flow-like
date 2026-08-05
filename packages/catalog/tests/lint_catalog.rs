@@ -155,6 +155,47 @@ fn assert_ceiling(label: &str, violations: &[LintViolation], ceiling: usize) {
 
 // ── Hard checks (zero violations) ─────────────────────────────────────
 
+/// The board prompt names these accessors verbatim so the model stops reading file attributes off
+/// the FlowPath struct. A rename here would turn that guidance into a lie the model cannot act on.
+#[test]
+fn flow_path_accessor_nodes_named_in_guidance_exist() {
+    let guidance = flow_like::copilot::prompts::FLOW_PATH_ACCESSOR_GUIDANCE;
+    let nodes = all_nodes();
+    for id in [
+        "filename",
+        "set_filename",
+        "extension",
+        "set_extension",
+        "parent",
+        "child",
+        "raw_path",
+        "from_raw_path",
+        "path_replace_segment",
+    ] {
+        let node = nodes.iter().find(|(name, _)| name == id);
+        assert!(node.is_some(), "catalog no longer has node `{id}`");
+        let camel = id
+            .split('_')
+            .enumerate()
+            .map(|(index, part)| {
+                if index == 0 {
+                    part.to_string()
+                } else {
+                    let mut chars = part.chars();
+                    match chars.next() {
+                        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                        None => String::new(),
+                    }
+                }
+            })
+            .collect::<String>();
+        assert!(
+            guidance.contains(&format!("{camel}(")),
+            "FLOW_PATH_ACCESSOR_GUIDANCE no longer mentions `{camel}`"
+        );
+    }
+}
+
 #[test]
 fn every_node_has_a_description() {
     let violations = collect_violations(|node| {

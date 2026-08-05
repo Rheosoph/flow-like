@@ -2,15 +2,32 @@
 
 import { useEffect, useRef } from "react";
 import { resolveColorToRgb } from "../../../lib/chart-theme";
+import {
+	type IComposerActivityChannel,
+	createTypingResponse,
+	decayPerk,
+} from "../../../lib/composer-activity";
 import { cn } from "../../../lib/utils";
 
 const POINT_COUNT = 520;
 const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 
+/**
+ * Extra turn at full typing, in radians per *second* — roughly triple the resting drift at 60Hz.
+ * Kept in seconds even though the resting spin beside it is per-frame, so the typing response is
+ * the same speed on a 120Hz display; matching the pre-existing constant would have doubled it.
+ */
+const TYPING_SPIN = 0.41;
+/** How far writing tips the sphere toward the composer below it. */
+const TYPING_PITCH = 0.16;
+
 interface IChatEmptyOrbProps {
 	/** Rendered diameter in px. */
 	readonly size?: number;
 	readonly className?: string;
+	/** The composer whose draft the sphere answers. Omit for a mark that only follows the pointer. */
+	readonly activity?: IComposerActivityChannel;
+	readonly typingMotion?: boolean;
 }
 
 interface IOrbPoint {
@@ -38,10 +55,19 @@ function buildSphere(): IOrbPoint[] {
 
 /**
  * The empty-state mark: a slowly rotating point sphere that leans toward the
- * pointer. It carries the invitation so the empty state needs no copy.
+ * pointer. It carries the invitation so the empty state needs no copy. With
+ * `typingMotion` it also answers the composer — turning a little faster and
+ * tipping toward the text while you write.
  */
-export function ChatEmptyOrb({ size = 260, className }: IChatEmptyOrbProps) {
+export function ChatEmptyOrb({
+	size = 260,
+	className,
+	activity,
+	typingMotion = false,
+}: IChatEmptyOrbProps) {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
+	const typingMotionRef = useRef(typingMotion);
+	typingMotionRef.current = typingMotion;
 
 	useEffect(() => {
 		const canvas = canvasRef.current;
@@ -99,17 +125,34 @@ export function ChatEmptyOrb({ size = 260, className }: IChatEmptyOrbProps) {
 		const radius = size * 0.35;
 		let spin = 0;
 		let frame = 0;
+		const response = activity ? createTypingResponse(activity) : null;
+		let perk = 0;
+		let last = 0;
 
-		const render = () => {
-			spin += reduceMotion ? 0 : 0.0032;
+		const render = (ms?: number) => {
+			// The resting motion keeps its original per-frame constants; only the typing response
+			// is integrated in seconds, so it settles the same way on a 120Hz display.
+			const dt = last && ms ? Math.min((ms - last) / 1000, 0.05) : 0.016;
+			if (ms) last = ms;
+			const step = response?.advance(
+				typingMotionRef.current && !reduceMotion,
+				dt,
+			);
+			const typing = step?.typing ?? 0;
+			const fullness = step?.fullness ?? 0;
+			perk = decayPerk(perk, step?.perked ?? false, dt);
+
+			spin += reduceMotion ? 0 : 0.0032 + TYPING_SPIN * typing * dt;
 			leanX += (targetX - leanX) * 0.05;
 			leanY += (targetY - leanY) * 0.05;
 
 			ctx.clearRect(0, 0, size, size);
 			ctx.globalCompositeOperation = onLightGround ? "source-over" : "lighter";
 
+			// A draft swells the sphere a touch and tips it down at the composer below it.
+			const swell = radius * (1 + fullness * 0.03 + perk * 0.035);
 			const yaw = spin + leanX;
-			const pitch = Math.sin(spin * 0.7) * 0.22 + leanY;
+			const pitch = Math.sin(spin * 0.7) * 0.22 + leanY + typing * TYPING_PITCH;
 			const cosYaw = Math.cos(yaw);
 			const sinYaw = Math.sin(yaw);
 			const cosPitch = Math.cos(pitch);
@@ -122,8 +165,8 @@ export function ChatEmptyOrb({ size = 260, className }: IChatEmptyOrbProps) {
 				z = point.y * sinPitch + z * cosPitch;
 
 				const perspective = 1 / (2.4 - z);
-				const px = center + x * radius * perspective * 2.05;
-				const py = center + y * radius * perspective * 2.05;
+				const px = center + x * swell * perspective * 2.05;
+				const py = center + y * swell * perspective * 2.05;
 				const depth = (z + 1) / 2;
 				const alpha = onLightGround
 					? 0.12 + depth * depth * 0.78
@@ -149,7 +192,7 @@ export function ChatEmptyOrb({ size = 260, className }: IChatEmptyOrbProps) {
 			themeObserver.disconnect();
 			window.removeEventListener("pointermove", onPointerMove);
 		};
-	}, [size]);
+	}, [size, activity]);
 
 	return (
 		<div

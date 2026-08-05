@@ -101,6 +101,21 @@ export function resolveChatPlaceholderBubbleState(
 		: "idle";
 }
 
+/**
+ * Whether the mark answers the composer while the user writes. Opt-in: an interface that never
+ * asked for it keeps a mark that only breathes and follows the pointer.
+ */
+export function resolveChatPlaceholderTypingMotion(value: unknown): boolean {
+	return value === true;
+}
+
+/** The marks that can react — an image or no mark at all has nothing to animate. */
+export function chatPlaceholderSupportsTypingMotion(
+	visual: IChatPlaceholderVisual,
+): boolean {
+	return visual === "planet" || visual === "bubble";
+}
+
 export function resolveChatAiDisclosure(value: unknown): string {
 	if (typeof value !== "string") return DEFAULT_CHAT_AI_DISCLOSURE;
 	return value.trim() || DEFAULT_CHAT_AI_DISCLOSURE;

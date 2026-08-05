@@ -1,7 +1,7 @@
 "use client";
 import { DragOverlay, useDroppable } from "@dnd-kit/core";
 import { createId } from "@paralleldrive/cuid2";
-import type { UseQueryResult } from "@tanstack/react-query";
+import { type UseQueryResult, useQueryClient } from "@tanstack/react-query";
 import {
 	Background,
 	BackgroundVariant,
@@ -132,7 +132,11 @@ import {
 	upsertVariableCommand,
 } from "../../lib";
 import { getErrorMessage } from "../../lib/error-message";
-import { computeFlowLayout } from "../../lib/flow-auto-layout";
+import {
+	computeFlowLayoutDetailed,
+	type LayoutBox,
+	type LayoutComment,
+} from "../../lib/flow-auto-layout";
 import {
 	getFunctionReferenceNodeIdsFromEdge,
 	handleConnection,
@@ -335,6 +339,8 @@ const MAIN_PANEL_INDEX = 1;
 const RUNS_PANEL_INDEX = 2;
 const FLOWSCRIPT_PANEL_INDEX = 3;
 
+const PROFILE_BITS_STALE_TIME = 5 * 60 * 1000;
+
 export function FlowBoard({
 	appId,
 	boardId,
@@ -441,6 +447,7 @@ export function FlowBoard({
 		backend.userState,
 		[],
 	);
+	const queryClient = useQueryClient();
 	const selectorDataRef = useRef(createEmptyFlowSelectorData());
 	const [selectorDataVersion, setSelectorDataVersion] = useState(0);
 	const selectorCacheKeyRef = useRef("");
@@ -448,12 +455,11 @@ export function FlowBoard({
 		Promise<FlowElementOption[]> | undefined
 	>(undefined);
 	const bitOptionsPromiseRef = useRef<Promise<IBit[]> | undefined>(undefined);
-	const selectorCacheKey = `${
-		currentProfile.data?.hub_profile?.id ??
-		backend.profile?.id ??
-		backend.profile?.hub ??
-		"local"
-	}:${appId}`;
+	// getProfile() already resolves to the hub profile, so `id` is the reactive
+	// source here — `backend.profile` is only assigned later, out of band.
+	const selectorProfileId =
+		currentProfile.data?.id ?? backend.profile?.id ?? backend.profile?.hub;
+	const selectorCacheKey = `${selectorProfileId ?? "local"}:${appId}`;
 
 	if (selectorCacheKeyRef.current !== selectorCacheKey) {
 		selectorCacheKeyRef.current = selectorCacheKey;
@@ -602,7 +608,18 @@ export function FlowBoard({
 
 			const promise = (async () => {
 				try {
-					const bits = await backend.bitState.getProfileBits();
+					// Shared query key with useInvoke(getProfileBits): every bit pin on
+					// the board resolves from one request, reused across board mounts.
+					// The query cache is persisted, so it is only safe once the profile
+					// is known — an unresolved id would cache one profile's bits under a
+					// key every other profile also reads from.
+					const bits = selectorProfileId
+						? await queryClient.fetchQuery({
+								queryKey: ["getProfileBits", selectorProfileId],
+								queryFn: () => backend.bitState.getProfileBits(),
+								staleTime: force ? 0 : PROFILE_BITS_STALE_TIME,
+							})
+						: await backend.bitState.getProfileBits();
 					if (selectorCacheKeyRef.current === cacheKey) {
 						cache.bitOptions = bits;
 						cache.bitsByRef = indexBitsByRef(bits);
@@ -628,7 +645,7 @@ export function FlowBoard({
 			bitOptionsPromiseRef.current = promise;
 			return promise;
 		},
-		[backend.bitState],
+		[backend.bitState, queryClient, selectorProfileId],
 	);
 
 	selectorDataRef.current.loadElements = loadElementOptions;
@@ -3046,21 +3063,137 @@ export function FlowBoard({
 				}
 			}
 
+			// Inside a layer, its own boundary nodes are real, wired, movable nodes
+			// (flow-board-utils renders them with inverted pins). Leaving them out
+			// reflows the whole body around two anchors the layout never saw.
+			const openLayer = currentLayer
+				? boardData.layers?.[currentLayer]
+				: undefined;
+			if (openLayer) {
+				const inputPins: Record<string, IPin> = {};
+				const returnPins: Record<string, IPin> = {};
+				for (const pin of Object.values(openLayer.pins)) {
+					const inverted: IPin = {
+						...pin,
+						pin_type:
+							pin.pin_type === IPinType.Input
+								? IPinType.Output
+								: IPinType.Input,
+					};
+					if (inverted.pin_type === IPinType.Output)
+						inputPins[inverted.id] = inverted;
+					else returnPins[inverted.id] = inverted;
+				}
+
+				const boundary = (
+					suffix: "-input" | "-return",
+					pins: Record<string, IPin>,
+					coordinates: number[] | null | undefined,
+					isStart: boolean,
+				): INode =>
+					({
+						id: openLayer.id + suffix,
+						category: "",
+						coordinates: [coordinates?.[0] ?? 0, coordinates?.[1] ?? 0, 0],
+						description: "",
+						event_callback: false,
+						friendly_name: openLayer.name,
+						fn_refs: null,
+						name: openLayer.id + suffix,
+						pins,
+						start: isStart,
+					}) as unknown as INode;
+
+				// A pinless boundary node has no edges, so it would be packed as a
+				// stray island — and, being a start node, would then anchor the whole
+				// layer to that stray position. Only include the ones that are wired.
+				if (Object.keys(inputPins).length > 0) {
+					layerNodes.push(
+						boundary("-input", inputPins, openLayer.in_coordinates, true),
+					);
+				}
+				if (Object.keys(returnPins).length > 0) {
+					layerNodes.push(
+						boundary("-return", returnPins, openLayer.out_coordinates, false),
+					);
+				}
+			}
+
 			if (layerNodes.length === 0 && layerEntities.length === 0) return;
 
-			const newPositions = computeFlowLayout(
+			// Real rendered sizes beat any formula: columns are spaced by the
+			// widest node they contain and rows by real heights, so a mis-measured
+			// node is the difference between a clean board and overlapping nodes.
+			const nodeSizes = new Map<string, [number, number]>();
+			for (const rendered of getNodes()) {
+				const width = rendered.measured?.width ?? rendered.width;
+				const height = rendered.measured?.height ?? rendered.height;
+				if (
+					typeof width === "number" &&
+					typeof height === "number" &&
+					width >= 8 &&
+					height >= 8
+				) {
+					nodeSizes.set(rendered.id, [width, height]);
+				}
+			}
+
+			// Comments are annotations over a region of the graph. They move with
+			// the nodes they cover, otherwise every layout strands them.
+			const comments: LayoutComment[] = [];
+			for (const comment of Object.values(boardData.comments ?? {})) {
+				const commentLayer =
+					(comment.layer ?? "") === "" ? undefined : comment.layer;
+				if (commentLayer !== currentLayer) continue;
+				comments.push({
+					id: comment.id,
+					x: comment.coordinates[0] ?? 0,
+					y: comment.coordinates[1] ?? 0,
+					width: comment.width ?? 200,
+					height: comment.height ?? 200,
+					isLocked: comment.is_locked === true,
+				});
+			}
+
+			// Laying out just the selection keeps the rest of the board where the
+			// user left it, which is what makes this safe to press.
+			const scoped = selectedNodeIds.length > 1;
+			const only = scoped ? new Set(selectedNodeIds) : undefined;
+
+			// A scoped layout only reasons about the selection, so hand it the
+			// boxes it must stay off.
+			const obstacles: LayoutBox[] = [];
+			if (only) {
+				for (const rendered of getNodes()) {
+					if (only.has(rendered.id)) continue;
+					const size = nodeSizes.get(rendered.id);
+					if (!size) continue;
+					obstacles.push({
+						x: rendered.position.x,
+						y: rendered.position.y,
+						width: size[0],
+						height: size[1],
+					});
+				}
+			}
+
+			const { positions, commentPositions } = computeFlowLayoutDetailed(
 				{
 					layerNodes,
 					layerEntities,
 					boardLayers: boardData.layers,
 					currentLayer,
+					nodeSizes,
+					comments: scoped ? [] : comments,
+					only,
+					obstacles,
 				},
 				style,
 			);
 
 			const commands: IGenericCommand[] = [];
 			for (const node of layerNodes) {
-				const pos = newPositions.get(node.id);
+				const pos = positions.get(node.id);
 				if (!pos) continue;
 				commands.push(
 					moveNodeCommand({
@@ -3072,7 +3205,7 @@ export function FlowBoard({
 				);
 			}
 			for (const entity of layerEntities) {
-				const pos = newPositions.get(entity.id);
+				const pos = positions.get(entity.id);
 				if (!pos) continue;
 				commands.push(
 					moveNodeCommand({
@@ -3083,13 +3216,42 @@ export function FlowBoard({
 					}),
 				);
 			}
+			for (const comment of comments) {
+				const pos = commentPositions.get(comment.id);
+				if (!pos) continue;
+				if (pos[0] === comment.x && pos[1] === comment.y) continue;
+				commands.push(
+					moveNodeCommand({
+						node_id: comment.id,
+						from_coordinates: [comment.x, comment.y, 0],
+						to_coordinates: [pos[0], pos[1], 0],
+						current_layer: currentLayer,
+					}),
+				);
+			}
 
 			if (commands.length === 0) return;
 			await executeCommands(commands);
 
-			setTimeout(() => fitView({ padding: 0.2, duration: 300 }), 100);
+			setTimeout(
+				() =>
+					fitView({
+						padding: 0.2,
+						duration: 300,
+						nodes: scoped ? selectedNodeIds.map((id) => ({ id })) : undefined,
+					}),
+				100,
+			);
 		},
-		[board.data, currentLayer, executeCommands, fitView, version],
+		[
+			board.data,
+			currentLayer,
+			executeCommands,
+			fitView,
+			getNodes,
+			selectedNodeIds,
+			version,
+		],
 	);
 
 	// Use the copilot commands hook for executing AI-generated commands
@@ -3884,6 +4046,7 @@ export function FlowBoard({
 				open={autoLayoutDialogOpen}
 				onOpenChange={setAutoLayoutDialogOpen}
 				onSelect={(alg) => autoLayout(alg)}
+				selectionCount={selectedNodeIds.length}
 			/>
 		</div>
 	);

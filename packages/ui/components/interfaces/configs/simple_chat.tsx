@@ -7,7 +7,9 @@ import {
 	CHAT_PLACEHOLDER_VISUALS,
 	DEFAULT_CHAT_AI_DISCLOSURE,
 	DEFAULT_CHAT_EXAMPLE_MESSAGES,
+	chatPlaceholderSupportsTypingMotion,
 	resolveChatPlaceholderBubbleState,
+	resolveChatPlaceholderTypingMotion,
 	resolveChatPlaceholderVisual,
 } from "../../../lib/chat-appearance";
 import {
@@ -121,6 +123,9 @@ export function SimpleChatConfig({
 	);
 	const placeholderBubbleState = resolveChatPlaceholderBubbleState(
 		config?.placeholder_bubble_state,
+	);
+	const placeholderTypingMotion = resolveChatPlaceholderTypingMotion(
+		config?.placeholder_typing_motion,
 	);
 
 	const renderVoiceSelect = (
@@ -303,6 +308,30 @@ export function SimpleChatConfig({
 									}{" "}
 									The orb holds this pose — it does not follow what the
 									assistant is actually doing.
+								</p>
+							</div>
+						)}
+
+						{chatPlaceholderSupportsTypingMotion(placeholderVisual) && (
+							<div className="space-y-2">
+								<div className="flex items-center space-x-2">
+									<Switch
+										disabled={!isEditing}
+										id="placeholder_typing_motion"
+										checked={placeholderTypingMotion}
+										onCheckedChange={(checked) =>
+											setValue("placeholder_typing_motion", checked)
+										}
+									/>
+									<Label htmlFor="placeholder_typing_motion">
+										React While Typing
+									</Label>
+								</div>
+								<p className="text-sm text-muted-foreground">
+									The mark answers the composer: it perks up as writing starts,
+									leans toward the draft and stirs in proportion to how fast the
+									user types, then settles when they stop. Off by default, and
+									always still for anyone whose system asks for reduced motion.
 								</p>
 							</div>
 						)}

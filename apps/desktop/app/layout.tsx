@@ -1,23 +1,5 @@
-"use client";
-import {
-	ExecutionEngineProviderComponent,
-	ExecutionServiceProvider,
-	PersistQueryClientProvider,
-	QueryClient,
-	ReactFlowProvider,
-} from "@flow-like/flow-like-ui";
-import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
-import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
-import { TooltipProvider } from "@flow-like/flow-like-ui/components/ui/tooltip";
 import "@flow-like/flow-like-ui/global.css";
-import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
-import { GlobalChatOverlay } from "@flow-like/flow-like-ui/components/global-chat/global-chat-overlay";
-import { GlobalToolBridge } from "@flow-like/flow-like-ui/components/global-chat/global-tool-bridge";
-import { GlobalUpgradeDialog } from "@flow-like/flow-like-ui/components/upgrade/upgrade-dialog";
-import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
-import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
-import { createIDBPersister } from "@flow-like/flow-like-ui/lib/persister";
-import { isWebkitLite } from "@flow-like/flow-like-ui/lib/platform";
+import type { Viewport } from "next";
 import {
 	Architects_Daughter,
 	DM_Sans,
@@ -45,44 +27,29 @@ import {
 	Space_Grotesk,
 	Space_Mono,
 } from "next/font/google";
-import { useEffect } from "react";
-import { AppSidebar } from "../components/app-sidebar";
-import { DesktopAuthProvider } from "../components/auth-provider";
-import { DeeplinkNavigationHandler } from "../components/deeplink-navigation-handler";
-import DownloadNotificationProvider from "../components/download-notification-provider";
-import GlobalAnchorHandler from "../components/global-anchor-component";
-import { IOSWebviewHardening } from "../components/ios-webview-hardening";
-import NotificationProvider from "../components/notification-provider";
-import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
-import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
-import { RpaPermissionProvider } from "../components/rpa";
-import { RuntimeVariablesProviderComponent } from "../components/runtime-variables-provider";
-import { SpotlightWrapper } from "../components/spotlight-wrapper";
-import { TauriProvider } from "../components/tauri-provider";
-import { TelemetryProvider } from "../components/telemetry-provider";
-import { ThemeLoader } from "../components/theme-loader";
-import ToastProvider from "../components/toast-provider";
-import TrayProvider from "../components/tray-provider";
-import { UpdateProvider } from "../components/update-provider";
-import { initBlobOffload } from "../lib/init-blob-offload";
+import { Providers } from "./providers";
 
-initBlobOffload();
-
-const persister = createIDBPersister();
-const queryClient = new QueryClient({
-	defaultOptions: {
-		queries: {
-			networkMode: "always",
-			staleTime: 30 * 1000,
-			gcTime: 24 * 60 * 60 * 1000,
-			refetchOnWindowFocus: false,
-			refetchOnReconnect: false,
-			refetchOnMount: true,
-			retry: 1,
-			retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
-		},
-	},
-});
+/**
+ * `viewport-fit=cover` MUST be present in the server-rendered HTML.
+ *
+ * WebKit resolves every `env(safe-area-inset-*)` to 0px unless the viewport meta
+ * carries `viewport-fit=cover` at parse time, and it does not reliably recompute
+ * them when the meta is patched later from JS (WebKit #191872 / #272779). Since
+ * the native shell also disables `contentInsetAdjustmentBehavior`, a missing
+ * `cover` means the web content renders full-bleed with zero insets — i.e. the
+ * header lands under the Dynamic Island and the bottom nav under the home
+ * indicator. This export is the only thing that puts it in the shipped HTML;
+ * `viewport.test.ts` guards it.
+ *
+ * Requires this file to stay a Server Component — Next.js ignores `viewport`
+ * exports from "use client" modules. Client providers live in ./providers.tsx.
+ */
+export const viewport: Viewport = {
+	width: "device-width",
+	initialScale: 1,
+	viewportFit: "cover",
+	interactiveWidget: "resizes-content",
+};
 
 const inter = Inter({ subsets: ["latin"], preload: true });
 const dmSans = DM_Sans({ subsets: ["latin"], preload: true });
@@ -141,31 +108,6 @@ const architectsDaughter = Architects_Daughter({
 	preload: true,
 });
 
-function NetworkAwareProvider({ children }: { children: React.ReactNode }) {
-	const isOnline = useNetworkStatus();
-
-	useEffect(() => {
-		// Tag the document so CSS can disable WebKit-expensive effects (backdrop
-		// filters etc.) on WKWebView/Safari while Chromium keeps the full look.
-		document.documentElement.dataset.engine = isWebkitLite()
-			? "webkit"
-			: "blink";
-	}, []);
-
-	useEffect(() => {
-		// When network comes back online, refetch all active queries
-		if (isOnline) {
-			console.log("Network reconnected - refetching stale queries");
-			queryClient.refetchQueries({
-				type: "active",
-				stale: true,
-			});
-		}
-	}, [isOnline]);
-
-	return <>{children}</>;
-}
-
 export default function RootLayout({
 	children,
 }: Readonly<{
@@ -179,67 +121,9 @@ export default function RootLayout({
 			suppressContentEditableWarning
 			className="min-h-screen"
 		>
-			{/* <ReactScan /> */}
-			<ReactFlowProvider>
-				<PersistQueryClientProvider
-					client={queryClient}
-					persistOptions={{
-						persister,
-						maxAge: 24 * 60 * 60 * 1000,
-					}}
-				>
-					<NetworkAwareProvider>
-						<body className={inter.className} data-desktop-app="true">
-							<IOSWebviewHardening />
-							<NetworkStatusIndicator />
-							<UpdateProvider />
-							<TrayProvider />
-							<GlobalAnchorHandler />
-							<ThemeProvider
-								attribute="class"
-								defaultTheme="system"
-								enableSystem
-								storageKey="theme"
-								disableTransitionOnChange
-							>
-								<TooltipProvider>
-									<Toaster />
-									<ToastProvider />
-									<TauriProvider>
-										<DownloadNotificationProvider />
-										<RpaPermissionProvider />
-										<DeeplinkNavigationHandler>
-											<OAuthCallbackHandler>
-												<OAuthExecutionProvider>
-													<DesktopAuthProvider>
-														<NotificationProvider />
-														<RuntimeVariablesProviderComponent>
-															<ExecutionServiceProvider>
-																<ExecutionEngineProviderComponent>
-																	<SpotlightWrapper>
-																		<TelemetryProvider>
-																			<ThemeLoader />
-																			<AppSidebar>{children}</AppSidebar>
-																			<GlobalToolBridge />
-																			<GlobalChatOverlay />
-																			<FlowPilotBubbleButton />
-																			<GlobalUpgradeDialog />
-																		</TelemetryProvider>
-																	</SpotlightWrapper>
-																</ExecutionEngineProviderComponent>
-															</ExecutionServiceProvider>
-														</RuntimeVariablesProviderComponent>
-													</DesktopAuthProvider>
-												</OAuthExecutionProvider>
-											</OAuthCallbackHandler>
-										</DeeplinkNavigationHandler>
-									</TauriProvider>
-								</TooltipProvider>
-							</ThemeProvider>
-						</body>
-					</NetworkAwareProvider>
-				</PersistQueryClientProvider>
-			</ReactFlowProvider>
+			<body className={inter.className} data-desktop-app="true">
+				<Providers>{children}</Providers>
+			</body>
 		</html>
 	);
 }

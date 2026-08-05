@@ -2985,6 +2985,7 @@ export class BoardState implements IBoardState {
 	async resolveBoardEditJob(
 		jobId: string,
 		approved: boolean,
+		destructivePreapproved = false,
 	): Promise<BoardEditJobResolution> {
 		const job = await this.getBoardEditJob(jobId);
 		const remoteIdentity =
@@ -3013,6 +3014,7 @@ export class BoardState implements IBoardState {
 			invoke<BoardEditJobResolution>("flowpilot_resolve_board_edit_job", {
 				jobId,
 				approved,
+				destructivePreapproved,
 				remoteProfileId: remoteIdentity?.remoteProfileId,
 				remotePrincipalId: remoteIdentity?.remotePrincipalId,
 				remoteHub: remoteIdentity?.remoteHub,

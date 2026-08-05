@@ -59,12 +59,14 @@ const ContainerInner = ({
 	// Memoize children to prevent re-renders when sidebar state changes
 	const memoizedChildren = useMemo(() => children, [children]);
 
-	if (!sidebar) return memoizedChildren;
-
+	// The wrapper renders before a sidebar exists on purpose. Interfaces push
+	// theirs from a mount effect, and swapping the tree shape underneath them at
+	// that moment unmounts the interface that just finished rendering — the user
+	// sees the app load itself a second time.
 	return (
 		<div className="h-full overflow-hidden flex flex-col grow max-h-full">
 			{/* Desktop Resizable Layout */}
-			{!isMobile && isDesktopSidebarOpen ? (
+			{sidebar && !isMobile && isDesktopSidebarOpen ? (
 				<ResizablePanelGroup
 					direction="horizontal"
 					className="flex-1 w-full flex flex-row items-stretch overflow-hidden"
@@ -100,14 +102,16 @@ const ContainerInner = ({
 			{/* Mobile Sheet */}
 			{isMobile && (
 				<>
-					<Sheet open={isOpen} onOpenChange={setIsOpen}>
-						<SheetContent
-							side="left"
-							className="w-80 p-0 border-r bg-background/95 backdrop-blur-sm supports-backdrop-filter:bg-background/60"
-						>
-							{sidebar}
-						</SheetContent>
-					</Sheet>
+					{sidebar ? (
+						<Sheet open={isOpen} onOpenChange={setIsOpen}>
+							<SheetContent
+								side="left"
+								className="w-80 p-0 border-r bg-background/95 backdrop-blur-sm supports-backdrop-filter:bg-background/60"
+							>
+								{sidebar}
+							</SheetContent>
+						</Sheet>
+					) : null}
 
 					{/* Main Content for Mobile */}
 					<div className="relative h-full flex flex-col grow max-h-full overflow-hidden">

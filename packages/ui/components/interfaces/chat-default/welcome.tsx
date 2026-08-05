@@ -3,6 +3,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import type { IEvent, IEventPayloadChat } from "../../../lib";
 import { DEFAULT_CHAT_EXAMPLE_MESSAGES } from "../../../lib/chat-appearance";
+import { createComposerActivity } from "../../../lib/composer-activity";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import { ChatPlaceholder } from "./chat-placeholder";
@@ -30,6 +31,8 @@ export function ChatWelcome({
 	const [currentMessage, setCurrentMessage] = useState("");
 	const [voiceModeOpen, setVoiceModeOpen] = useState(false);
 	const chatBox = useRef<ChatBoxRef>(null);
+	// One channel per welcome screen — the mark must answer this composer, not another chat's.
+	const activity = useRef(createComposerActivity()).current;
 	const description = event.description?.trim();
 	const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 	const voiceEnabled = isVoiceEnabled(voiceConfig);
@@ -265,7 +268,12 @@ export function ChatWelcome({
 						className="flex flex-col items-center gap-3"
 						data-fl-chat-welcome-header
 					>
-						<ChatPlaceholder config={config} appId={appId} size={168} />
+						<ChatPlaceholder
+							config={config}
+							appId={appId}
+							size={168}
+							activity={activity}
+						/>
 						<div className="space-y-1 text-center">
 							<h1 className="text-base font-semibold tracking-tight">
 								{event.name}
@@ -286,6 +294,7 @@ export function ChatWelcome({
 							onSendMessage={onSendMessage}
 							onContentChange={(content) => {
 								setCurrentMessage(content);
+								activity.report(content);
 							}}
 							fileUpload={config?.allow_file_upload ?? false}
 							audioInput={voiceEnabled}

@@ -24,10 +24,19 @@ const NON_TEXT_INPUT_TYPES = new Set([
 const POLL_MAX_RETRIES = 40;
 const POLL_INTERVAL_MS = 50;
 
-function upsertViewportMeta(content: string) {
+/**
+ * Last-resort repair only. The authoritative `viewport-fit=cover` comes from the
+ * `viewport` export in app/layout.tsx, i.e. it is already in the parsed HTML.
+ * Rewriting the meta afterwards makes WebKit re-run viewport resolution, which
+ * is exactly the path where it fails to recompute env(safe-area-inset-*)
+ * (WebKit #191872), so leave a correct tag alone.
+ */
+function ensureViewportMeta(content: string) {
 	let meta = document.querySelector(
 		'meta[name="viewport"]',
 	) as HTMLMetaElement | null;
+
+	if (meta?.getAttribute("content")?.includes("viewport-fit=cover")) return;
 
 	if (!meta) {
 		meta = document.createElement("meta");
@@ -165,7 +174,7 @@ export function IOSWebviewHardening() {
 	useEffect(() => {
 		if (!isTauriRuntime() || !isMobileDevice()) return;
 
-		upsertViewportMeta(MOBILE_VIEWPORT_CONTENT);
+		ensureViewportMeta(MOBILE_VIEWPORT_CONTENT);
 		applySafeAreaInsets();
 		pollForInsets();
 

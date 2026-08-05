@@ -46,7 +46,7 @@ impl NodeLogic for GetStructFieldNode {
         node.add_input_pin(
             "field",
             "Field",
-            "Field path (e.g., 'message.content' or 'items[0].name')",
+            "Field selector (e.g., 'message.content' or 'items[0].name')",
             VariableType::String,
         );
 

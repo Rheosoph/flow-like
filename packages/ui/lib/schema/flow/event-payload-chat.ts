@@ -41,6 +41,7 @@ export interface IEventPayloadChat {
 	placeholder_visual?: IChatPlaceholderVisual | null;
 	placeholder_bubble_state?: IChatPlaceholderBubbleState | null;
 	placeholder_image?: string | null;
+	placeholder_typing_motion?: boolean | null;
 	voice?: IVoiceConfig | null;
 	navigate_to_routes?: string[] | null;
 	default_tools?: string[] | null;

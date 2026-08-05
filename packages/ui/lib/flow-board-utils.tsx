@@ -758,6 +758,7 @@ export function parseBoard(
 					selectorDataRef,
 					selectorDataVersion,
 					hash: layer.hash ?? -1,
+					version: version,
 					pinLookup: lookup,
 					pushLayer: async (layer: ILayer) => {
 						pushLayer(layer);

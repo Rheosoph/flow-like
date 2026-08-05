@@ -1,8 +1,11 @@
 import { describe, expect, it } from "bun:test";
 import {
 	type FlowPilotOrbState,
+	ORB_COMPOSING_PARAMS,
+	ORB_INVITING_PARAMS,
 	ORB_STATE_PARAMS,
 	classifyOrbTool,
+	mixOrbParams,
 	selectActiveOrbTool,
 } from "./flowpilot-orb-state";
 
@@ -61,6 +64,69 @@ describe("classifyOrbTool", () => {
 	it("is case-insensitive", () => {
 		expect(classifyOrbTool("EMIT_COMMANDS")).toBe("working");
 		expect(classifyOrbTool("Ask_User")).toBe("ready");
+	});
+});
+
+const ORB_KEYS = Object.keys(ORB_INVITING_PARAMS) as Array<
+	keyof typeof ORB_INVITING_PARAMS
+>;
+
+function expectPose(
+	actual: typeof ORB_INVITING_PARAMS,
+	expected: typeof ORB_INVITING_PARAMS,
+) {
+	for (const key of ORB_KEYS) {
+		expect(actual[key]).toBeCloseTo(expected[key], 10);
+	}
+}
+
+describe("mixOrbParams", () => {
+	it("returns the endpoints unchanged at 0 and 1", () => {
+		expectPose(
+			mixOrbParams(ORB_INVITING_PARAMS, ORB_COMPOSING_PARAMS, 0),
+			ORB_INVITING_PARAMS,
+		);
+		expectPose(
+			mixOrbParams(ORB_INVITING_PARAMS, ORB_COMPOSING_PARAMS, 1),
+			ORB_COMPOSING_PARAMS,
+		);
+	});
+
+	it("clamps out-of-range blends so an overshooting spring cannot fly past the pose", () => {
+		expectPose(
+			mixOrbParams(ORB_INVITING_PARAMS, ORB_COMPOSING_PARAMS, 2.4),
+			ORB_COMPOSING_PARAMS,
+		);
+		expectPose(
+			mixOrbParams(ORB_INVITING_PARAMS, ORB_COMPOSING_PARAMS, -1),
+			ORB_INVITING_PARAMS,
+		);
+	});
+
+	it("interpolates every field", () => {
+		const half = mixOrbParams(ORB_INVITING_PARAMS, ORB_COMPOSING_PARAMS, 0.5);
+		for (const key of ORB_KEYS) {
+			expect(half[key]).toBeCloseTo(
+				(ORB_INVITING_PARAMS[key] + ORB_COMPOSING_PARAMS[key]) / 2,
+				10,
+			);
+		}
+	});
+
+	it("reuses one scratch object, so a caller must read it before the next blend", () => {
+		const first = mixOrbParams(ORB_INVITING_PARAMS, ORB_COMPOSING_PARAMS, 0);
+		const second = mixOrbParams(ORB_INVITING_PARAMS, ORB_COMPOSING_PARAMS, 1);
+		expect(first).toBe(second);
+	});
+
+	it("keeps composing calmer than the live thinking state it must not imitate", () => {
+		expect(ORB_COMPOSING_PARAMS.rate).toBeLessThan(
+			ORB_STATE_PARAMS.thinking.rate,
+		);
+		expect(ORB_COMPOSING_PARAMS.spin).toBeLessThan(
+			ORB_STATE_PARAMS.thinking.spin,
+		);
+		expect(ORB_COMPOSING_PARAMS.sat).toBe(0);
 	});
 });
 

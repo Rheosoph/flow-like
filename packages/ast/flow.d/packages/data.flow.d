@@ -2542,7 +2542,7 @@ declare function rawPath({ path: Struct }): string;
 declare function setExtension({ path: Struct, extension: string }): Struct;
 
 /**
- * Gets the filename from a path
+ * Renames a file path, keeping the original extension when the new name has none
  * @param inPath — FlowPath
  * @param filename (optional) — Filename
  * @returns outPath — FlowPath
@@ -5928,3 +5928,4 @@ declare function eventsExtractActionContext({ actionContext: Struct, fieldName?:
  * @returns value — The current value of the component (null if not found)
  */
 declare function eventsExtractInputValue({ inputValues: Struct, componentId?: string }): any;
+

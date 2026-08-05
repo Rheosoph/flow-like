@@ -69536,7 +69536,7 @@
         }
       ],
       "impure": false,
-      "doc": "Gets the filename from a path"
+      "doc": "Renames a file path, keeping the original extension when the new name has none"
     },
     {
       "node_type": "set_get_size",
@@ -70693,7 +70693,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Field path (e.g., 'message.content' or 'items[0].name')"
+          "doc": "Field selector (e.g., 'message.content' or 'items[0].name')"
         }
       ],
       "outputs": [
@@ -70780,7 +70780,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Field path (e.g., 'message.content' or 'items[0].name')"
+          "doc": "Field selector (e.g., 'message.content' or 'items[0].name')"
         }
       ],
       "outputs": [
@@ -70859,7 +70859,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Field path to remove (e.g., 'message.content' or 'items[0]')"
+          "doc": "Field selector to remove (e.g., 'message.content' or 'items[0]')"
         }
       ],
       "outputs": [
@@ -70907,7 +70907,7 @@
             "container": "Normal"
           },
           "optional": false,
-          "doc": "Field path (e.g., 'message.content' or 'items[0].name')"
+          "doc": "Field selector (e.g., 'message.content' or 'items[0].name')"
         },
         {
           "name": "value",

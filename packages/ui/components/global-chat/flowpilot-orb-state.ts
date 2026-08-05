@@ -114,6 +114,48 @@ export const ORB_INVITING_PARAMS: OrbStateParams = {
 };
 
 /**
+ * Where the empty-state mark travels while you are writing to it: rounder, a little fuller, and
+ * churning at roughly walking pace. Never reached outright — the mark only gets this far while
+ * you are typing steadily, and eases back to `ORB_INVITING_PARAMS` the moment you stop.
+ */
+export const ORB_COMPOSING_PARAMS: OrbStateParams = {
+	rate: 0.85,
+	focus: 0.44,
+	bulge: 0.34,
+	reach: 0.2,
+	scale: 1.04,
+	breathe: 0.03,
+	round: 0.55,
+	teeth: 0,
+	sat: 0,
+	spin: 0.5,
+	spinMix: 0.42,
+};
+
+const ORB_PARAM_KEYS = Object.keys(
+	ORB_INVITING_PARAMS,
+) as (keyof OrbStateParams)[];
+
+/** Scratch for `mixOrbParams`, reused so a render loop never allocates. */
+const MIXED_PARAMS: OrbStateParams = { ...ORB_INVITING_PARAMS };
+
+/**
+ * Blends two poses. The result is a shared object valid only until the next call — render loops
+ * use it to fill uniforms in the same frame, and nothing else should hold on to it.
+ */
+export function mixOrbParams(
+	from: OrbStateParams,
+	to: OrbStateParams,
+	t: number,
+): OrbStateParams {
+	const k = Math.min(1, Math.max(0, t));
+	for (const key of ORB_PARAM_KEYS) {
+		MIXED_PARAMS[key] = from[key] + (to[key] - from[key]) * k;
+	}
+	return MIXED_PARAMS;
+}
+
+/**
  * Tools that mutate something or produce code/UI. Anything here is `working`; every other tool
  * is research or loading, so it falls through to `thinking`. Deliberately an allow-list of
  * mutations — a new read-only tool should default to thinking, not claim to be applying changes.

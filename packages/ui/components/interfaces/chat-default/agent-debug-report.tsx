@@ -8,8 +8,9 @@ import {
 	Copy,
 	FileText,
 } from "lucide-react";
-import { useState } from "react";
-import { cn } from "../../../lib";
+import { useMemo, useState } from "react";
+import { useModelNames } from "../../../hooks/use-model-names";
+import { cn, modelLabel } from "../../../lib";
 import {
 	type IAgentDebugReport,
 	agentDebugReportAsMarkdown,
@@ -36,6 +37,12 @@ function outcomeClass(outcome: IAgentDebugReport["outcome"]) {
 export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 	const [open, setOpen] = useState(false);
 	const [copied, setCopied] = useState<"json" | "markdown" | null>(null);
+	const modelNames = useModelNames(
+		useMemo(() => [report.model], [report.model]),
+	);
+	const modelName = report.model
+		? modelLabel(report.model, modelNames).label
+		: undefined;
 	const copy = async (format: "json" | "markdown") => {
 		const value =
 			format === "json"
@@ -86,8 +93,8 @@ export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
 				<CollapsibleContent>
 					<div className="border-t border-border/50 px-2.5 py-2">
 						<div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-							<span>
-								{[report.provider, report.model, report.reasoning_effort]
+							<span title={report.model}>
+								{[report.provider, modelName, report.reasoning_effort]
 									.filter(Boolean)
 									.join(" · ") || "Provider metadata unavailable"}
 							</span>

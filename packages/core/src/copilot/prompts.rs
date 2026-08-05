@@ -1091,6 +1091,35 @@ pub const NUMBERS_CONVERSIONS_GUIDANCE: &str = r#"
   `value` through a useless node — reference the value directly instead.
 "#;
 
+/// FlowPath is a three-field store handle, not a file object. Without this block the model writes
+/// `file.filename` / `structGet({ struct: file, field: "extension" })`, which selects a field that
+/// does not exist and yields null at runtime instead of failing.
+pub const FLOW_PATH_ACCESSOR_GUIDANCE: &str = r#"
+## FILES ARE FlowPath HANDLES, NOT FIELD BAGS
+- Every file value on this platform (upload/storage/cache/user dirs, chat attachments,
+  `a2uiGetFileInputFiles`, list and download nodes) is a `FlowPath` struct with exactly three
+  fields: `path`, `storeRef`, `cacheStoreRef`. It has NO `filename`, `extension`, `parent`,
+  `stem`, `name`, `size`, or `mimeType` field.
+- NEVER read a file attribute with dot access or `structGet`. `file.filename` and
+  `structGet({ struct: file, field: "extension" })` select a field that does not exist — both are
+  rejected, and on any struct that slips through they return null with no error. Use the
+  `Data/Files/Path` accessor calls:
+  - `filename({ path: file })` -> `filename`; pass `removeExtension: true` for the stem.
+  - `extension({ path: file })` -> `extension`, without the leading dot.
+  - `rawPath({ path: file })` -> `rawPath`, the whole path as a string. Prefer it over `file.path`.
+  - `parent({ path: file })` -> `parentPath`. IMPURE: it needs an exec slot in the body.
+  - `child({ parentPath: dir, childName: "report.pdf" })` -> `path`, a file under a directory.
+  - `setFilename({ inPath: file, filename: "out" })` -> `outPath` and
+    `setExtension({ path: file, extension: "csv" })` -> `pathOut` (IMPURE) rename in place.
+  - `fromRawPath({ basePath: file, rawPath: text })` -> `path` rebuilds a FlowPath from a string,
+    reusing `basePath`'s store. A FlowPath is NOT reconstructible from a bare string alone.
+  - `pathReplaceSegment({ inPath: file, from: "in", to: "out" })` -> `outPath` swaps one segment.
+- File CONTENT is not a field either: read it with `readToString({ path })`, `readToBytes({ path })`
+  or `pathGet({ path })`.
+- Reading `file.path` or `file.storeRef` is legal, but `path` is the raw store key, not a display
+  name — never derive a filename or extension from it with string operations.
+"#;
+
 /// How explanation/read-only board jobs should use the mixed board + FlowScript context.
 pub const EXPLANATION_WORKFLOW_GUIDANCE: &str = r#"
 ## EXPLAINING, REVIEWING, AND DEBUGGING WORKFLOWS
@@ -1769,6 +1798,8 @@ FlowScript through write/patch/check/commit.
 
 {numbers_guidance}
 
+{flowpath_guidance}
+
 {explanation_guidance}
 
 {flowscript_examples}
@@ -1831,6 +1862,7 @@ emit_commands (position-only MoveNode and canvas comments only)
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
+        flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -2371,6 +2403,8 @@ pub fn general_system_prompt() -> String {
 
 {numbers_guidance}
 
+{flowpath_guidance}
+
 {explanation_guidance}
 
 {autonomy_guidance}
@@ -2384,6 +2418,7 @@ pub fn general_system_prompt() -> String {
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
+        flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -2447,6 +2482,8 @@ FlowScript surface is required.
 
 {numbers_guidance}
 
+{flowpath_guidance}
+
 {explanation_guidance}
 
 If `emit_commands` returns validation issues, nothing was queued. Fix only the visual batch and
@@ -2458,6 +2495,7 @@ resend it; if the error says FlowScript is required, switch to the retained sour
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
+        flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -2584,6 +2622,8 @@ resend.
 
 {numbers_guidance}
 
+{flowpath_guidance}
+
 {explanation_guidance}
 
 {flowscript_examples}
@@ -2620,6 +2660,7 @@ check_flowscript (compile/validate), commit_flowscript (queue the checked batch)
         dashboard_guidance = DASHBOARD_A2UI_GUIDANCE,
         execution_guidance = EXECUTION_FLOW_GUIDANCE,
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
+        flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
@@ -3258,6 +3299,32 @@ mod tests {
             assert!(prompt.contains("A SEGMENT IS NOT A STUB"));
             assert!(prompt.contains("Segmentation is HOW the request is built"));
             assert!(prompt.contains("Boards of one app CANNOT call each other"));
+        }
+    }
+
+    /// A FlowPath carries no file attributes, so a board prompt without this block produces
+    /// `file.filename` reads that resolve to null instead of the catalog accessors.
+    #[test]
+    fn board_prompts_teach_flow_path_accessors() {
+        let prompts = [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_system_prompt(),
+            board_sdk_flowscript_system_prompt("", 0),
+            general_system_prompt(),
+        ];
+
+        for prompt in prompts {
+            assert!(prompt.contains("## FILES ARE FlowPath HANDLES, NOT FIELD BAGS"));
+            assert!(prompt.contains("`path`, `storeRef`, `cacheStoreRef`"));
+            assert!(prompt.contains("NEVER read a file attribute with dot access or `structGet`"));
+            for accessor in [
+                "filename({ path: file })",
+                "extension({ path: file })",
+                "rawPath({ path: file })",
+                "parent({ path: file })",
+            ] {
+                assert!(prompt.contains(accessor), "missing {accessor}");
+            }
         }
     }
 

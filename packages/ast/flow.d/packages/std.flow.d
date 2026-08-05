@@ -575,7 +575,7 @@ declare function structMakeFromSchema(): Struct;
 /**
  * Fetches a field from a struct (supports dot notation and array access)
  * @param struct — Struct Output
- * @param field — Field path (e.g., 'message.content' or 'items[0].name')
+ * @param field — Field selector (e.g., 'message.content' or 'items[0].name')
  * @returns value — Value of the Struct
  * @returns found — Indicates if the value was found
  */
@@ -592,7 +592,7 @@ declare function structGetFields({ struct: Struct }): { fieldNames: string[], fi
 /**
  * Checks if a field exists in a struct (supports dot notation and array access)
  * @param struct — Struct Output
- * @param field — Field path (e.g., 'message.content' or 'items[0].name')
+ * @param field — Field selector (e.g., 'message.content' or 'items[0].name')
  * @returns found — Indicates if the value was found
  */
 declare function structHas({ struct: Struct, field: string }): bool;
@@ -600,7 +600,7 @@ declare function structHas({ struct: Struct, field: string }): bool;
 /**
  * Removes a field from a struct (supports dot notation and array access)
  * @param structIn — Struct In
- * @param field — Field path to remove (e.g., 'message.content' or 'items[0]')
+ * @param field — Field selector to remove (e.g., 'message.content' or 'items[0]')
  * @returns structOut — Struct Out
  * @returns removedValue — The value that was removed (null if field didn't exist)
  * @impure has side effects / drives control flow
@@ -610,7 +610,7 @@ declare function structRemove({ structIn: Struct, field: string }): { structOut:
 /**
  * Sets a field in a struct (supports dot notation and array access)
  * @param structIn — Struct In
- * @param field — Field path (e.g., 'message.content' or 'items[0].name')
+ * @param field — Field selector (e.g., 'message.content' or 'items[0].name')
  * @param value — Value to set
  * @returns structOut — Struct Out
  * @impure has side effects / drives control flow

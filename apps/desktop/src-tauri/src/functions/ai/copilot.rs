@@ -1059,11 +1059,17 @@ pub fn flowpilot_get_board_edit_job(job_id: String) -> Option<BoardEditJob> {
 
 /// Atomically claim a pending review and resolve it. Duplicate callers observe the same native job
 /// instead of applying the batch twice; exact-batch CAS remains enforced by the existing Apply API.
+///
+/// `destructive_preapproved` reports that the destructive review was already presented to and
+/// accepted by the user in the renderer — either through the approval card or through the auto-mode
+/// waiver they armed themselves. It suppresses only the redundant second confirmation; every exact
+/// claim, base-fingerprint, and batch-equality check below still runs unchanged.
 #[tauri::command]
 pub async fn flowpilot_resolve_board_edit_job(
     app_handle: AppHandle,
     job_id: String,
     approved: bool,
+    destructive_preapproved: Option<bool>,
     remote_profile_id: Option<String>,
     remote_principal_id: Option<String>,
     remote_hub: Option<String>,
@@ -1231,6 +1237,7 @@ pub async fn flowpilot_resolve_board_edit_job(
             app_id,
             token,
             Some(recovered_batch),
+            destructive_preapproved.unwrap_or(false),
         )
         .await;
         let phase = match result.status.as_str() {
@@ -1835,7 +1842,7 @@ pub async fn flowpilot_apply_flow_ir_commit(
     app_id: String,
     token: FlowIrCommitToken,
 ) -> ApplyFlowIrCommitResult {
-    flowpilot_apply_flow_ir_commit_with_recovery(app_handle, app_id, token, None).await
+    flowpilot_apply_flow_ir_commit_with_recovery(app_handle, app_id, token, None, false).await
 }
 
 fn board_edit_job_matches_terminal_delivery(
@@ -1863,6 +1870,7 @@ async fn flowpilot_apply_flow_ir_commit_with_recovery(
     app_id: String,
     token: FlowIrCommitToken,
     recovered_batch: Option<RecoveredBoardEditBatch>,
+    destructive_preapproved: bool,
 ) -> ApplyFlowIrCommitResult {
     if app_id.trim().is_empty()
         || token.board_id.trim().is_empty()
@@ -2005,11 +2013,15 @@ async fn flowpilot_apply_flow_ir_commit_with_recovery(
     };
     let destructive_review_items =
         typed_commit_destructive_review_items(replacement_mode, &board_commands);
-    if !destructive_review_items.is_empty() {
-        // Renderer state is not an authorization boundary. Release the live-board lock while the
-        // operating-system dialog is open, then reacquire it and repeat the exact claim/base/batch
-        // checks before applying. A compromised renderer can request this dialog, but it cannot
-        // synthesize the native user's answer or race an approved answer onto another revision.
+    // The renderer already carries the user's decision when it approved the review card or when
+    // they armed auto mode, so re-asking here is a duplicate prompt rather than a second boundary.
+    // Everything that actually protects the batch — the exact claim, the base fingerprint, and the
+    // batch-equality revalidation below — is enforced regardless of this flag.
+    if !destructive_review_items.is_empty() && !destructive_preapproved {
+        // Release the live-board lock while the operating-system dialog is open, then reacquire it
+        // and repeat the exact claim/base/batch checks before applying. A compromised renderer can
+        // request this dialog, but it cannot synthesize the native user's answer or race an
+        // approved answer onto another revision.
         drop(board);
         if !confirm_destructive_flow_ir_commit(app_handle.clone(), destructive_review_items.clone())
             .await

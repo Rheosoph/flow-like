@@ -708,13 +708,17 @@ export interface AutoLayoutDialogProps {
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	onSelect: (style: LayoutStyle) => void;
+	/** Number of currently selected nodes; >1 scopes the layout to them. */
+	selectionCount?: number;
 }
 
 export const AutoLayoutDialog = memo(function AutoLayoutDialog({
 	open,
 	onOpenChange,
 	onSelect,
+	selectionCount = 0,
 }: AutoLayoutDialogProps) {
+	const scoped = selectionCount > 1;
 	const cards = useMemo(
 		() =>
 			LAYOUT_OPTIONS.map((opt) => {
@@ -756,11 +760,18 @@ export const AutoLayoutDialog = memo(function AutoLayoutDialog({
 				<DialogHeader>
 					<DialogTitle>Auto Layout</DialogTitle>
 					<DialogDescription>
-						Arrange nodes left-to-right following execution flow. Events are
-						grouped separately with data nodes placed beside their consumers.
+						{scoped
+							? `Arranges the ${selectionCount} selected nodes left-to-right along their execution flow. The rest of the board stays where it is.`
+							: "Arranges every node in this layer left-to-right along its execution flow, with data nodes banded beneath the node that consumes them."}
 					</DialogDescription>
 				</DialogHeader>
 				<div className="grid grid-cols-3 gap-3 mt-1">{cards}</div>
+				<p className="text-xs text-muted-foreground">
+					{scoped
+						? "Press Escape and clear the selection to lay out the whole layer."
+						: "Select two or more nodes first to lay out only that part of the board."}{" "}
+					Undo with ⌘Z.
+				</p>
 			</DialogContent>
 		</Dialog>
 	);

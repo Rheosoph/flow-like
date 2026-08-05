@@ -25,6 +25,7 @@ export * from "./bit/huggingface-mlx-import";
 export * from "./bit/huggingface-model-import";
 export * from "./bit/local-model-filter";
 export * from "./bit/mlx-model-pack";
+export * from "./bit/model-display-name";
 export * from "./bit/tts-asset-repair";
 
 export * from "./schema/index";
@@ -47,6 +48,7 @@ export * from "./temporary-upload-cache";
 export * from "./css-utils";
 export * from "./search-index";
 export * from "./chat-appearance";
+export * from "./composer-activity";
 export * from "./chat-theme-presets";
 export * from "./idb-cleanup";
 export * from "./seed-gradient";

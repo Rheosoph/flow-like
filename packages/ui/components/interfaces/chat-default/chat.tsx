@@ -115,6 +115,11 @@ export interface IChatProps {
 	eventId?: string;
 	/** The event Chat UI keeps its AI transparency disclosure below the composer. */
 	showAiDisclosure?: boolean;
+	/**
+	 * Called on every composer edit with the current draft. Fires on each keystroke, so pass a
+	 * stable reference and keep the handler free of React state updates.
+	 */
+	onDraftChange?: (content: string) => void;
 }
 
 export interface IChatRef {
@@ -145,6 +150,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			boardId,
 			eventId,
 			showAiDisclosure = false,
+			onDraftChange,
 		},
 		ref,
 	) => {
@@ -690,6 +696,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								availableTools={config?.tools ?? []}
 								defaultActiveTools={defaultActiveTools}
 								onSendMessage={handleSendMessage}
+								onContentChange={onDraftChange}
 								fileUpload={config?.allow_file_upload ?? false}
 								audioInput={voiceEnabled}
 								voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
