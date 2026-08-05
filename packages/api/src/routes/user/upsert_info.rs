@@ -1,11 +1,30 @@
 use std::time::Duration;
 
-use crate::{entity::user, error::ApiError, middleware::jwt::AppUser, state::AppState};
+use crate::{
+    entity::user,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    routes::user::{avatar_file_name, identity::sanitize_display_name},
+    state::AppState,
+};
 use axum::{Extension, Json, extract::State};
 use flow_like_types::create_id;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+const ALLOWED_AVATAR_EXTENSIONS: &[&str] = &["webp", "png", "jpg", "jpeg", "gif", "avif"];
+
+/// The extension is user input that ends up in a storage path, so it is matched
+/// against an allowlist rather than sanitized.
+fn normalize_avatar_extension(extension: &str) -> Result<&'static str, ApiError> {
+    let lowered = extension.trim().trim_start_matches('.').to_ascii_lowercase();
+    ALLOWED_AVATAR_EXTENSIONS
+        .iter()
+        .find(|allowed| **allowed == lowered)
+        .copied()
+        .ok_or(ApiError::BAD_REQUEST)
+}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
 pub struct UpsertInfoBody {
@@ -69,26 +88,28 @@ pub async fn upsert_info(
     }
 
     if let Some(name) = payload.name {
-        updated_user.name = Set(Some(name));
+        updated_user.name = Set(sanitize_display_name(&name));
     }
     if let Some(description) = payload.description {
         updated_user.description = Set(Some(description));
     }
     if let Some(avatar_extension) = payload.avatar_extension {
+        let avatar_extension = normalize_avatar_extension(&avatar_extension)?;
         let master_store = state.master_credentials().await?;
         let master_store = master_store.to_store(false).await?;
 
         if let Some(avatar) = &current_user.avatar {
-            let file_name = format!("{}.webp", avatar);
             let path = flow_like_storage::Path::from("media")
                 .child("users")
                 .child(sub.clone())
-                .child(file_name);
+                .child(avatar_file_name(avatar));
             if let Err(err) = master_store.as_generic().delete(&path).await {
                 tracing::error!("Failed to delete existing avatar at {}: {:?}", path, err);
             }
         }
 
+        // The upload is signed for the real extension; the media-transformer
+        // rewrites it to `.webp`, which is what the row points at.
         let id = create_id();
         updated_user.avatar = Set(Some(id.clone()));
 

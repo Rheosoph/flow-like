@@ -2,6 +2,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Subject reported by runs that carry no authenticated caller. It never
+/// identifies a stored account, so consumers must resolve it to the current
+/// viewer instead of looking it up.
+pub const LOCAL_USER_SUB: &str = "local";
+
 /// Represents the user context during execution.
 /// Contains information about the user who triggered the execution,
 /// their role, permissions, and any custom attributes.
@@ -52,11 +57,23 @@ impl UserExecutionContext {
     /// Create an offline/local user context with admin privileges
     pub fn offline() -> Self {
         Self {
-            sub: "local".to_string(),
+            sub: LOCAL_USER_SUB.to_string(),
             role: Some(RoleContext::admin()),
             is_technical_user: false,
             key_id: None,
         }
+    }
+
+    /// Create a context for a trusted local run. Local execution always grants
+    /// admin privileges, but an authenticated run keeps the caller's subject so
+    /// nodes and surfaces resolve the real user instead of the placeholder.
+    pub fn local(sub: impl Into<String>) -> Self {
+        let sub = sub.into();
+        if sub.is_empty() || sub == LOCAL_USER_SUB {
+            return Self::offline();
+        }
+
+        Self::new(sub).with_role(RoleContext::admin())
     }
 
     /// Create a context for technical users (API keys)
@@ -98,7 +115,7 @@ impl UserExecutionContext {
 
     /// Check if this is an offline/local context
     pub fn is_offline(&self) -> bool {
-        self.sub == "local"
+        self.sub == LOCAL_USER_SUB
     }
 
     /// Check if this is a technical user (API key)
@@ -167,6 +184,24 @@ mod tests {
         assert!(ctx.is_offline());
         assert!(ctx.role.is_some());
         assert!(ctx.has_permission(RoleContext::OWNER_PERMISSION));
+    }
+
+    #[test]
+    fn test_local_context_keeps_authenticated_sub() {
+        let ctx = UserExecutionContext::local("user-123");
+        assert_eq!(ctx.sub, "user-123");
+        assert!(!ctx.is_offline());
+        assert!(ctx.has_permission(RoleContext::OWNER_PERMISSION));
+    }
+
+    #[test]
+    fn test_local_context_falls_back_to_offline() {
+        for sub in ["", LOCAL_USER_SUB] {
+            let ctx = UserExecutionContext::local(sub);
+            assert_eq!(ctx.sub, LOCAL_USER_SUB);
+            assert!(ctx.is_offline());
+            assert!(ctx.has_permission(RoleContext::OWNER_PERMISSION));
+        }
     }
 
     #[test]

@@ -54,5 +54,6 @@ export * from "./chat-theme-presets";
 export * from "./idb-cleanup";
 export * from "./seed-gradient";
 export * from "./package-widgets";
+export * from "./user-display";
 export * from "./widget-schema-form";
 export * from "./widget-contract-form";

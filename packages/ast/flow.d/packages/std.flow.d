@@ -1134,6 +1134,18 @@ declare function a2uiGetIframeSrc({ elementRef: Struct }): string;
 declare function a2uiGetTooltipContent({ elementRef: Struct }): { content: string, side: string };
 
 
+// === UI/Elements/Graph ===
+
+/**
+ * Update the nodes, edges or label styles of a graph
+ * @param elementRef — Reference to the graph element
+ * @param property (optional) — Which property to update
+ * @param nodes — Array of graph nodes
+ * @impure has side effects / drives control flow
+ */
+declare function a2uiUpdateGraph({ elementRef: Struct, property?: string, nodes: Struct[] }): void;
+
+
 // === UI/Elements/Hotspot ===
 
 /**

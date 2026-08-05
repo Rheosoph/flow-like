@@ -51,7 +51,7 @@ pub mod log;
 pub mod trace;
 pub mod user_context;
 
-pub use user_context::{RoleContext, UserExecutionContext};
+pub use user_context::{LOCAL_USER_SUB, RoleContext, UserExecutionContext};
 
 const USE_DEPENDENCY_GRAPH: bool = false;
 const RUN_LOCK_TIMEOUT: Duration = Duration::from_secs(3);
@@ -961,11 +961,11 @@ impl InternalRun {
             (log_store, db, write_opts)
         };
 
-        // derive sub from token (JWT) or default to "local"
+        // derive sub from token (JWT) or default to the local placeholder
         let sub_value = token
             .as_ref()
             .and_then(|t| extract_sub_from_jwt(t).ok())
-            .unwrap_or_else(|| "local".to_string());
+            .unwrap_or_else(|| LOCAL_USER_SUB.to_string());
 
         let nodes_executed = Arc::new(AtomicU64::new(0));
         let run = Run {
@@ -1380,6 +1380,15 @@ impl InternalRun {
     /// Set the user execution context for offline/local execution
     pub fn set_offline_user_context(&mut self) {
         self.user_context = Some(UserExecutionContext::offline());
+    }
+
+    /// Set the user execution context for a trusted local run, adopting the
+    /// run's subject. Signed-in runs keep the caller's identity; unauthenticated
+    /// ones fall back to the offline placeholder. Call after any subject
+    /// override so the context matches the run.
+    pub async fn set_local_user_context(&mut self) {
+        let sub = self.run.lock().await.sub.clone();
+        self.user_context = Some(UserExecutionContext::local(sub));
     }
 
     /// Get the user execution context if available

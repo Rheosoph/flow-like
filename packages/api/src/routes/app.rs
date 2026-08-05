@@ -18,6 +18,7 @@ pub mod ai_act;
 pub mod analytics;
 pub mod api;
 pub mod board;
+pub mod cache;
 pub mod comments;
 pub mod connection;
 pub mod data;
@@ -73,6 +74,13 @@ pub fn routes() -> Router<AppState> {
             "/{app_id}/notifications/create",
             post(notifications::create_notification),
         )
+        .route(
+            "/{app_id}/cache",
+            get(cache::read_cache_entry)
+                .put(cache::write_cache_entry)
+                .delete(cache::delete_cache_entry),
+        )
+        .route("/{app_id}/cache/exists", get(cache::cache_entry_exists))
         .nest("/{app_id}/templates", template::routes())
         .nest("/{app_id}/widgets", widget::routes())
         .nest("/{app_id}/pages", page::routes())

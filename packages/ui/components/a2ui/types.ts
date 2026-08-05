@@ -437,7 +437,10 @@ export interface AvatarComponent extends ComponentBase {
 
 export interface UserProfileComponent extends ComponentBase {
 	type: "userProfile";
-	/** User subject/sub ID. Compatible with Set Element Value via component.value. */
+	/**
+	 * User subject/sub ID. Compatible with Set Element Value via component.value.
+	 * The "local" sub of an unauthenticated execution renders the current user.
+	 */
 	value: BoundValue;
 	/** "avatar" | "chip" | "row" | "detailed" | "card" */
 	variant?: BoundValue;

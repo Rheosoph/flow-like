@@ -206,7 +206,7 @@ Example:
         "userprofile" | "user_profile" => r#"UserProfile - Fetch and display a Flow-Like user by subject/sub ID
 Properties:
 - type: "userProfile" (required)
-- value: BoundValue - user subject/sub ID. Compatible with Set Element Value.
+- value: BoundValue - user subject/sub ID. Compatible with Set Element Value. The "local" sub of an unauthenticated execution renders the current user.
 - variant: BoundValue - "avatar" | "chip" | "row" | "detailed" | "card"
 - avatarSize: BoundValue - "xs" | "sm" | "md" | "lg" | "xl" | "2xl"
 - showHover: BoundValue (boolean) - enable hover details

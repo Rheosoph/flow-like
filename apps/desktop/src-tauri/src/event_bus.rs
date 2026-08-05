@@ -155,6 +155,7 @@ impl EventBusEvent {
             .await;
 
         internal_run.set_execution_environment(local_execution_environment());
+        internal_run.set_local_user_context().await;
 
         let run_id = internal_run.run.lock().await.id.clone();
 

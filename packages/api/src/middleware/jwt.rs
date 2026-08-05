@@ -111,9 +111,11 @@ pub struct UserInfo {
     pub email: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_bool")]
     pub email_verified: Option<bool>,
+    pub name: Option<String>,
     pub given_name: Option<String>,
     pub family_name: Option<String>,
     pub middle_name: Option<String>,
+    pub nickname: Option<String>,
     pub preferred_username: Option<String>,
     pub phone_number: Option<String>,
     #[serde(default, deserialize_with = "deserialize_opt_bool")]

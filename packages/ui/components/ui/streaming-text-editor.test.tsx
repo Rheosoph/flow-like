@@ -10,7 +10,11 @@ import {
 	splitStreamingBlocks,
 } from "./streaming-markdown-blocks";
 import { StreamingTextEditor } from "./streaming-text-editor";
-import { RICH_REMARK_PLUGINS, TextEditor, safeDeserialize } from "./text-editor";
+import {
+	RICH_REMARK_PLUGINS,
+	TextEditor,
+	safeDeserialize,
+} from "./text-editor";
 
 const worker = createSlateEditor({ plugins: BaseEditorKit, nodeId: false });
 
@@ -44,18 +48,27 @@ const CORPUS: ReadonlyArray<readonly [string, string]> = [
 	["loose bullet list", "- a\n\n- b\n\n- c"],
 	["list with continuation", "1. item\n\n   continuation paragraph\n\n2. next"],
 	["nested list", "- a\n\n  - b\n\n  - c\n\n- d"],
-	["list containing a fence", "- item\n\n  ```ts\n  const a = 1;\n  ```\n\n- next"],
+	[
+		"list containing a fence",
+		"- item\n\n  ```ts\n  const a = 1;\n  ```\n\n- next",
+	],
 	["directive block", ":::info\nSome info\n\nWith a blank line\n:::\n\nAfter."],
 	["reference link", "See [the docs][ref] for more.\n\n[ref]: https://x.dev"],
 	["html block", "<div>\nhi\n</div>\n\nAfter."],
-	["table then prose", "| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter the table."],
+	[
+		"table then prose",
+		"| A | B |\n| --- | --- |\n| 1 | 2 |\n\nAfter the table.",
+	],
 	[
 		"dollar amounts and block math",
 		"It costs $5 today and $10 tomorrow.\n\nBlock: $$a^2 + b^2$$",
 	],
 	["setext headings", "Title\n===\n\nBody text.\n\nSub\n---\n\nMore."],
 	["thematic break", "Above.\n\n---\n\nBelow."],
-	["fence with blank lines", "Intro.\n\n```js\nconst a = 1;\n\nconst b = 2;\n```\n\nEnd."],
+	[
+		"fence with blank lines",
+		"Intro.\n\n```js\nconst a = 1;\n\nconst b = 2;\n```\n\nEnd.",
+	],
 ];
 
 describe("streaming parse equals whole-document parse at every prefix", () => {
@@ -73,10 +86,9 @@ describe("streaming parse equals whole-document parse at every prefix", () => {
 
 describe("streaming tail integrity", () => {
 	test("an unterminated fence stays one tail block", () => {
-		expect(splitStreamingBlocks("Intro.\n\n```js\nconst a = 1;\n\nco")).toEqual([
-			"Intro.",
-			"```js\nconst a = 1;\n\nco",
-		]);
+		expect(splitStreamingBlocks("Intro.\n\n```js\nconst a = 1;\n\nco")).toEqual(
+			["Intro.", "```js\nconst a = 1;\n\nco"],
+		);
 	});
 
 	test("a half-written table row is not frozen into the cache", () => {
@@ -256,5 +268,80 @@ describe("streaming render matches the settled render", () => {
 		);
 		expect(html).toContain("data-slate-editor");
 		expect((html.match(/data-slate-node="element"/g) ?? []).length).toBe(1);
+	});
+});
+
+async function setupDom() {
+	const { Window } = await import("happy-dom");
+	const window = new Window();
+	Object.assign(window, { SyntaxError, TypeError });
+	Object.assign(globalThis, {
+		document: window.document,
+		Element: window.Element,
+		Event: window.Event,
+		HTMLElement: window.HTMLElement,
+		MouseEvent: window.MouseEvent,
+		Node: window.Node,
+		navigator: window.navigator,
+		window,
+		Document: window.Document,
+		DocumentFragment: window.DocumentFragment,
+		ShadowRoot: window.ShadowRoot,
+		Range: window.Range,
+		Selection: window.Selection,
+		Text: window.Text,
+		Comment: window.Comment,
+		DOMParser: window.DOMParser,
+		getSelection: window.getSelection?.bind(window),
+		getComputedStyle: window.getComputedStyle.bind(window),
+		requestAnimationFrame: window.requestAnimationFrame.bind(window),
+		cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
+		IS_REACT_ACT_ENVIRONMENT: true,
+	});
+	const { createRoot } = await import("react-dom/client");
+	const element = window.document.createElement("div");
+	window.document.body.append(element);
+	// happy-dom's element types are structurally compatible with, but not
+	// identical to, the lib.dom ones react-dom is typed against.
+	const container = element as unknown as HTMLElement;
+	return { container, root: createRoot(container) };
+}
+
+describe("live updates reach the DOM in the same commit", () => {
+	// Parsing happens during render precisely so a token is visible in the same
+	// act() — deferring it to an effect, idle callback or worker would break the
+	// chat's streaming contract.
+	test("each content update is visible synchronously", async () => {
+		const { act } = await import("react");
+		const { container, root } = await setupDom();
+
+		for (const [text, expected] of [
+			["Hel", "Hel"],
+			["Hello wor", "Hello wor"],
+			["Hello world", "Hello world"],
+			["Hello world\n\nSecond paragraph", "Second paragraph"],
+		] as const) {
+			await act(async () => {
+				root.render(createElement(StreamingTextEditor, { content: text }));
+			});
+			expect(container.textContent).toContain(expected);
+		}
+	});
+
+	test("a growing document keeps earlier text in the DOM", async () => {
+		const { act } = await import("react");
+		const { container, root } = await setupDom();
+
+		const document_ = Array.from(
+			{ length: 30 },
+			(_, i) => `## Section ${i}\n\nBody text for section ${i}.`,
+		).join("\n\n");
+
+		await act(async () => {
+			root.render(createElement(StreamingTextEditor, { content: document_ }));
+		});
+
+		expect(container.textContent).toContain("Section 0");
+		expect(container.textContent).toContain("Section 29");
 	});
 });

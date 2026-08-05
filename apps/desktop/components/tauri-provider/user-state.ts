@@ -11,18 +11,20 @@ import type {
 	INotificationsOverview,
 	IUserLookup,
 } from "@flow-like/flow-like-ui/state/backend-state/types";
-import type {
-	IBillingSession,
-	IPushTargetStatus,
-	IPricingResponse,
-	IRegisterPushTargetRequest,
-	IRegisterPushTargetResponse,
-	ISubscribeRequest,
-	ISubscribeResponse,
-	IUserInfo,
-	IUserTemplateInfo,
-	IUserUpdate,
-	IUserWidgetInfo,
+import {
+	type IBillingSession,
+	type IPushTargetStatus,
+	type IPricingResponse,
+	type IRegisterPushTargetRequest,
+	type IRegisterPushTargetResponse,
+	type ISubscribeRequest,
+	type ISubscribeResponse,
+	type IUserInfo,
+	type IUserTemplateInfo,
+	type IUserUpdate,
+	type IUserWidgetInfo,
+	isLocalUserSub,
+	userLookupFromClaims,
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
@@ -148,7 +150,34 @@ export class UserState implements IUserState {
 		return counts.reduce((sum, count) => sum + count, 0);
 	}
 
+	/**
+	 * Local executions report the "local" sub, which no account matches —
+	 * resolve it to the signed-in user, falling back to cached auth claims
+	 * when the hub is unreachable.
+	 */
+	private async lookupCurrentUser(): Promise<IUserLookup> {
+		const claims = this.backend.auth?.user?.profile;
+		const sub = claims?.sub;
+
+		if (sub && !isLocalUserSub(sub) && this.hasRemoteAccessToken()) {
+			try {
+				return await this.lookupUser(sub);
+			} catch (error) {
+				console.warn(
+					"[UserState.lookupUser] falling back to auth claims for the local sub:",
+					error,
+				);
+			}
+		}
+
+		return userLookupFromClaims(claims);
+	}
+
 	async lookupUser(userId: string): Promise<IUserLookup> {
+		if (isLocalUserSub(userId)) {
+			return await this.lookupCurrentUser();
+		}
+
 		if (!this.backend.profile || !this.backend.auth) {
 			throw new Error("Profile or auth context not available");
 		}
@@ -165,20 +194,26 @@ export class UserState implements IUserState {
 		return result;
 	}
 	async searchUsers(query: string): Promise<IUserLookup[]> {
-		if (!this.backend.profile || !this.backend.auth) {
-			throw new Error("Profile or auth context not available");
+		const trimmed = query.trim();
+		if (!trimmed || !this.backend.profile || !this.backend.auth) {
+			return [];
 		}
 
-		const result = await fetcher<IUserLookup[]>(
-			this.backend.profile,
-			`user/search/${query}`,
-			{
-				method: "GET",
-			},
-			this.backend.auth,
-		);
+		try {
+			const result = await fetcher<IUserLookup[]>(
+				this.backend.profile,
+				`user/search/${encodeURIComponent(trimmed)}`,
+				{
+					method: "GET",
+				},
+				this.backend.auth,
+			);
 
-		return result;
+			return result ?? [];
+		} catch (error) {
+			console.warn("[UserState.searchUsers] search failed:", error);
+			return [];
+		}
 	}
 	async getNotifications(): Promise<INotificationsOverview> {
 		// Get local notifications first (works offline)

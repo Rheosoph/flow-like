@@ -210,7 +210,8 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		value: {
 			type: "boundValue",
 			required: true,
-			description: "User subject/sub ID",
+			description:
+				'User subject/sub ID. The "local" sub of an unauthenticated execution renders the current user',
 		},
 		variant: {
 			type: "boundValue",

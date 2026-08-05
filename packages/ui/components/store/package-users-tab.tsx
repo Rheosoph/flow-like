@@ -14,6 +14,12 @@ import type {
 	UpdateUserPermissionRequest,
 } from "../../lib/schema/wasm";
 import {
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+	userSecondaryLabel,
+} from "../../lib/user-display";
+import {
 	Badge,
 	Button,
 	RelativeTime,
@@ -59,11 +65,12 @@ function roleBadgeVariant(
 }
 
 function UserAvatar({ user }: { user: PackageUser }) {
-	if (user.avatar) {
+	const avatar = userAvatarUrl(user);
+	if (avatar) {
 		return (
 			<img
-				src={user.avatar}
-				alt={user.username ?? user.userId}
+				src={avatar}
+				alt={userDisplayName(user, user.userId)}
 				className="h-8 w-8 rounded-full object-cover"
 			/>
 		);
@@ -71,7 +78,7 @@ function UserAvatar({ user }: { user: PackageUser }) {
 
 	return (
 		<div className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-xs font-medium uppercase">
-			{(user.username ?? user.userId).charAt(0)}
+			{userInitials(user)}
 		</div>
 	);
 }
@@ -233,42 +240,46 @@ export function PackageUsersTab({
 						</TableRow>
 					</TableHeader>
 					<TableBody>
-						{users.map((user) => (
-							<TableRow key={user.id}>
-								<TableCell>
-									<div className="flex items-center gap-3">
-										<UserAvatar user={user} />
-										<div className="min-w-0">
-											<p className="truncate text-sm font-medium">
-												{user.name ?? user.username ?? user.userId}
-											</p>
-											{user.username && user.name && (
-												<p className="truncate text-xs text-muted-foreground">
-													@{user.username}
+						{users.map((user) => {
+							const secondaryLabel = userSecondaryLabel(user);
+
+							return (
+								<TableRow key={user.id}>
+									<TableCell>
+										<div className="flex items-center gap-3">
+											<UserAvatar user={user} />
+											<div className="min-w-0">
+												<p className="truncate text-sm font-medium">
+													{userDisplayName(user, user.userId)}
 												</p>
-											)}
+												{secondaryLabel && (
+													<p className="truncate text-xs text-muted-foreground">
+														{secondaryLabel}
+													</p>
+												)}
+											</div>
 										</div>
-									</div>
-								</TableCell>
-								<TableCell>
-									<Badge variant={roleBadgeVariant(user.permission)}>
-										{permissionLabel(user.permission)}
-									</Badge>
-								</TableCell>
-								<TableCell className="text-sm text-muted-foreground">
-									<RelativeTime fallback="—" value={user.grantedAt} />
-								</TableCell>
-								<TableCell className="text-right">
-									<UserActions
-										user={user}
-										callerPermission={currentUserPermission}
-										onUpdatePermission={onUpdatePermission}
-										onRemoveUser={onRemoveUser}
-										isMutating={isMutating}
-									/>
-								</TableCell>
-							</TableRow>
-						))}
+									</TableCell>
+									<TableCell>
+										<Badge variant={roleBadgeVariant(user.permission)}>
+											{permissionLabel(user.permission)}
+										</Badge>
+									</TableCell>
+									<TableCell className="text-sm text-muted-foreground">
+										<RelativeTime fallback="—" value={user.grantedAt} />
+									</TableCell>
+									<TableCell className="text-right">
+										<UserActions
+											user={user}
+											callerPermission={currentUserPermission}
+											onUpdatePermission={onUpdatePermission}
+											onRemoveUser={onRemoveUser}
+											isMutating={isMutating}
+										/>
+									</TableCell>
+								</TableRow>
+							);
+						})}
 					</TableBody>
 				</Table>
 			)}

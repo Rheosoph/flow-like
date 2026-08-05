@@ -10,6 +10,7 @@ use crate::state::AppState;
 
 pub mod ai_act;
 pub mod bit;
+pub mod cache;
 pub mod connections;
 pub mod forks;
 pub mod governance;
@@ -151,6 +152,7 @@ pub fn routes() -> Router<AppState> {
         .nest("/ai-act", ai_act::routes())
         // Run reconciliation
         .route("/runs/sweep", post(runs::sweep_runs))
+        .route("/cache/sweep", post(cache::sweep_cache))
         // Fork orphan janitor
         .route("/forks/orphans", get(forks::list_orphan_forks))
         .route(

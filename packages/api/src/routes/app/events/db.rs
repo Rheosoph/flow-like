@@ -53,8 +53,23 @@ pub fn filter_event_list_execution(mut event: CoreEvent) -> CoreEvent {
 
 const USER_FACING_EVENT_TYPES: &[&str] = &["simple_chat", "generic_form", "quick_action"];
 
+/// Event types backing generated machinery rather than an author-managed event.
+/// They are never part of the listed event set.
+const HIDDEN_EVENT_TYPES: &[&str] = &["ontology_action"];
+
+/// The route list is the same rows as the event list seen through a different
+/// column, so both endpoints must hide the same events. When they disagree, a
+/// caller diffing the two reads the surplus as orphaned and deletes live data.
+pub fn is_listed_event_type(event_type: &str) -> bool {
+    !HIDDEN_EVENT_TYPES.contains(&event_type)
+}
+
+pub fn is_user_facing_event_parts(default_page_id: Option<&str>, event_type: &str) -> bool {
+    default_page_id.is_some() || USER_FACING_EVENT_TYPES.contains(&event_type)
+}
+
 pub fn is_user_facing_event(event: &CoreEvent) -> bool {
-    event.default_page_id.is_some() || USER_FACING_EVENT_TYPES.contains(&event.event_type.as_str())
+    is_user_facing_event_parts(event.default_page_id.as_deref(), &event.event_type)
 }
 
 /// Convert a core Event to database Event model

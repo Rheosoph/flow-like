@@ -9,11 +9,13 @@ use axum::{
     http::{HeaderMap, header},
     routing::post,
 };
-use flow_like_types::maintenance::{
-    MaintenanceRunRequest, MaintenanceRunResponse, TelemetryAlertsMaintenanceResult,
+use flow_like_types::{
+    cache::CacheCleanupResult,
+    maintenance::{MaintenanceRunRequest, MaintenanceRunResponse, TelemetryAlertsMaintenanceResult},
 };
 
 use crate::{
+    cache::sweeper::sweep_once as sweep_cache_once,
     error::ApiError,
     state::AppState,
     telemetry::alerts::{TelemetryAlertConfig, evaluate_once},
@@ -64,6 +66,33 @@ async fn run_maintenance_job(
                     evaluated: result.evaluated,
                     triggered: result.triggered,
                     resolved: result.resolved,
+                },
+            )))
+        }
+        MaintenanceRunRequest::CacheCleanup => {
+            let store = state.cache_store.clone().ok_or_else(|| {
+                ApiError::service_unavailable(
+                    "Cache backend is not configured or failed to initialize on this deployment",
+                )
+            })?;
+
+            let deleted = sweep_cache_once(store.as_ref()).await.map_err(|error| {
+                tracing::error!(error = %error, "Scheduled cache cleanup failed");
+                ApiError::internal_error(flow_like_types::anyhow!(
+                    "Cache cleanup failed: {}",
+                    error
+                ))
+            })?;
+
+            tracing::info!(
+                deleted,
+                backend = store.backend_name(),
+                "Maintenance cache cleanup completed"
+            );
+
+            Ok(Json(MaintenanceRunResponse::CacheCleanup(
+                CacheCleanupResult {
+                    deleted: deleted.max(0) as u64,
                 },
             )))
         }

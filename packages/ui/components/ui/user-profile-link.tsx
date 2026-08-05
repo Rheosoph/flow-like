@@ -9,9 +9,17 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
+import {
+	type UserDisplayLike,
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+	userSecondaryLabel,
+} from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IUserLookup } from "../../state/backend-state/types";
+import { resolveAccountId } from "../../state/backend-state/user-state";
 import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./hover-card";
 import { RelativeTime } from "./relative-time";
@@ -34,57 +42,21 @@ export interface UserProfileLinkProps {
 	muted?: boolean;
 }
 
-function deriveInitials(label?: string | null) {
-	if (!label) return "??";
-	const parts = label.trim().split(/\s+/).filter(Boolean);
-	if (parts.length === 0) return "??";
-	if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-	return `${parts[0][0] ?? ""}${
-		parts[parts.length - 1][0] ?? ""
-	}`.toUpperCase();
-}
-
-function preferredLabel(
+/** Lookup wins per field, props fill the gaps. */
+function mergeUser(
 	lookup?: IUserLookup | null,
 	props?: Pick<
 		UserProfileLinkProps,
-		| "name"
-		| "email"
-		| "username"
-		| "preferredUsername"
-		| "userId"
-		| "fallbackLabel"
+		"name" | "email" | "username" | "preferredUsername" | "avatarUrl"
 	>,
-) {
-	return (
-		lookup?.name ??
-		props?.name ??
-		lookup?.preferred_username ??
-		props?.preferredUsername ??
-		lookup?.username ??
-		props?.username ??
-		lookup?.email ??
-		props?.email ??
-		props?.userId ??
-		props?.fallbackLabel ??
-		"Unknown user"
-	);
-}
-
-function secondaryLabel(
-	lookup?: IUserLookup | null,
-	props?: Pick<
-		UserProfileLinkProps,
-		"email" | "username" | "preferredUsername" | "userId"
-	>,
-) {
-	const handle =
-		lookup?.preferred_username ??
-		props?.preferredUsername ??
-		lookup?.username ??
-		props?.username;
-	if (handle) return `@${handle}`;
-	return lookup?.email ?? props?.email ?? props?.userId ?? null;
+): UserDisplayLike {
+	return {
+		name: lookup?.name ?? props?.name,
+		preferred_username: lookup?.preferred_username ?? props?.preferredUsername,
+		username: lookup?.username ?? props?.username,
+		email: lookup?.email ?? props?.email,
+		avatar_url: lookup?.avatar_url ?? props?.avatarUrl,
+	};
 }
 
 export function UserProfileLink({
@@ -111,26 +83,25 @@ export function UserProfileLink({
 		Boolean(userId),
 	);
 
-	const label = preferredLabel(lookup.data, {
+	// A "local" sub means the executing user was not authenticated: the lookup
+	// resolves it to the current user, so use the account id it returns.
+	const resolvedUserId = resolveAccountId(lookup.data?.id, userId);
+
+	const user = mergeUser(lookup.data, {
 		name,
 		email,
 		username,
 		preferredUsername,
-		userId,
-		fallbackLabel,
+		avatarUrl,
 	});
+	const label = userDisplayName(user, resolvedUserId ?? fallbackLabel);
 	const visibleLabel =
 		compact && label.length > 22 ? `${label.slice(0, 22)}...` : label;
-	const subtitle = secondaryLabel(lookup.data, {
-		email,
-		username,
-		preferredUsername,
-		userId,
-	});
-	const resolvedAvatar = lookup.data?.avatar_url ?? avatarUrl ?? "";
+	const subtitle = userSecondaryLabel(user) ?? resolvedUserId ?? null;
+	const resolvedAvatar = userAvatarUrl(user) ?? "";
 	const resolvedDescription = lookup.data?.description ?? description;
 	const resolvedCreatedAt = lookup.data?.created_at ?? createdAt;
-	const initials = useMemo(() => deriveInitials(label), [label]);
+	const initials = useMemo(() => userInitials(label, "??"), [label]);
 
 	if (!userId) {
 		return (
@@ -147,31 +118,41 @@ export function UserProfileLink({
 		);
 	}
 
+	const triggerClassName = cn(
+		"group inline-flex min-w-0 items-center gap-1.5 rounded-md text-xs font-medium transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+		muted ? "text-muted-foreground" : "text-foreground",
+		className,
+	);
+
+	const triggerContent = (
+		<>
+			{showAvatar && (
+				<Avatar className={cn("h-4 w-4", avatarClassName)}>
+					<AvatarImage src={resolvedAvatar} alt={label} />
+					<AvatarFallback className="text-[8px]">{initials}</AvatarFallback>
+				</Avatar>
+			)}
+			{lookup.isLoading ? (
+				<Skeleton className="h-3 w-16" />
+			) : (
+				<span className="truncate group-hover:underline">{visibleLabel}</span>
+			)}
+		</>
+	);
+
 	return (
 		<HoverCard openDelay={120} closeDelay={120}>
 			<HoverCardTrigger asChild>
-				<a
-					href={`/profile?sub=${encodeURIComponent(userId)}`}
-					className={cn(
-						"group inline-flex min-w-0 items-center gap-1.5 rounded-md text-xs font-medium transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
-						muted ? "text-muted-foreground" : "text-foreground",
-						className,
-					)}
-				>
-					{showAvatar && (
-						<Avatar className={cn("h-4 w-4", avatarClassName)}>
-							<AvatarImage src={resolvedAvatar} alt={label} />
-							<AvatarFallback className="text-[8px]">{initials}</AvatarFallback>
-						</Avatar>
-					)}
-					{lookup.isLoading ? (
-						<Skeleton className="h-3 w-16" />
-					) : (
-						<span className="truncate group-hover:underline">
-							{visibleLabel}
-						</span>
-					)}
-				</a>
+				{resolvedUserId ? (
+					<a
+						href={`/profile?sub=${encodeURIComponent(resolvedUserId)}`}
+						className={triggerClassName}
+					>
+						{triggerContent}
+					</a>
+				) : (
+					<span className={triggerClassName}>{triggerContent}</span>
+				)}
 			</HoverCardTrigger>
 			<HoverCardContent align="start" className="w-80 p-0">
 				<div className="border-b bg-muted/30 p-4">
@@ -187,13 +168,15 @@ export function UserProfileLink({
 									{subtitle}
 								</div>
 							)}
-							<a
-								href={`/profile?sub=${encodeURIComponent(userId)}`}
-								className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-							>
-								View profile
-								<ArrowUpRight className="h-3 w-3" />
-							</a>
+							{resolvedUserId && (
+								<a
+									href={`/profile?sub=${encodeURIComponent(resolvedUserId)}`}
+									className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+								>
+									View profile
+									<ArrowUpRight className="h-3 w-3" />
+								</a>
+							)}
 						</div>
 					</div>
 				</div>
@@ -230,15 +213,17 @@ export function UserProfileLink({
 									/>
 								</div>
 							) : null}
-							<div className="flex items-center justify-between gap-3">
-								<span className="inline-flex items-center gap-1.5 text-muted-foreground">
-									<IdCard className="h-3.5 w-3.5" />
-									User ID
-								</span>
-								<code className="max-w-44 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
-									{userId}
-								</code>
-							</div>
+							{resolvedUserId ? (
+								<div className="flex items-center justify-between gap-3">
+									<span className="inline-flex items-center gap-1.5 text-muted-foreground">
+										<IdCard className="h-3.5 w-3.5" />
+										User ID
+									</span>
+									<code className="max-w-44 truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
+										{resolvedUserId}
+									</code>
+								</div>
+							) : null}
 							{resolvedDescription ? (
 								<p className="rounded-md bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
 									{resolvedDescription}

@@ -1,21 +1,27 @@
 use crate::{
-    entity::{membership, user},
+    entity::{membership, sea_orm_active_enums::UserStatus, user},
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::user::sign_avatar,
+    routes::user::{
+        identity::{RankableUser, SearchTerm, escape_like_pattern, score_candidate},
+        sign_avatar,
+    },
     state::AppState,
 };
 use axum::{
     Extension, Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
 };
 use flow_like::hub::Lookup;
 use flow_like_types::Value;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{
+    ColumnTrait, Condition, EntityTrait, QueryFilter, QuerySelect,
+    sea_query::{Expr, LikeExpr, extension::postgres::PgExpr},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct UserLookupResponse {
@@ -219,17 +225,39 @@ async fn ensure_executor_lookup_permission(
     Ok(())
 }
 
+const DEFAULT_SEARCH_LIMIT: u64 = 10;
+const MAX_SEARCH_LIMIT: u64 = 25;
+/// Ranking only sees what the database returns, so the candidate pool is wider
+/// than the response — otherwise an arbitrary unordered slice decides the winners.
+const CANDIDATE_POOL_FACTOR: u64 = 8;
+const MAX_CANDIDATE_POOL: u64 = 200;
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct UserSearchQuery {
+    #[serde(default)]
+    pub limit: Option<u64>,
+}
+
+/// `ILIKE` with no wildcards is exactly case-insensitive equality.
+fn ilike_eq(column: user::Column, value: &str) -> sea_orm::sea_query::SimpleExpr {
+    Expr::col(column).ilike(LikeExpr::new(escape_like_pattern(value)).escape('\\'))
+}
+
+fn ilike_contains(column: user::Column, pattern: &str) -> sea_orm::sea_query::SimpleExpr {
+    Expr::col(column).ilike(LikeExpr::new(pattern).escape('\\'))
+}
+
 #[utoipa::path(
     get,
     path = "/user/search/{query}",
     tag = "user",
     params(
-        ("query" = String, Path, description = "Search query (username, email, or name)")
+        ("query" = String, Path, description = "Name, handle, email or user ID to search for"),
+        UserSearchQuery
     ),
     responses(
-        (status = 200, description = "Users matching the search query", body = Vec<UserLookupResponse>),
-        (status = 401, description = "Unauthorized"),
-        (status = 404, description = "No users found")
+        (status = 200, description = "Users matching the search query, best match first", body = Vec<UserLookupResponse>),
+        (status = 401, description = "Unauthorized")
     ),
     security(
         ("bearer_auth" = [])
@@ -240,56 +268,112 @@ pub async fn user_search(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(query): Path<String>,
+    Query(params): Query<UserSearchQuery>,
 ) -> Result<Json<Vec<UserLookupResponse>>, ApiError> {
     user.sub()?;
     let lookup_config = state.platform_config.lookup.clone();
+    let limit = params
+        .limit
+        .unwrap_or(DEFAULT_SEARCH_LIMIT)
+        .clamp(1, MAX_SEARCH_LIMIT);
 
-    // First try exact matches
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    // Pasting an id or a full email address should resolve even when it is shorter
+    // than the substring-search floor.
     let exact_matches = user::Entity::find()
         .filter(
-            user::Column::Id
-                .eq(&query)
-                .or(user::Column::Email.eq(&query))
-                .or(user::Column::Username.eq(&query)),
+            Condition::any()
+                .add(user::Column::Id.eq(trimmed))
+                .add(ilike_eq(user::Column::Email, trimmed))
+                .add(ilike_eq(user::Column::Username, trimmed))
+                .add(ilike_eq(user::Column::PreferredUsername, trimmed)),
         )
+        .filter(user::Column::Status.ne(UserStatus::Banned))
+        .limit(MAX_SEARCH_LIMIT)
         .all(&state.db)
         .await?;
 
-    if !exact_matches.is_empty() {
-        let mut responses: Vec<UserLookupResponse> = Vec::with_capacity(exact_matches.len());
-
-        for user_info in exact_matches {
-            let response =
-                UserLookupResponse::parse(user_info, lookup_config.clone(), &state).await;
-            responses.push(response);
+    // A one-character term matches most of the table, so it is not worth scanning for.
+    let term = SearchTerm::parse(trimmed);
+    let fuzzy_matches = match &term {
+        Some(term) => {
+            let pattern = term.like_pattern();
+            let pool = (limit * CANDIDATE_POOL_FACTOR).min(MAX_CANDIDATE_POOL);
+            user::Entity::find()
+                .filter(
+                    Condition::any()
+                        .add(ilike_contains(user::Column::Name, &pattern))
+                        .add(ilike_contains(user::Column::PreferredUsername, &pattern))
+                        .add(ilike_contains(user::Column::Email, &pattern))
+                        .add(ilike_contains(user::Column::Username, &pattern)),
+                )
+                .filter(user::Column::Status.ne(UserStatus::Banned))
+                .limit(pool)
+                .all(&state.db)
+                .await?
         }
+        None => Vec::new(),
+    };
 
-        return Ok(Json(responses));
+    let mut seen = HashSet::with_capacity(exact_matches.len() + fuzzy_matches.len());
+    let mut candidates: Vec<user::Model> = Vec::with_capacity(seen.capacity());
+    for candidate in exact_matches.into_iter().chain(fuzzy_matches) {
+        if seen.insert(candidate.id.clone()) {
+            candidates.push(candidate);
+        }
     }
 
-    // If no exact matches, try fuzzy search
-    let fuzzy_query = format!("%{}%", query);
-    let fuzzy_matches = user::Entity::find()
-        .filter(
-            user::Column::Username
-                .like(&fuzzy_query)
-                .or(user::Column::Name.like(&fuzzy_query))
-                .or(user::Column::Email.like(&fuzzy_query)),
-        )
-        .limit(10)
-        .all(&state.db)
-        .await?;
-
-    if fuzzy_matches.is_empty() {
-        return Err(ApiError::NOT_FOUND);
+    if candidates.is_empty() {
+        return Ok(Json(Vec::new()));
     }
 
-    let mut responses: Vec<UserLookupResponse> = Vec::with_capacity(fuzzy_matches.len());
+    // Without a term the exact pass already decided the set; ranking is a no-op.
+    if let Some(term) = &term {
+        let mut ranked = candidates
+            .into_iter()
+            .map(|candidate| {
+                let score = score_candidate(
+                    &RankableUser {
+                        id: &candidate.id,
+                        name: candidate.name.as_deref(),
+                        preferred_username: candidate.preferred_username.as_deref(),
+                        username: candidate.username.as_deref(),
+                        email: candidate.email.as_deref(),
+                        has_avatar: candidate.avatar.is_some(),
+                    },
+                    term,
+                );
+                (score, candidate)
+            })
+            .collect::<Vec<_>>();
 
-    for user_info in fuzzy_matches {
-        let response = UserLookupResponse::parse(user_info, lookup_config.clone(), &state).await;
-        responses.push(response);
+        // Ties break on id so paging over a stable dataset stays stable.
+        ranked.sort_by(|(left_score, left), (right_score, right)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        candidates = ranked
+            .into_iter()
+            .map(|(_, candidate)| candidate)
+            .collect::<Vec<_>>();
     }
+
+    candidates.truncate(limit as usize);
+
+    // Each response signs an avatar URL against the object store; serially that is
+    // one round trip per result.
+    let responses = futures::future::join_all(
+        candidates
+            .into_iter()
+            .map(|candidate| UserLookupResponse::parse(candidate, lookup_config.clone(), &state)),
+    )
+    .await;
 
     Ok(Json(responses))
 }

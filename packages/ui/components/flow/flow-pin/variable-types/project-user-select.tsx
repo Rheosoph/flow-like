@@ -14,6 +14,10 @@ import {
 	convertJsonToUint8Array,
 	parseUint8ArrayToJson,
 } from "../../../../lib/uint8";
+import {
+	userDisplayName,
+	userSecondaryLabel,
+} from "../../../../lib/user-display";
 import type {
 	IMember,
 	IUserLookup,
@@ -27,28 +31,19 @@ function normalizeSub(value: number[] | undefined | null): string {
 	return typeof parsed === "string" ? parsed : "";
 }
 
+/** Falls back to the raw sub: picking a user by id stays a valid affordance here. */
 function getUserDisplayName(
 	user: IUserLookup | undefined,
 	sub: string,
 ): string {
-	return (
-		user?.name ??
-		user?.preferred_username ??
-		user?.username ??
-		user?.email ??
-		sub ??
-		"Unknown User"
-	);
+	return userDisplayName(user, sub || "Unknown User");
 }
 
 function getUserSecondaryLabel(
 	user: IUserLookup | undefined,
 	sub: string,
 ): string {
-	const secondary = user?.preferred_username ?? user?.username ?? user?.email;
-	const displayName = getUserDisplayName(user, sub);
-	if (secondary && secondary !== displayName) return secondary;
-	return sub;
+	return userSecondaryLabel(user) ?? sub;
 }
 
 export function ProjectUserSelect({

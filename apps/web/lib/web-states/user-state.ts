@@ -12,18 +12,20 @@ import type {
 	INotificationsOverview,
 	IUserLookup,
 } from "@flow-like/flow-like-ui/state/backend-state/types";
-import type {
-	IBillingSession,
-	IPricingResponse,
-	IPushTargetStatus,
-	IRegisterPushTargetRequest,
-	IRegisterPushTargetResponse,
-	ISubscribeRequest,
-	ISubscribeResponse,
-	IUserInfo,
-	IUserTemplateInfo,
-	IUserUpdate,
-	IUserWidgetInfo,
+import {
+	type IBillingSession,
+	type IPricingResponse,
+	type IPushTargetStatus,
+	type IRegisterPushTargetRequest,
+	type IRegisterPushTargetResponse,
+	type ISubscribeRequest,
+	type ISubscribeResponse,
+	type IUserInfo,
+	type IUserTemplateInfo,
+	type IUserUpdate,
+	type IUserWidgetInfo,
+	isLocalUserSub,
+	userLookupFromClaims,
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { createId } from "@paralleldrive/cuid2";
@@ -118,17 +120,50 @@ export class WebUserState implements IUserState {
 		);
 	}
 
+	/**
+	 * Local executions report the "local" sub, which no account matches —
+	 * resolve it to the signed-in user, falling back to cached auth claims
+	 * when the hub is unreachable.
+	 */
+	private async lookupCurrentUser(): Promise<IUserLookup> {
+		const claims = this.backend.auth?.user?.profile;
+		const sub = claims?.sub;
+
+		if (sub && !isLocalUserSub(sub) && this.hasRemoteAccessToken()) {
+			try {
+				return await this.lookupUser(sub);
+			} catch (error) {
+				console.warn(
+					"[WebUserState.lookupUser] falling back to auth claims for the local sub:",
+					error,
+				);
+			}
+		}
+
+		return userLookupFromClaims(claims);
+	}
+
 	async lookupUser(userId: string): Promise<IUserLookup> {
+		if (isLocalUserSub(userId)) {
+			return await this.lookupCurrentUser();
+		}
+
 		return apiGet<IUserLookup>(`user/lookup/${userId}`, this.backend.auth);
 	}
 
 	async searchUsers(query: string): Promise<IUserLookup[]> {
+		const trimmed = query.trim();
+		if (!trimmed) return [];
+
 		try {
-			return await apiGet<IUserLookup[]>(
-				`user/search/${encodeURIComponent(query)}`,
-				this.backend.auth,
+			return (
+				(await apiGet<IUserLookup[]>(
+					`user/search/${encodeURIComponent(trimmed)}`,
+					this.backend.auth,
+				)) ?? []
 			);
-		} catch {
+		} catch (error) {
+			console.warn("[UserState.searchUsers] search failed:", error);
 			return [];
 		}
 	}

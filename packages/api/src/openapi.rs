@@ -356,6 +356,11 @@ impl Modify for SecurityAddon {
         crate::routes::app::comments::remove_comment::remove_comment,
         // Notifications routes
         crate::routes::app::notifications::create_notification,
+        // Cache routes
+        crate::routes::app::cache::read_cache_entry,
+        crate::routes::app::cache::cache_entry_exists,
+        crate::routes::app::cache::write_cache_entry,
+        crate::routes::app::cache::delete_cache_entry,
         // Data routes
         crate::routes::app::data::upload_files::upload_files,
         crate::routes::app::data::upload_files::upload_user_files,
@@ -521,6 +526,7 @@ impl Modify for SecurityAddon {
         crate::routes::admin::sinks::list_tokens::list_tokens,
         crate::routes::admin::profiles::delete_profile_template::delete_profile_template,
         crate::routes::admin::runs::sweep_runs,
+        crate::routes::admin::cache::sweep_cache,
         // Course routes (University)
         crate::routes::course::courses::list_courses,
         crate::routes::course::courses::get_course,
@@ -571,6 +577,13 @@ impl Modify for SecurityAddon {
         // Health schemas
         crate::routes::health::HealthResponse,
         crate::routes::health::DbHealthResponse,
+        // Cache schemas
+        crate::routes::app::cache::ReadCacheResponse,
+        crate::routes::app::cache::ExistsCacheResponse,
+        crate::routes::app::cache::WriteCacheRequest,
+        crate::routes::app::cache::WriteCacheResponse,
+        crate::routes::app::cache::DeleteCacheResponse,
+        crate::routes::admin::cache::SweepCacheResponse,
         // OAuth schemas
         crate::routes::oauth::TokenExchangeRequest,
         crate::routes::oauth::TokenRefreshRequest,

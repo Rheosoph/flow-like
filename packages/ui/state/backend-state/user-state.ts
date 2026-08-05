@@ -14,6 +14,56 @@ export interface IUserUpdate {
 	tutorial_completed?: boolean;
 }
 
+/**
+ * Sub reported by executions without an authenticated caller (local/offline
+ * runs, anonymous invocations). It never identifies a stored account, so the
+ * frontend resolves it to whoever is currently signed in.
+ */
+export const LOCAL_USER_SUB = "local";
+
+/** Subset of the OIDC id-token claims used to describe the signed-in user. */
+export interface IUserClaims {
+	sub?: string;
+	name?: string;
+	preferred_username?: string;
+	nickname?: string;
+	email?: string;
+	picture?: string;
+}
+
+export function isLocalUserSub(userId?: string | null): boolean {
+	return userId?.trim().toLowerCase() === LOCAL_USER_SUB;
+}
+
+/**
+ * First candidate that identifies a stored account. The local placeholder never
+ * does, so it is dropped before an id is rendered or linked to a profile page.
+ */
+export function resolveAccountId(
+	...candidates: (string | null | undefined)[]
+): string | undefined {
+	const match = candidates.find(
+		(candidate) => candidate && !isLocalUserSub(candidate),
+	);
+	return match ?? undefined;
+}
+
+/**
+ * Build a lookup record for the signed-in user from cached auth claims. Used
+ * when the local sub cannot be resolved against the hub (offline, no account).
+ */
+export function userLookupFromClaims(claims?: IUserClaims | null): IUserLookup {
+	return {
+		id: claims?.sub ?? LOCAL_USER_SUB,
+		name: claims?.name ?? (claims?.sub ? undefined : "You"),
+		preferred_username: claims?.preferred_username,
+		username: claims?.nickname,
+		email: claims?.email,
+		avatar_url: claims?.picture,
+		created_at: "",
+	};
+}
+
 export interface IUserInfo {
 	id: string;
 	stripeId?: string;

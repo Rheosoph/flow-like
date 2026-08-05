@@ -69,6 +69,8 @@ pub enum Relation {
     AppAnalyticsDaily,
     #[sea_orm(has_many = "super::app_board_score::Entity")]
     AppBoardScore,
+    #[sea_orm(has_many = "super::app_cache_entry::Entity")]
+    AppCacheEntry,
     #[sea_orm(has_many = "super::app_discount::Entity")]
     AppDiscount,
     #[sea_orm(has_many = "super::app_group::Entity")]
@@ -174,6 +176,12 @@ impl Related<super::app_analytics_daily::Entity> for Entity {
 impl Related<super::app_board_score::Entity> for Entity {
     fn to() -> RelationDef {
         Relation::AppBoardScore.def()
+    }
+}
+
+impl Related<super::app_cache_entry::Entity> for Entity {
+    fn to() -> RelationDef {
+        Relation::AppCacheEntry.def()
     }
 }
 

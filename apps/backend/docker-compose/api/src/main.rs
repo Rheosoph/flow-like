@@ -9,6 +9,7 @@ use axum::{
     middleware::{self, Next},
     response::IntoResponse,
 };
+use flow_like_api::cache::sweeper::{CacheSweeperConfig, spawn_cache_sweeper};
 use flow_like_api::execution::{RunSweeperConfig, spawn_run_sweeper};
 use flow_like_api::telemetry::{
     TelemetryAlertConfig, TelemetryRollupConfig, TelemetrySweeperConfig,
@@ -76,6 +77,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let _sweeper_handle =
         spawn_run_sweeper(Arc::new(state.db.clone()), RunSweeperConfig::from_env());
+
+    // Only spawns for backends without native expiry; the others no-op and log why.
+    let _cache_sweeper_handle = state
+        .cache_store
+        .clone()
+        .and_then(|store| spawn_cache_sweeper(store, CacheSweeperConfig::from_env()));
 
     // Spawned before the sweeper so the aggregates lead the deletions. The
     // ordering guarantee itself lives in the sweeper, which clamps every raw

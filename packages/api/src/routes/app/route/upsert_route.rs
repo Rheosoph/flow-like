@@ -121,6 +121,10 @@ pub async fn update_route(
         .ok_or(ApiError::NOT_FOUND)?;
 
     let path = model.route.clone().ok_or(ApiError::NOT_FOUND)?;
+    // Default-ness belongs to the path, so it travels with it when the path is
+    // reassigned. Callers that only move a route omit `isDefault`, and forcing
+    // false there silently drops the app's entry point.
+    let inherited_default = model.is_default;
 
     if body.is_default == Some(true) {
         clear_default_flag(&state, &app_id).await?;
@@ -143,7 +147,7 @@ pub async fn update_route(
         // Set route on new event
         let mut target_active: event::ActiveModel = target.into();
         target_active.route = Set(Some(path.clone()));
-        target_active.is_default = Set(body.is_default.unwrap_or(false));
+        target_active.is_default = Set(body.is_default.unwrap_or(inherited_default));
         let updated = target_active.update(&state.db).await?;
 
         return Ok(Json(RouteMapping {

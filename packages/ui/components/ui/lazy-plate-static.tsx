@@ -107,7 +107,10 @@ const PATH_INDEX = Symbol.for("flow-like.staticPathIndex");
 type PathIndexState = { map: WeakMap<object, Path> };
 
 export function indexEditorPaths(editor: SlateEditor, fromIndex = 0): void {
-	const holder = editor as unknown as Record<symbol, PathIndexState | undefined>;
+	const holder = editor as unknown as Record<
+		symbol,
+		PathIndexState | undefined
+	>;
 	let state = holder[PATH_INDEX];
 
 	if (!state) {

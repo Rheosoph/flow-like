@@ -1,5 +1,6 @@
 "use client";
 
+import { Loader2Icon } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { IOAuthConsentStore } from "../../db/oauth-db";
 import { useInvoke } from "../../hooks";
@@ -765,13 +766,21 @@ export function EventForm({
 				</>
 			)}
 
-			{/* Form Actions */}
-			<div className="flex justify-end space-x-2 pt-4 border-t">
-				<Button type="button" variant="outline" onClick={onCancel}>
+			{/* Form Actions — sticky so the primary action stays reachable instead
+			    of sitting past a screenful of type-specific configuration. */}
+			<div className="sticky bottom-0 -mx-1 flex justify-end gap-2 border-t bg-background/95 px-1 pt-3 pb-1 backdrop-blur supports-backdrop-filter:bg-background/85">
+				<Button
+					type="button"
+					variant="outline"
+					onClick={onCancel}
+					disabled={isSubmitting}
+					className="h-10 sm:h-9"
+				>
 					Cancel
 				</Button>
 				<Button
 					type="submit"
+					className="h-10 sm:h-9"
 					disabled={
 						isSubmitting ||
 						!formData.name ||
@@ -780,7 +789,14 @@ export function EventForm({
 							: !formData.board_id || !formData.node_id)
 					}
 				>
-					{isEditing ? "Update Event" : "Create Event"}
+					{isSubmitting && <Loader2Icon className="h-4 w-4 animate-spin" />}
+					{isSubmitting
+						? isEditing
+							? "Updating…"
+							: "Creating…"
+						: isEditing
+							? "Update Event"
+							: "Create Event"}
 				</Button>
 			</div>
 

@@ -6,6 +6,7 @@ pub use super::ai_act_model_registry::Entity as AiActModelRegistry;
 pub use super::app::Entity as App;
 pub use super::app_analytics_daily::Entity as AppAnalyticsDaily;
 pub use super::app_board_score::Entity as AppBoardScore;
+pub use super::app_cache_entry::Entity as AppCacheEntry;
 pub use super::app_connection::Entity as AppConnection;
 pub use super::app_discount::Entity as AppDiscount;
 pub use super::app_group::Entity as AppGroup;

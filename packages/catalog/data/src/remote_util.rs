@@ -130,7 +130,7 @@ pub(crate) fn http_client_no_redirect() -> reqwest::Client {
 /// Bounded client for short control-plane operations performed while holding
 /// run-scoped single-flight locks (token exchange, authorization, presign).
 /// It deliberately rejects redirects so credentials never cross origins.
-fn control_plane_http_client() -> reqwest::Client {
+pub(crate) fn control_plane_http_client() -> reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT
         .get_or_init(|| {

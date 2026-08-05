@@ -33,9 +33,16 @@ import {
 	useState,
 } from "react";
 import { useInvoke } from "../../hooks/use-invoke";
+import {
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+	userSecondaryLabel,
+} from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IMember, IUserLookup } from "../../state/backend-state/types";
+import { isLocalUserSub } from "../../state/backend-state/user-state";
 import {
 	Avatar,
 	AvatarFallback,
@@ -534,30 +541,10 @@ function looksLikeSub(value: string): boolean {
 	return value.length >= 12 && !/\s/.test(value);
 }
 
-function userDisplayName(
-	user: IUserLookup | undefined,
-	fallback: string,
-): string {
-	return (
-		user?.name ??
-		user?.preferred_username ??
-		user?.username ??
-		user?.email ??
-		fallback
-	);
-}
-
-function userInitials(label: string): string {
-	const parts = label.trim().split(/\s+/).filter(Boolean);
-	if (parts.length === 0) return "??";
-	if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-	return `${parts[0][0] ?? ""}${parts[parts.length - 1][0] ?? ""}`.toUpperCase();
-}
-
 /** Resolve an assignee value to a user when it looks like a sub reference. */
 function useAssigneeUser(value: string | undefined): IUserLookup | undefined {
 	const backend = useBackend();
-	const enabled = !!value && looksLikeSub(value);
+	const enabled = !!value && (looksLikeSub(value) || isLocalUserSub(value));
 	const lookup = useInvoke(
 		backend.userState.lookupUser,
 		backend.userState,
@@ -590,9 +577,9 @@ export function AssigneeDisplay({
 			title={label}
 		>
 			<Avatar className="h-5 w-5 shrink-0">
-				<AvatarImage src={user.avatar_url ?? ""} alt={label} />
+				<AvatarImage src={userAvatarUrl(user) ?? ""} alt={label} />
 				<AvatarFallback className="text-[8px]">
-					{userInitials(label)}
+					{userInitials(label, "??")}
 				</AvatarFallback>
 			</Avatar>
 			<span className="truncate">{label}</span>
@@ -615,16 +602,13 @@ function MemberCommandItem({
 		true,
 	);
 	const label = userDisplayName(lookup.data, sub);
-	const secondary =
-		lookup.data?.preferred_username ??
-		lookup.data?.username ??
-		lookup.data?.email;
+	const secondary = userSecondaryLabel(lookup.data);
 	return (
 		<CommandItem value={`${label} ${sub}`} onSelect={() => onPick(sub)}>
 			<Avatar className="h-5 w-5 shrink-0">
-				<AvatarImage src={lookup.data?.avatar_url ?? ""} alt={label} />
+				<AvatarImage src={userAvatarUrl(lookup.data) ?? ""} alt={label} />
 				<AvatarFallback className="text-[8px]">
-					{userInitials(label)}
+					{userInitials(label, "??")}
 				</AvatarFallback>
 			</Avatar>
 			<div className="min-w-0 flex-1">

@@ -719,6 +719,47 @@ declare function dataAtlassianJiraMoveToSprint({ provider: Struct, sprintId: int
 declare function dataAtlassianJiraUpdateSprint({ provider: Struct, sprintId: int, name: string, goal: string, state: string, startDate: string, endDate: string }): Struct;
 
 
+// === Data/Cache ===
+
+/**
+ * Removes a value from the app's cache.
+ * @param cache — Cache handle from the Open Cache node
+ * @param key — The key to remove
+ * @returns deleted — True when an entry was actually removed
+ * @impure has side effects / drives control flow
+ */
+declare function cacheDelete({ cache: Struct, key: string }): bool;
+
+/**
+ * Opens the app's key/value cache. Connect the result to Read, Write and Delete Cache nodes.
+ * @param scope (optional) — App shares entries with everyone who can run this app. User keeps them private to whoever triggered the run.
+ * @param namespace (optional) — Optional prefix so short keys from different flows cannot collide
+ * @returns cache — Cache handle for the Read, Write and Delete Cache nodes
+ */
+declare function cacheOpen({ scope?: string, namespace?: string }): Struct;
+
+/**
+ * Reads a value from the app's cache. Reports a miss when the key was never written or its lifetime has elapsed.
+ * @param cache — Cache handle from the Open Cache node
+ * @param key — The key to read
+ * @returns found — True when a live entry existed for this key
+ * @returns value — The cached value, or null on a miss
+ * @impure has side effects / drives control flow
+ */
+declare function cacheRead({ cache: Struct, key: string }): { found: bool, value: Struct };
+
+/**
+ * Stores a value in the app's cache, optionally with a lifetime after which it disappears on its own.
+ * @param cache — Cache handle from the Open Cache node
+ * @param key — The key to write
+ * @param value — The value to store
+ * @param ttlSeconds (optional) — Seconds until the entry expires. 0 keeps it until it is deleted.
+ * @returns expiresAt — Unix timestamp in milliseconds when the entry expires, or 0 when it never does
+ * @impure has side effects / drives control flow
+ */
+declare function cacheWrite({ cache: Struct, key: string, value: Struct, ttlSeconds?: int }): int;
+
+
 // === Data/DataFusion ===
 
 /**

@@ -22,6 +22,12 @@ import {
 	useInvoke,
 } from "../../../";
 import {
+	userAvatarUrl,
+	userDisplayName,
+	userHandle,
+	userInitials,
+} from "../../../lib/user-display";
+import {
 	SectionHeading,
 	StatusChip,
 	TEAM_ROW_HANDLE,
@@ -139,20 +145,16 @@ function RequestRow({
 		);
 	}
 
-	const evaluatedName =
-		userData.username ?? userData.name ?? userData.email ?? "Unknown User";
-	const contact = userData.email ?? userData.username ?? "No contact details";
+	const evaluatedName = userDisplayName(userData, "Unknown User");
+	const contact =
+		userData.email ?? userHandle(userData) ?? "No contact details";
 
 	return (
 		<div className={teamRowClass({ attention: true, align: "start" })}>
 			<Avatar className="size-9 shrink-0">
-				<AvatarImage src={userData.avatar_url} alt={evaluatedName} />
+				<AvatarImage src={userAvatarUrl(userData)} alt={evaluatedName} />
 				<AvatarFallback className="text-[11px] font-semibold text-foreground">
-					{evaluatedName
-						.split(" ")
-						.map((n) => n[0])
-						.join("")
-						.toUpperCase()}
+					{userInitials(userData)}
 				</AvatarFallback>
 			</Avatar>
 

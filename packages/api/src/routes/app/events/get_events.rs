@@ -3,7 +3,9 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::events::db::{filter_event_list_execution, is_user_facing_event},
+    routes::app::events::db::{
+        filter_event_list_execution, is_listed_event_type, is_user_facing_event,
+    },
     state::AppState,
 };
 use axum::{
@@ -53,7 +55,7 @@ pub async fn get_events(
     // Filter out secret variable values from all events
     let mut events: Vec<Event> = events
         .into_iter()
-        .filter(|event| event.event_type != "ontology_action")
+        .filter(|event| is_listed_event_type(&event.event_type))
         .map(filter_event_secrets)
         .collect();
 

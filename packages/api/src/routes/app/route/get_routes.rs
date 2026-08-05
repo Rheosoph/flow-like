@@ -1,6 +1,11 @@
 use crate::{
-    ensure_permission, entity::event, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    ensure_permission,
+    entity::event,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::app::events::db::{is_listed_event_type, is_user_facing_event_parts},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -44,7 +49,7 @@ pub async fn get_routes(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
 ) -> Result<Json<Vec<RouteMapping>>, ApiError> {
-    ensure_permission!(user, &app_id, &state, RolePermissions::ListEvents);
+    let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ListEvents);
 
     let events = event::Entity::find()
         .filter(event::Column::AppId.eq(&app_id))
@@ -52,8 +57,17 @@ pub async fn get_routes(
         .all(&state.db)
         .await?;
 
+    // A route lives on the event row, so this list must hide exactly what
+    // `GET /apps/{app_id}/events` hides. Any surplus here reads as a route
+    // without an event.
+    let can_read_events = permission.has_permission(RolePermissions::ReadEvents);
     let routes = events
         .into_iter()
+        .filter(|e| is_listed_event_type(&e.event_type))
+        .filter(|e| {
+            can_read_events
+                || (e.active && is_user_facing_event_parts(e.page_id.as_deref(), &e.event_type))
+        })
         .filter_map(|e| {
             e.route.map(|path| RouteMapping {
                 id: e.id.clone(),
