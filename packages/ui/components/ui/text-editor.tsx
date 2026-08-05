@@ -29,6 +29,11 @@ import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
 import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
 import { remarkUserMention } from "../editor/plugins/remark-user-mention";
 import { Editor, EditorContainer } from "../editor/ui/editor";
+import {
+	LazyPlateStatic,
+	WINDOWING_BLOCK_THRESHOLD,
+	indexEditorPaths,
+} from "./lazy-plate-static";
 
 const EMPTY_MENTION_ITEMS: ReadonlyArray<MentionItem> = [];
 
@@ -85,6 +90,9 @@ const MINIMAL_STATIC_PLUGIN_IDS = new Set([
 	"strikethrough",
 	"ul",
 ]);
+
+const STATIC_EDITOR_CLASSNAME =
+	"py-0 [&_h1:first-of-type]:mt-0 [&_h2:first-of-type]:mt-0 [&_h3:first-of-type]:mt-0 [&_h4:first-of-type]:mt-0 [&_h5:first-of-type]:mt-0 [&_h6:first-of-type]:mt-0";
 
 const toValue = (nodes: PlateLikeNode[]): Value => nodes as unknown as Value;
 
@@ -428,15 +436,23 @@ function TextEditorStatic({
 		);
 	}, [initialContent, isMarkdown, remarkPlugins, plugins]);
 
-	const editor = useMemo(
-		() =>
-			createSlateEditor({
-				id: "static-rendered-editor",
-				plugins,
-				value,
-			}),
-		[plugins, value],
-	);
+	const editor = useMemo(() => {
+		const staticEditor = createSlateEditor({
+			id: "static-rendered-editor",
+			plugins,
+			value,
+			// NodeIdPlugin stamps ids by running a setNodes transform per node,
+			// and each transform re-runs normalization for the surrounding block.
+			// On documents with tables that turns initial normalization quadratic
+			// (240 tables: 14s with ids, 6ms without). Read-only rendering never
+			// reads the ids, so skip the pass entirely.
+			nodeId: false,
+		});
+		indexEditorPaths(staticEditor);
+		return staticEditor;
+	}, [plugins, value]);
+
+	const isLongDocument = value.length > WINDOWING_BLOCK_THRESHOLD;
 
 	const handleStaticInteraction = (
 		e: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>,
@@ -470,10 +486,11 @@ function TextEditorStatic({
 			}}
 			className="overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word [&_p]:[overflow-wrap:anywhere] [&_li]:[overflow-wrap:anywhere]"
 		>
-			<PlateStatic
-				editor={editor}
-				className="py-0 [&_h1:first-of-type]:mt-0 [&_h2:first-of-type]:mt-0 [&_h3:first-of-type]:mt-0 [&_h4:first-of-type]:mt-0 [&_h5:first-of-type]:mt-0 [&_h6:first-of-type]:mt-0"
-			/>
+			{isLongDocument ? (
+				<LazyPlateStatic editor={editor} className={STATIC_EDITOR_CLASSNAME} />
+			) : (
+				<PlateStatic editor={editor} className={STATIC_EDITOR_CLASSNAME} />
+			)}
 		</div>
 	);
 }

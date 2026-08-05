@@ -95,6 +95,14 @@ export const COMPONENT_EVENT_MANIFEST = {
 			false,
 		),
 	],
+	graph: [
+		event("nodeClick", "Node selected", "A graph node was selected."),
+		event("edgeClick", "Edge selected", "A graph edge was selected."),
+	],
+	ontologyGraph: [
+		event("nodeClick", "Node selected", "An ontology object was selected."),
+		event("edgeClick", "Edge selected", "An ontology relation was selected."),
+	],
 	calendar: [
 		event("open", "Event opened", "A calendar event was opened."),
 		event("create", "Event created", "A calendar event was created."),

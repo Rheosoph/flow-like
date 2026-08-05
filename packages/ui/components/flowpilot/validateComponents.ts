@@ -119,6 +119,8 @@ const REQUIRED_PROPS: Record<string, string[]> = {
 	widgetInstance: ["instanceId", "widgetId"],
 	calendar: ["events"],
 	gantt: ["tasks"],
+	graph: ["nodes"],
+	ontologyGraph: ["ontologyId"],
 };
 
 /** Default BoundValue to inject when a required prop is missing. */
@@ -143,6 +145,7 @@ const DEFAULT_BOUND_VALUES: Record<string, BoundValue> = {
 	text: { literalString: "" },
 	maxValue: { literalNumber: 100 },
 	chartType: { literalString: "bar" },
+	ontologyId: { literalString: "" },
 };
 
 function defaultRequiredProp(type: string, prop: string): unknown {
@@ -161,7 +164,8 @@ function defaultRequiredProp(type: string, prop: string): unknown {
 		prop === "items" ||
 		prop === "boxes" ||
 		prop === "labels" ||
-		prop === "hotspots"
+		prop === "hotspots" ||
+		prop === "nodes"
 	) {
 		return { literalJson: "[]" } satisfies BoundValue;
 	}

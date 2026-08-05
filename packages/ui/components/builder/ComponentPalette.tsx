@@ -22,6 +22,7 @@ import {
 	MessageSquare,
 	Mic,
 	MousePointer,
+	Network,
 	Package,
 	PanelLeft,
 	Rows3,
@@ -560,6 +561,20 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		icon: Square,
 		category: "Display",
 		description: "Interactive geographic map with markers and routes",
+	},
+	{
+		type: "graph",
+		label: "Graph",
+		icon: Network,
+		category: "Display",
+		description: "Node/edge network graph rendered on a WebGL canvas",
+	},
+	{
+		type: "ontologyGraph",
+		label: "Ontology",
+		icon: Network,
+		category: "Display",
+		description: "Live explorer for one of this project's ontologies",
 	},
 	{
 		type: "calendar",

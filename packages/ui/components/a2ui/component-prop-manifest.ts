@@ -558,6 +558,33 @@ export const COMPONENT_PROPS = {
 		"clusterMaxZoom",
 	],
 
+	// Graphs
+	graph: [
+		"nodes",
+		"edges",
+		"labelStyles",
+		"showToolbar",
+		"showSearch",
+		"showLegend",
+		"showInspector",
+		"height",
+	],
+	ontologyGraph: [
+		"ontologyId",
+		"appId",
+		"limit",
+		"allowExpand",
+		"allowSearch",
+		"allowPaths",
+		"allowActions",
+		"allowCypher",
+		"allowStyleEdit",
+		"allowLimitChange",
+		"showToolbar",
+		"showLegend",
+		"height",
+	],
+
 	// Planning
 	calendar: [
 		"events",
