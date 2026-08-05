@@ -613,7 +613,24 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 	}
 
 	return (
-		<div className={className ?? "h-full min-h-0 w-full"}>
+		<div className={className ?? "relative h-full min-h-0 w-full"}>
+			{/* The overlay itself loaded — a failed subgraph fetch stays recoverable. */}
+			{error && (
+				<div
+					role="alert"
+					className="absolute inset-x-0 top-0 z-30 flex items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+				>
+					<span className="truncate">{error}</span>
+					<Button
+						variant="outline"
+						size="sm"
+						className="h-6 shrink-0 text-xs"
+						onClick={retry}
+					>
+						Retry
+					</Button>
+				</div>
+			)}
 			<GraphViewer
 				overlay={overlay}
 				data={data}

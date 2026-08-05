@@ -46,7 +46,9 @@ export function A2UIOntologyGraph({
 	const triggerEvent = useComponentEventTrigger(componentId);
 	const ontologyId = useResolved<string>(component.ontologyId);
 	const overrideAppId = useResolved<string>(component.appId);
-	const limit = useResolved<number>(component.limit);
+	const rawLimit = useResolved<unknown>(component.limit);
+	// A bound limit can arrive as a string; NaN would poison the initial load.
+	const limit = Number(rawLimit) || undefined;
 	const allowExpand = useResolved<boolean>(component.allowExpand) ?? true;
 	const allowSearch = useResolved<boolean>(component.allowSearch) ?? true;
 	const allowPaths = useResolved<boolean>(component.allowPaths) ?? true;

@@ -44,6 +44,8 @@ describe("component event manifest", () => {
 				"locate",
 				"viewportChange",
 			],
+			graph: ["nodeClick", "edgeClick"],
+			ontologyGraph: ["nodeClick", "edgeClick"],
 			calendar: ["open", "create", "update", "move", "resize", "delete"],
 			gantt: [
 				"open",
