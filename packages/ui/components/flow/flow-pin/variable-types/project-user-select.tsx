@@ -39,11 +39,16 @@ function getUserDisplayName(
 	return userDisplayName(user, sub || "Unknown User");
 }
 
+/** Falls back to the sub when the secondary line would only repeat the name. */
 function getUserSecondaryLabel(
 	user: IUserLookup | undefined,
 	sub: string,
 ): string {
-	return userSecondaryLabel(user) ?? sub;
+	const secondary = userSecondaryLabel(user);
+	if (!secondary) return sub;
+	const displayName = getUserDisplayName(user, sub);
+	if (secondary === displayName || secondary === `@${displayName}`) return sub;
+	return secondary;
 }
 
 export function ProjectUserSelect({

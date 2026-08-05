@@ -23,10 +23,11 @@ use std::{any::Any, sync::Arc};
 /// (12 layers, 12 heads, 768 hidden) at batch 1: 0.17 GB at 1024 tokens, 0.76 GB at 2048,
 /// 2.88 GB at 4096, 10.22 GB at 8192.
 ///
-/// The mobile value is empirical, not derived from that curve: on iPhone hardware 512 runs and 1024
-/// is an uncatchable jetsam kill, so the real device budget is far tighter than the desktop figures
-/// suggest. Raise it only against a device measurement.
-const MOBILE_MAX_SEQ: usize = 512;
+/// The iPhone failure at 1024 that motivated this cap was measured with the CoreML provider active,
+/// which cost ~2.9 GB on its own at 512 tokens — more than the CPU provider needs at 4096. With
+/// CoreML no longer registered (see `collect_execution_providers`), the same model at two threads
+/// needs +0.12 GB at 1024 and +0.71 GB at 2048. 2048 therefore has real headroom;
+const MOBILE_MAX_SEQ: usize = 2048;
 const DESKTOP_MAX_SEQ: usize = 8192;
 
 /// Per-batch ceiling on `batch * seq^2`, the term attention memory is proportional to.

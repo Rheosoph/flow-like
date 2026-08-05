@@ -604,7 +604,10 @@ function MemberCommandItem({
 	const label = userDisplayName(lookup.data, sub);
 	const secondary = userSecondaryLabel(lookup.data);
 	return (
-		<CommandItem value={`${label} ${sub}`} onSelect={() => onPick(sub)}>
+		<CommandItem
+			value={`${label} ${secondary ?? ""} ${sub}`}
+			onSelect={() => onPick(sub)}
+		>
 			<Avatar className="h-5 w-5 shrink-0">
 				<AvatarImage src={userAvatarUrl(lookup.data) ?? ""} alt={label} />
 				<AvatarFallback className="text-[8px]">
@@ -613,7 +616,7 @@ function MemberCommandItem({
 			</Avatar>
 			<div className="min-w-0 flex-1">
 				<div className="truncate text-xs">{label}</div>
-				{secondary && secondary !== label && (
+				{secondary && secondary !== label && secondary !== `@${label}` && (
 					<div className="truncate text-[10px] text-muted-foreground">
 						{secondary}
 					</div>

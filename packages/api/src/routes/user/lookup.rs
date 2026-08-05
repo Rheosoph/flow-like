@@ -225,6 +225,41 @@ async fn ensure_executor_lookup_permission(
     Ok(())
 }
 
+/// Executor tokens belong to a running flow, so they see the app's members and
+/// nobody else — the same boundary `scoped_lookup_ids` enforces for lookups.
+async fn scope_search_candidates(
+    state: &AppState,
+    user: &AppUser,
+    candidates: Vec<user::Model>,
+) -> Result<Vec<user::Model>, ApiError> {
+    let AppUser::Executor(executor) = user else {
+        return Ok(candidates);
+    };
+
+    ensure_executor_lookup_permission(state, user, &executor.app_id).await?;
+    if candidates.is_empty() {
+        return Ok(candidates);
+    }
+
+    let members = membership::Entity::find()
+        .filter(membership::Column::AppId.eq(&executor.app_id))
+        .filter(
+            membership::Column::UserId
+                .is_in(candidates.iter().map(|candidate| candidate.id.clone())),
+        )
+        .limit(MAX_CANDIDATE_POOL)
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|membership| membership.user_id)
+        .collect::<HashSet<_>>();
+
+    Ok(candidates
+        .into_iter()
+        .filter(|candidate| members.contains(&candidate.id))
+        .collect())
+}
+
 const DEFAULT_SEARCH_LIMIT: u64 = 10;
 const MAX_SEARCH_LIMIT: u64 = 25;
 /// Ranking only sees what the database returns, so the candidate pool is wider
@@ -270,7 +305,7 @@ pub async fn user_search(
     Path(query): Path<String>,
     Query(params): Query<UserSearchQuery>,
 ) -> Result<Json<Vec<UserLookupResponse>>, ApiError> {
-    user.sub()?;
+    user.executor_scoped_sub()?;
     let lookup_config = state.platform_config.lookup.clone();
     let limit = params
         .limit
@@ -327,6 +362,7 @@ pub async fn user_search(
         }
     }
 
+    let mut candidates = scope_search_candidates(&state, &user, candidates).await?;
     if candidates.is_empty() {
         return Ok(Json(Vec::new()));
     }

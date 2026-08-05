@@ -241,7 +241,10 @@ export function PackageUsersTab({
 					</TableHeader>
 					<TableBody>
 						{users.map((user) => {
-							const secondaryLabel = userSecondaryLabel(user);
+							const displayName = userDisplayName(user, user.userId);
+							const secondary = userSecondaryLabel(user);
+							const secondaryLabel =
+								secondary === `@${displayName}` ? undefined : secondary;
 
 							return (
 								<TableRow key={user.id}>
@@ -250,7 +253,7 @@ export function PackageUsersTab({
 											<UserAvatar user={user} />
 											<div className="min-w-0">
 												<p className="truncate text-sm font-medium">
-													{userDisplayName(user, user.userId)}
+													{displayName}
 												</p>
 												{secondaryLabel && (
 													<p className="truncate text-xs text-muted-foreground">
