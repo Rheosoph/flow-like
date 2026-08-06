@@ -154,6 +154,11 @@ export type {
 	GeoMapMarkerDef,
 	GeoMapRouteDef,
 	GeoMapViewport,
+	GraphComponent,
+	GraphNodeDef,
+	GraphEdgeDef,
+	GraphLabelStyleDef,
+	OntologyGraphComponent,
 	GeoCoordinate,
 	GeoBoundingBox,
 	GeoRouteGeometry,
@@ -195,6 +200,8 @@ export { A2UISpinner } from "./display/Spinner";
 export { A2UISkeleton } from "./display/Skeleton";
 export { A2UILottie } from "./display/Lottie";
 export { A2UIGeoMap } from "./display/GeoMap";
+export { A2UIGraph } from "./display/Graph";
+export { A2UIOntologyGraph } from "./display/OntologyGraph";
 export { A2UICalendar } from "./display/Calendar";
 export { A2UIGantt } from "./display/GanttChart";
 

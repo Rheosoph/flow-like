@@ -1,9 +1,14 @@
 use std::collections::HashMap;
 
 use crate::{
-    entity::user, error::ApiError, middleware::jwt::AppUser,
-    routes::profile::create_default::create_default_profile, routes::user::sign_avatar,
-    state::AppState, user_management::UserManagement,
+    entity::user,
+    error::ApiError,
+    middleware::jwt::AppUser,
+    routes::profile::create_default::create_default_profile,
+    routes::user::identity::{derive_display_name, derive_public_handle, sanitize_display_name},
+    routes::user::sign_avatar,
+    state::AppState,
+    user_management::UserManagement,
 };
 use axum::{Extension, Json, extract::State};
 use flow_like_types::{anyhow, create_id};
@@ -58,9 +63,9 @@ pub async fn user_info(
     let username = identity_info
         .as_ref()
         .and_then(|info| info.username.clone());
-    let preferred_username = identity_info
-        .as_ref()
-        .and_then(|info| info.preferred_username.clone());
+    // Only a handle the provider actually gave us — never its pool-internal one.
+    let preferred_username = identity_info.as_ref().and_then(derive_public_handle);
+    let display_name = identity_info.as_ref().and_then(derive_display_name);
     let user_info = user::Entity::find_by_id(&sub).one(&state.db).await?;
     if let Some(mut user_info) = user_info {
         let mut updated_user: Option<user::ActiveModel> = None;
@@ -79,6 +84,22 @@ pub async fn user_info(
             let mut tmp_updated_user: user::ActiveModel =
                 updated_user.unwrap_or(user_info.clone().into());
             tmp_updated_user.username = sea_orm::ActiveValue::Set(Some(username.clone()));
+            updated_user = Some(tmp_updated_user);
+        }
+
+        // Backfills users provisioned before display names were derived, and users
+        // created by `ensure_user_exists`, which has no claims to work from. A name
+        // the user set themselves via `PUT /user/info` is never overwritten.
+        if let Some(display_name) = &display_name
+            && user_info
+                .name
+                .as_deref()
+                .and_then(sanitize_display_name)
+                .is_none()
+        {
+            let mut tmp_updated_user: user::ActiveModel =
+                updated_user.unwrap_or(user_info.clone().into());
+            tmp_updated_user.name = sea_orm::ActiveValue::Set(Some(display_name.clone()));
             updated_user = Some(tmp_updated_user);
         }
 
@@ -110,8 +131,7 @@ pub async fn user_info(
 
         if let Some(mut updated_user) = updated_user {
             updated_user.updated_at = sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc());
-            let new_user = updated_user.update(&state.db).await?;
-            user_info = new_user;
+            user_info = persist_identity_sync(&state, updated_user, user_info).await?;
         }
 
         if identity_info.is_some() {
@@ -137,6 +157,7 @@ pub async fn user_info(
         stripe_id: sea_orm::ActiveValue::Set(None),
         username: sea_orm::ActiveValue::Set(username),
         preferred_username: sea_orm::ActiveValue::Set(preferred_username),
+        name: sea_orm::ActiveValue::Set(display_name),
         created_at: sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc()),
         updated_at: sea_orm::ActiveValue::Set(chrono::Utc::now().naive_utc()),
         ..Default::default()
@@ -159,6 +180,43 @@ pub async fn user_info(
     new_user = ensure_stripe_user(&state, new_user, email.clone()).await?;
 
     Ok(Json(new_user))
+}
+
+/// `username` and `preferredUsername` are unique, so an identity sync can collide
+/// with another row. `/user/info` gates app startup, so a collision must degrade to
+/// "keep the row we have" rather than fail the request.
+#[tracing::instrument(name = "Persist identity sync", skip_all)]
+async fn persist_identity_sync(
+    state: &AppState,
+    updated_user: user::ActiveModel,
+    current: user::Model,
+) -> Result<user::Model, ApiError> {
+    let err = match updated_user.clone().update(&state.db).await {
+        Ok(user) => return Ok(user),
+        Err(err) => err,
+    };
+
+    tracing::warn!(
+        user_id = %current.id,
+        "Identity sync failed, retrying without unique handle columns: {:?}",
+        err
+    );
+
+    let mut retry = updated_user;
+    retry.username = sea_orm::ActiveValue::Unchanged(current.username.clone());
+    retry.preferred_username = sea_orm::ActiveValue::Unchanged(current.preferred_username.clone());
+
+    match retry.update(&state.db).await {
+        Ok(user) => Ok(user),
+        Err(err) => {
+            tracing::error!(
+                user_id = %current.id,
+                "Identity sync failed permanently, serving unsynced user: {:?}",
+                err
+            );
+            Ok(current)
+        }
+    }
 }
 
 async fn ensure_stripe_user(

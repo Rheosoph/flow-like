@@ -54,6 +54,22 @@ impl From<Path> for StorageItem {
     }
 }
 
+/// HTTP ETags are quoted-strings (RFC 9110), and cloud backends hand the header
+/// through verbatim, so `"abc"` reaches us with the quotes as literal characters.
+/// Strips the weak-validator prefix and the surrounding quotes for use as a hash.
+fn unquote_etag(e_tag: &str) -> String {
+    let e_tag = e_tag.trim();
+    let e_tag = e_tag
+        .strip_prefix("W/")
+        .or_else(|| e_tag.strip_prefix("w/"))
+        .unwrap_or(e_tag);
+
+    match e_tag.strip_prefix('"').and_then(|t| t.strip_suffix('"')) {
+        Some(inner) => inner.to_string(),
+        None => e_tag.to_string(),
+    }
+}
+
 /// A signature is reused only while at least this share of its lifetime is
 /// left, so a client never receives a URL that is about to expire.
 const SIGNATURE_REUSE_RATIO: u32 = 2;
@@ -310,7 +326,7 @@ impl FlowLikeStore {
         let meta = self.as_generic().head(path).await?;
 
         if let Some(hash) = meta.e_tag {
-            return Ok(hash);
+            return Ok(unquote_etag(&hash));
         }
 
         self.content_hash(path).await
@@ -352,6 +368,29 @@ mod tests {
     use super::*;
 
     const TTL: Duration = Duration::from_secs(86_400);
+
+    #[test]
+    fn unquote_etag_strips_quotes_and_weak_prefix() {
+        assert_eq!(
+            unquote_etag("\"9bb58f26192e4ba00f01e2e7b136bbd8\""),
+            "9bb58f26192e4ba00f01e2e7b136bbd8"
+        );
+        assert_eq!(unquote_etag("W/\"abc123\""), "abc123");
+        assert_eq!(
+            unquote_etag("\"d41d8cd98f00b204e9800998ecf8427e-3\""),
+            "d41d8cd98f00b204e9800998ecf8427e-3"
+        );
+    }
+
+    #[test]
+    fn unquote_etag_leaves_unquoted_validators_untouched() {
+        assert_eq!(
+            unquote_etag("1a2b3c-18f2c4d5e6-400"),
+            "1a2b3c-18f2c4d5e6-400"
+        );
+        assert_eq!(unquote_etag(""), "");
+        assert_eq!(unquote_etag("\""), "\"");
+    }
 
     #[test]
     fn signed_url_key_ignores_only_rotating_signature_fields() {

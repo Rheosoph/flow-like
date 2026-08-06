@@ -3128,7 +3128,7 @@ Layout: column, row, grid, stack, scrollArea, absolute, aspectRatio, overlay, bo
 Display: text, image, icon, video, lottie, badge, avatar, userProfile, progress, spinner, skeleton, divider, markdown, diffView, filePreview, geoMap
 Interactive: button, textField (multiline for textarea), select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, voiceInput (audio recording/dictation), feedback (thumbs rating), appLink, link
 Container: card, modal, tabs, accordion, drawer, tooltip, popover
-Data: table, plotlyChart, nivoChart, calendar, gantt
+Data: table, plotlyChart, nivoChart, calendar, gantt, graph (own nodes/edges), ontologyGraph (this project's ontology, loads itself)
 Vision: boundingBoxOverlay, imageLabeler, imageHotspot
 Game: canvas2d, sprite, shape, scene3d, model3d, dialogue, characterPortrait, choiceMenu, inventoryGrid, healthBar, miniMap
 Embeds: iframe
@@ -3542,6 +3542,7 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "rows",
             "maxLength",
             "required",
+            "debounceMs",
         ]),
         "select" => Some(&[
             "value",
@@ -3560,6 +3561,7 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "disabled",
             "showValue",
             "label",
+            "debounceMs",
         ]),
         "checkbox" => Some(&["checked", "label", "disabled", "indeterminate"]),
         "switch" => Some(&["checked", "label", "disabled"]),
@@ -3643,6 +3645,31 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "clusterMarkers",
             "clusterRadius",
             "clusterMaxZoom",
+        ]),
+        "graph" => Some(&[
+            "nodes",
+            "edges",
+            "labelStyles",
+            "showToolbar",
+            "showSearch",
+            "showLegend",
+            "showInspector",
+            "height",
+        ]),
+        "ontologyGraph" => Some(&[
+            "ontologyId",
+            "appId",
+            "limit",
+            "allowExpand",
+            "allowSearch",
+            "allowPaths",
+            "allowActions",
+            "allowCypher",
+            "allowStyleEdit",
+            "allowLimitChange",
+            "showToolbar",
+            "showLegend",
+            "height",
         ]),
         "link" => Some(&[
             "href",
@@ -3902,6 +3929,8 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
         "widgetInstance" => &["instanceId", "widgetId"],
         "calendar" => &["events"],
         "gantt" => &["tasks"],
+        "graph" => &["nodes"],
+        "ontologyGraph" => &["ontologyId"],
         _ => &[],
     }
 }

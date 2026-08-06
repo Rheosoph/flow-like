@@ -60,6 +60,12 @@ import {
 	useInvoke,
 } from "../../../";
 import {
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+	userSecondaryLabel,
+} from "../../../lib/user-display";
+import {
 	SectionHeading,
 	TEAM_ACTION_GRADIENT,
 	TEAM_ROW_META,
@@ -79,14 +85,16 @@ export function InviteUserDialog({
 	const backend = useBackend();
 	const [message, setMessage] = useState("");
 	const [invitee, setInvitee] = useState("");
-	const inviteeSearch = useDebounce(invitee, 500);
+	const inviteeSearch = useDebounce(invitee.trim(), 350);
 	const [showInviteDialog, setShowInviteDialog] = useState(false);
 
+	// One character matches most of the directory, so it is not worth a round trip.
+	const canSearch = inviteeSearch.length >= 2;
 	const userSearch = useInvoke(
 		backend.userState.searchUsers,
 		backend.userState,
 		[inviteeSearch],
-		inviteeSearch.length > 0,
+		canSearch,
 	);
 
 	return (
@@ -108,12 +116,12 @@ export function InviteUserDialog({
 				<div className="space-y-4 py-4">
 					<div className="space-y-2">
 						<Label htmlFor="usernameOrEmail" className="text-sm font-medium">
-							Username or Email
+							Name, handle or email
 						</Label>
 						<div className="relative">
 							<Input
 								id="usernameOrEmail"
-								placeholder="Search by username or email..."
+								placeholder="Search by name, handle, email or user ID..."
 								value={invitee}
 								onChange={(e) => setInvitee(e.target.value)}
 								className="pl-10"
@@ -135,7 +143,7 @@ export function InviteUserDialog({
 						/>
 					</div>
 
-					{inviteeSearch.length > 0 && (
+					{canSearch && (
 						<div className="space-y-3">
 							<Separator />
 
@@ -154,69 +162,70 @@ export function InviteUserDialog({
 											Search Results
 										</h4>
 										<div className="max-h-48 space-y-2 overflow-y-auto pr-2">
-											{userSearch.data.map((user) => (
-												<div
-													key={user.id}
-													className="group flex items-center justify-between rounded-lg border bg-card p-3 transition-colors hover:bg-accent/50"
-												>
-													<div className="flex items-center gap-3">
-														<Avatar className="h-9 w-9">
-															<AvatarImage
-																src={user.avatar_url}
-																alt={user.name ?? user.username ?? user.email}
-															/>
-															<AvatarFallback className="bg-primary/10 text-primary">
-																{(user.name ?? user.username ?? user.email)
-																	?.charAt(0)
-																	.toUpperCase()}
-															</AvatarFallback>
-														</Avatar>
-														<div className="min-w-0 flex-1">
-															<p className="truncate text-sm font-medium">
-																{user.name ?? user.username ?? user.email}
-															</p>
-															{user.username && user.email && user.name && (
-																<p className="truncate text-xs text-muted-foreground">
-																	@{user.username}
-																</p>
-															)}
-														</div>
-													</div>
-													<Button
-														size="sm"
-														onClick={async () => {
-															try {
-																await backend.teamState.inviteUser(
-																	appId,
-																	user.id,
-																	message,
-																);
-																toast.success(
-																	`Invitation sent to ${user.name ?? user.username ?? user.email}!`,
-																);
-																setShowInviteDialog(false);
-																setInvitee("");
-																setMessage("");
-															} catch (error) {
-																console.error(error);
-																toast.error(
-																	"Failed to send invite. Please try again.",
-																);
-															}
-														}}
-														className="h-8 gap-1.5 text-xs"
+											{userSearch.data.map((user) => {
+												const displayName = userDisplayName(user, user.id);
+												const secondary = userSecondaryLabel(user);
+												return (
+													<div
+														key={user.id}
+														className="group flex items-center justify-between gap-3 rounded-lg border bg-card p-3 transition-colors hover:bg-accent/50"
 													>
-														<Mail className="h-3 w-3" />
-														Invite
-													</Button>
-												</div>
-											))}
+														<div className="flex min-w-0 items-center gap-3">
+															<Avatar className="h-9 w-9 shrink-0">
+																<AvatarImage
+																	src={userAvatarUrl(user)}
+																	alt={displayName}
+																/>
+																<AvatarFallback className="bg-primary/10 text-primary">
+																	{userInitials(user)}
+																</AvatarFallback>
+															</Avatar>
+															<div className="min-w-0 flex-1">
+																<p className="truncate text-sm font-medium">
+																	{displayName}
+																</p>
+																{secondary && (
+																	<p className="truncate text-xs text-muted-foreground">
+																		{secondary}
+																	</p>
+																)}
+															</div>
+														</div>
+														<Button
+															size="sm"
+															onClick={async () => {
+																try {
+																	await backend.teamState.inviteUser(
+																		appId,
+																		user.id,
+																		message,
+																	);
+																	toast.success(
+																		`Invitation sent to ${displayName}!`,
+																	);
+																	setShowInviteDialog(false);
+																	setInvitee("");
+																	setMessage("");
+																} catch (error) {
+																	console.error(error);
+																	toast.error(
+																		"Failed to send invite. Please try again.",
+																	);
+																}
+															}}
+															className="h-8 shrink-0 gap-1.5 text-xs"
+														>
+															<Mail className="h-3 w-3" />
+															Invite
+														</Button>
+													</div>
+												);
+											})}
 										</div>
 									</div>
 								)}
 
 							{!userSearch.isFetching &&
-								inviteeSearch.length > 0 &&
 								(!userSearch.data || userSearch.data.length === 0) && (
 									<div className="flex flex-col items-center gap-2 py-8 text-center">
 										<div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
@@ -225,7 +234,7 @@ export function InviteUserDialog({
 										<div className="space-y-1">
 											<p className="text-sm font-medium">No users found</p>
 											<p className="text-xs text-muted-foreground">
-												Try searching with a different username or email
+												Search by name, handle, email or user ID
 											</p>
 										</div>
 									</div>
@@ -233,10 +242,14 @@ export function InviteUserDialog({
 						</div>
 					)}
 
-					{inviteeSearch.length === 0 && (
+					{!canSearch && (
 						<div className="flex flex-col items-center gap-2 py-6 text-center text-muted-foreground">
 							<Users className="h-8 w-8" />
-							<p className="text-sm">Start typing to search for users</p>
+							<p className="text-sm">
+								{inviteeSearch.length === 0
+									? "Start typing to search for users"
+									: "Keep typing — at least 2 characters"}
+							</p>
 						</div>
 					)}
 				</div>

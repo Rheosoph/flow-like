@@ -19,5 +19,7 @@ export { A2UIDiffView } from "./DiffView";
 export { A2UINivoChart } from "./NivoChart";
 export { A2UIBoundingBoxOverlay } from "./BoundingBoxOverlay";
 export { A2UIGeoMap } from "./GeoMap";
+export { A2UIGraph } from "./Graph";
+export { A2UIOntologyGraph } from "./OntologyGraph";
 export { A2UICalendar } from "./Calendar";
 export { A2UIGantt } from "./GanttChart";

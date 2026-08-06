@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { AudioPreview } from "../../ui/audio-preview";
 import { AudioPlayback, type VoiceVariant } from "../../voice";
@@ -105,8 +105,6 @@ export function A2UIFilePreview({
 	const [content, setContent] = useState<string>("");
 	const [loadingText, setLoadingText] = useState(false);
 	const [error, setError] = useState(false);
-	const [pdfKey, setPdfKey] = useState(0);
-	const containerRef = useRef<HTMLDivElement>(null);
 
 	const fileType = src
 		? getFileType(src, mimeType, filename, fileTypeOverride)
@@ -138,16 +136,6 @@ export function A2UIFilePreview({
 		}
 	}, [fileType, loadTextContent]);
 
-	useEffect(() => {
-		if (fileType === "pdf" && containerRef.current) {
-			const observer = new ResizeObserver(() => {
-				setPdfKey((prev) => prev + 1);
-			});
-			observer.observe(containerRef.current);
-			return () => observer.disconnect();
-		}
-	}, [fileType]);
-
 	const fitClass =
 		{
 			contain: "object-contain",
@@ -174,12 +162,10 @@ export function A2UIFilePreview({
 	if (fileType === "pdf") {
 		return (
 			<div
-				ref={containerRef}
 				className={cn("w-full h-full flex flex-col", resolveStyle(style))}
 				style={resolveInlineStyle(style)}
 			>
 				<iframe
-					key={pdfKey}
 					src={`${src}#toolbar=1&#view=FitH`}
 					className="w-full h-full border-0"
 					title={`PDF Preview: ${rawFileName(src, filename)}`}

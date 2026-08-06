@@ -14,9 +14,11 @@ import {
 	getNivoChartTheme,
 } from "../../../lib/chart-theme";
 import { cn } from "../../../lib/utils";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { toEventContextValue } from "../event-context";
 import type {
 	BarChartStyle,
 	BoundValue,
@@ -33,6 +35,10 @@ import type {
 	TreemapChartStyle,
 } from "../types";
 import { NIVO_SAMPLE_DATA } from "./nivo-data";
+
+/** Charts never dispatched actions before, so `*` and `actions[0]` are not
+ * inherited by their new click event. */
+const EXACT_ONLY = { legacyFallback: false, wildcardFallback: false };
 
 // Error boundary to catch chart rendering errors
 interface ChartErrorBoundaryProps {
@@ -645,7 +651,9 @@ const CHART_PACKAGES: Record<string, ChartInfo> = {
 export function A2UINivoChart({
 	component,
 	style,
+	componentId,
 }: ComponentProps<NivoChartComponent>) {
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const containerRef = useRef<HTMLDivElement>(null);
 	const [chartModule, setChartModule] = useState<ChartModule | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -1393,10 +1401,22 @@ export function A2UINivoChart({
 		chordStyle,
 	]);
 
-	const finalProps = useMemo(
-		() => (rawConfig ? { ...chartProps, ...rawConfig } : chartProps),
-		[chartProps, rawConfig],
-	);
+	const finalProps = useMemo(() => {
+		const merged = rawConfig ? { ...chartProps, ...rawConfig } : chartProps;
+		return {
+			...merged,
+			// Every nivo chart calls `onClick(datum, event)`, but the datum shape
+			// is per-chart and carries live scales and parent back-references.
+			onClick: (datum: unknown) => {
+				void triggerEvent(
+					"pointClick",
+					component,
+					{ point: toEventContextValue(datum), chartType },
+					EXACT_ONLY,
+				);
+			},
+		};
+	}, [chartProps, chartType, component, rawConfig, triggerEvent]);
 
 	if (loading) {
 		return (

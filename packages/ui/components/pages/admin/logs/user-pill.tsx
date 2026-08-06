@@ -4,8 +4,12 @@ import { Copy, Mail, User as UserIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../../hooks/use-invoke";
+import {
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+} from "../../../../lib/user-display";
 import { useBackend } from "../../../../state/backend-state";
-import type { IUserLookup } from "../../../../state/backend-state/types";
 import {
 	Avatar,
 	AvatarFallback,
@@ -29,29 +33,6 @@ interface UserPillProps {
 	muted?: boolean;
 }
 
-function deriveInitials(label?: string | null) {
-	if (!label) return "??";
-	const parts = label.trim().split(/\s+/).filter(Boolean);
-	if (parts.length === 0) return "??";
-	if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-	const first = parts[0][0] ?? "";
-	const last = parts[parts.length - 1][0] ?? "";
-	return (first + last).toUpperCase();
-}
-
-function preferredLabel(user?: IUserLookup | null, fallback?: string) {
-	if (!user) return fallback ?? "Unknown";
-	return (
-		user.name ??
-		user.preferred_username ??
-		user.username ??
-		user.email ??
-		user.id ??
-		fallback ??
-		"Unknown"
-	);
-}
-
 export function UserPill({
 	userId,
 	className,
@@ -68,8 +49,11 @@ export function UserPill({
 		Boolean(userId),
 	);
 
-	const label = preferredLabel(lookup.data, userId ?? undefined);
-	const initials = useMemo(() => deriveInitials(label), [label]);
+	const label = userDisplayName(
+		lookup.data,
+		lookup.data?.id ?? userId ?? "Unknown",
+	);
+	const initials = useMemo(() => userInitials(label, "??"), [label]);
 	const isAnonymous = !userId;
 
 	if (isAnonymous) {
@@ -93,7 +77,7 @@ export function UserPill({
 			} ${className ?? ""}`}
 		>
 			<Avatar className="h-4 w-4">
-				<AvatarImage src={lookup.data?.avatar_url ?? ""} alt={label} />
+				<AvatarImage src={userAvatarUrl(lookup.data) ?? ""} alt={label} />
 				<AvatarFallback className="text-[8px]">{initials}</AvatarFallback>
 			</Avatar>
 			{lookup.isLoading ? (
@@ -114,7 +98,10 @@ export function UserPill({
 					<SheetHeader>
 						<div className="flex items-center gap-3">
 							<Avatar className="h-12 w-12">
-								<AvatarImage src={lookup.data?.avatar_url ?? ""} alt={label} />
+								<AvatarImage
+									src={userAvatarUrl(lookup.data) ?? ""}
+									alt={label}
+								/>
 								<AvatarFallback>{initials}</AvatarFallback>
 							</Avatar>
 							<div className="min-w-0">

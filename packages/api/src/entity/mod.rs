@@ -8,6 +8,7 @@ pub mod ai_act_model_registry;
 pub mod app;
 pub mod app_analytics_daily;
 pub mod app_board_score;
+pub mod app_cache_entry;
 pub mod app_connection;
 pub mod app_discount;
 pub mod app_group;

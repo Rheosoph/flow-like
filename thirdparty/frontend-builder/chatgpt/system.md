@@ -64,7 +64,7 @@ Binding: {"path": "$.data.field", "defaultValue": "fallback"}
 ## Available Components
 
 **Layout:** column, row, grid, stack, scrollArea, absolute, aspectRatio, box, center, spacer
-**Display:** text, image, icon, video, lottie, markdown, badge, avatar, userProfile, progress, spinner, divider, skeleton, table, tableRow, tableCell, plotlyChart, nivoChart, iframe, filePreview, boundingBoxOverlay, geoMap
+**Display:** text, image, icon, video, lottie, markdown, badge, avatar, userProfile, progress, spinner, divider, skeleton, table, tableRow, tableCell, plotlyChart, nivoChart, iframe, filePreview, boundingBoxOverlay, geoMap, graph, ontologyGraph
 **Interactive:** button, feedback, appLink, textField, select, slider, checkbox, switch, radioGroup, dateTimeInput, fileInput, imageInput, voiceInput, link, imageLabeler, imageHotspot
 **Container:** card, modal, tabs, accordion, drawer, tooltip, popover
 **Game/Visual:** canvas2d, sprite, shape, scene3d, model3d, dialogue, characterPortrait, choiceMenu, inventoryGrid, healthBar, miniMap

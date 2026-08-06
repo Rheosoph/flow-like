@@ -247,6 +247,25 @@ async fn maintenance_handler(event: LambdaEvent<ScheduledMaintenancePayload>) ->
                 "Telemetry alert maintenance completed"
             )
         }
+        (MaintenanceJob::CacheCleanup, MaintenanceRunResponse::CacheCleanup(result)) => {
+            tracing::info!(
+                deleted = result.deleted,
+                "Cache cleanup maintenance completed"
+            )
+        }
+        (job, response) => {
+            // The API answered for a different job than we asked for. Fail the
+            // invocation so the mismatch surfaces instead of being logged as success.
+            tracing::error!(
+                requested = job.as_str(),
+                response = ?response,
+                "Maintenance API responded for a different job"
+            );
+            return Err(Error::from(format!(
+                "Maintenance API responded for a different job than {}",
+                job.as_str()
+            )));
+        }
     }
 
     Ok(())

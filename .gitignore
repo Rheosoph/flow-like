@@ -89,3 +89,4 @@ apps/desktop/src-tauri/binaries/mac/arm/mlx-resources/
 apps/desktop/src-tauri/apple/FlowLikeMLX/.build/
 .codacy/codacy.config.baseline.json
 .codacy/codacy.config.json
+.tmp-nextrepro

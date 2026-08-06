@@ -1983,9 +1983,12 @@ function FlowPilotImpl({
 							pendingBoardEditJob?.token.claim_id === token.claim_id &&
 							backendContext.boardState.resolveBoardEditJob
 						) {
+							// Reaching Apply means the user chose it here — through the review card
+							// or through auto mode — so the host must not re-ask for the same batch.
 							const resolution =
 								await backendContext.boardState.resolveBoardEditJob(
 									pendingBoardEditJob.jobId,
+									true,
 									true,
 								);
 							if (isSettledBoardEditJob(resolution.job)) {
@@ -3723,23 +3726,18 @@ function FlowPilotImpl({
 		Boolean(pendingFlowIrCommit) &&
 		visiblePendingCommands.length === 0 &&
 		flowscriptWorkspaceStatus === "stale";
-	const pendingJobRequiresExplicitApproval = Boolean(
-		pendingBoardEditJob &&
-			(pendingBoardEditJob.review.replacementMode ||
-				pendingBoardEditJob.review.destructiveEffects.length > 0),
-	);
-
 	// Auto mode applies a settled review as soon as generation finishes, mirroring the exact
-	// condition that renders the review card. The attempt stamp makes this fire once per
-	// distinct review: every early return inside executePendingCommands either leaves the
-	// review untouched (key unchanged, so no retry) or clears it outright. Bailing on
-	// `destructiveApplyRequest` is load-bearing — cancelling that dialog restores the
-	// applicable workspace, and without the bail the effect would immediately re-raise it.
+	// condition that renders the review card, and covers destructive reviews (deletions and
+	// full-board replacements) as well — arming the toggle is the user's standing decision. The
+	// attempt stamp makes this fire once per distinct review: every early return inside
+	// executePendingCommands either leaves the review untouched (key unchanged, so no retry) or
+	// clears it outright. Bailing on `destructiveApplyRequest` is load-bearing — cancelling that
+	// dialog restores the applicable workspace, and without the bail the effect would immediately
+	// re-raise it.
 	const autoApplyKey =
 		!autoMode ||
 		loading ||
 		destructiveApplyRequest !== null ||
-		pendingJobRequiresExplicitApproval ||
 		hasDismissOnlyStaleReview ||
 		!(agentMode === "board" || agentMode === "both") ||
 		!(

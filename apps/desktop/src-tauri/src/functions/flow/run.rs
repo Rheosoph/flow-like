@@ -306,8 +306,9 @@ async fn execute_internal(
     }
     internal_run.set_execution_environment(local_execution_environment());
 
-    // Set offline user context for desktop app (always admin/owner)
-    internal_run.set_offline_user_context();
+    // Desktop runs are always admin/owner, but keep the signed-in subject so
+    // nodes and surfaces see the real user instead of the local placeholder.
+    internal_run.set_local_user_context().await;
 
     if overrides.log_flush_interval.is_some() || overrides.log_batch_size.is_some() {
         internal_run

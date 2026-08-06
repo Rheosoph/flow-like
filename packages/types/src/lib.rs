@@ -73,6 +73,7 @@ pub mod futures {
     pub use futures::StreamExt;
 }
 pub use async_stream;
+pub mod cache;
 pub mod frontend_request;
 pub mod interaction;
 pub mod intercom;

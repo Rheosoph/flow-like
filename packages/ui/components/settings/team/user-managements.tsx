@@ -55,6 +55,12 @@ import {
 	useInvoke,
 } from "../../../";
 import {
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+	userSecondaryLabel,
+} from "../../../lib/user-display";
+import {
 	SectionHeading,
 	StatusChip,
 	TEAM_ROW_HANDLE,
@@ -279,7 +285,7 @@ function Member({
 		await backend.teamState.removeUser(userRole.app_id, member.user_id);
 		invalidate(backend.teamState.getTeam, [userRole.app_id]);
 		toast.success(
-			`${userData?.username ?? "User"} has been removed from the team.`,
+			`${userDisplayName(userData, "User")} has been removed from the team.`,
 		);
 	}, [member.user_id, backend, userRole, userData, invalidate]);
 
@@ -287,25 +293,16 @@ function Member({
 
 	if (!userData) return <MemberRowSkeleton />;
 
-	const evaluatedName =
-		userData.name ??
-		userData.preferred_username ??
-		userData.username ??
-		userData.email ??
-		"Unknown User";
-	const handle =
-		userData.preferred_username ?? userData.username ?? userData.email;
+	const evaluatedName = userDisplayName(userData, "Unknown User");
+	const handle = userSecondaryLabel(userData);
 	const roleName = userRole?.name ?? "No Role Assigned";
 
 	return (
 		<div className={teamRowClass()}>
 			<Avatar className="size-9 shrink-0">
-				<AvatarImage src={userData.avatar_url} alt={evaluatedName} />
+				<AvatarImage src={userAvatarUrl(userData)} alt={evaluatedName} />
 				<AvatarFallback className="text-[11px] font-semibold text-foreground">
-					{evaluatedName
-						.split(" ")
-						.map((n) => n[0])
-						.join("")}
+					{userInitials(userData)}
 				</AvatarFallback>
 			</Avatar>
 
@@ -317,7 +314,7 @@ function Member({
 					>
 						{evaluatedName}
 					</a>
-					{handle && <span className={TEAM_ROW_HANDLE}>@{handle}</span>}
+					{handle && <span className={TEAM_ROW_HANDLE}>{handle}</span>}
 				</div>
 				<div className={TEAM_ROW_META}>
 					{isOwner ? (

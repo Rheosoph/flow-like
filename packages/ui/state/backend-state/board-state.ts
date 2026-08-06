@@ -295,10 +295,15 @@ export interface IBoardState {
 	/** Read one native review job, primarily for idempotent resolution polling. */
 	getBoardEditJob?(jobId: string): Promise<BoardEditJob | undefined>;
 
-	/** Apply or deny the exact retained batch owned by the native job. */
+	/**
+	 * Apply or deny the exact retained batch owned by the native job. `destructivePreapproved`
+	 * reports that the user already accepted the destructive review here (approval card or auto
+	 * mode), so the host skips its duplicate confirmation without relaxing any batch check.
+	 */
 	resolveBoardEditJob?(
 		jobId: string,
 		approved: boolean,
+		destructivePreapproved?: boolean,
 	): Promise<BoardEditJobResolution>;
 
 	/** Claim one renderer delivery of an already-applied native receipt. */

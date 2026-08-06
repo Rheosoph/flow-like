@@ -7,7 +7,14 @@ import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	resolveEventDebounceMs,
+	useDebouncedTrigger,
+} from "../hooks/use-debounced-trigger";
 import type { BoundValue, SliderComponent } from "../types";
+
+/** Events added after slider shipped never inherit `*` or `actions[0]`. */
+const EXACT_ONLY = { legacyFallback: false, wildcardFallback: false };
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
@@ -29,7 +36,11 @@ export function A2UISlider({
 	const max = useResolved<number>(component.max) ?? 100;
 	const step = useResolved<number>(component.step) ?? 1;
 	const showValue = useResolved<boolean>(component.showValue);
+	const debounceMs = resolveEventDebounceMs(
+		useResolved<number>(component.debounceMs),
+	);
 	const { setByPath } = useData();
+	const { schedule, cancel } = useDebouncedTrigger(debounceMs);
 
 	const handleChange = (newValues: number[]) => {
 		const newValue = newValues[0];
@@ -46,8 +57,12 @@ export function A2UISlider({
 				context: { value: newValue },
 			});
 		}
+		schedule(() => {
+			void triggerEvent("input", component, { value: newValue }, EXACT_ONLY);
+		});
 	};
 	const handleCommit = (newValues: number[]) => {
+		cancel();
 		void triggerEvent("change", component, { value: newValues[0] });
 	};
 

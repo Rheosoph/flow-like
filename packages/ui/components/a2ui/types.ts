@@ -437,7 +437,10 @@ export interface AvatarComponent extends ComponentBase {
 
 export interface UserProfileComponent extends ComponentBase {
 	type: "userProfile";
-	/** User subject/sub ID. Compatible with Set Element Value via component.value. */
+	/**
+	 * User subject/sub ID. Compatible with Set Element Value via component.value.
+	 * The "local" sub of an unauthenticated execution renders the current user.
+	 */
 	value: BoundValue;
 	/** "avatar" | "chip" | "row" | "detailed" | "card" */
 	variant?: BoundValue;
@@ -586,6 +589,7 @@ export interface TextFieldComponent extends ComponentBase {
 	rows?: BoundValue;
 	maxLength?: BoundValue;
 	required?: BoundValue;
+	debounceMs?: BoundValue; // pause before the "input" event fires (default 400, min 100)
 }
 
 export interface SelectComponent extends ComponentBase {
@@ -608,6 +612,7 @@ export interface SliderComponent extends ComponentBase {
 	disabled?: BoundValue;
 	showValue?: BoundValue;
 	label?: BoundValue;
+	debounceMs?: BoundValue; // pause before the "input" event fires (default 400, min 100)
 }
 
 export interface CheckboxComponent extends ComponentBase {
@@ -1538,6 +1543,62 @@ export interface GeoMapComponent extends ComponentBase {
 	clusterMaxZoom?: BoundValue;
 }
 
+// ── Graph component types ──────────────────────────────────────────
+
+/** Style applied to every node or edge carrying a label. */
+export interface GraphLabelStyleDef {
+	color?: string;
+	icon?: string;
+	size?: number;
+}
+
+/** Mirrors SubgraphNode, so graph query output binds without mapping. */
+export interface GraphNodeDef {
+	id: string;
+	label: string;
+	caption?: string;
+	props?: Record<string, unknown>;
+}
+
+/** Mirrors SubgraphEdge, so graph query output binds without mapping. */
+export interface GraphEdgeDef {
+	id: string;
+	source: string;
+	target: string;
+	label: string;
+	props?: Record<string, unknown>;
+}
+
+export interface GraphComponent extends ComponentBase {
+	type: "graph";
+	nodes: BoundValue;
+	edges?: BoundValue;
+	/** `{ "<label>": { color, icon, size } }` or `[{ label, color, icon, size }]` */
+	labelStyles?: BoundValue;
+	showToolbar?: BoundValue;
+	showSearch?: BoundValue;
+	showLegend?: BoundValue;
+	showInspector?: BoundValue;
+	height?: BoundValue;
+}
+
+export interface OntologyGraphComponent extends ComponentBase {
+	type: "ontologyGraph";
+	ontologyId: BoundValue;
+	appId?: BoundValue;
+	limit?: BoundValue;
+	allowExpand?: BoundValue;
+	allowSearch?: BoundValue;
+	allowPaths?: BoundValue;
+	allowActions?: BoundValue;
+	allowCypher?: BoundValue;
+	allowStyleEdit?: BoundValue;
+	allowLimitChange?: BoundValue;
+	showToolbar?: BoundValue;
+	showLegend?: BoundValue;
+	height?: BoundValue;
+}
+
 // ── Planning: Calendar & Gantt (mirrors Rust structs) ──────────────
 
 // A single calendar event (mirrors CalendarEvent in update_schemas.rs)
@@ -1745,6 +1806,8 @@ export type A2UIComponent =
 	| ImageLabelerComponent
 	| ImageHotspotComponent
 	| GeoMapComponent
+	| GraphComponent
+	| OntologyGraphComponent
 	| CalendarComponent
 	| GanttComponent
 	| WidgetInstanceComponent

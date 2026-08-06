@@ -61,6 +61,8 @@ import {
 } from "../../index";
 import { cn } from "../../lib";
 import { getApiOrigin } from "../../lib/api-url";
+import { resolveChatPlaceholderTypingMotion } from "../../lib/chat-appearance";
+import { createComposerActivity } from "../../lib/composer-activity";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../lib/flowpilot-debug";
 import { isTauri } from "../../lib/platform";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
@@ -169,7 +171,14 @@ const GLOBAL_CHAT_CONFIG = {
 	allow_file_upload: true,
 	ai_disclosure: FLOWPILOT_AI_DISCLOSURE,
 	tools: [] as string[],
+	// FlowPilot has no interface config screen of its own, so this is where its copy of the chat
+	// event's `placeholder_typing_motion` lives. Set it to true to let the mark answer the composer.
+	placeholder_typing_motion: false,
 };
+
+const GLOBAL_CHAT_TYPING_MOTION = resolveChatPlaceholderTypingMotion(
+	GLOBAL_CHAT_CONFIG.placeholder_typing_motion,
+);
 
 // FlowScript itself needs at least 420px. Keep app previews above the split until the remaining
 // conversation column is wide enough for a useful embedded desktop surface.
@@ -186,6 +195,9 @@ interface GlobalChatBodyProps {
  */
 export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const chatRef = useRef<IChatRef>(null);
+	// One channel per surface: an app chat can be open beside this one, and typing in it must not
+	// stir this mark. Never state — it changes per keystroke and only the film's loop reads it.
+	const composerActivity = useRef(createComposerActivity()).current;
 
 	const messages = useGlobalChatStore((s) => s.messages);
 	const activeConversationId = useGlobalChatStore(
@@ -249,11 +261,9 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	}, [enableOverlayAutoOpen, variant]);
 	// Turning auto mode on mid-run settles approval cards whose promises the bridge captured
 	// before the flip; queued ones drain as each is answered. `ask` prompts are never
-	// auto-answered — auto mode waives permission, not questions — and neither are prompts
-	// flagged `destructive` (the deletion gate), which always need a real user decision.
+	// auto-answered — auto mode waives permission, not questions.
 	useEffect(() => {
-		if (!autoMode || toolPrompt?.kind !== "approval" || toolPrompt.destructive)
-			return;
+		if (!autoMode || toolPrompt?.kind !== "approval") return;
 		toolPrompt.respond({ approved: true, remember: false });
 	}, [autoMode, toolPrompt]);
 	// Live board surface (open canvas) the assistant can see and edit — shown as a context chip.
@@ -1264,7 +1274,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						onClick={() => setAutoMode(!autoMode)}
 						title={
 							autoMode
-								? "Auto mode on — tools run and changes apply without asking, including destructive ones. Only board-item deletion still asks."
+								? "Auto mode on — tools run and changes apply without asking, including deletions and full-board replacements."
 								: "Auto mode off — the assistant asks before acting"
 						}
 						className={cn(
@@ -1396,6 +1406,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 									onSelect={(prompt) => void handleSendMessage(prompt)}
 									suggestionsOnly={compact}
 									exiting={emptyStateExiting}
+									activity={composerActivity}
+									typingMotion={GLOBAL_CHAT_TYPING_MOTION}
 								/>
 							</div>
 						)}
@@ -1407,6 +1419,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								sessionId={activeConversationId}
 								messages={messages}
 								onSendMessage={handleSendMessage}
+								onDraftChange={composerActivity.report}
 								isStreamActive={isStreaming}
 								// Supplying this is what unlocks the composer: sends are never
 								// blocked; they start another turn, queue, or steer the running one.

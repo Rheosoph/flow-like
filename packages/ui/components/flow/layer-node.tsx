@@ -3,11 +3,13 @@ import { useDebounce } from "@uidotdev/usehooks";
 import { type Node, type NodeProps, useReactFlow } from "@xyflow/react";
 import {
 	BanIcon,
+	CheckIcon,
 	CircleXIcon,
 	ScrollTextIcon,
 	SquareCheckIcon,
 	SquareFunctionIcon,
 	TriangleAlertIcon,
+	XIcon,
 	ZapIcon,
 } from "lucide-react";
 import { useTheme } from "next-themes";
@@ -21,18 +23,27 @@ import {
 } from "react";
 import PuffLoader from "react-spinners/PuffLoader";
 import { toast } from "sonner";
+import { useInvalidateInvoke } from "../../hooks";
 import type { IBoard, INode } from "../../lib";
+import {
+	CALL_FUNCTION_NODE_NAME,
+	layerToFunctionErrorMessage,
+	planLayerToFunction,
+} from "../../lib/layer-to-function";
 import { logLevelFromNumber } from "../../lib/log-level";
+import { toastError, toastSuccess } from "../../lib/messages";
 import {
 	type ILayer,
 	ILayerType,
 	ILogLevel,
 	IPinType,
 } from "../../lib/schema/flow/board";
+import { useBackendStore } from "../../state/backend-state";
 import { useLogAggregation } from "../../state/log-aggregation-state";
 import { useRunExecutionStore } from "../../state/run-execution-state";
 import { AutoResizeText } from "./auto-resize-text";
 import { CommentDialog } from "./comment-dialog";
+import { useUndoRedo } from "./flow-history";
 import { FlowPin } from "./flow-pin";
 import type { FlowSelectorDataRef } from "./flow-selector-data";
 import { LayerEditMenu } from "./layer-editing-menu";
@@ -50,6 +61,7 @@ export type LayerNode = Node<
 		boardDataVersion?: string;
 		selectorDataRef?: FlowSelectorDataRef;
 		selectorDataVersion?: number;
+		version?: [number, number, number];
 		pushLayer(layer: ILayer): Promise<void>;
 		onLayerUpdate(layer: ILayer): Promise<void>;
 		onLayerRemove(layer: ILayer, preserve_nodes: boolean): Promise<void>;
@@ -66,6 +78,8 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 	const [editing, setEditing] = useState(false);
 	const [isHovered, setIsHovered] = useState(false);
 	const { resolvedTheme } = useTheme();
+	const invalidate = useInvalidateInvoke();
+	const { pushCommands } = useUndoRedo(props.data.appId, props.data.boardId);
 
 	const currentMetadata = useLogAggregation((s) => s.currentMetadata);
 
@@ -183,6 +197,59 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 		setName(undefined);
 	}, [props.id, name]);
 
+	const convertToFunction = useCallback(async () => {
+		if (typeof props.data.version !== "undefined") return;
+
+		const board = props.data.boardRef?.current;
+		const backend = useBackendStore.getState().backend;
+		if (!board || !backend) return;
+
+		try {
+			const catalog = await backend.boardState.getCatalog(props.data.appId);
+			const plan = planLayerToFunction({
+				board,
+				layer: board.layers[props.data.layer.id] ?? props.data.layer,
+				callFunctionTemplate: catalog.find(
+					(node) => node.name === CALL_FUNCTION_NODE_NAME,
+				),
+			});
+
+			if (!plan.ok) {
+				if (plan.error.reason === "already_function") return;
+				toastError(layerToFunctionErrorMessage(plan.error), <XIcon />);
+				return;
+			}
+
+			const executed = await backend.boardState.executeCommands(
+				props.data.appId,
+				props.data.boardId,
+				plan.plan.commands,
+			);
+			await pushCommands(executed);
+			await invalidate(backend.boardState.getBoard, [
+				props.data.appId,
+				props.data.boardId,
+			]);
+			toastSuccess(
+				plan.plan.renamedPins > 0
+					? `'${props.data.layer.name}' is now a function — ${plan.plan.renamedPins} duplicate pin name(s) were renamed`
+					: `'${props.data.layer.name}' is now a function`,
+				<CheckIcon />,
+			);
+		} catch (error) {
+			console.error("Failed to convert layer to function:", error);
+			toastError("Failed to convert the layer into a function", <XIcon />);
+		}
+	}, [
+		props.data.appId,
+		props.data.boardId,
+		props.data.boardRef,
+		props.data.layer,
+		props.data.version,
+		invalidate,
+		pushCommands,
+	]);
+
 	const handleExplain = useCallback(() => {
 		const selectedNodes = getNodes().filter((node) => node.selected);
 		const nodeIds =
@@ -231,6 +298,12 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 						onExtend={() => props.data.onLayerRemove(props.data.layer, true)}
 						onDelete={() => props.data.onLayerRemove(props.data.layer, false)}
 						onExplain={handleExplain}
+						onConvertToFunction={
+							props.data.layer.type === ILayerType.Function ||
+							typeof props.data.version !== "undefined"
+								? undefined
+								: convertToFunction
+						}
 					/>
 				)}
 				<div

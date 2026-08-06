@@ -140,9 +140,16 @@ import {
 	resolveAppEventType,
 } from "./app-event-target";
 import {
+	type DetachedPageLookup,
+	assertDetachedWriteSafe,
+	findPersistedPage,
+	pageWithAppliedComponents,
+} from "./detached-page-edit";
+import {
 	flowPilotWidgetCreationScope,
 	isFlowPilotPageNotFoundError,
 	resolveFlowPilotWidgetTarget,
+	slugifyRoute,
 } from "./flowpilot-widget-target";
 import { readFlowScriptSource } from "./read-flowscript-source";
 import {
@@ -342,16 +349,6 @@ function requestDeadline(request: FrontendToolRequest) {
 }
 
 /** Turn a page name/route into a leading-slash URL slug (e.g. "My Page" -> "/my-page"). */
-function slugifyRoute(value: string): string {
-	const slug = value
-		.trim()
-		.toLowerCase()
-		.replace(/^\/+/, "")
-		.replace(/[^a-z0-9]+/g, "-")
-		.replace(/^-+|-+$/g, "");
-	return `/${slug || "page"}`;
-}
-
 interface InlineWidgetInstance {
 	instanceId: string;
 	copilotWidgetId: string;
@@ -1727,12 +1724,15 @@ export function GlobalToolBridge() {
 				const approvalSessionKey =
 					job.approval.sessionKey ||
 					`${syntheticRequest.toolName}:${job.approval.kind}`;
+				// Auto mode and the session allowlist waive destructive reviews too: both are an
+				// explicit standing decision by the user, and a gate they cannot turn off is just a
+				// prompt. The card still spells out every destructive effect whenever it is shown.
 				const needsApproval =
-					destructive ||
-					((job.approval.kind === "mutating" ||
-						job.approval.kind === "execute") &&
-						!useGlobalChatStore.getState().autoMode &&
-						!approvedKeysRef.current.has(approvalSessionKey));
+					(job.approval.kind === "mutating" ||
+						job.approval.kind === "execute" ||
+						destructive) &&
+					!useGlobalChatStore.getState().autoMode &&
+					!approvedKeysRef.current.has(approvalSessionKey);
 				const resolution = !needsApproval
 					? { approved: true, remember: false }
 					: await openDialog({
@@ -1766,12 +1766,7 @@ export function GlobalToolBridge() {
 					});
 					return;
 				}
-				if (
-					resolution.approved &&
-					resolution.remember &&
-					!destructive &&
-					job.approval.kind !== "none"
-				) {
+				if (resolution.approved && resolution.remember) {
 					approvedKeysRef.current.add(approvalSessionKey);
 				}
 				const resolveJob = backend.boardState.resolveBoardEditJob;
@@ -1782,9 +1777,13 @@ export function GlobalToolBridge() {
 					});
 					return;
 				}
+				// The destructive review was either shown and accepted just above, or waived by auto
+				// mode / the session allowlist. Either way the user has already decided, so the host
+				// must not re-ask with its own dialog.
 				const resolved = await resolveJob.call(
 					backend.boardState,
 					job.jobId,
+					resolution.approved,
 					resolution.approved,
 				);
 				if (
@@ -4237,15 +4236,19 @@ Completion contract: build complete helper logic first and add the Event entry l
 								);
 								// Ownership has moved from this ephemeral tool request to the native job.
 								flowIrCommit = undefined;
+								// Reported to the agent so it can describe the pending review; it no
+								// longer gates anything on this path.
 								const destructive =
 									job.review.replacementMode ||
 									job.review.destructiveEffects.length > 0;
-								if (useGlobalChatStore.getState().autoMode && !destructive) {
-									// Auto mode already authorizes safe mutations. Settle the durable
-									// job before replying so the parent agent receives the applied board's
-									// Event ids and can finish app-level wiring in the same turn.
+								if (useGlobalChatStore.getState().autoMode) {
+									// Auto mode authorizes every board mutation, deletions included.
+									// Settle the durable job before replying so the parent agent
+									// receives the applied board's Event ids and can finish app-level
+									// wiring in the same turn.
 									const resolved = await backend.boardState.resolveBoardEditJob(
 										job.jobId,
+										true,
 										true,
 									);
 									const resolvedJob = resolved.job;
@@ -4586,8 +4589,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 								appliedViaLive = await applyOnce(false);
 								if (blockedDeletion) {
 									assertRequestActive(request, "deletion approval");
-									// Destructive edits are NEVER auto-applied: ask the user inline and
-									// only re-apply with deletions allowed after an explicit approve.
+									// Ask inline and only re-apply with deletions allowed once approved.
+									// Auto mode settles this card itself, so an armed user is not
+									// re-prompted for every deletion the run needs.
 									const diagnostic = diagnostics[0] ?? "";
 									const outcome = await openDialog({
 										type: "approval",
@@ -5179,11 +5183,24 @@ Completion contract: build complete helper logic first and add the Event entry l
 							: null,
 					});
 					if (!targetResolution.ok)
-						return { status: "error", message: targetResolution.message };
+						return {
+							status: "error",
+							...(targetResolution.code ? { code: targetResolution.code } : {}),
+							message: targetResolution.message,
+						};
 					const createMode = targetResolution.mode === "create";
-					// Ambient builder state is input only for an actual edit. A mounted page/widget
-					// must never leak its components or app scope into an explicit create request.
-					const editSurface = createMode ? null : widgetSurface;
+					// A named page that no mounted builder is showing is edited straight in storage.
+					const requestedPageTarget =
+						targetResolution.mode === "edit"
+							? targetResolution.pageTarget
+							: null;
+					// Ambient builder state is input only for an edit of the mounted builder itself. A
+					// create request, or an edit of some other page, must never absorb its components
+					// or app scope.
+					let editSurface =
+						targetResolution.mode === "edit" && targetResolution.surface
+							? widgetSurface
+							: null;
 					const targetAppId = targetResolution.appId;
 					const appId = targetAppId;
 					let boardId = createMode
@@ -5207,6 +5224,45 @@ Completion contract: build complete helper logic first and add the Event entry l
 						}
 						boardId = boards[0]?.id ?? "";
 					}
+					let detachedPage: IPage | undefined;
+					if (requestedPageTarget) {
+						let located: DetachedPageLookup;
+						try {
+							located = await findPersistedPage(
+								backend.pageState,
+								appId,
+								requestedPageTarget,
+							);
+						} catch (error) {
+							return {
+								status: "error",
+								message: `Failed to read the pages of app '${appId}': ${getErrorMessage(error)}`,
+							};
+						}
+						if (!located.ok)
+							return {
+								status: "error",
+								code: located.code,
+								message: located.message,
+							};
+						// A builder mounted on this very page keeps the staged-review path: a detached
+						// write would be invisible to it, and its next autosave would overwrite it.
+						if (
+							widgetSurface?.kind === "page" &&
+							widgetSurface.pageId === located.page.id &&
+							(!widgetSurface.appId || widgetSurface.appId === appId)
+						) {
+							editSurface = widgetSurface;
+						} else {
+							detachedPage = located.page;
+							boardId = located.page.boardId ?? "";
+						}
+					}
+					// The copilot's "before" tree comes from the open canvas when there is one, and
+					// from the saved page when there is not.
+					const currentComponents =
+						editSurface?.currentComponents ?? detachedPage?.components ?? [];
+					const selectedComponentIds = editSurface?.selectedComponentIds ?? [];
 					const widgetConversationId = conversationScopeId(request);
 					const widgetCreationIdentityForBoard = (targetBoardId: string) =>
 						createMode && widgetConversationId
@@ -5372,8 +5428,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 								board_id: boardId,
 								instruction,
 								create_mode: createMode,
-								selected_component_ids: editSurface?.selectedComponentIds ?? [],
-								current_components: editSurface?.currentComponents ?? [],
+								detached_page_id: detachedPage?.id,
+								selected_component_ids: selectedComponentIds,
+								current_components: currentComponents,
 							},
 							summary: "Delegated UI sub-agent started.",
 						}),
@@ -5419,8 +5476,8 @@ Completion contract: build complete helper logic first and add the Event entry l
 							null,
 							undefined,
 							[],
-							editSurface?.currentComponents ?? [],
-							editSurface?.selectedComponentIds ?? [],
+							currentComponents,
+							selectedComponentIds,
 							instruction,
 							[],
 							undefined /* images */,
@@ -5484,20 +5541,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 					subAcc.steps.set("components", {
 						id: "components",
 						title: "UI components",
-						description: `${components.length} component${components.length === 1 ? "" : "s"} ${createMode ? "generated" : "ready for review"}`,
+						description: `${components.length} component${components.length === 1 ? "" : "s"} ${createMode ? "generated" : detachedPage ? "applied to the page" : "ready for review"}`,
 						status: "done",
 						timestamp: Date.now(),
 					});
 					publishSubSteps();
 
+					const persistenceAcquireOptions = () => ({
+						deadlineAtMs: requestDeadline(request),
+						signal:
+							requestExecutionLeasesRef.current.get(request)?.controller.signal,
+						onInvalidated: () => markRequestExpired(request.requestId),
+					});
+
 					if (createMode) {
-						const persistenceAcquireOptions = () => ({
-							deadlineAtMs: requestDeadline(request),
-							signal:
-								requestExecutionLeasesRef.current.get(request)?.controller
-									.signal,
-							onInvalidated: () => markRequestExpired(request.requestId),
-						});
 						let releaseAppPersistence: (() => void) | undefined;
 						let releasePageBoardPersistence: (() => void) | undefined;
 						try {
@@ -5574,7 +5631,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 										pageBeforeCatalog.boardId &&
 										pageBeforeCatalog.boardId !== boardId
 											? `Page id '${pageId}' already belongs to board '${pageBeforeCatalog.boardId}', not '${boardId}'. Choose a globally unique page_id.`
-											: `Page '${pageId}' already exists. Open it and use mode='edit', or choose a different page_id for a new page.`,
+											: `Page '${pageId}' already exists. To change it call flowpilot_widget again with mode='edit', app_id, and this page_id; to add a separate page choose a different page_id.`,
 								});
 							}
 
@@ -5742,7 +5799,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 									message:
 										existingPage.boardId && existingPage.boardId !== boardId
 											? `Page id '${pageId}' already belongs to board '${existingPage.boardId}', not '${boardId}'. Choose a globally unique page_id.`
-											: `Page '${pageId}' already exists. Open it and use mode='edit', or choose a different page_id for a new page.`,
+											: `Page '${pageId}' already exists. To change it call flowpilot_widget again with mode='edit', app_id, and this page_id; to add a separate page choose a different page_id.`,
 								});
 							}
 							const timestamp = new Date().toISOString();
@@ -5824,8 +5881,120 @@ Completion contract: build complete helper logic first and add the Event entry l
 						}
 					}
 
-					// Edit mode: stage for the user's inline review. The tool never applies this
-					// itself; only the review card does, either on a click or via auto mode.
+					// Detached edit: no builder is showing this page, so the merge the builder would
+					// have performed on Apply happens here and is saved directly.
+					if (detachedPage) {
+						const releaseDetachedEdit = await boardEditCoordinator.acquire(
+							boardEditLockKey(appId, detachedPage.boardId),
+							persistenceAcquireOptions(),
+						);
+						try {
+							assertRequestActive(request, "detached page persistence");
+							// The user may have opened this page's builder while the copilot ran. It
+							// now holds the authoritative tree and would overwrite a direct write on
+							// its next autosave, so hand the components to the review card instead.
+							// A run that has already ended cannot show a review card, so it writes rather
+							// than discarding the work.
+							const liveNow = runIsLive()
+								? useAssistantSurface.getState().widgetSurface
+								: null;
+							if (
+								liveNow?.kind === "page" &&
+								liveNow.pageId === detachedPage.id &&
+								(!liveNow.appId || liveNow.appId === appId)
+							) {
+								scope.setPendingComponents({
+									components,
+									canvasSettings,
+									warnings: warnings.length > 0 ? warnings : undefined,
+									surfaceId: liveNow.surfaceId,
+									appId,
+								});
+								scope.referenceApp(appId);
+								return finishWidgetRun({
+									status: "ok",
+									message: response.message,
+									component_count: components.length,
+									staged: true,
+									applied: false,
+									app_id: appId,
+									page: { id: detachedPage.id, name: detachedPage.name },
+									note: "The user opened this page's builder while the UI was being generated, so the components are pending their review in the chat instead of being written directly. Tell the user to review and apply them.",
+								});
+							}
+							// Re-read under the lock: a parallel run may have saved this page while
+							// the UI was being generated.
+							let persisted: IPage;
+							try {
+								persisted = await backend.pageState.getPage(
+									appId,
+									detachedPage.id,
+								);
+							} catch (error) {
+								return finishWidgetRun({
+									status: "error",
+									message: `Failed to re-read page '${detachedPage.id}' before writing: ${getErrorMessage(error)}`,
+								});
+							}
+							const writeGuard = assertDetachedWriteSafe(
+								detachedPage,
+								persisted,
+							);
+							if (!writeGuard.ok)
+								return finishWidgetRun({
+									status: "error",
+									code: writeGuard.code,
+									message: writeGuard.message,
+								});
+							await backend.pageState.updatePage(
+								appId,
+								pageWithAppliedComponents(
+									persisted,
+									components,
+									canvasSettings,
+									new Date().toISOString(),
+								),
+							);
+							scope.referenceApp(appId);
+							// Opening the page is the only review the user gets on this path. Deferred
+							// because a mid-stream router.push tears the run down.
+							useGlobalChatStore.getState().setPendingNavigation({
+								target: `/page-builder?id=${detachedPage.id}&app=${appId}&board=${detachedPage.boardId ?? ""}`,
+								runId: scope.runId,
+							});
+							return finishWidgetRun({
+								status: "ok",
+								message: response.message,
+								component_count: components.length,
+								staged: false,
+								applied: true,
+								app_id: appId,
+								...(detachedPage.boardId
+									? { board_id: detachedPage.boardId }
+									: {}),
+								page: {
+									id: detachedPage.id,
+									name: detachedPage.name,
+									route: detachedPage.route,
+								},
+								...(requestedPageTarget?.appIdFromSurface
+									? { app_scope_source: "open_builder" }
+									: {}),
+								...(warnings.length > 0 ? { warnings } : {}),
+								note: "Applied DIRECTLY to the saved page — no builder was open, so there is no review card and the user has NOT reviewed this. Name the page you changed when you report back. Components whose ids the copilot reused were replaced and new ones appended; nothing was deleted, and reusable widgets are not extracted in edit mode. No workflow logic was built — behaviour still needs flowpilot_board.",
+							});
+						} catch (error) {
+							return finishWidgetRun({
+								status: "error",
+								message: `Failed to save the page edit: ${getErrorMessage(error)}. The local copy may already hold the change — re-read the page before retrying.`,
+							});
+						} finally {
+							releaseDetachedEdit();
+						}
+					}
+
+					// Edit mode with the builder open: stage for the user's inline review. The tool
+					// never applies this itself; only the review card does, on a click or auto mode.
 					let staged = false;
 					if (runIsLive() && editSurface) {
 						scope.setPendingComponents({

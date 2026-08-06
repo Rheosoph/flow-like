@@ -71,6 +71,60 @@ pub struct GeoMapViewport {
 }
 
 // =============================================================================
+// Graph Input Schemas
+// =============================================================================
+
+/// Visual style applied to every node or edge carrying a label
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphLabelStyle {
+    /// The node or edge label this style applies to
+    pub label: String,
+    /// Hex color, e.g. "#6366f1"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    /// Icon key rendered inside the node
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    /// Node radius in pixels
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<f64>,
+}
+
+/// A single graph node
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNodeInput {
+    /// Unique identifier, referenced by edge source/target
+    pub id: String,
+    /// Type of the node — drives colour, icon and the legend
+    pub label: String,
+    /// Text shown on and next to the node
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    /// Arbitrary properties listed in the node inspector
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub props: Option<flow_like_types::Value>,
+}
+
+/// A single graph edge
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdgeInput {
+    /// Unique identifier for this edge
+    pub id: String,
+    /// Id of the node the edge starts at
+    pub source: String,
+    /// Id of the node the edge points to
+    pub target: String,
+    /// Type of the relation — drives colour and the legend
+    pub label: String,
+    /// Arbitrary properties listed in the edge inspector
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub props: Option<flow_like_types::Value>,
+}
+
+// =============================================================================
 // Model3D Input Schemas
 // =============================================================================
 

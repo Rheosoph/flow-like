@@ -45,6 +45,11 @@ import {
 	type PackageVersion,
 	type RegistryEntry,
 } from "../../lib/schema/wasm";
+import {
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+} from "../../lib/user-display";
 import { useBackend } from "../../state/backend-state";
 import type { GenericFetcher } from "../pages/store/store-package-detail";
 import {
@@ -193,9 +198,7 @@ function formatReviewAction(action: PackageReview["action"]) {
 }
 
 function getReviewerLabel(review: PackageReview) {
-	return (
-		review.reviewer?.name ?? review.reviewer?.username ?? review.reviewerId
-	);
+	return userDisplayName(review.reviewer, review.reviewerId);
 }
 
 function PublicationReviewCard({
@@ -266,7 +269,7 @@ function PublicationReviewCard({
 					<div className="space-y-3">
 						{reviews.map((review) => {
 							const reviewerLabel = getReviewerLabel(review);
-							const reviewerInitial = reviewerLabel.charAt(0).toUpperCase();
+							const reviewerAvatar = userAvatarUrl(review.reviewer);
 
 							return (
 								<div
@@ -275,13 +278,12 @@ function PublicationReviewCard({
 								>
 									<div className="flex items-start gap-3">
 										<Avatar className="h-9 w-9">
-											{review.reviewer?.avatar ? (
-												<AvatarImage
-													src={review.reviewer.avatar}
-													alt={reviewerLabel}
-												/>
+											{reviewerAvatar ? (
+												<AvatarImage src={reviewerAvatar} alt={reviewerLabel} />
 											) : null}
-											<AvatarFallback>{reviewerInitial}</AvatarFallback>
+											<AvatarFallback>
+												{userInitials(review.reviewer)}
+											</AvatarFallback>
 										</Avatar>
 										<div className="min-w-0 flex-1 space-y-1">
 											<div className="flex flex-wrap items-center gap-2">

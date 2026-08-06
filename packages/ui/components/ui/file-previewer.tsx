@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AudioPreview } from "./audio-preview";
 import { MonacoFileEditor } from "./monaco-file-editor";
 import { TextEditor } from "./text-editor";
@@ -88,10 +88,8 @@ export function FilePreviewer({
 	onSave?: (content: string) => Promise<void>;
 }>) {
 	const [content, setContent] = useState<string>("");
-	const [pdfKey, setPdfKey] = useState(0);
 	const [pdfPreviewUrl, setPdfPreviewUrl] = useState("");
 	const [pdfPreviewError, setPdfPreviewError] = useState<string | null>(null);
-	const containerRef = useRef<HTMLDivElement>(null);
 
 	const previewContent = useCallback(async () => {
 		const response = await fetch(url);
@@ -157,21 +155,6 @@ export function FilePreviewer({
 		};
 	}, [filename, url]);
 
-	useEffect(() => {
-		if (isPdf(url, filename) && containerRef.current) {
-			const observer = new ResizeObserver(() => {
-				// Force rerender of the PDF iframe when size changes
-				setPdfKey((prev) => prev + 1);
-			});
-
-			observer.observe(containerRef.current);
-
-			return () => {
-				observer.disconnect();
-			};
-		}
-	}, [url, filename]);
-
 	if (!canPreview(url, filename)) {
 		return (
 			<div className="text-red-500">File type not supported for preview</div>
@@ -194,9 +177,8 @@ export function FilePreviewer({
 		}
 
 		return (
-			<div ref={containerRef} className="w-full h-full flex flex-col">
+			<div className="w-full h-full flex flex-col">
 				<iframe
-					key={pdfKey}
 					src={`${pdfPreviewUrl}${pageUrl}`}
 					className="w-full h-full border-0 max-h-full max-w-full"
 					title={`PDF Preview: ${rawFileName(url, filename)}`}

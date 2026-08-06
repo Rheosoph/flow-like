@@ -186,7 +186,14 @@ fn collect_execution_providers() -> (
         }
     }
 
-    #[cfg(any(feature = "coreml", target_vendor = "apple"))]
+    // CoreML is opt-in rather than automatic on Apple. It only accepts operators it has a builder
+    // for, and the models FlowLike ships are built from ops it largely rejects, so ORT splits the
+    // graph into dozens of subgraphs with a buffer copy at every boundary. Measured against the
+    // shipped gte-multilingual-base (73 partitions over 1192 nodes) and the CLIP image encoder
+    // (104 partitions over 1188 nodes), CoreML was 2-5x slower, used 4-6x the peak memory, and
+    // took 6-16x longer to load than the plain CPU provider. Build with `--features coreml` to
+    // re-enable it for a model that genuinely maps onto it.
+    #[cfg(feature = "coreml")]
     {
         let provider = ort::ep::CoreML::default();
         if provider.is_available().unwrap_or(false) {
@@ -240,7 +247,15 @@ fn collect_execution_providers() -> (
         all(target_arch = "arm", any(target_os = "linux", target_os = "android"))
     ))]
     {
+        // XNNPACK spins up its own pthreadpool from the session's intra-op thread count rather
+        // than using ORT's shared pool, so the mobile clamp below has to be repeated here or the
+        // EP silently allocates one worker per core.
         let provider = ort::ep::XNNPACK::default();
+        #[cfg(any(target_os = "ios", target_os = "tvos", target_os = "android"))]
+        let provider = match std::num::NonZeroUsize::new(2) {
+            Some(threads) => provider.with_intra_op_num_threads(threads),
+            None => provider,
+        };
         if provider.is_available().unwrap_or(false) {
             info!("XNNPACK execution provider available");
             eps.push(provider.build());

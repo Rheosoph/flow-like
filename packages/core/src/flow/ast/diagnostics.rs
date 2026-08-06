@@ -23,6 +23,7 @@ pub enum FlowScriptDiagnosticCode {
     FsTypeMismatch,
     FsTypeAmbiguous,
     FsUnknownInputPin,
+    FsStructFieldUnknown,
     FsUnresolvedArgument,
     FsOutputPinUnresolved,
     FsExecutionPolicyAmbiguous,
@@ -57,6 +58,7 @@ impl FlowScriptDiagnosticCode {
             Self::FsTypeMismatch => "FS_TYPE_MISMATCH",
             Self::FsTypeAmbiguous => "FS_TYPE_AMBIGUOUS",
             Self::FsUnknownInputPin => "FS_UNKNOWN_INPUT_PIN",
+            Self::FsStructFieldUnknown => "FS_STRUCT_FIELD_UNKNOWN",
             Self::FsUnresolvedArgument => "FS_UNRESOLVED_ARGUMENT",
             Self::FsOutputPinUnresolved => "FS_OUTPUT_PIN_UNRESOLVED",
             Self::FsExecutionPolicyAmbiguous => "FS_EXECUTION_POLICY_AMBIGUOUS",
@@ -313,6 +315,26 @@ fn classify(message: &str) -> FlowScriptDiagnostic {
         diagnostic.actual = Some("catalog metadata was not supplied".into());
         diagnostic.fix = fix(
             "Reconcile through the catalog-aware FlowScript entry point.",
+            None,
+        );
+    } else if message.contains("which has no field") || message.contains("which has no such field")
+    {
+        // A platform struct whose field list is authoritative — the repair is always an accessor
+        // call, and the message already carries the list of them.
+        diagnostic.code = FlowScriptDiagnosticCode::FsStructFieldUnknown;
+        diagnostic.phase = FlowScriptDiagnosticPhase::Validation;
+        let (struct_title, field) = if message.contains("which has no such field") {
+            (ticks.get(2).cloned(), ticks.get(1).cloned())
+        } else {
+            (ticks.get(1).cloned(), ticks.get(2).cloned())
+        };
+        diagnostic.expected = struct_title.map(|title| format!("a declared field of `{title}`"));
+        diagnostic.actual = field;
+        diagnostic.fix = fix(
+            message
+                .split_once("; ")
+                .map(|(_, hint)| hint)
+                .unwrap_or("Use the catalog accessor call for this attribute."),
             None,
         );
     } else if message.contains("argument") && message.contains("has incompatible pin types") {
@@ -709,6 +731,7 @@ fn link_execution_cascades(diagnostics: &mut [FlowScriptDiagnostic]) {
                 | FlowScriptDiagnosticCode::FsTypeMismatch
                 | FlowScriptDiagnosticCode::FsTypeAmbiguous
                 | FlowScriptDiagnosticCode::FsUnknownInputPin
+                | FlowScriptDiagnosticCode::FsStructFieldUnknown
                 | FlowScriptDiagnosticCode::FsUnresolvedArgument
                 | FlowScriptDiagnosticCode::FsOutputPinUnresolved
                 | FlowScriptDiagnosticCode::FsHelperEmpty
@@ -1219,6 +1242,34 @@ mod tests {
             assert_eq!(diagnostic.code, expected_code, "{message}");
             assert_eq!(diagnostic.phase, expected_phase, "{message}");
             assert!(diagnostic.fix.is_some(), "missing fix for {message}");
+        }
+    }
+
+    /// The accessor list is the whole point of this diagnostic — a classification that drops it
+    /// leaves the model with "no such field" and no way to repair.
+    #[test]
+    fn closed_struct_field_rejection_carries_the_accessor_repair() {
+        for message in [
+            "catalog output `path_from_upload_dir.file` is a `FlowPath`, which has no field `filename`; a FlowPath is a store handle, not a file object; read file attributes with the `Data/Files/Path` accessors instead: `filename({ path })`, `extension({ path })`",
+            "`structGet` reads field `extension` from a `FlowPath`, which has no such field; a FlowPath is a store handle, not a file object; read file attributes with the `Data/Files/Path` accessors instead: `filename({ path })`, `extension({ path })`",
+        ] {
+            let diagnostic = result(&[message])
+                .structured_diagnostics()
+                .pop()
+                .expect("structured diagnostic");
+            assert_eq!(
+                diagnostic.code,
+                FlowScriptDiagnosticCode::FsStructFieldUnknown,
+                "{message}"
+            );
+            assert_eq!(
+                diagnostic.phase,
+                FlowScriptDiagnosticPhase::Validation,
+                "{message}"
+            );
+            let fix = diagnostic.fix.expect("fix").summary;
+            assert!(fix.contains("filename({ path })"), "{fix}");
+            assert!(fix.contains("extension({ path })"), "{fix}");
         }
     }
 }

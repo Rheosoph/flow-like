@@ -9,9 +9,21 @@ import {
 	useRef,
 	useState,
 } from "react";
+import {
+	type IComposerActivityChannel,
+	applyComposerLean,
+	createTypingResponse,
+	decayPerk,
+} from "../../lib/composer-activity";
+import { observeResize } from "../../lib/observe-resize";
 import { cn } from "../../lib/utils";
 import { type BubbleFilmUniforms, createBubbleFilm } from "./bubble-film";
-import { ORB_INVITING_PARAMS } from "./flowpilot-orb-state";
+import {
+	ORB_COMPOSING_PARAMS,
+	ORB_INVITING_PARAMS,
+	type OrbStateParams,
+	mixOrbParams,
+} from "./flowpilot-orb-state";
 
 export interface IEmptyStateSuggestion {
 	readonly label: string;
@@ -32,6 +44,10 @@ interface IFlowPilotEmptyStateProps {
 	/** Play the hand-off to the live orb, then unmount. Drive with `useEmptyStateExit`. */
 	readonly exiting?: boolean;
 	readonly className?: string;
+	/** The composer's draft channel. Without it the mark has nothing to answer. */
+	readonly activity?: IComposerActivityChannel;
+	/** `placeholder_typing_motion` from the chat interface's config. */
+	readonly typingMotion?: boolean;
 }
 
 /** Satellite orbit relative to the film's own radius, matching the launcher's proportions. */
@@ -56,6 +72,9 @@ const COLLAPSE_DURATION = 260;
 const REVEAL_LEAD = 180;
 /** With no satellites to wait for, the suggestions just stagger in on their own. */
 const BARE_REVEAL_STAGGER = 70;
+
+/** The swell that greets the start of a burst of typing — a breath, not the entrance's shockwave. */
+const PERK_SWELL = 0.05;
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 const smoothstep = (value: number) => value * value * (3 - 2 * value);
@@ -94,7 +113,8 @@ const bulge = { x: 0, y: 0, near: 0, attention: 0 };
 
 /**
  * Where the film should bulge: an idle wander around the rim that the pointer takes over as it
- * approaches. `pointer` is null until the pointer has moved, and under reduced motion.
+ * approaches, and that a live draft takes over from both. `pointer` is null until the pointer has
+ * moved, and under reduced motion.
  */
 function aimBulge(
 	clock: number,
@@ -102,8 +122,9 @@ function aimBulge(
 	pointer: { x: number; y: number } | null,
 	attention: number,
 	dt: number,
+	params: OrbStateParams,
+	typing: number,
 ) {
-	const params = ORB_INVITING_PARAMS;
 	// Reach is tuned against the launcher's film radius, so it scales with this one.
 	const scale = box / FILM_BOX;
 	bulge.x = Math.cos(clock * 0.9) * params.reach * scale;
@@ -119,6 +140,13 @@ function aimBulge(
 		pull = 0.35 + 0.5 * bulge.near;
 		bulge.x = bulge.x * (1 - pull) + pointer.x * aim * pull;
 		bulge.y = bulge.y * (1 - pull) + pointer.y * aim * pull;
+	}
+	if (typing > 0) {
+		const lean = applyComposerLean(bulge.x, bulge.y, typing, clock, box);
+		bulge.x = lean.x;
+		bulge.y = lean.y;
+		bulge.near = Math.max(bulge.near, typing * 0.6);
+		pull = Math.max(pull, typing);
 	}
 	bulge.attention = approach(attention, pull, 5, dt);
 	return bulge;
@@ -156,6 +184,10 @@ export function useEmptyStateExit(show: boolean, durationMs = 420) {
  * assistant for the rest of the conversation, rather than a mark you never see again. It
  * inflates on mount, hands its three satellites to the suggestion buttons, rests almost still
  * while leaning toward the pointer, and collapses into the live orb when the first message goes.
+ *
+ * With `typingMotion` on it also answers the composer: it perks up as a burst of writing starts,
+ * gathers and leans down at the draft while you keep going, and settles back the moment you stop.
+ * See `ORB_COMPOSING_PARAMS`.
  */
 export function FlowPilotEmptyState({
 	suggestions,
@@ -164,6 +196,8 @@ export function FlowPilotEmptyState({
 	suggestionsOnly = false,
 	exiting = false,
 	className,
+	activity,
+	typingMotion = false,
 }: IFlowPilotEmptyStateProps) {
 	const rootRef = useRef<HTMLDivElement>(null);
 	const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -187,6 +221,8 @@ export function FlowPilotEmptyState({
 	const maxSizeRef = useRef(maxSize);
 	const exitingRef = useRef(exiting);
 	const suggestionsOnlyRef = useRef(suggestionsOnly);
+	const typingMotionRef = useRef(typingMotion);
+	typingMotionRef.current = typingMotion;
 	layoutRef.current = layout;
 	maxSizeRef.current = maxSize;
 	exitingRef.current = exiting;
@@ -264,12 +300,13 @@ export function FlowPilotEmptyState({
 		const canvas = canvasRef.current;
 		const parent = root?.parentElement;
 		if (!root || !canvas || !parent) return;
-		const observer = new ResizeObserver(measure);
-		observer.observe(parent);
-		observer.observe(canvas);
+		// `measure` sizes the canvas it observes, so the callback has to land a
+		// frame later — a same-frame write leaves the browser with undelivered
+		// resize notifications.
+		const unobserve = observeResize([parent, canvas], measure);
 		window.addEventListener("resize", measure);
 		return () => {
-			observer.disconnect();
+			unobserve();
 			window.removeEventListener("resize", measure);
 		};
 	}, [measure, suggestionsOnly]);
@@ -297,7 +334,6 @@ export function FlowPilotEmptyState({
 		const root = rootRef.current;
 		if (!canvas || !root) return;
 
-		const params = ORB_INVITING_PARAMS;
 		let elapsed = 0;
 		let clock = 0;
 		let spin = 0;
@@ -314,6 +350,10 @@ export function FlowPilotEmptyState({
 		let attention = 0;
 		let mx = 0;
 		let my = 0;
+		const response = activity ? createTypingResponse(activity) : null;
+		let typing = 0;
+		let fullness = 0;
+		let perk = 0;
 
 		const onPointerMove = (event: PointerEvent) => {
 			const rect = canvas.getBoundingClientRect();
@@ -329,6 +369,26 @@ export function FlowPilotEmptyState({
 			host: root,
 			frame: (dt, u, reduced) => {
 				const geom = geomRef.current;
+
+				// How hard the composer is being worked. Eased rather than switched, so turning
+				// the interface's setting off mid-draft settles the mark instead of snapping it.
+				if (response) {
+					const step = response.advance(
+						typingMotionRef.current && !reduced && !exitingRef.current,
+						dt,
+					);
+					typing = step.typing;
+					fullness = step.fullness;
+					perk = decayPerk(perk, step.perked, dt);
+				}
+				const params =
+					typing > 1e-3
+						? mixOrbParams(
+								ORB_INVITING_PARAMS,
+								ORB_COMPOSING_PARAMS,
+								smoothstep(typing),
+							)
+						: ORB_INVITING_PARAMS;
 
 				if (reduced) {
 					clock = 6 * params.rate;
@@ -359,26 +419,42 @@ export function FlowPilotEmptyState({
 					poseSatellites(ms, geom.satOrbit, u, departed);
 				}
 
+				// A longer draft fills the mark out very slightly — enough to notice between a
+				// blank composer and a written one, not enough to watch it happen.
 				const box =
-					geom.box * grow * (1 + Math.sin(clock * 1.6) * params.breathe);
+					geom.box *
+					grow *
+					params.scale *
+					(1 + fullness * 0.02 + perk * PERK_SWELL) *
+					(1 + Math.sin(clock * 1.6) * params.breathe);
 				const aim = aimBulge(
 					clock,
 					box,
 					hasPointer && !reduced ? pointer : null,
 					attention,
 					dt,
+					params,
+					typing,
 				);
 				attention = aim.attention;
 				mx = approach(mx, aim.x, 7.7, dt);
 				my = approach(my, aim.y, 7.7, dt);
 
 				u.time = clock;
-				u.focus = params.focus + aim.near * 0.3 + pop * 0.6;
+				u.focus =
+					params.focus +
+					aim.near * 0.3 +
+					pop * 0.6 +
+					fullness * 0.12 +
+					perk * 0.35;
 				u.boxX = box;
 				u.boxY = box;
 				u.mouseX = mx;
 				u.mouseY = my;
-				u.mstr = Math.min(1.6, params.bulge + attention * 0.8 + pop * 0.5);
+				u.mstr = Math.min(
+					1.6,
+					params.bulge + attention * 0.8 + pop * 0.5 + typing * 0.35,
+				);
 				u.round = params.round;
 				u.spin = spin;
 				u.spinMix = params.spinMix;
@@ -397,7 +473,7 @@ export function FlowPilotEmptyState({
 			film.destroy();
 			window.removeEventListener("pointermove", onPointerMove);
 		};
-	}, [suggestionsOnly]);
+	}, [suggestionsOnly, activity]);
 
 	const canvasStyle = useMemo(
 		() => ({

@@ -1,4 +1,35 @@
 /**
+ * Frontend context shared by every board run triggered from a surface: the
+ * a2ui navigation nodes read `_route`/`_query_params` from the run payload and
+ * the state nodes read `_page_id`/`_global_state`/`_page_state`. Widget
+ * callbacks run the same nodes as plain workflow events, so every trigger path
+ * must ship this block — omitting it makes Get Query Params return nothing.
+ */
+export function buildFrontendContextPayload(
+	pathname: string | null | undefined,
+	globalState: Record<string, unknown> | undefined,
+	pageState: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+	const queryParams: Record<string, string> = {};
+	let route = "";
+	if (typeof window !== "undefined") {
+		const searchParams = new URLSearchParams(window.location.search);
+		searchParams.forEach((value, key) => {
+			queryParams[key] = value;
+		});
+		route = window.location.pathname;
+	}
+
+	return {
+		_route: route,
+		_query_params: queryParams,
+		_page_id: pathname || "default",
+		_global_state: globalState ?? {},
+		_page_state: pageState ?? {},
+	};
+}
+
+/**
  * Remove transient local upload previews without changing JSON semantics.
  * Undefined object fields are omitted (as JSON.stringify does), while undefined
  * array slots become null so indexes remain stable.

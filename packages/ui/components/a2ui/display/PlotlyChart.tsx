@@ -3,15 +3,51 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getPlotlyChartLayout, useChartTokens } from "../../../lib/chart-theme";
 import { cn } from "../../../lib/utils";
+import { useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import { toEventContextValue } from "../event-context";
 import type {
 	BoundValue,
 	ChartDataSource,
 	ChartSeries,
 	PlotlyChartComponent,
 } from "../types";
+
+/** Charts never dispatched actions before, so `*` and `actions[0]` are not
+ * inherited by their new click event. */
+const EXACT_ONLY = { legacyFallback: false, wildcardFallback: false };
+
+const MAX_CLICKED_POINTS = 32;
+
+/**
+ * Project a `plotly_click` payload down to the fields a board can use. Each
+ * raw point carries `data`/`fullData` back-references holding the entire
+ * trace, so the whole series would otherwise travel with a single click.
+ */
+function projectPlotlyPoints(event: unknown): unknown[] {
+	const points = (event as { points?: unknown } | null)?.points;
+	if (!Array.isArray(points)) return [];
+
+	return points.slice(0, MAX_CLICKED_POINTS).map((raw) => {
+		const point = raw as Record<string, unknown>;
+		const trace = point.data as Record<string, unknown> | undefined;
+		return {
+			curveNumber: point.curveNumber ?? null,
+			pointIndex: point.pointIndex ?? point.pointNumber ?? null,
+			x: toEventContextValue(point.x) ?? null,
+			y: toEventContextValue(point.y) ?? null,
+			z: toEventContextValue(point.z) ?? null,
+			label: toEventContextValue(point.label) ?? null,
+			value: toEventContextValue(point.value) ?? null,
+			text: toEventContextValue(point.text) ?? null,
+			customdata: toEventContextValue(point.customdata) ?? null,
+			traceName: typeof trace?.name === "string" ? trace.name : null,
+			traceType: typeof trace?.type === "string" ? trace.type : null,
+		};
+	});
+}
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
@@ -96,13 +132,36 @@ interface PlotlyModule {
 	purge: (root: HTMLElement) => void;
 }
 
+/** Plotly turns the node it renders into an event emitter. */
+interface PlotlyGraphDiv extends HTMLDivElement {
+	on?: (eventName: string, handler: (event: unknown) => void) => void;
+	removeAllListeners?: (eventName: string) => void;
+}
+
 export function A2UIPlotlyChart({
 	component,
 	style,
+	componentId,
 }: ComponentProps<PlotlyChartComponent>) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const plotlyRef = useRef<PlotlyModule | null>(null);
+	const clickBoundRef = useRef(false);
+	const triggerEvent = useComponentEventTrigger(componentId);
 	const { resolve } = useData();
+
+	// The listener outlives every re-render of the plot, so it reads the current
+	// handler through a ref instead of being re-bound on each payload change.
+	const emitPointClickRef = useRef<(event: unknown) => void>(() => {});
+	emitPointClickRef.current = (event: unknown) => {
+		const points = projectPlotlyPoints(event);
+		if (points.length === 0) return;
+		void triggerEvent(
+			"pointClick",
+			component,
+			{ point: points[0], points },
+			EXACT_ONLY,
+		);
+	};
 
 	// Plotly paints to canvas and cannot read CSS variables, so the chat tokens
 	// are resolved against the chart's own node and re-resolved on theme change.
@@ -326,12 +385,20 @@ export function A2UIPlotlyChart({
 			if (!mounted || !containerRef.current) return;
 
 			const payload = payloadRef.current;
+			const plotNode = containerRef.current as PlotlyGraphDiv;
 			await plotlyRef.current.react(
-				containerRef.current,
+				plotNode,
 				payload.data as unknown[],
 				{ ...payload.layout, autosize: true } as Record<string, unknown>,
 				payload.config as Record<string, unknown>,
 			);
+
+			if (!clickBoundRef.current && plotNode.on) {
+				clickBoundRef.current = true;
+				plotNode.on("plotly_click", (event) =>
+					emitPointClickRef.current(event),
+				);
+			}
 		};
 
 		loadAndRender();
@@ -347,9 +414,11 @@ export function A2UIPlotlyChart({
 	// Purge on unmount only — tearing the plot down between renders would also
 	// discard the pan and zoom the user has applied.
 	useEffect(() => {
-		const container = containerRef.current;
+		const container = containerRef.current as PlotlyGraphDiv | null;
 		return () => {
 			if (container && plotlyRef.current) {
+				container.removeAllListeners?.("plotly_click");
+				clickBoundRef.current = false;
 				plotlyRef.current.purge(container);
 			}
 		};

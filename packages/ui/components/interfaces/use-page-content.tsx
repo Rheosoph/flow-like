@@ -1,5 +1,6 @@
 "use client";
 
+import { isEqual } from "lodash-es";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
 	type JSX,
@@ -71,6 +72,57 @@ export async function loadPageAfterBoardSync(
 	return pageState.getPage(appId, pageId, boardId);
 }
 
+export interface IStoreRedirectState {
+	readonly embedded: boolean;
+	readonly authLoading: boolean;
+	readonly hasAccessToken: boolean;
+	readonly appInLocalProfile: boolean;
+	readonly localProfileCheckPending: boolean;
+	readonly remoteAppCheckPending: boolean;
+	readonly remoteAppLoaded: boolean;
+	readonly remoteAppFailed: boolean;
+	readonly eventsLoaded: boolean;
+	readonly eventsFailed: boolean;
+	readonly eventsFetching: boolean;
+}
+
+/**
+ * The store is a dead end for a running interface, so it is only reached when
+ * this device positively cannot open the app: neither the local profiles nor
+ * the hub know it, or its event catalog produced nothing to render.
+ *
+ * A refresh that failed while usable data survived must never eject a working
+ * interface — routes in particular are optional metadata whose absence simply
+ * falls back to the default event.
+ */
+export function resolveStoreRedirect(state: IStoreRedirectState): {
+	pending: boolean;
+	redirect: boolean;
+} {
+	if (state.embedded) return { pending: false, redirect: false };
+
+	if (
+		state.authLoading ||
+		state.localProfileCheckPending ||
+		state.remoteAppCheckPending
+	) {
+		return { pending: true, redirect: false };
+	}
+
+	const catalogUnavailable =
+		state.eventsFailed && !state.eventsLoaded && !state.eventsFetching;
+
+	if (state.appInLocalProfile) {
+		return { pending: false, redirect: catalogUnavailable };
+	}
+
+	const hasNoAccess = state.hasAccessToken
+		? state.remoteAppFailed && !state.remoteAppLoaded
+		: true;
+
+	return { pending: false, redirect: hasNoAccess || catalogUnavailable };
+}
+
 export function UsePageContent({
 	eventConfig,
 	notFound,
@@ -125,11 +177,15 @@ export function UsePageContent({
 		[],
 	);
 
+	// Signed-in users open locally installed apps too, so the local profiles
+	// stay authoritative for access even when a hub lookup is available.
+	const needsLocalProfileCheck = Boolean(appId && !embedded && !auth.isLoading);
+
 	const localProfiles = useInvoke(
 		backend.userState.getAllSettingsProfiles,
 		backend.userState,
 		[],
-		Boolean(appId && !embedded && !auth.isLoading && !hasAccessToken),
+		needsLocalProfileCheck,
 	);
 
 	const remoteApp = useInvoke(
@@ -157,19 +213,11 @@ export function UsePageContent({
 		);
 	}, [appId, localProfiles.data]);
 
-	const needsUnauthenticatedLocalCheck = Boolean(
-		appId && !embedded && !auth.isLoading && !hasAccessToken,
-	);
 	const localProfileCheckPending =
-		needsUnauthenticatedLocalCheck &&
+		needsLocalProfileCheck &&
 		localProfiles.isFetching &&
 		!localProfiles.data &&
 		!localProfiles.isError;
-	const shouldRedirectUnauthenticatedToStore = Boolean(
-		needsUnauthenticatedLocalCheck &&
-			!localProfileCheckPending &&
-			!appIsInAnyLocalProfile,
-	);
 
 	const needsAuthenticatedRemoteCheck = Boolean(
 		appId && !embedded && hasAccessToken,
@@ -179,28 +227,49 @@ export function UsePageContent({
 		remoteApp.isFetching &&
 		!remoteApp.data &&
 		!remoteApp.isError;
-	const shouldRedirectAuthenticatedToStore = Boolean(
-		needsAuthenticatedRemoteCheck &&
-			!authenticatedRemoteCheckPending &&
-			!appIsInAnyLocalProfile &&
-			!remoteApp.data &&
-			remoteApp.isError,
-	);
 
-	const shouldRedirectFetchErrorToStore = Boolean(
-		appId && !embedded && (routes.isError || events.isError),
-	);
-
-	const redirectCheckPending = Boolean(
-		authCheckPending ||
-			localProfileCheckPending ||
+	const storeRedirect = useMemo(
+		() =>
+			resolveStoreRedirect({
+				embedded: embedded || !appId,
+				authLoading: authCheckPending,
+				hasAccessToken,
+				appInLocalProfile: appIsInAnyLocalProfile,
+				localProfileCheckPending,
+				remoteAppCheckPending: authenticatedRemoteCheckPending,
+				remoteAppLoaded: Boolean(remoteApp.data),
+				remoteAppFailed: remoteApp.isError,
+				eventsLoaded: Boolean(events.data),
+				eventsFailed: events.isError,
+				eventsFetching: events.isFetching,
+			}),
+		[
+			embedded,
+			appId,
+			authCheckPending,
+			hasAccessToken,
+			appIsInAnyLocalProfile,
+			localProfileCheckPending,
 			authenticatedRemoteCheckPending,
+			remoteApp.data,
+			remoteApp.isError,
+			events.data,
+			events.isError,
+			events.isFetching,
+		],
 	);
-	const shouldRedirectToStore = Boolean(
-		shouldRedirectUnauthenticatedToStore ||
-			shouldRedirectAuthenticatedToStore ||
-			shouldRedirectFetchErrorToStore,
-	);
+	const redirectCheckPending = storeRedirect.pending;
+	const shouldRedirectToStore = storeRedirect.redirect;
+
+	// One ejection per app: a redirect that re-fires while the replace is still
+	// committing stacks navigations and flickers the interface back and forth.
+	const redirectedAppRef = useRef<string | null>(null);
+	const goToStore = useCallback(() => {
+		if (!appId || embedded) return;
+		if (redirectedAppRef.current === appId) return;
+		redirectedAppRef.current = appId;
+		router.replace(storeHref);
+	}, [appId, embedded, router, storeHref]);
 
 	// --- Computed: usable event types ---
 
@@ -362,19 +431,9 @@ export function UsePageContent({
 	const isRoutePending = Boolean(appId && resolvedRouteKey !== routeKey);
 
 	useEffect(() => {
-		if (!appId || embedded || redirectCheckPending || !shouldRedirectToStore) {
-			return;
-		}
-
-		router.replace(storeHref);
-	}, [
-		appId,
-		embedded,
-		redirectCheckPending,
-		shouldRedirectToStore,
-		router,
-		storeHref,
-	]);
+		if (redirectCheckPending || !shouldRedirectToStore) return;
+		goToStore();
+	}, [redirectCheckPending, shouldRedirectToStore, goToStore]);
 
 	const effectiveRouteEvent = useMemo(() => {
 		return canUseEvent(routeEvent) ? routeEvent : null;
@@ -515,7 +574,7 @@ export function UsePageContent({
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: headerRef is a stable ref
 	const switchEvent = useCallback(
-		(newEventId: string) => {
+		(newEventId: string, replace = false) => {
 			if (!appId || !newEventId || eventId === newEventId) return;
 			headerRef.current?.pushToolbarElements([]);
 			headerRef.current?.pushNavElements([]);
@@ -523,7 +582,7 @@ export function UsePageContent({
 				onNavigate?.({ eventId: newEventId });
 				return;
 			}
-			setQueryParams("eventId", newEventId);
+			setQueryParams("eventId", newEventId, { replace });
 		},
 		[appId, eventId, embedded, onNavigate, setQueryParams],
 	);
@@ -574,7 +633,10 @@ export function UsePageContent({
 						)
 					: await backend.pageState.getPage(appId, pageId, pageBoardId);
 				if (!cancelled) {
-					setPageData(page);
+					// A catalog refresh re-reads the same page. Handing the interface a
+					// new object identity for unchanged content rebuilds its surface and
+					// throws away whatever the running page had rendered.
+					setPageData((current) => (isEqual(current, page) ? current : page));
 				}
 			} catch (e) {
 				console.error("Failed to load page:", e);
@@ -617,7 +679,7 @@ export function UsePageContent({
 				onNavigate?.({ eventId: null });
 				return;
 			}
-			setQueryParams("eventId", undefined);
+			setQueryParams("eventId", undefined, { replace: true });
 		}
 	}, [effectiveRouteMapping, eventId, embedded, onNavigate, setQueryParams]);
 
@@ -630,8 +692,7 @@ export function UsePageContent({
 
 		if (sortedEvents.length === 0) {
 			if (!events.data || queriesPending) return;
-			if (embedded) return;
-			router.replace(storeHref);
+			goToStore();
 			return;
 		}
 
@@ -639,10 +700,7 @@ export function UsePageContent({
 
 		if (!rerouteEvent) {
 			if (queriesPending) return;
-			if (events.data) {
-				if (embedded) return;
-				router.replace(storeHref);
-			}
+			if (events.data) goToStore();
 			return;
 		}
 
@@ -655,14 +713,14 @@ export function UsePageContent({
 
 		if (!resolvedCurrentEvent) {
 			if (rerouteEvent) {
-				switchEvent(rerouteEvent.id);
+				switchEvent(rerouteEvent.id, true);
 				return;
 			}
 			return;
 		}
 
 		if (eventId && !canUseEvent(resolvedCurrentEvent)) {
-			switchEvent(rerouteEvent?.id ?? "");
+			switchEvent(rerouteEvent?.id ?? "", true);
 			return;
 		}
 
@@ -681,9 +739,7 @@ export function UsePageContent({
 		isRoutePending,
 		isDirectEventPending,
 		routes.isFetching,
-		router,
-		embedded,
-		storeHref,
+		goToStore,
 	]);
 
 	// --- Route navigation ---
@@ -708,15 +764,20 @@ export function UsePageContent({
 
 	// --- Render logic ---
 
+	// A silent token renewal or a background access re-check must not tear down an
+	// interface that already resolved — it would remount the whole event tree and
+	// look like the app reloading itself.
+	const accessGateBlocking = Boolean(
+		(redirectCheckPending || shouldRedirectToStore) && !activeEvent,
+	);
+
 	const shouldRenderHeader = useMemo(() => {
-		if (redirectCheckPending) return false;
-		if (shouldRedirectToStore) return false;
+		if (accessGateBlocking) return false;
 		if (routeLoading || isRoutePending || isDirectEventPending) return false;
 		if (pageEvent?.default_page_id) return false;
 		return true;
 	}, [
-		redirectCheckPending,
-		shouldRedirectToStore,
+		accessGateBlocking,
 		routeLoading,
 		isRoutePending,
 		isDirectEventPending,
@@ -727,8 +788,7 @@ export function UsePageContent({
 	const inner = useMemo(() => {
 		if (!appId) return notFound ?? <NoDefaultInterface appId="" />;
 		if (
-			redirectCheckPending ||
-			shouldRedirectToStore ||
+			accessGateBlocking ||
 			routeLoading ||
 			isRoutePending ||
 			isDirectEventPending
@@ -833,8 +893,7 @@ export function UsePageContent({
 		events.isFetching,
 		events.data,
 		notFound,
-		redirectCheckPending,
-		shouldRedirectToStore,
+		accessGateBlocking,
 	]);
 
 	if (!appId) {

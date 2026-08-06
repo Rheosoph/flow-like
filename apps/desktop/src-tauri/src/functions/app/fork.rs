@@ -115,6 +115,12 @@ pub struct UploadLocalAppContentResponse {
     pub failures: Vec<BundleFileFailure>,
 }
 
+/// Summarizes exactly what [`upload_local_app_content_bundle`] will
+/// push, so the server's cap check at `/fork/online/begin` and its
+/// re-measurement at finalize agree. Meta artifacts are excluded (they
+/// travel through the app-edit endpoints), each relative path is counted
+/// once even though the desktop's meta and content stores share a root,
+/// and project-database objects are left out of the object count.
 #[tauri::command(async)]
 pub async fn summarize_local_app_bundle(
     app_handle: AppHandle,
@@ -128,16 +134,32 @@ pub async fn summarize_local_app_bundle(
     let meta_store = TauriFlowLikeState::get_project_meta_store(&app_handle).await?;
     let content_store = TauriFlowLikeState::get_project_storage_store(&app_handle).await?;
 
-    let (meta_size, meta_count) = summarize_store_prefix(&meta_store, &prefix)
-        .await
-        .map_err(|e| TauriFunctionError::new(&format!("summarize meta store: {e}")))?;
-    let (content_size, content_count) = summarize_store_prefix(&content_store, &prefix)
-        .await
-        .map_err(|e| TauriFunctionError::new(&format!("summarize content store: {e}")))?;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut total_size_bytes: u64 = 0;
+    let mut total_object_count: u64 = 0;
+
+    for (label, store) in [("meta", &meta_store), ("content", &content_store)] {
+        let entries = summarize_store_prefix(store, &prefix)
+            .await
+            .map_err(|e| TauriFunctionError::new(&format!("summarize {label} store: {e}")))?;
+        for (relative_path, size) in entries {
+            if !is_content_blob_path(&relative_path) {
+                continue;
+            }
+            if !seen.insert(relative_path.clone()) {
+                continue;
+            }
+            total_size_bytes = total_size_bytes.saturating_add(size);
+            if is_project_db_path(&relative_path) {
+                continue;
+            }
+            total_object_count = total_object_count.saturating_add(1);
+        }
+    }
 
     Ok(LocalAppBundleSummary {
-        total_size_bytes: meta_size.saturating_add(content_size),
-        total_object_count: meta_count.saturating_add(content_count),
+        total_size_bytes,
+        total_object_count,
     })
 }
 
@@ -184,6 +206,16 @@ pub async fn upload_local_app_content_bundle(
             continue;
         };
         if relative_path.is_empty() {
+            continue;
+        }
+        // The desktop keeps meta and content under one root, so an
+        // unfiltered walk would push `manifest.app`, `*.board`,
+        // `events/**` and `versions/**` into the destination's content
+        // bucket — where nothing reads them, while they still count
+        // against the fork size cap and trip the server's
+        // meta-in-content-store leak detector. Meta artifacts go up
+        // through the app-edit endpoints instead.
+        if !is_content_blob_path(&relative_path) {
             continue;
         }
 
@@ -411,12 +443,13 @@ async fn copy_one(
     Ok(len)
 }
 
+/// Lists `(relative_path, size)` for every object below `prefix`.
 async fn summarize_store_prefix(
     store: &Arc<dyn ObjectStore>,
     prefix: &Path,
-) -> flow_like_types::Result<(u64, u64)> {
-    let mut total_size: u64 = 0;
-    let mut total_count: u64 = 0;
+) -> flow_like_types::Result<Vec<(String, u64)>> {
+    let prefix_str = prefix.as_ref().to_string();
+    let mut entries: Vec<(String, u64)> = Vec::new();
     let mut listing = store.list(Some(prefix));
 
     loop {
@@ -426,11 +459,17 @@ async fn summarize_store_prefix(
             Err(e) if is_missing_prefix_error(&e) => break,
             Err(e) => return Err(anyhow!("list prefix: {e}")),
         };
-        total_size = total_size.saturating_add(item.size as u64);
-        total_count = total_count.saturating_add(1);
+        let path_str = item.location.as_ref().to_string();
+        let Some(relative_path) = relative_to_prefix(&path_str, &prefix_str) else {
+            continue;
+        };
+        if relative_path.is_empty() {
+            continue;
+        }
+        entries.push((relative_path, item.size as u64));
     }
 
-    Ok((total_size, total_count))
+    Ok(entries)
 }
 
 async fn register_profile_app(
@@ -461,6 +500,16 @@ fn is_content_blob_path(relative_path: &str) -> bool {
         || relative_path.starts_with("upload/")
         || relative_path == "storage"
         || relative_path.starts_with("storage/")
+}
+
+/// The project LanceDB. Excluded from the fork's object count (never
+/// from its byte total) because one table fans out into a file per
+/// fragment, per index and per commit manifest — a database that is
+/// small on disk still reaches five-digit object counts and would trip
+/// the deployment's `forking.max_file_count` on every fork. Mirrors
+/// `utils::fork::preview::project_db_prefix` on the server.
+fn is_project_db_path(relative_path: &str) -> bool {
+    relative_path.starts_with("storage/db/")
 }
 
 fn is_missing_prefix_error(error: &impl std::fmt::Display) -> bool {

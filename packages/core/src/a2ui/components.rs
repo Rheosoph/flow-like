@@ -96,6 +96,8 @@ pub enum A2UIComponentType {
     Iframe(IframeProps),
     PlotlyChart(PlotlyChartProps),
     NivoChart(NivoChartProps),
+    Graph(GraphProps),
+    OntologyGraph(OntologyGraphProps),
 
     // Planning components
     Calendar(CalendarProps),
@@ -1486,6 +1488,87 @@ pub struct NivoChartProps {
 }
 
 // =============================================================================
+// Graphs
+// =============================================================================
+
+/// Node/edge network graph rendered with the WebGL canvas used by the ontology
+/// explorer. Nodes and edges use the subgraph wire shape, so the output of a
+/// graph or ontology query can be bound straight to this component.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphProps {
+    /// Nodes: `[{ id, label, caption?, props? }]`
+    pub nodes: BoundValue,
+    /// Edges: `[{ id, source, target, label, props? }]`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edges: Option<BoundValue>,
+    /// Per-label style overrides: `{ "<label>": { color, icon, size } }`
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label_styles: Option<BoundValue>,
+    /// Toolbar with node/edge counts and the search box (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_toolbar: Option<BoundValue>,
+    /// Search box over the loaded nodes (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_search: Option<BoundValue>,
+    /// Floating label legend (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_legend: Option<BoundValue>,
+    /// Node/edge detail drawer on selection (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_inspector: Option<BoundValue>,
+    /// Component height, e.g. "480px" (default "480px")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<BoundValue>,
+}
+
+/// Embeds an existing project ontology exactly as the Data Studio shows it:
+/// live data, neighbour expansion, search, path finding and governed actions.
+/// Access is enforced by the same permissions as the Data Studio itself.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OntologyGraphProps {
+    /// Id of the ontology (graph overlay) to display
+    pub ontology_id: BoundValue,
+    /// Project the ontology belongs to (defaults to the running project)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<BoundValue>,
+    /// Node budget for the initial load (defaults to the ontology's own limit)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<BoundValue>,
+    /// Neighbour and child expansion (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_expand: Option<BoundValue>,
+    /// Search across the loaded graph and the full ontology (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_search: Option<BoundValue>,
+    /// Shortest-path finding between two nodes (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_paths: Option<BoundValue>,
+    /// Running governed ontology actions on a node (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_actions: Option<BoundValue>,
+    /// Cypher query panel (default false)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_cypher: Option<BoundValue>,
+    /// Legend style edits, persisted onto the shared ontology (default false)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_style_edit: Option<BoundValue>,
+    /// Node-limit selector in the toolbar (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_limit_change: Option<BoundValue>,
+    /// Toolbar with counts, search and limit selector (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_toolbar: Option<BoundValue>,
+    /// Floating label legend (default true)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_legend: Option<BoundValue>,
+    /// Component height, e.g. "480px" (default "480px")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<BoundValue>,
+}
+
+// =============================================================================
 // Image Labeler (Bounding Box Annotation)
 // =============================================================================
 
@@ -1954,6 +2037,34 @@ mod tests {
             "chartType": { "literalString": "bar" }
         }))
         .expect("nivoChart should accept a required chartType");
+    }
+
+    #[test]
+    fn graph_components_require_their_data_source() {
+        assert!(serde_json::from_value::<A2UIComponentType>(json!({ "type": "graph" })).is_err());
+        serde_json::from_value::<A2UIComponentType>(json!({
+            "type": "graph",
+            "nodes": { "path": "graph.nodes" },
+            "edges": { "path": "graph.edges" },
+            "showLegend": { "literalBool": false }
+        }))
+        .expect("graph should accept bound nodes and edges");
+
+        assert!(
+            serde_json::from_value::<A2UIComponentType>(json!({ "type": "ontologyGraph" })).is_err()
+        );
+        let component: A2UIComponentType = serde_json::from_value(json!({
+            "type": "ontologyGraph",
+            "ontologyId": { "literalString": "ontology-1" },
+            "allowCypher": { "literalBool": true },
+            "allowStyleEdit": { "literalBool": false }
+        }))
+        .expect("ontologyGraph should accept a required ontologyId");
+
+        let serialized = serde_json::to_value(component).expect("component should serialize");
+        assert_eq!(serialized["type"], "ontologyGraph");
+        assert!(serialized.get("ontologyId").is_some());
+        assert!(serialized.get("allowStyleEdit").is_some());
     }
 
     #[test]

@@ -27,6 +27,7 @@ import {
 } from "../../hooks/use-invoke";
 import { addAppToProfile } from "../../lib/add-app-to-profile";
 import { formatRelativeTime } from "../../lib/date";
+import { userDisplayName } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IInvite, INotification } from "../../state/backend-state/types";
@@ -677,11 +678,9 @@ function InvitationCard({
 		[invite.by_member_id],
 	);
 
-	const inviterLabel =
-		userLookup.data?.name ??
-		userLookup.data?.username ??
-		userLookup.data?.email ??
-		null;
+	const inviterLabel = userLookup.data
+		? userDisplayName(userLookup.data)
+		: null;
 
 	return (
 		<motion.div

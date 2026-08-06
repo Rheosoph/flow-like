@@ -1,10 +1,4 @@
 "use client";
-import { createId } from "@paralleldrive/cuid2";
-import * as Sentry from "@sentry/nextjs";
-import { invoke } from "@tauri-apps/api/core";
-import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -77,8 +71,16 @@ import {
 	useInvalidateInvoke,
 	useInvoke,
 	useSidebar,
+	userDisplayName,
+	userInitials,
 } from "@flow-like/flow-like-ui";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { createId } from "@paralleldrive/cuid2";
+import * as Sentry from "@sentry/nextjs";
+import { invoke } from "@tauri-apps/api/core";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { motion } from "framer-motion";
 import {
 	BadgeCheck,
@@ -1100,11 +1102,15 @@ export function NavUser({
 		[auth?.user?.profile?.sub, hasAccessToken],
 	);
 
-	const displayName: string = useMemo(() => {
-		if (!info.data) return "Offline";
+	const displayName: string = useMemo(
+		() => userDisplayName(info.data, "Offline"),
+		[info.data],
+	);
 
-		return info.data?.name ?? info.data?.preferred_username ?? "Offline";
-	}, [info.data]);
+	const initials: string = useMemo(
+		() => userInitials(displayName, "?"),
+		[displayName],
+	);
 
 	const email: string = useMemo(() => {
 		return info.data?.email ?? "Anonymous";
@@ -1135,12 +1141,9 @@ export function NavUser({
 							whileHover="hover"
 						>
 							<Avatar className="h-8 w-8 rounded-lg">
-								<AvatarImage
-									src={info.data?.avatar}
-									alt={user?.name ?? "Offline"}
-								/>
+								<AvatarImage src={info.data?.avatar} alt={displayName} />
 								<AvatarFallback className="rounded-lg">
-									{displayName.slice(0, 2).toUpperCase()}
+									{initials}
 								</AvatarFallback>
 							</Avatar>
 							{notificationCount > 0 && (
@@ -1166,9 +1169,9 @@ export function NavUser({
 						<DropdownMenuLabel className="p-0 font-normal">
 							<div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
 								<Avatar className="h-8 w-8 rounded-lg">
-									<AvatarImage src={info.data?.avatar} alt={"User Avatar"} />
+									<AvatarImage src={info.data?.avatar} alt={displayName} />
 									<AvatarFallback className="rounded-lg">
-										{displayName.slice(0, 2).toUpperCase()}
+										{initials}
 									</AvatarFallback>
 								</Avatar>
 								<div className="grid flex-1 text-left text-sm leading-tight">

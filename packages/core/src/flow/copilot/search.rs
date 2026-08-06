@@ -192,6 +192,28 @@ pub fn enrich_node_metadata(mut metadata: NodeMetadata) -> NodeMetadata {
     if haystack.contains("notification") {
         capability_tags.insert("notification".to_string());
     }
+    // Category-gated so the tags stay strong evidence: without them the path accessors fall under
+    // the declaration acceptance gate for the plain-language queries that should find them.
+    if metadata
+        .category
+        .as_deref()
+        .is_some_and(|category| category.starts_with("Data/Files/Path"))
+    {
+        capability_tags.insert("file".to_string());
+        capability_tags.insert("path".to_string());
+        if haystack.contains("filename") {
+            capability_tags.insert("filename".to_string());
+            capability_tags.insert("basename".to_string());
+            capability_tags.insert("stem".to_string());
+        }
+        if haystack.contains("extension") {
+            capability_tags.insert("extension".to_string());
+        }
+        if haystack.contains("parent") || haystack.contains("child") || haystack.contains("folder")
+        {
+            capability_tags.insert("folder".to_string());
+        }
+    }
     if haystack.contains("http") || haystack.contains("request") {
         capability_tags.insert("http".to_string());
     }
@@ -348,6 +370,11 @@ fn token_synonyms(token: &str) -> &'static [&'static str] {
         "receipt" => &["email", "mail", "send"],
         "followup" | "follow-up" => &["email", "send", "notification"],
         "webhook" => &["trigger", "http", "event"],
+        "file" => &["path", "flowpath", "filename", "extension", "storage"],
+        "filename" | "basename" => &["file", "path", "name", "extension", "stem"],
+        "extension" | "ext" => &["file", "path", "filename", "suffix"],
+        "folder" | "directory" | "dir" => &["path", "parent", "child", "list", "storage"],
+        "stem" => &["filename", "file", "path", "extension"],
         _ => &[],
     }
 }
@@ -375,6 +402,24 @@ fn companion_nodes_for(node_name: &str) -> Vec<String> {
             "mail_address_fields".to_string(),
             "email_imap_mark_seen".to_string(),
             "email_imap_move_message".to_string(),
+        ],
+        // A FlowPath carries no file attributes, so every producer of one advertises the accessors.
+        // Without this the model reaches for a generic struct-field read and silently gets null.
+        "path_from_upload_dir"
+        | "path_from_storage_dir"
+        | "path_from_cache_dir"
+        | "path_from_user_dir"
+        | "path_virtual_dir"
+        | "path_list_paths"
+        | "path_list_folders"
+        | "pathbuf_to_path"
+        | "a2ui_get_file_input_files"
+        | "events_chat_attachment_from_signed_url" => vec![
+            "filename".to_string(),
+            "extension".to_string(),
+            "raw_path".to_string(),
+            "parent".to_string(),
+            "child".to_string(),
         ],
         _ => Vec::new(),
     }

@@ -17,6 +17,8 @@ import {
 	Textarea,
 	useBackend,
 	useInvoke,
+	userAvatarUrl,
+	userInitials,
 } from "@flow-like/flow-like-ui";
 import {
 	CreditCard,
@@ -71,7 +73,7 @@ export function ProfilePage({ actions = {} }: Readonly<ProfilePageProps>) {
 				email: info.data.email ?? "",
 				previewName: info.data.name ?? "",
 				description: info.data.description ?? "",
-				avatar: info.data.avatar ?? "/placeholder.webp",
+				avatar: userAvatarUrl(info.data) ?? "/placeholder.webp",
 			});
 		}
 	}, [info.data]);
@@ -168,14 +170,6 @@ export function ProfilePage({ actions = {} }: Readonly<ProfilePageProps>) {
 		info.refetch,
 	]);
 
-	const getInitials = useCallback((name: string) => {
-		return name
-			.split(" ")
-			.map((n) => n[0])
-			.join("")
-			.toUpperCase();
-	}, []);
-
 	return (
 		<div className="container max-w-4xl mx-auto p-6 space-y-6">
 			<ProfileHeader />
@@ -185,7 +179,6 @@ export function ProfilePage({ actions = {} }: Readonly<ProfilePageProps>) {
 					<AvatarCard
 						avatar={formData.avatar}
 						previewName={formData.previewName}
-						getInitials={getInitials}
 						onAvatarUpload={handleAvatarUpload}
 						canEdit={true}
 					/>
@@ -232,7 +225,6 @@ const ProfileHeader: React.FC = () => (
 interface AvatarCardProps {
 	avatar: string;
 	previewName: string;
-	getInitials: (name: string) => string;
 	onAvatarUpload: (event: React.ChangeEvent<HTMLInputElement>) => void;
 	canEdit: boolean;
 }
@@ -240,7 +232,6 @@ interface AvatarCardProps {
 const AvatarCard: React.FC<AvatarCardProps> = ({
 	avatar,
 	previewName,
-	getInitials,
 	onAvatarUpload,
 	canEdit,
 }) => (
@@ -256,7 +247,7 @@ const AvatarCard: React.FC<AvatarCardProps> = ({
 				<Avatar className="h-24 w-24">
 					<AvatarImage src={avatar} alt={previewName} />
 					<AvatarFallback className="text-lg">
-						{getInitials(previewName)}
+						{userInitials(previewName)}
 					</AvatarFallback>
 				</Avatar>
 

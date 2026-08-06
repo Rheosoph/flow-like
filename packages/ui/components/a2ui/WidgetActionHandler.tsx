@@ -1,5 +1,6 @@
 "use client";
 
+import { usePathname } from "next/navigation";
 import {
 	type ReactNode,
 	createContext,
@@ -13,6 +14,7 @@ import {
 } from "../../lib/schema/flow/board-version";
 import { useBackend } from "../../state/backend-state";
 import {
+	buildFrontendContextPayload,
 	compactWorkflowPayload,
 	useActionContext,
 	useCollectEventElements,
@@ -99,6 +101,7 @@ export function WidgetActionProvider({
 	onA2UIEvents,
 }: WidgetActionProviderProps) {
 	const backend = useBackend();
+	const pathname = usePathname();
 	const runtimeActionContext = useActionContext();
 	const collectInputValues = useEventRelevantValues();
 	const collectElements = useCollectEventElements();
@@ -146,6 +149,11 @@ export function WidgetActionProvider({
 						_surface_id: surfaceId,
 						_input_values: inputValues,
 						_elements: elements,
+						...buildFrontendContextPayload(
+							pathname,
+							runtimeActionContext.globalState,
+							runtimeActionContext.pageState,
+						),
 					};
 
 					for (const field of action.contextSchema) {
@@ -233,8 +241,11 @@ export function WidgetActionProvider({
 			collectInputValues,
 			collectElements,
 			markComponentTriggering,
+			pathname,
 			runtimeActionContext.boardId,
 			runtimeActionContext.boardVersion,
+			runtimeActionContext.globalState,
+			runtimeActionContext.pageState,
 		],
 	);
 

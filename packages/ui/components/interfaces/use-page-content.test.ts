@@ -1,5 +1,124 @@
 import { describe, expect, test } from "bun:test";
-import { loadPageAfterBoardSync } from "./use-page-content";
+import {
+	type IStoreRedirectState,
+	loadPageAfterBoardSync,
+	resolveStoreRedirect,
+} from "./use-page-content";
+
+function redirectState(
+	overrides: Partial<IStoreRedirectState> = {},
+): IStoreRedirectState {
+	return {
+		embedded: false,
+		authLoading: false,
+		hasAccessToken: true,
+		appInLocalProfile: true,
+		localProfileCheckPending: false,
+		remoteAppCheckPending: false,
+		remoteAppLoaded: true,
+		remoteAppFailed: false,
+		eventsLoaded: true,
+		eventsFailed: false,
+		eventsFetching: false,
+		...overrides,
+	};
+}
+
+describe("store redirect", () => {
+	test("keeps a resolved interface when a refresh fails but data survived", () => {
+		expect(
+			resolveStoreRedirect(
+				redirectState({ eventsFailed: true, eventsLoaded: true }),
+			),
+		).toEqual({ pending: false, redirect: false });
+	});
+
+	test("waits instead of ejecting while the catalog is still retrying", () => {
+		expect(
+			resolveStoreRedirect(
+				redirectState({
+					eventsFailed: true,
+					eventsLoaded: false,
+					eventsFetching: true,
+				}),
+			),
+		).toEqual({ pending: false, redirect: false });
+	});
+
+	test("ejects once the catalog failed with nothing to render", () => {
+		expect(
+			resolveStoreRedirect(
+				redirectState({ eventsFailed: true, eventsLoaded: false }),
+			),
+		).toEqual({ pending: false, redirect: true });
+	});
+
+	test("a locally installed app survives a failed hub lookup", () => {
+		expect(
+			resolveStoreRedirect(
+				redirectState({
+					appInLocalProfile: true,
+					remoteAppLoaded: false,
+					remoteAppFailed: true,
+				}),
+			),
+		).toEqual({ pending: false, redirect: false });
+	});
+
+	test("ejects a signed-in user without local or remote access", () => {
+		expect(
+			resolveStoreRedirect(
+				redirectState({
+					appInLocalProfile: false,
+					remoteAppLoaded: false,
+					remoteAppFailed: true,
+				}),
+			),
+		).toEqual({ pending: false, redirect: true });
+	});
+
+	test("ejects a signed-out user whose profiles do not contain the app", () => {
+		expect(
+			resolveStoreRedirect(
+				redirectState({ hasAccessToken: false, appInLocalProfile: false }),
+			),
+		).toEqual({ pending: false, redirect: true });
+	});
+
+	test("holds every verdict while an access check is in flight", () => {
+		for (const pendingFlag of [
+			"authLoading",
+			"localProfileCheckPending",
+			"remoteAppCheckPending",
+		] as const) {
+			expect(
+				resolveStoreRedirect(
+					redirectState({
+						[pendingFlag]: true,
+						appInLocalProfile: false,
+						remoteAppLoaded: false,
+						remoteAppFailed: true,
+					}),
+				),
+			).toEqual({ pending: true, redirect: false });
+		}
+	});
+
+	test("never ejects an embedded interface", () => {
+		expect(
+			resolveStoreRedirect(
+				redirectState({
+					embedded: true,
+					appInLocalProfile: false,
+					remoteAppLoaded: false,
+					remoteAppFailed: true,
+					eventsFailed: true,
+					eventsLoaded: false,
+				}),
+			),
+		).toEqual({ pending: false, redirect: false });
+	});
+});
 
 describe("page board synchronization", () => {
 	test("waits for board synchronization before reading the page", async () => {

@@ -68,6 +68,7 @@ flow-like-model-provider.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog-macros.workspace = true
 ahash.workspace = true
+blake3.workspace = true
 tracing.workspace = true
 schemars.workspace = true
 futures.workspace = true

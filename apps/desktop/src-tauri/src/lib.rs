@@ -30,6 +30,8 @@ use flow_like_catalog::{get_catalog, initialize as initialize_catalog};
 use flow_like_types::{sync::Mutex, tokio::time::interval};
 use settings::Settings;
 use state::TauriFlowLikeState;
+#[cfg(target_os = "ios")]
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::{sync::Arc, time::Duration};
 #[cfg(debug_assertions)]
 use tauri::Url;
@@ -158,36 +160,109 @@ fn tune_windows_webview(window: &tauri::WebviewWindow) {
     }
 }
 
-/// JS snippet that probes CSS env(safe-area-inset-*) and applies the values
-/// as CSS custom properties. Also re-syncs `--fl-mobile-vvh` so the body
-/// height is correct after `harden_ios_webview_scroll` changes the scroll
-/// view's content inset adjustment (which affects `visualViewport.height`).
+/// `UIEdgeInsets` — four `CGFloat`, which is `f64` on 64-bit iOS.
 #[cfg(target_os = "ios")]
-const IOS_SAFE_AREA_JS: &str = concat!(
-    "(function(){",
-    "var d=document.documentElement;",
-    "var p=document.createElement('div');",
-    "p.style.cssText='position:fixed;left:-9999px;top:0;width:1px;height:1px;",
-    "padding-top:env(safe-area-inset-top,0px);",
-    "padding-bottom:env(safe-area-inset-bottom,0px);",
-    "visibility:hidden;pointer-events:none';",
-    "(document.body||d).appendChild(p);",
-    "var cs=getComputedStyle(p);",
-    "var t=Math.round(parseFloat(cs.paddingTop)||0);",
-    "var b=Math.round(parseFloat(cs.paddingBottom)||0);",
-    "p.remove();",
-    "t=Math.max(t,window.__FL_NATIVE_SAFE_TOP||0);",
-    "b=Math.max(b,window.__FL_NATIVE_SAFE_BOTTOM||0);",
-    "if(t>0||b>0){",
-    "d.style.setProperty('--fl-native-safe-top',t+'px');",
-    "d.style.setProperty('--fl-native-safe-bottom',b+'px');",
-    "window.__FL_NATIVE_SAFE_TOP=t;",
-    "window.__FL_NATIVE_SAFE_BOTTOM=b;",
-    "}",
-    "var vvh=Math.round((window.visualViewport?window.visualViewport.height:0)||window.innerHeight);",
-    "if(vvh>0)d.style.setProperty('--fl-mobile-vvh',vvh+'px');",
-    "})();"
-);
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+struct UIEdgeInsets {
+    top: f64,
+    left: f64,
+    bottom: f64,
+    right: f64,
+}
+
+#[cfg(target_os = "ios")]
+unsafe impl objc2::Encode for UIEdgeInsets {
+    const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+        "UIEdgeInsets",
+        &[
+            objc2::Encoding::Double,
+            objc2::Encoding::Double,
+            objc2::Encoding::Double,
+            objc2::Encoding::Double,
+        ],
+    );
+}
+
+/// Latest safe-area insets measured from UIKit, in CSS px. Monotonic (`fetch_max`)
+/// so a transient 0 during rotation or backgrounding can never shrink the layout.
+#[cfg(target_os = "ios")]
+type NativeInsets = Arc<(AtomicI64, AtomicI64)>;
+
+/// Read the real UIKit safe-area insets into `sink`.
+///
+/// This is the authoritative source. CSS `env(safe-area-inset-*)` only resolves
+/// to non-zero once the viewport meta carries `viewport-fit=cover` *and* WebKit
+/// has completed a layout pass (WebKit #191872), so the web side can silently
+/// report 0 and let the header slide under the Dynamic Island. UIKit always
+/// knows. Mirrors the Android `FlowLikeInsets` bridge, which has had a real
+/// native source all along.
+///
+/// UIKit reports points, which map 1:1 to CSS px in WKWebView — unlike Android's
+/// physical pixels, these need no devicePixelRatio scaling.
+#[cfg(target_os = "ios")]
+fn probe_ios_native_insets(window: &tauri::WebviewWindow, sink: NativeInsets) {
+    if let Err(err) = window.with_webview(move |webview| unsafe {
+        use objc2::runtime::AnyObject;
+
+        let view: *mut AnyObject = webview.inner().cast();
+        if view.is_null() {
+            return;
+        }
+
+        // The hosting UIWindow already reports the device insets while the
+        // webview itself may still be mid-layout; fall back if not attached yet.
+        let host: *mut AnyObject = objc2::msg_send![view, window];
+        let target = if host.is_null() { view } else { host };
+
+        let insets: UIEdgeInsets = objc2::msg_send![target, safeAreaInsets];
+        let top = insets.top.max(0.0).ceil() as i64;
+        let bottom = insets.bottom.max(0.0).ceil() as i64;
+
+        sink.0.fetch_max(top, Ordering::Relaxed);
+        sink.1.fetch_max(bottom, Ordering::Relaxed);
+    }) {
+        tracing::warn!("Failed to read iOS safe-area insets: {}", err);
+    }
+}
+
+/// JS that folds the native insets together with CSS env(safe-area-inset-*) and
+/// applies the larger of the two as CSS custom properties. Also re-syncs
+/// `--fl-mobile-vvh` so the body height is correct after
+/// `harden_ios_webview_scroll` changes the scroll view's content inset
+/// adjustment (which affects `visualViewport.height`).
+#[cfg(target_os = "ios")]
+fn ios_safe_area_js(native_top: i64, native_bottom: i64) -> String {
+    format!(
+        concat!(
+            "(function(){{",
+            "var d=document.documentElement;",
+            "var p=document.createElement('div');",
+            "p.style.cssText='position:fixed;left:-9999px;top:0;width:1px;height:1px;",
+            "padding-top:env(safe-area-inset-top,0px);",
+            "padding-bottom:env(safe-area-inset-bottom,0px);",
+            "visibility:hidden;pointer-events:none';",
+            "(document.body||d).appendChild(p);",
+            "var cs=getComputedStyle(p);",
+            "var t=Math.round(parseFloat(cs.paddingTop)||0);",
+            "var b=Math.round(parseFloat(cs.paddingBottom)||0);",
+            "p.remove();",
+            "t=Math.max(t,{native_top},window.__FL_NATIVE_SAFE_TOP||0);",
+            "b=Math.max(b,{native_bottom},window.__FL_NATIVE_SAFE_BOTTOM||0);",
+            "if(t>0||b>0){{",
+            "d.style.setProperty('--fl-native-safe-top',t+'px');",
+            "d.style.setProperty('--fl-native-safe-bottom',b+'px');",
+            "window.__FL_NATIVE_SAFE_TOP=t;",
+            "window.__FL_NATIVE_SAFE_BOTTOM=b;",
+            "}}",
+            "var vvh=Math.round((window.visualViewport?window.visualViewport.height:0)||window.innerHeight);",
+            "if(vvh>0)d.style.setProperty('--fl-mobile-vvh',vvh+'px');",
+            "}})();"
+        ),
+        native_top = native_top,
+        native_bottom = native_bottom,
+    )
+}
 
 // --- iOS Release logging -----------------------------------------------------
 #[cfg(all(target_os = "ios", not(debug_assertions)))]
@@ -702,13 +777,23 @@ pub fn run() {
             {
                 let ios_handle = app.app_handle().clone();
                 tauri::async_runtime::spawn(async move {
+                    // `with_webview` dispatches to the main thread, so each tick
+                    // evals the values resolved by the previous one. The extra
+                    // trailing delay guarantees the run ends on an eval rather
+                    // than on a read whose result is never applied.
+                    let insets: NativeInsets = Arc::new((AtomicI64::new(0), AtomicI64::new(0)));
+
                     // Wait for the WKWebView to be fully initialised before
                     // touching ObjC properties — calling too early crashes.
-                    for delay_ms in [100, 300, 700, 1500, 3000] {
+                    for delay_ms in [100, 300, 700, 1500, 3000, 5000] {
                         flow_like_types::tokio::time::sleep(Duration::from_millis(delay_ms)).await;
                         if let Some(main) = ios_handle.get_webview_window("main") {
                             harden_ios_webview_scroll(&main);
-                            let _ = main.eval(IOS_SAFE_AREA_JS);
+                            probe_ios_native_insets(&main, insets.clone());
+                            let _ = main.eval(&ios_safe_area_js(
+                                insets.0.load(Ordering::Relaxed),
+                                insets.1.load(Ordering::Relaxed),
+                            ));
                         }
                     }
                 });

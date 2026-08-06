@@ -29,6 +29,11 @@ import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
 import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
 import { remarkUserMention } from "../editor/plugins/remark-user-mention";
 import { Editor, EditorContainer } from "../editor/ui/editor";
+import {
+	LazyPlateStatic,
+	WINDOWING_BLOCK_THRESHOLD,
+	indexEditorPaths,
+} from "./lazy-plate-static";
 
 const EMPTY_MENTION_ITEMS: ReadonlyArray<MentionItem> = [];
 
@@ -86,6 +91,75 @@ const MINIMAL_STATIC_PLUGIN_IDS = new Set([
 	"ul",
 ]);
 
+export const STATIC_EDITOR_CLASSNAME =
+	"py-0 [&_h1:first-of-type]:mt-0 [&_h2:first-of-type]:mt-0 [&_h3:first-of-type]:mt-0 [&_h4:first-of-type]:mt-0 [&_h5:first-of-type]:mt-0 [&_h6:first-of-type]:mt-0";
+
+/** Wrapper styling shared by every read-only markdown surface. */
+export const PROSE_WRAPPER_CLASSNAME =
+	"overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word [&_p]:[overflow-wrap:anywhere] [&_li]:[overflow-wrap:anywhere]";
+
+/**
+ * The full remark set. Streaming and settled rendering must share this list, or
+ * the same markdown parses differently in the two phases — `$5 … $10` in prose
+ * became an inline equation mid-stream and repaired itself on completion.
+ */
+export const RICH_REMARK_PLUGINS: ReadonlyArray<unknown> = [
+	[remarkMath, { singleDollarTextMath: false }],
+	remarkGfm,
+	remarkBreaks,
+	remarkMdx,
+	remarkMention,
+	remarkEmoji as unknown,
+	remarkFocusNodes,
+	remarkUserMention,
+	remarkInlineSpoiler,
+];
+
+const MINIMAL_REMARK_PLUGINS: ReadonlyArray<unknown> = [
+	remarkGfm,
+	remarkBreaks,
+	remarkFocusNodes,
+	remarkUserMention,
+	remarkInlineSpoiler,
+];
+
+/**
+ * Focus-node and user-mention elements render as plain spans, so the click is
+ * delegated from the wrapper. Shared by every read-only prose surface.
+ */
+export function createStaticProseHandlers({
+	onFocusNode,
+	onUserMention,
+}: Readonly<{
+	onFocusNode?: (nodeId: string) => void;
+	onUserMention?: (sub: string) => void;
+}>) {
+	const handle = (
+		e: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>,
+	) => {
+		const target = e.target as HTMLElement;
+		const focusSpan = target.closest("[data-focus-node-id]");
+		if (focusSpan && onFocusNode) {
+			e.preventDefault();
+			const nodeId = focusSpan.getAttribute("data-focus-node-id");
+			if (nodeId) onFocusNode(nodeId);
+		}
+		const userMentionSpan = target.closest("[data-user-mention-sub]");
+		if (userMentionSpan && onUserMention) {
+			e.preventDefault();
+			const sub = userMentionSpan.getAttribute("data-user-mention-sub");
+			if (sub) onUserMention(sub);
+		}
+	};
+
+	return {
+		onClick: handle,
+		onKeyDown: (e: KeyboardEvent<HTMLDivElement>) => {
+			if (e.key === "Enter" || e.key === " ") handle(e);
+		},
+	};
+}
+
 const toValue = (nodes: PlateLikeNode[]): Value => nodes as unknown as Value;
 
 const paragraphValue = (text: string): Value =>
@@ -124,7 +198,7 @@ const splitMarkdownPreservingCodeBlocks = (markdown: string): string[] => {
 /**
  * Post-process Plate nodes to convert focus://, invalid://, and user:// links to custom elements
  */
-const transformSpecialLinks = (
+export const transformSpecialLinks = (
 	nodes: ReadonlyArray<PlateLikeNode>,
 ): PlateLikeNode[] => {
 	return nodes.map((node) => {
@@ -360,29 +434,7 @@ function TextEditorStatic({
 	onFocusNode?: (nodeId: string) => void;
 	onUserMention?: (sub: string) => void;
 }>) {
-	const remarkPlugins = useMemo(
-		() =>
-			minimal
-				? [
-						remarkGfm,
-						remarkBreaks,
-						remarkFocusNodes,
-						remarkUserMention,
-						remarkInlineSpoiler,
-					]
-				: [
-						[remarkMath, { singleDollarTextMath: false }],
-						remarkGfm,
-						remarkBreaks,
-						remarkMdx,
-						remarkMention,
-						remarkEmoji as unknown,
-						remarkFocusNodes,
-						remarkUserMention,
-						remarkInlineSpoiler,
-					],
-		[minimal],
-	);
+	const remarkPlugins = minimal ? MINIMAL_REMARK_PLUGINS : RICH_REMARK_PLUGINS;
 
 	// Use minimal plugin set for better performance in read-only contexts
 	const plugins = useMemo(
@@ -428,52 +480,34 @@ function TextEditorStatic({
 		);
 	}, [initialContent, isMarkdown, remarkPlugins, plugins]);
 
-	const editor = useMemo(
-		() =>
-			createSlateEditor({
-				id: "static-rendered-editor",
-				plugins,
-				value,
-			}),
-		[plugins, value],
-	);
+	const editor = useMemo(() => {
+		const staticEditor = createSlateEditor({
+			id: "static-rendered-editor",
+			plugins,
+			value,
+			// NodeIdPlugin stamps ids by running a setNodes transform per node,
+			// and each transform re-runs normalization for the surrounding block.
+			// On documents with tables that turns initial normalization quadratic
+			// (240 tables: 14s with ids, 6ms without). Read-only rendering never
+			// reads the ids, so skip the pass entirely.
+			nodeId: false,
+		});
+		indexEditorPaths(staticEditor);
+		return staticEditor;
+	}, [plugins, value]);
 
-	const handleStaticInteraction = (
-		e: MouseEvent<HTMLDivElement> | KeyboardEvent<HTMLDivElement>,
-	) => {
-		const target = e.target as HTMLElement;
-		const focusSpan = target.closest("[data-focus-node-id]");
-		if (focusSpan && onFocusNode) {
-			e.preventDefault();
-			const nodeId = focusSpan.getAttribute("data-focus-node-id");
-			if (nodeId) {
-				onFocusNode(nodeId);
-			}
-		}
-		const userMentionSpan = target.closest("[data-user-mention-sub]");
-		if (userMentionSpan && onUserMention) {
-			e.preventDefault();
-			const sub = userMentionSpan.getAttribute("data-user-mention-sub");
-			if (sub) {
-				onUserMention(sub);
-			}
-		}
-	};
+	const isLongDocument = value.length > WINDOWING_BLOCK_THRESHOLD;
 
 	return (
 		<div
-			onClick={handleStaticInteraction}
-			onKeyDown={(e) => {
-				if (e.key === "Enter" || e.key === " ") {
-					handleStaticInteraction(e);
-				}
-			}}
-			className="overflow-hidden [&_pre]:overflow-x-auto [&_pre]:whitespace-pre-wrap [&_code]:wrap-break-word [&_p]:[overflow-wrap:anywhere] [&_li]:[overflow-wrap:anywhere]"
+			{...createStaticProseHandlers({ onFocusNode, onUserMention })}
+			className={PROSE_WRAPPER_CLASSNAME}
 		>
-			<PlateStatic
-				editor={editor}
-				className="py-0 [&_h1:first-of-type]:mt-0 [&_h2:first-of-type]:mt-0 [&_h3:first-of-type]:mt-0 [&_h4:first-of-type]:mt-0 [&_h5:first-of-type]:mt-0 [&_h6:first-of-type]:mt-0"
-			/>
+			{isLongDocument ? (
+				<LazyPlateStatic editor={editor} className={STATIC_EDITOR_CLASSNAME} />
+			) : (
+				<PlateStatic editor={editor} className={STATIC_EDITOR_CLASSNAME} />
+			)}
 		</div>
 	);
 }

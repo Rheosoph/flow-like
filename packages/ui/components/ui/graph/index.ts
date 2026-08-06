@@ -19,6 +19,31 @@ export {
 } from "./graph-query-panel";
 export { GraphSearch, type GraphSearchProps } from "./graph-search";
 export {
+	OntologyActionDialog,
+	type OntologyActionDialogProps,
+	type OntologyActionTarget,
+	type InvokeOntologyAction,
+	extractGraphErrorMessage,
+} from "./ontology-action-dialog";
+export {
+	OntologyExplorer,
+	type OntologyExplorerProps,
+	GRAPH_MAX_NODE_LIMIT,
+	GRAPH_NODE_EXPANSION_LIMIT,
+	GRAPH_SEARCH_MATCH_LIMIT,
+	GRAPH_VIEW_LIMIT_MAX,
+	GRAPH_MAX_EXPANSION_DEPTH,
+} from "./ontology-explorer";
+export {
+	DEFAULT_LABEL_STYLE,
+	applyStyleToOverlay,
+	buildOverlayFromSubgraph,
+	collectSubtree,
+	enrichSubgraphWithStyles,
+	mergeSubgraphData,
+	removeSubtree,
+} from "./subgraph-utils";
+export {
 	GraphViewer,
 	type GraphViewerProps,
 	getNodeRawId,

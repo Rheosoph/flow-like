@@ -40,6 +40,7 @@ import {
 	useBackend,
 	useInvalidateInvoke,
 	useInvoke,
+	useIsMobile,
 } from "@flow-like/flow-like-ui";
 import type { IOAuthConsentStore } from "@flow-like/flow-like-ui/db/oauth-db";
 import type { EventSectionId } from "@flow-like/flow-like-ui/lib/event-sections";
@@ -82,7 +83,6 @@ import {
 	Play,
 	Plus,
 	RefreshCw,
-	SaveIcon,
 	Settings,
 	StickyNote,
 	Trash2,
@@ -90,12 +90,20 @@ import {
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { toast } from "sonner";
 import { EventAttentionStrip } from "./event-attention-strip";
+import { EventSaveBar } from "./event-save-bar";
 import { EventSectionRail } from "./event-section-rail";
 import { EventsOverview } from "./events-overview";
 import { SectionGuidance } from "./section-guidance";
 import { SetupChecklist } from "./setup-checklist";
 import { useEventIssues } from "./use-event-issues";
+
+function errorMessage(error: unknown): string {
+	if (error instanceof Error) return error.message;
+	if (typeof error === "string") return error;
+	return "Unexpected error";
+}
 
 // Helper function to check if an event requires a sink based on eventMapping
 function eventRequiresSink(
@@ -186,7 +194,6 @@ export default function EventsPage({
 	const [pendingEvent, setPendingEvent] = useState<IEvent | null>(null);
 	const [pendingRoutePath, setPendingRoutePath] = useState<string | null>(null);
 	const [isOffline, setIsOffline] = useState<boolean | null>(null);
-	const [routeCleanupDone, setRouteCleanupDone] = useState(false);
 	const uiEventTypeSet = useMemo(
 		() => new Set(uiEventTypes ?? []),
 		[uiEventTypes],
@@ -224,48 +231,12 @@ export default function EventsPage({
 		setEditingEvent(events.data?.find((event) => event.id === eventId) ?? null);
 	}, [editingEvent, id, eventId, events.data]);
 
-	// Clean up orphaned routes (routes pointing to deleted events)
-	useEffect(() => {
-		if (!id || !events.data) return;
-
-		const cleanupOrphanedRoutes = async () => {
-			try {
-				const routes = await backend.routeState.getRoutes(id);
-				const eventIds = new Set(events.data?.map((e) => e.id) ?? []);
-				let deletedAny = false;
-
-				console.log(
-					`[Route Cleanup] Found ${routes.length} routes, checking against ${eventIds.size} events`,
-				);
-
-				for (const route of routes) {
-					// Delete routes that point to non-existent events
-					if (!eventIds.has(route.eventId)) {
-						console.log(
-							`[Route Cleanup] Marking for deletion: route ${route.path} (eventId: ${route.eventId})`,
-						);
-						await backend.routeState.deleteRouteByPath(id, route.path);
-						deletedAny = true;
-					}
-				}
-
-				if (deletedAny) {
-					console.log(
-						"[Route Cleanup] Completed - deleted orphaned routes, invalidating cache",
-					);
-					await invalidate(backend.routeState.getRoutes, [id]);
-				} else {
-					console.log("[Route Cleanup] No orphaned routes found");
-				}
-			} catch (e) {
-				console.error("Failed to clean up orphaned routes:", e);
-			} finally {
-				setRouteCleanupDone(true);
-			}
-		};
-
-		cleanupOrphanedRoutes();
-	}, [id, events.data, backend.routeState, invalidate]);
+	// A route cannot be orphaned: server-side it is the `route` column on the
+	// event row itself, so it disappears with the event. Reconciling the two
+	// lists here only ever deleted live routes, because `GET /routes` is a
+	// superset of `GET /events` (which filters by type, active flag and
+	// permission) and because a failed event fetch is indistinguishable from an
+	// app with no events.
 
 	// Check if app is offline
 	useEffect(() => {
@@ -387,8 +358,10 @@ export default function EventsPage({
 
 				await invalidate(backend.eventState.getEvents, [id]);
 				await events.refetch();
+				toast.success(`Event "${savedEvent.name}" created`);
 			} catch (error) {
 				console.error("Failed to create event:", error);
+				toast.error(`Failed to create event: ${errorMessage(error)}`);
 			} finally {
 				if (savedEvent) {
 					setIsCreateDialogOpen(false);
@@ -430,9 +403,10 @@ export default function EventsPage({
 				}
 
 				await backend.eventState.deleteEvent(id, eventId);
-				console.log(`Deleted event with ID: ${eventId}`);
+				toast.success("Event deleted");
 			} catch (e) {
 				console.error("Failed to delete event:", e);
+				toast.error(`Failed to delete event: ${errorMessage(e)}`);
 			} finally {
 				if (editingEvent?.id === eventId) {
 					setEditingEvent(null);
@@ -566,7 +540,7 @@ export default function EventsPage({
 	}
 
 	return (
-		<div className="container mx-auto flex flex-col grow max-h-full">
+		<div className="container mx-auto flex max-h-full grow flex-col px-3 md:px-0">
 			<div className="flex flex-col grow overflow-hidden max-h-full">
 				<div className="flex flex-col overflow-auto overflow-x-visible grow h-full max-h-full">
 					{events.data?.length === 0 ? (
@@ -619,7 +593,7 @@ export default function EventsPage({
 						</DialogDescription>
 					</DialogHeader>
 					<DialogBody>
-						{id && routeCleanupDone && (
+						{id && (
 							<EventForm
 								eventConfig={eventMapping}
 								uiEventTypes={uiEventTypes}
@@ -694,9 +668,11 @@ function EventConfiguration({
 }>) {
 	const backend = useBackend();
 	const invalidate = useInvalidateInvoke();
+	const isMobile = useIsMobile();
 	const [isEditing, setIsEditing] = useState(false);
 	const [formData, setFormData] = useState<IEvent>(event);
 	const [showPatDialog, setShowPatDialog] = useState(false);
+	const [isSaving, setIsSaving] = useState(false);
 	const [isOffline, setIsOffline] = useState<boolean | null>(null);
 	const canExecuteLocally = backend.capabilities().canExecuteLocally;
 	const [isRefreshingInputs, setIsRefreshingInputs] = useState(false);
@@ -757,11 +733,14 @@ function EventConfiguration({
 		return routes.data?.find((r) => r.eventId === event.id) ?? null;
 	}, [routes.data, event.id]);
 
+	// Until the route list has actually loaded, `routeForEvent` is null for an
+	// event that does have a route. Seeding the draft with "/" then would let a
+	// save overwrite the real path with the placeholder.
 	useEffect(() => {
-		if (isEditing) return;
+		if (isEditing || !routes.isSuccess) return;
 		setRoutePathDraft(routeForEvent?.path ?? "/");
 		setRoutePathError(null);
-	}, [routeForEvent?.path, isEditing]);
+	}, [routeForEvent?.path, isEditing, routes.isSuccess]);
 
 	// OAuth consent state
 	const [showOAuthConsent, setShowOAuthConsent] = useState(false);
@@ -873,10 +852,6 @@ function EventConfiguration({
 	]);
 
 	const handleInputChange = (field: keyof IEvent, value: any) => {
-		console.dir({
-			field,
-			value,
-		});
 		setFormData((prev) => ({ ...prev, [field]: value }));
 	};
 
@@ -887,7 +862,7 @@ function EventConfiguration({
 		return eventTypeConfig?.withSink.includes(formData.event_type);
 	};
 
-	const handleSave = async (
+	const runSave = async (
 		selectedPat?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
 	) => {
@@ -898,6 +873,14 @@ function EventConfiguration({
 		const desiredRoutePath = shouldHaveRoute
 			? normalizePath(routePathDraft)
 			: null;
+
+		// The draft is only trustworthy once the existing routes are known —
+		// otherwise the placeholder "/" would be written over the real path.
+		if (shouldHaveRoute && !routes.isSuccess) {
+			setRoutePathError("Route path is still loading, please retry");
+			toast.error("Route path is still loading, please retry");
+			return;
+		}
 
 		const requiresSink = checkRequiresSink();
 
@@ -983,19 +966,28 @@ function EventConfiguration({
 				return r.eventId !== event.id;
 			});
 			if (conflict) {
-				setRoutePathError(`Route path already in use: ${desiredRoutePath}`);
+				const message = `Route path already in use: ${desiredRoutePath}`;
+				setRoutePathError(message);
+				toast.error(message);
 				return;
 			}
 		}
 
 		// Save the event with the PAT and OAuth tokens if provided
-		await backend.eventState.upsertEvent(
+		const saved = await backend.eventState.upsertEvent(
 			appId,
 			formData,
 			undefined,
 			selectedPat,
 			oauthTokens,
 		);
+
+		// The backend stamps `updated_at` and re-populates `inputs` on every
+		// upsert, so the draft can never match the stored event again. Without
+		// adopting the response the dirty check stays true forever: the bar keeps
+		// claiming unsaved changes right after a successful save, which reads as
+		// "saving is broken" and invites repeated taps.
+		setFormData(saved);
 
 		if (shouldHaveRoute && desiredRoutePath) {
 			try {
@@ -1004,17 +996,44 @@ function EventConfiguration({
 					await backend.routeState.deleteRouteByPath(appId, routeForEvent.path);
 				}
 				// Set new route
-				await backend.routeState.setRoute(appId, desiredRoutePath, formData.id);
+				await backend.routeState.setRoute(appId, desiredRoutePath, saved.id);
 				await routes.refetch();
 			} catch (error) {
 				console.error("Failed to upsert route for UI event:", error);
 				setRoutePathError("Failed to save route path");
+				toast.error(
+					`Event saved, but the route path could not be updated: ${errorMessage(error)}`,
+				);
 				return;
 			}
 		}
 		onReload?.();
 		setIsEditing(false);
 		setShowPatDialog(false);
+		toast.success(`"${saved.name}" saved`);
+	};
+
+	// Saving is the one action on this page with real consequences, and until now
+	// it reported nothing: a rejected upsert surfaced as an unhandled rejection
+	// and the bar just stayed up. Every outcome is now visible, and the in-flight
+	// flag stops a double tap from firing two writes.
+	const savingRef = useRef(false);
+	const handleSave = async (
+		selectedPat?: string,
+		oauthTokens?: Record<string, IOAuthToken>,
+	) => {
+		if (savingRef.current) return;
+		savingRef.current = true;
+		setIsSaving(true);
+		try {
+			await runSave(selectedPat, oauthTokens);
+		} catch (error) {
+			console.error("Failed to save event:", error);
+			toast.error(`Failed to save event: ${errorMessage(error)}`);
+		} finally {
+			savingRef.current = false;
+			setIsSaving(false);
+		}
 	};
 
 	const handleOAuthAuthorize = async (providerId: string) => {
@@ -1072,17 +1091,20 @@ function EventConfiguration({
 		setIsRefreshingInputs(true);
 		try {
 			// Re-upsert the event to trigger populate_inputs on the backend
-			await backend.eventState.upsertEvent(
+			const saved = await backend.eventState.upsertEvent(
 				appId,
 				event,
 				undefined,
 				undefined,
 				undefined,
 			);
+			setFormData(saved);
 			await invalidate(backend.eventState.getEvents, [appId]);
 			onReload?.();
+			toast.success("Inputs refreshed");
 		} catch (error) {
 			console.error("Failed to refresh inputs:", error);
+			toast.error(`Failed to refresh inputs: ${errorMessage(error)}`);
 		} finally {
 			setIsRefreshingInputs(false);
 		}
@@ -1195,8 +1217,18 @@ function EventConfiguration({
 		// `config` is a byte blob whose encoding depends on key insertion order, so
 		// comparing the raw arrays reports edits that never happened. Compare the
 		// decoded config with sorted keys, and the rest of the event separately.
-		const { config: draftConfig, ...draftRest } = formData;
-		const { config: savedConfig, ...savedRest } = event;
+		// `updated_at` is stamped by the backend on every upsert and is never a
+		// user edit, so comparing it would leave the editor permanently dirty.
+		const {
+			config: draftConfig,
+			updated_at: _draftStamp,
+			...draftRest
+		} = formData;
+		const {
+			config: savedConfig,
+			updated_at: _savedStamp,
+			...savedRest
+		} = event;
 		if (stableStringify(draftRest) !== stableStringify(savedRest)) return true;
 		if (
 			stableStringify(parseUint8ArrayToJson(draftConfig ?? []) ?? {}) !==
@@ -1246,26 +1278,44 @@ function EventConfiguration({
 		setIsEditing(true);
 	}, []);
 
+	const showSaveBar = isDirty || isEditing;
+	const saveBar = (
+		<EventSaveBar
+			placement={isMobile ? "top" : "bottom"}
+			isDirty={isDirty}
+			isSaving={isSaving}
+			error={routePathError}
+			onSave={() => handleSave()}
+			onDiscard={handleCancel}
+		/>
+	);
+
 	return (
-		<div className="container mx-auto flex flex-col min-h-0">
+		// The desktop shell drops all padding below md, so the editor supplies its
+		// own gutter instead of running its cards into the screen edges.
+		<div className="container mx-auto flex min-h-0 flex-col px-3 md:px-0">
 			{/* Breadcrumbs */}
-			<div className="flex items-center space-x-2 text-sm text-muted-foreground py-4">
+			<div className="flex min-w-0 items-center gap-2 py-3 text-sm text-muted-foreground sm:py-4">
 				<Button
 					variant="ghost"
 					size="sm"
 					onClick={onDone}
-					className="p-0 h-auto font-normal hover:text-foreground"
+					className="h-auto shrink-0 p-0 font-normal hover:text-foreground"
 				>
 					Events
 				</Button>
-				<span>/</span>
-				<span className="text-foreground font-medium">{event.name}</span>
+				<span className="shrink-0">/</span>
+				<span className="truncate font-medium text-foreground">
+					{event.name}
+				</span>
 			</div>
 
+			{isMobile && showSaveBar && saveBar}
+
 			{/* Content */}
-			<div className="space-y-6 pb-24">
+			<div className="space-y-6 pb-6">
 				{/* Status */}
-				<div className="flex flex-wrap items-center gap-x-3 gap-y-2.5 rounded-lg border bg-card/80 px-4 py-3">
+				<div className="flex flex-wrap items-center gap-x-3 gap-y-2.5 rounded-lg border bg-card/80 px-3 py-3 sm:px-4">
 					<div className="flex shrink-0 items-center gap-2.5">
 						<div
 							className={`w-2.5 h-2.5 rounded-full ${formData.active ? "bg-green-500" : "bg-orange-500"}`}
@@ -1368,7 +1418,7 @@ function EventConfiguration({
 								</div>
 							);
 						})()}
-					<div className="ml-auto flex shrink-0 items-center gap-2">
+					<div className="flex w-full shrink-0 items-center justify-end gap-2 sm:ml-auto sm:w-auto">
 						{board.data?.nodes?.[formData.node_id] && formData.node_id && (
 							<EventTypeConfiguration
 								eventConfig={eventMapping}
@@ -2312,31 +2362,10 @@ function EventConfiguration({
 				</div>
 			</div>
 
-			{/* Floating Save Bar — driven by actual changes, since the config
-			    surface is always interactive and "edit mode" no longer means the
-			    user has changed anything. */}
-			{(isDirty || isEditing) && (
-				<div className="fixed bottom-0 left-0 right-0 z-50 border-t bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80">
-					<div className="container mx-auto flex items-center justify-between py-3 px-4">
-						<p className="text-sm text-muted-foreground">
-							{isDirty ? "You have unsaved changes" : "Editing mode"}
-						</p>
-						<div className="flex items-center gap-2">
-							<Button variant="outline" size="sm" onClick={handleCancel}>
-								Discard
-							</Button>
-							<Button
-								size="sm"
-								onClick={() => handleSave()}
-								disabled={!isDirty}
-							>
-								<SaveIcon className="h-4 w-4 mr-1.5" />
-								Save Changes
-							</Button>
-						</div>
-					</div>
-				</div>
-			)}
+			{/* Save bar — driven by actual changes, since the config surface is
+			    always interactive and "edit mode" no longer means the user has
+			    changed anything. */}
+			{!isMobile && showSaveBar && saveBar}
 
 			{/* PAT Selector Dialog */}
 			<PatSelectorDialog

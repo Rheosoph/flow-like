@@ -75,6 +75,9 @@ export class RouteState implements IAppRouteState {
 			return mergeLocalAndRemoteRoutes(local, mapped);
 		};
 
+		// Routes are optional metadata: an app without any mapping falls back to
+		// its default event. Reporting a failed refresh as an error would make a
+		// network hiccup indistinguishable from "this app is not available".
 		if (force) {
 			try {
 				const remoteData = await syncRemote();
@@ -82,7 +85,6 @@ export class RouteState implements IAppRouteState {
 				this.backend.queryClient.setQueryData(queryKey, remoteData);
 				return remoteData;
 			} catch (error) {
-				if (local.length === 0) throw error;
 				console.warn(
 					"[RouteSync] Forced route fetch failed, falling back to local routes:",
 					error,

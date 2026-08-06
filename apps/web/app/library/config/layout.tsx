@@ -517,6 +517,28 @@ export default function Id({
 		}
 	}
 
+	// Storage and Data Studio own their vertical space; every other section scrolls.
+	const contentFillsHeight =
+		currentRoute?.includes("/storage") || currentRoute?.includes("/explore");
+
+	// Rendered exactly once — a second copy for mobile would mount the whole page
+	// twice, duplicating its effects, URL writes and IndexedDB persistence.
+	const pageContent = (
+		<Suspense
+			fallback={
+				<div className="space-y-4">
+					<Skeleton className="h-8 w-full" />
+					<Skeleton className="h-32 w-full" />
+					<Skeleton className="h-24 w-full" />
+				</div>
+			}
+		>
+			<div key={id ?? "missing-app"} className="contents">
+				{children}
+			</div>
+		</Suspense>
+	);
+
 	return (
 		<TooltipProvider>
 			<main className="flex overflow-hidden flex-col w-full p-4 sm:p-6 gap-4 sm:gap-6 flex-1 min-h-0 h-full">
@@ -981,7 +1003,7 @@ export default function Id({
 					)}
 
 					<Card
-						className={`relative h-full max-h-full flex-col grow overflow-hidden min-h-0 transition-all duration-300 bg-transparent hidden md:flex ${isMaximized ? "shadow-2xl" : ""} order-1 md:order-2`}
+						className={`relative h-full max-h-full flex flex-col grow overflow-hidden min-h-0 transition-all duration-300 bg-transparent border-0 rounded-none py-0 shadow-none backdrop-blur-none md:border md:rounded-xl md:py-6 md:shadow-sm md:backdrop-blur-sm ${isMaximized ? "md:shadow-2xl" : ""} order-1 md:order-2`}
 					>
 						<div className="pointer-events-none absolute right-4 top-4 z-20 hidden md:block">
 							<div className="pointer-events-auto">
@@ -1009,7 +1031,7 @@ export default function Id({
 						<CardContent className="flex-1 p-0 overflow-hidden min-h-0">
 							{hasActivePublicationRequest &&
 								!currentRoute?.includes("/publication") && (
-									<div className="px-6 pt-4 pr-16">
+									<div className="px-3 pt-4 md:px-6 md:pr-16">
 										<AppPublicationBanner
 											requests={publicationRequests.data ?? []}
 											onNavigate={() => {
@@ -1018,62 +1040,21 @@ export default function Id({
 										/>
 									</div>
 								)}
-							{currentRoute?.includes("/storage") ||
-							currentRoute?.includes("/explore") ? (
+							{contentFillsHeight ? (
 								<div className="h-full flex flex-col">
-									<div className="flex-1 min-h-0 overflow-hidden p-6 pt-4 pr-16">
-										<Suspense
-											fallback={
-												<div className="space-y-4">
-													<Skeleton className="h-8 w-full" />
-													<Skeleton className="h-32 w-full" />
-													<Skeleton className="h-24 w-full" />
-												</div>
-											}
-										>
-											<div key={id ?? "missing-app"} className="contents">
-												{children}
-											</div>
-										</Suspense>
+									<div className="flex-1 min-h-0 overflow-hidden px-3 pb-4 md:p-6 md:pt-4 md:pr-16">
+										{pageContent}
 									</div>
 								</div>
 							) : (
 								<div className="h-full overflow-y-auto">
-									<div className="p-6 pt-4 pr-16">
-										<Suspense
-											fallback={
-												<div className="space-y-4">
-													<Skeleton className="h-8 w-full" />
-													<Skeleton className="h-32 w-full" />
-													<Skeleton className="h-24 w-full" />
-												</div>
-											}
-										>
-											<div key={id ?? "missing-app"} className="contents">
-												{children}
-											</div>
-										</Suspense>
+									<div className="px-3 pb-4 md:p-6 md:pt-4 md:pr-16">
+										{pageContent}
 									</div>
 								</div>
 							)}
 						</CardContent>
 					</Card>
-
-					<div className="min-w-0 flex flex-col max-h-full overflow-x-hidden overflow-y-auto px-3 pb-4 md:hidden">
-						<Suspense
-							fallback={
-								<div className="space-y-4">
-									<Skeleton className="h-8 w-full" />
-									<Skeleton className="h-32 w-full" />
-									<Skeleton className="h-24 w-full" />
-								</div>
-							}
-						>
-							<div key={id ?? "missing-app"} className="contents">
-								{children}
-							</div>
-						</Suspense>
-					</div>
 				</div>
 			</main>
 		</TooltipProvider>

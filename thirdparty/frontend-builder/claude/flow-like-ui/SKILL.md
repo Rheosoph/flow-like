@@ -225,7 +225,7 @@ Read [references/styling-guide.md](references/styling-guide.md) for the style ob
 Use exact, case-sensitive type names.
 
 - Layout: `row`, `column`, `stack`, `grid`, `scrollArea`, `aspectRatio`, `overlay`, `absolute`, `box`, `center`, `spacer`
-- Display and data: `text`, `image`, `icon`, `video`, `lottie`, `markdown`, `divider`, `badge`, `avatar`, `userProfile`, `progress`, `spinner`, `skeleton`, `table`, `tableRow`, `tableCell`, `iframe`, `filePreview`, `diffView`, `plotlyChart`, `nivoChart`, `boundingBoxOverlay`, `geoMap`, `calendar`, `gantt`
+- Display and data: `text`, `image`, `icon`, `video`, `lottie`, `markdown`, `divider`, `badge`, `avatar`, `userProfile`, `progress`, `spinner`, `skeleton`, `table`, `tableRow`, `tableCell`, `iframe`, `filePreview`, `diffView`, `plotlyChart`, `nivoChart`, `boundingBoxOverlay`, `geoMap`, `graph`, `ontologyGraph`, `calendar`, `gantt`
 - Interactive: `button`, `feedback`, `appLink`, `textField`, `select`, `slider`, `checkbox`, `switch`, `radioGroup`, `dateTimeInput`, `fileInput`, `imageInput`, `voiceInput`, `link`, `imageLabeler`, `imageHotspot`
 - Containers: `card`, `modal`, `tabs`, `accordion`, `drawer`, `tooltip`, `popover`
 - Game and 3D: `canvas2d`, `sprite`, `shape`, `scene3d`, `model3d`, `dialogue`, `characterPortrait`, `choiceMenu`, `inventoryGrid`, `healthBar`, `miniMap`

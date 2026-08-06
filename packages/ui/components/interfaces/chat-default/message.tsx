@@ -10,15 +10,18 @@ import {
 	PaperclipIcon,
 	ThumbsDownIcon,
 	ThumbsUpIcon,
+	XIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { IRole, cn } from "../../../lib";
 import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
+import { observeResize } from "../../../lib/observe-resize";
 import {
 	Badge,
 	Button,
 	Dialog,
+	DialogClose,
 	DialogContent,
 	DialogDescription,
 	DialogFooter,
@@ -656,9 +659,10 @@ export const MessageComponent = memo(
 			};
 
 			evaluate();
-			const observer = new ResizeObserver(evaluate);
-			observer.observe(el);
-			return () => observer.disconnect();
+			// Collapsing caps the height of the observed element itself, so the
+			// re-measure has to happen a frame after the notification rather than
+			// inside it.
+			return observeResize([el], evaluate);
 		}, [message.inner, isUser]);
 
 		const handleFileClick = useCallback((file: ProcessedAttachment) => {
@@ -1024,14 +1028,39 @@ export const MessageComponent = memo(
 						open={!!fullscreenFile}
 						onOpenChange={() => setFullscreenFile(null)}
 					>
-						<DialogContent className="w-screen h-screen max-w-none! max-h-none! p-0 bg-black border-0 rounded-none top-[50%]! left-[50%]! translate-x-[-50%]! translate-y-[-50%]!">
+						<DialogContent
+							showCloseButton={false}
+							className="w-dvw h-dvh max-w-none! max-h-none! p-0 gap-0 overflow-hidden bg-black text-white border-0 rounded-none top-[50%]! left-[50%]! translate-x-[-50%]! translate-y-[-50%]!"
+						>
 							<div className="relative w-full h-full flex flex-col">
-								<div className="absolute top-0 left-0 right-0 z-10 flex items-center justify-start p-4 bg-linear-to-b from-black/80 to-transparent pointer-events-none">
-									<p className="text-white text-sm font-medium truncate">
+								<div
+									className="absolute top-0 left-0 right-0 z-10 flex items-center justify-between gap-2 px-3 pb-6 bg-linear-to-b from-black/80 to-transparent pointer-events-none"
+									style={{
+										paddingTop:
+											"calc(var(--fl-safe-top, env(safe-area-inset-top, 0px)) + 0.75rem)",
+									}}
+								>
+									<p className="min-w-0 flex-1 text-white text-sm font-medium truncate">
 										{getDisplayFileName(fullscreenFile.name)}
 									</p>
+									<DialogClose asChild>
+										<Button
+											variant="ghost"
+											size="icon"
+											className="pointer-events-auto size-10 shrink-0 rounded-full bg-black/40 text-white hover:bg-black/60 hover:text-white"
+										>
+											<XIcon className="size-5" />
+											<span className="sr-only">Close</span>
+										</Button>
+									</DialogClose>
 								</div>
-								<div className="flex-1 flex items-center justify-center w-full h-full">
+								<div
+									className="flex-1 min-h-0 flex items-center justify-center w-full"
+									style={{
+										paddingBottom:
+											"var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px))",
+									}}
+								>
 									<FileDialogPreview file={fullscreenFile} />
 								</div>
 							</div>

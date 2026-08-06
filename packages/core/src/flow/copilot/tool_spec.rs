@@ -336,10 +336,25 @@ fn flowpilot_board_message(args: &Value) -> String {
 
 fn flowpilot_widget_message(args: &Value) -> String {
     let instruction = spec_arg_str(args, "instruction", "instruction");
-    if instruction.is_empty() {
-        "FlowPilot wants to design UI on the open widget surface.".to_string()
+    // A named page is edited in storage, with no builder and no review card, so the approval has to
+    // say that rather than implying the user is watching an open surface.
+    let edits_saved_page = spec_arg_str(args, "mode", "mode").trim().to_lowercase() == "edit"
+        && [
+            ("page_id", "pageId"),
+            ("route", "route"),
+            ("page_name", "pageName"),
+        ]
+        .iter()
+        .any(|(snake, camel)| !spec_arg_str(args, snake, camel).trim().is_empty());
+    let subject = if edits_saved_page {
+        "rewrite the UI of a saved page"
     } else {
-        format!("FlowPilot wants to design UI on the open widget surface: {instruction}")
+        "design UI"
+    };
+    if instruction.is_empty() {
+        format!("FlowPilot wants to {subject}.")
+    } else {
+        format!("FlowPilot wants to {subject}: {instruction}")
     }
 }
 
@@ -901,8 +916,8 @@ SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use creat
         PlatformToolSpec {
             name: "flowpilot_widget",
             description: r#"The UI specialist — design and build interfaces (A2UI). Two modes:
-- mode="edit": edit the user's currently OPEN widget/page builder (generated components are staged for review). Ambient open-builder state is used only in this mode.
-- mode="create": create a NEW page from scratch in an app (pass app_id). Supplying app_id/page_id/board_id/page_name/route defaults to create mode even when another builder is open. A page is board-scoped, so a board is created automatically if the app has none.
+- mode="edit": change an EXISTING page or widget. With the builder open on the target, generated components are staged for the user's review. With no builder open, pass app_id plus page_id (or route/page_name) and the saved page is rewritten directly — applied immediately, with no review card, so always name the page you changed when you report back. Ambient open-builder state is used only in this mode.
+- mode="create": create a NEW page from scratch in an app (pass app_id). Supplying app_id/page_id/board_id/page_name/route defaults to create mode even when another builder is open, so say mode="edit" explicitly to change a page that already exists. A page is board-scoped, so a board is created automatically if the app has none.
 	It builds the page AND any reusable widgets it needs — repeated or dynamic elements like list/grid cards, project or save-state rows, email-list items — in ONE call, then navigates the user to the page builder. A simple one-off layout (e.g. a dashboard with a chart and a table) needs no widget. Give a complete instruction for layout, content, and interaction affordances. When the user specified exact reusable-widget names, pass them in widget_names so the persisted entities keep those names even if the UI renderer omits an inline label. Side-effecting; asks for approval.
 SCOPE: UI only — pages, widgets, components. This specialist has no FlowScript or board-mutation authority and cannot build nodes, connections, entry events, or data wiring. A page may require an empty board record as its owner; that metadata scaffold is NOT workflow logic and is never proof that the board was built. Any requested behavior must be delegated separately to flowpilot_board. Never include FlowScript in this instruction and never treat this tool's success as satisfying board work.
 
@@ -912,11 +927,11 @@ RUN IT ALONGSIDE THE BOARD. You do NOT have to wait for this result before calli
                     "type": "object",
                     "properties": {
                         "instruction": { "type": "string", "description": "Complete natural-language description of the UI to build or modify (layout, content, and any reusable/repeated widgets)." },
-                        "mode": { "type": "string", "enum": ["create", "edit"], "description": "\"create\" to persist a new page, or \"edit\" to stage changes on the currently open builder. Defaults to create when any persisted-page target is supplied; otherwise edits the open builder when one exists." },
-                        "app_id": { "type": "string", "description": "App to create a NEW page in (from list_apps/create_app). Omit when editing the currently open builder surface." },
-                            "page_id": { "type": "string", "description": "Globally unique id for the new page, chosen by you. Prefix a friendly slug with app_id or use a UUID-like token. Pass this when building the page and board in the same turn so both specialists share the contract. An existing id is rejected rather than overwritten; open that page and use mode=edit instead. Optional — a fresh id is generated when omitted." },
-                            "page_name": { "type": "string", "description": "Name for the new page. Optional; a generic name is used if omitted." },
-                            "route": { "type": "string", "description": "URL route for the new page, e.g. \"/dashboard\". Optional; derived from the page name." },
+                        "mode": { "type": "string", "enum": ["create", "edit"], "description": "\"create\" to persist a NEW page, or \"edit\" to change one that already exists. edit stages changes on the open builder when it is showing the target; otherwise pass app_id with page_id (or route/page_name) and the saved page is edited in place. Defaults to create when any persisted-page target is supplied; otherwise edits the open builder when one exists." },
+                        "app_id": { "type": "string", "description": "App the page lives in (from list_apps/create_app). Required for mode=create, and for mode=edit unless you are editing the currently open builder." },
+                            "page_id": { "type": "string", "description": "Globally unique id for the new page, chosen by you. Prefix a friendly slug with app_id or use a UUID-like token. Pass this when building the page and board in the same turn so both specialists share the contract. In create mode an existing id is rejected rather than overwritten — to change that page, call again with mode=edit and the same app_id plus page_id. Optional — a fresh id is generated when omitted." },
+                            "page_name": { "type": "string", "description": "Name for the new page. Optional; a generic name is used if omitted. In mode=edit it names an existing page when you do not have its page_id; the match must be unique or the call fails." },
+                            "route": { "type": "string", "description": "URL route for the new page, e.g. \"/dashboard\". Optional; derived from the page name. In mode=edit it names an existing page when you do not have its page_id; the match must be unique or the call fails." },
                             "board_id": { "type": "string", "description": "Exact board the new page binds to. Required when the app has more than one board. For a new secondary board, choose the id up front and pass the same id to flowpilot_board with create_new_board=true." },
                             "widget_name": { "type": "string", "description": "Exact persisted name of the one reusable widget requested for this page. Use widget_names instead when more than one is requested." },
                             "widget_names": { "type": "array", "items": { "type": "string" }, "description": "Exact persisted reusable-widget names, in the same order they are requested in the instruction. Pass this whenever the user specified widget names." },

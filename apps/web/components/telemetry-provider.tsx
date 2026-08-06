@@ -21,6 +21,7 @@ import {
 	endTelemetrySession,
 	initTelemetrySampling,
 	initWebVitals,
+	isBenignBrowserError,
 	markTelemetrySessionCrashed,
 	sanitizeTelemetryPath,
 	setTelemetryErrorSink,
@@ -62,7 +63,9 @@ function installGlobalErrorHandlers(): () => void {
 	if (globalHandlerRefCount === 1) {
 		const onError = (event: ErrorEvent) => {
 			if (event.target && event.target !== window) return;
-			captureUnhandled(event.error ?? event.message, "window.onerror");
+			const error = event.error ?? event.message;
+			if (isBenignBrowserError(error)) return;
+			captureUnhandled(error, "window.onerror");
 		};
 		const onRejection = (event: PromiseRejectionEvent) =>
 			captureUnhandled(event.reason, "window.onunhandledrejection");

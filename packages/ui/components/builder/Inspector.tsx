@@ -22,12 +22,14 @@ import {
 	useMemo,
 	useState,
 } from "react";
+import { useInvoke } from "../../hooks";
 import { cn } from "../../lib";
 import {
 	createContractInputValue,
 	updateWidgetContractProps,
 } from "../../lib/widget-contract-form";
 import { homogeneousArrayItemSchema } from "../../lib/widget-schema-form";
+import { useBackend } from "../../state/backend-state";
 import {
 	type ComponentEventDefinition,
 	getComponentEventDefinitions,
@@ -3390,6 +3392,51 @@ interface PropertyFieldProps {
 	enumOptions?: string[];
 }
 
+/** Picks one of the project's ontologies by name instead of pasting its id. */
+function OntologyIdField({
+	appId,
+	value,
+	onChange,
+}: {
+	appId: string;
+	value: string;
+	onChange: (value: unknown) => void;
+}) {
+	const backend = useBackend();
+	const ontologies = useInvoke(
+		backend.graphState.listOverlays,
+		backend.graphState,
+		[appId],
+		Boolean(appId),
+	);
+
+	return (
+		<div className={INSPECTOR_FIELD_CLASS}>
+			<Label className="text-xs">Ontology</Label>
+			<Select
+				value={value || undefined}
+				onValueChange={(next) => onChange({ literalString: next })}
+			>
+				<SelectTrigger className="h-8 text-sm">
+					<SelectValue placeholder="Select an ontology..." />
+				</SelectTrigger>
+				<SelectContent>
+					{(ontologies.data ?? []).map((ontology) => (
+						<SelectItem key={ontology.id} value={ontology.id}>
+							{ontology.name}
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+			{ontologies.data?.length === 0 && (
+				<p className="text-[11px] text-muted-foreground">
+					This project has no ontologies yet — create one in Data Studio.
+				</p>
+			)}
+		</div>
+	);
+}
+
 function PropertyField({
 	name,
 	value,
@@ -3401,6 +3448,34 @@ function PropertyField({
 }: PropertyFieldProps) {
 	const { actionContext } = useBuilder();
 	const appId = actionContext?.appId;
+
+	// The ontology element is a link to existing project data — pick it by name.
+	// A path-bound id keeps the generic editor so bindings stay editable.
+	const literalOntologyId =
+		value === undefined
+			? ""
+			: typeof value === "object" &&
+					value !== null &&
+					"literalString" in value &&
+					typeof (value as { literalString: unknown }).literalString ===
+						"string"
+				? (value as { literalString: string }).literalString
+				: null;
+
+	if (
+		componentType === "ontologyGraph" &&
+		name === "ontologyId" &&
+		appId &&
+		literalOntologyId !== null
+	) {
+		return (
+			<OntologyIdField
+				appId={appId}
+				value={literalOntologyId}
+				onChange={onChange}
+			/>
+		);
+	}
 
 	// Skip rendering complex objects for now
 	if (typeof value === "object" && value !== null) {
@@ -5696,6 +5771,7 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 					description:
 						"This handler is configured but is not declared by the current component contract.",
 					legacyFallback: true,
+					wildcardFallback: true,
 				}),
 			);
 		const definitions = [...declared, ...configuredOnly];
@@ -5704,8 +5780,9 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 				id: WILDCARD_EVENT,
 				label: "Wildcard default",
 				description:
-					"Runs for named events that do not have an exact handler. This modern fallback supports an ordered action list.",
+					"Runs for named events that do not have an exact handler, except events added after the component shipped — those need their own handler. Supports an ordered action list.",
 				legacyFallback: true,
+				wildcardFallback: true,
 			});
 		}
 		return definitions;

@@ -56,23 +56,18 @@ function SheetContent({
 	/** Override the backdrop overlay (e.g. raise its z-index above a high-z host panel). */
 	overlayClassName?: string;
 }) {
+	const insetTop =
+		side === "bottom"
+			? "0px"
+			: "var(--fl-safe-top, env(safe-area-inset-top, 0px))";
+	const insetBottom =
+		side === "top"
+			? "0px"
+			: "var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px))";
+
 	const safeAreaStyle: React.CSSProperties = {
-		...(side === "left" || side === "right"
-			? {
-					paddingTop: "var(--fl-safe-top, env(safe-area-inset-top, 0px))",
-					paddingBottom:
-						"var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px))",
-				}
-			: side === "bottom"
-				? {
-						paddingBottom:
-							"var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px))",
-					}
-				: side === "top"
-					? {
-							paddingTop: "var(--fl-safe-top, env(safe-area-inset-top, 0px))",
-						}
-					: {}),
+		paddingTop: insetTop,
+		paddingBottom: insetBottom,
 		...style,
 	};
 
@@ -101,7 +96,13 @@ function SheetContent({
 				<div className="relative z-10 flex flex-col gap-4 h-full">
 					{children}
 				</div>
-				<SheetPrimitive.Close className="ring-offset-background focus:ring-ring data-[state=open]:bg-secondary absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none z-20">
+				{/* Absolutely positioned children resolve against the padding box,
+				    so `top-4` alone would land inside the safe-area padding — i.e.
+				    under the Dynamic Island. Offset by the inset explicitly. */}
+				<SheetPrimitive.Close
+					style={{ top: `calc(${insetTop} + 1rem)` }}
+					className="ring-offset-background focus:ring-ring data-[state=open]:bg-secondary absolute right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:ring-2 focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none z-20"
+				>
 					<XIcon className="size-4" />
 					<span className="sr-only">Close</span>
 				</SheetPrimitive.Close>

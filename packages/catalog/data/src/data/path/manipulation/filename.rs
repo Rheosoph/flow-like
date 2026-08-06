@@ -82,7 +82,7 @@ impl NodeLogic for SetFilenameNode {
         let mut node = Node::new(
             "set_filename",
             "Set Filename",
-            "Gets the filename from a path",
+            "Renames a file path, keeping the original extension when the new name has none",
             "Data/Files/Path",
         );
         node.add_icon("/flow/icons/path.svg");

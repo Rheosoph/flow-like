@@ -259,6 +259,12 @@ pub struct State {
     pub wasm_registry: Option<Arc<ServerRegistry>>,
     /// Sink scheduler for cron events (AWS EventBridge, K8s CronJobs, or in-memory)
     pub sink_scheduler: Option<Arc<dyn flow_like_sinks::SchedulerBackend>>,
+    /// Key/value cache backend used by flows (`CACHE_BACKEND`).
+    ///
+    /// Built once at startup rather than per request: cache reads are far more frequent
+    /// than execution-state reads, and rebuilding a Redis connection on every call would
+    /// dominate the latency the cache exists to avoid.
+    pub cache_store: Option<Arc<dyn crate::cache::CacheStore>>,
     /// Secret store for accessing secrets from various providers (env, AWS Parameter Store, etc.)
     pub secrets: Arc<SecretStore>,
     /// Encryption key for token encryption (derived from SINK_TOKEN_ENCRYPTION_KEY)
@@ -635,6 +641,25 @@ impl State {
             }
         };
 
+        // A cache the flows cannot reach is better surfaced as an explicit 503 from the
+        // cache endpoints than as a failed boot for every other feature.
+        let cache_store = {
+            let config = crate::cache::CacheStoreConfig::default().with_db(Arc::new(db.clone()));
+            match crate::cache::create_cache_store(config).await {
+                Ok(store) => {
+                    tracing::info!(backend = store.backend_name(), "Initialized cache backend");
+                    Some(store)
+                }
+                Err(error) => {
+                    tracing::error!(
+                        error = %error,
+                        "Failed to initialize the cache backend; cache endpoints will return 503"
+                    );
+                    None
+                }
+            }
+        };
+
         Self {
             platform_config,
             db,
@@ -679,6 +704,7 @@ impl State {
                 .build(),
             wasm_registry,
             sink_scheduler,
+            cache_store,
             secrets,
             encryption_key,
             sink_secret,

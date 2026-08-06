@@ -3,8 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import {
 	resolveChatPlaceholderBubbleState,
+	resolveChatPlaceholderTypingMotion,
 	resolveChatPlaceholderVisual,
 } from "../../../lib/chat-appearance";
+import type { IComposerActivityChannel } from "../../../lib/composer-activity";
 import {
 	isStoragePrefix,
 	presignSinglePath,
@@ -20,6 +22,11 @@ interface IChatPlaceholderProps {
 	readonly appId?: string;
 	readonly size?: number;
 	readonly className?: string;
+	/**
+	 * The composer's draft channel. Supply it and the mark reacts while the user types, provided
+	 * the interface enabled `placeholder_typing_motion`.
+	 */
+	readonly activity?: IComposerActivityChannel;
 }
 
 /**
@@ -62,9 +69,13 @@ function useResolvedImage(source: string, appId?: string) {
 function BubblePlaceholder({
 	state,
 	size,
+	activity,
+	typingMotion,
 }: {
 	state: ReturnType<typeof resolveChatPlaceholderBubbleState>;
 	size: number;
+	activity?: IComposerActivityChannel;
+	typingMotion: boolean;
 }) {
 	// A stable ref object, not `{current: el}` — the film keys its GL context on this identity and
 	// would tear the context down and rebuild it on every render.
@@ -77,7 +88,13 @@ function BubblePlaceholder({
 			className="relative shrink-0 overflow-visible"
 			style={{ width: size, height: size }}
 		>
-			<BubbleOrbFilm hostRef={hostRef} state={state} ackNonce={0} />
+			<BubbleOrbFilm
+				hostRef={hostRef}
+				state={state}
+				ackNonce={0}
+				activity={activity}
+				typingMotion={typingMotion}
+			/>
 		</div>
 	);
 }
@@ -91,8 +108,12 @@ export function ChatPlaceholder({
 	appId,
 	size = 168,
 	className,
+	activity,
 }: IChatPlaceholderProps) {
 	const visual = resolveChatPlaceholderVisual(config.placeholder_visual);
+	const typingMotion = resolveChatPlaceholderTypingMotion(
+		config.placeholder_typing_motion,
+	);
 	const source =
 		typeof config.placeholder_image === "string"
 			? config.placeholder_image.trim()
@@ -127,10 +148,19 @@ export function ChatPlaceholder({
 						config.placeholder_bubble_state,
 					)}
 					size={size}
+					activity={activity}
+					typingMotion={typingMotion}
 				/>
 			</div>
 		);
 	}
 
-	return <ChatEmptyOrb size={size} className={className} />;
+	return (
+		<ChatEmptyOrb
+			size={size}
+			className={className}
+			activity={activity}
+			typingMotion={typingMotion}
+		/>
+	);
 }

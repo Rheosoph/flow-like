@@ -14,3 +14,4 @@ export * from "./use-media-upload";
 export * from "./use-peer-users";
 export * from "./use-theme-gradient";
 export * from "./use-search-index";
+export * from "./use-model-names";

@@ -109,6 +109,15 @@ export interface GraphViewerProps {
 		to: SubgraphNode,
 	) => Promise<GraphPathsResult>;
 	onRunAction?: (action: OntologyActionDefinition, node: SubgraphNode) => void;
+	/** Fires whenever the selected node changes, including deselection. */
+	onNodeSelect?: (node: SubgraphNode | null) => void;
+	/** Fires whenever the selected edge changes, including deselection. */
+	onEdgeSelect?: (edge: SubgraphEdge | null) => void;
+	showToolbar?: boolean;
+	showSearch?: boolean;
+	showLegend?: boolean;
+	/** Node/edge detail drawer opened by selection. */
+	showInspector?: boolean;
 }
 
 interface PathOutcome {
@@ -137,6 +146,12 @@ export function GraphViewer({
 	limit,
 	onFindPaths,
 	onRunAction,
+	onNodeSelect,
+	onEdgeSelect,
+	showToolbar = true,
+	showSearch = true,
+	showLegend = true,
+	showInspector = true,
 }: GraphViewerProps) {
 	const [selectedNode, setSelectedNode] = useState<SubgraphNode | null>(null);
 	const [selectedEdge, setSelectedEdge] = useState<SubgraphEdge | null>(null);
@@ -267,6 +282,25 @@ export function GraphViewer({
 			setSelectedNode(updated);
 		}
 	}, [data, selectedNode]);
+
+	// Selection is reached from the canvas, the search panel and the inspector.
+	// Emitting from the resolved state keeps one notification per actual change;
+	// the id guard swallows the re-selection that data refreshes trigger.
+	const emittedNodeIdRef = useRef<string | null>(null);
+	useEffect(() => {
+		const id = selectedNode?.id ?? null;
+		if (emittedNodeIdRef.current === id) return;
+		emittedNodeIdRef.current = id;
+		onNodeSelect?.(selectedNode);
+	}, [selectedNode, onNodeSelect]);
+
+	const emittedEdgeIdRef = useRef<string | null>(null);
+	useEffect(() => {
+		const id = selectedEdge?.id ?? null;
+		if (emittedEdgeIdRef.current === id) return;
+		emittedEdgeIdRef.current = id;
+		onEdgeSelect?.(selectedEdge);
+	}, [selectedEdge, onEdgeSelect]);
 
 	useEffect(() => {
 		if (!pendingSearchNodeId || !data) return;
@@ -582,172 +616,180 @@ export function GraphViewer({
 			{/* Main graph area */}
 			<div className="flex-1 flex flex-col min-w-0 min-h-0">
 				{/* Toolbar */}
-				<div className="flex items-center gap-2 p-2 border-b bg-background">
-					{/* Live search */}
-					<div className="relative flex-1 max-w-sm">
-						<Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
-						<input
-							type="text"
-							value={searchQuery}
-							onChange={(e) => handleSearch(e.target.value)}
-							placeholder="Search loaded nodes, then fallback to full graph..."
-							className="w-full h-9 pl-8 pr-8 text-sm rounded-md border bg-transparent focus:outline-none focus:ring-1 focus:ring-ring"
-						/>
-						{searchQuery && (
-							<button
-								type="button"
-								className="absolute right-2 top-2.5 h-4 w-4 text-muted-foreground hover:text-foreground"
-								onClick={clearSearch}
-							>
-								<X className="h-4 w-4" />
-							</button>
-						)}
-						{showRemoteSearchPanel && (
-							<div className="absolute left-0 right-0 top-full z-20 mt-1 rounded-md border bg-popover shadow-lg overflow-hidden">
-								{remoteSearchLoading ? (
-									<div className="px-3 py-2 text-xs text-muted-foreground">
-										Searching full graph...
-									</div>
-								) : remoteSearchError ? (
-									<div className="px-3 py-2 text-xs text-destructive">
-										{remoteSearchError}
-									</div>
-								) : unloadedRemoteSearchMatches.length > 0 ? (
-									<div className="max-h-64 overflow-y-auto py-1">
-										{unloadedRemoteSearchMatches.map((node) => (
-											<button
-												key={node.id}
-												type="button"
-												className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left hover:bg-accent"
-												onClick={() => void handleRemoteSearchMatchClick(node)}
-											>
-												<span className="text-sm font-medium truncate max-w-full">
-													{node.caption ?? node.id}
-												</span>
-												<span className="text-[11px] text-muted-foreground truncate max-w-full">
-													{node.label} · {node.id}
-												</span>
-											</button>
-										))}
-									</div>
-								) : searchHighlight.size === 0 ? (
-									<div className="px-3 py-2 text-xs text-muted-foreground">
-										No nodes found in the full graph.
-									</div>
-								) : null}
-							</div>
-						)}
-					</div>
-
-					{searchHighlight.size > 0 && (
-						<span className="text-xs text-muted-foreground whitespace-nowrap">
-							{searchHighlight.size} loaded match
-							{searchHighlight.size !== 1 ? "es" : ""}
-						</span>
-					)}
-
-					{unloadedRemoteSearchMatches.length > 0 && (
-						<span className="text-xs text-muted-foreground whitespace-nowrap">
-							{unloadedRemoteSearchMatches.length} more in graph
-						</span>
-					)}
-
-					{hasRemoteSearchQuery && remoteSearchLoading && (
-						<span className="text-xs text-muted-foreground whitespace-nowrap">
-							Searching full graph...
-						</span>
-					)}
-
-					<div className="h-5 w-px bg-border" />
-
-					{/* Node / edge count */}
-					<span className="text-xs text-muted-foreground whitespace-nowrap">
-						{nodeCount.toLocaleString()} nodes · {edgeCount.toLocaleString()}{" "}
-						edges
-					</span>
-
-					{/* Limit selector */}
-					{onLimitChange && (
-						<>
-							<div className="h-5 w-px bg-border" />
-							<select
-								value={limit ?? 200}
-								onChange={(e) => onLimitChange(Number(e.target.value))}
-								className="h-8 text-xs rounded-md border bg-transparent px-2 focus:outline-none focus:ring-1 focus:ring-ring"
-							>
-								{GRAPH_VIEW_LIMIT_OPTIONS.map((option) => (
-									<option key={option} value={option}>
-										{formatGraphLimitOption(option)}
-									</option>
-								))}
-							</select>
-						</>
-					)}
-
-					<div className="h-5 w-px bg-border" />
-
-					{onRunCypher && (
-						<button
-							type="button"
-							className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded border whitespace-nowrap"
-							onClick={() => setShowQuery(!showQuery)}
-						>
-							{showQuery ? "Hide Query" : "Query"}
-						</button>
-					)}
-
-					<div className="ml-auto flex items-center gap-2">
-						{warnings.length > 0 && !warningsDismissed && (
-							<Popover>
-								<PopoverTrigger asChild>
-									<button
-										type="button"
-										className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap hover:bg-amber-500/20 transition-colors"
-									>
-										<AlertTriangle className="h-3.5 w-3.5" />
-										{warnings.length} data warning
-										{warnings.length !== 1 ? "s" : ""}
-									</button>
-								</PopoverTrigger>
-								<PopoverContent align="end" className="w-80 p-0">
-									<div className="flex items-center justify-between border-b px-3 py-2">
-										<span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
-											Data warnings
-										</span>
+				{showToolbar && (
+					<div className="flex items-center gap-2 p-2 border-b bg-background">
+						{showSearch && (
+							<>
+								{/* Live search */}
+								<div className="relative flex-1 max-w-sm">
+									<Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
+									<input
+										type="text"
+										value={searchQuery}
+										onChange={(e) => handleSearch(e.target.value)}
+										placeholder="Search loaded nodes, then fallback to full graph..."
+										className="w-full h-9 pl-8 pr-8 text-sm rounded-md border bg-transparent focus:outline-none focus:ring-1 focus:ring-ring"
+									/>
+									{searchQuery && (
 										<button
 											type="button"
-											className="text-muted-foreground hover:text-foreground"
-											onClick={() => setDismissedWarningsKey(warningsKey)}
-											title="Dismiss warnings"
+											className="absolute right-2 top-2.5 h-4 w-4 text-muted-foreground hover:text-foreground"
+											onClick={clearSearch}
 										>
-											<X className="h-3.5 w-3.5" />
+											<X className="h-4 w-4" />
 										</button>
-									</div>
-									<ul className="max-h-64 overflow-y-auto p-2 space-y-1">
-										{warnings.map((warning) => (
-											<li
-												key={warning}
-												className="rounded bg-amber-500/5 px-2 py-1.5 text-xs text-muted-foreground"
+									)}
+									{showRemoteSearchPanel && (
+										<div className="absolute left-0 right-0 top-full z-20 mt-1 rounded-md border bg-popover shadow-lg overflow-hidden">
+											{remoteSearchLoading ? (
+												<div className="px-3 py-2 text-xs text-muted-foreground">
+													Searching full graph...
+												</div>
+											) : remoteSearchError ? (
+												<div className="px-3 py-2 text-xs text-destructive">
+													{remoteSearchError}
+												</div>
+											) : unloadedRemoteSearchMatches.length > 0 ? (
+												<div className="max-h-64 overflow-y-auto py-1">
+													{unloadedRemoteSearchMatches.map((node) => (
+														<button
+															key={node.id}
+															type="button"
+															className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left hover:bg-accent"
+															onClick={() =>
+																void handleRemoteSearchMatchClick(node)
+															}
+														>
+															<span className="text-sm font-medium truncate max-w-full">
+																{node.caption ?? node.id}
+															</span>
+															<span className="text-[11px] text-muted-foreground truncate max-w-full">
+																{node.label} · {node.id}
+															</span>
+														</button>
+													))}
+												</div>
+											) : searchHighlight.size === 0 ? (
+												<div className="px-3 py-2 text-xs text-muted-foreground">
+													No nodes found in the full graph.
+												</div>
+											) : null}
+										</div>
+									)}
+								</div>
+
+								{searchHighlight.size > 0 && (
+									<span className="text-xs text-muted-foreground whitespace-nowrap">
+										{searchHighlight.size} loaded match
+										{searchHighlight.size !== 1 ? "es" : ""}
+									</span>
+								)}
+
+								{unloadedRemoteSearchMatches.length > 0 && (
+									<span className="text-xs text-muted-foreground whitespace-nowrap">
+										{unloadedRemoteSearchMatches.length} more in graph
+									</span>
+								)}
+
+								{hasRemoteSearchQuery && remoteSearchLoading && (
+									<span className="text-xs text-muted-foreground whitespace-nowrap">
+										Searching full graph...
+									</span>
+								)}
+
+								<div className="h-5 w-px bg-border" />
+							</>
+						)}
+
+						{/* Node / edge count */}
+						<span className="text-xs text-muted-foreground whitespace-nowrap">
+							{nodeCount.toLocaleString()} nodes · {edgeCount.toLocaleString()}{" "}
+							edges
+						</span>
+
+						{/* Limit selector */}
+						{onLimitChange && (
+							<>
+								<div className="h-5 w-px bg-border" />
+								<select
+									value={limit ?? 200}
+									onChange={(e) => onLimitChange(Number(e.target.value))}
+									className="h-8 text-xs rounded-md border bg-transparent px-2 focus:outline-none focus:ring-1 focus:ring-ring"
+								>
+									{GRAPH_VIEW_LIMIT_OPTIONS.map((option) => (
+										<option key={option} value={option}>
+											{formatGraphLimitOption(option)}
+										</option>
+									))}
+								</select>
+							</>
+						)}
+
+						<div className="h-5 w-px bg-border" />
+
+						{onRunCypher && (
+							<button
+								type="button"
+								className="text-xs text-muted-foreground hover:text-foreground px-2 py-1 rounded border whitespace-nowrap"
+								onClick={() => setShowQuery(!showQuery)}
+							>
+								{showQuery ? "Hide Query" : "Query"}
+							</button>
+						)}
+
+						<div className="ml-auto flex items-center gap-2">
+							{warnings.length > 0 && !warningsDismissed && (
+								<Popover>
+									<PopoverTrigger asChild>
+										<button
+											type="button"
+											className="flex items-center gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400 whitespace-nowrap hover:bg-amber-500/20 transition-colors"
+										>
+											<AlertTriangle className="h-3.5 w-3.5" />
+											{warnings.length} data warning
+											{warnings.length !== 1 ? "s" : ""}
+										</button>
+									</PopoverTrigger>
+									<PopoverContent align="end" className="w-80 p-0">
+										<div className="flex items-center justify-between border-b px-3 py-2">
+											<span className="text-xs font-semibold text-amber-600 dark:text-amber-400">
+												Data warnings
+											</span>
+											<button
+												type="button"
+												className="text-muted-foreground hover:text-foreground"
+												onClick={() => setDismissedWarningsKey(warningsKey)}
+												title="Dismiss warnings"
 											>
-												{warning}
-											</li>
-										))}
-									</ul>
-								</PopoverContent>
-							</Popover>
-						)}
-						{truncated && (
-							<span className="text-xs text-amber-500 whitespace-nowrap">
-								Result truncated
-							</span>
-						)}
-						{loading && (
-							<span className="text-xs text-muted-foreground animate-pulse whitespace-nowrap">
-								Loading...
-							</span>
-						)}
+												<X className="h-3.5 w-3.5" />
+											</button>
+										</div>
+										<ul className="max-h-64 overflow-y-auto p-2 space-y-1">
+											{warnings.map((warning) => (
+												<li
+													key={warning}
+													className="rounded bg-amber-500/5 px-2 py-1.5 text-xs text-muted-foreground"
+												>
+													{warning}
+												</li>
+											))}
+										</ul>
+									</PopoverContent>
+								</Popover>
+							)}
+							{truncated && (
+								<span className="text-xs text-amber-500 whitespace-nowrap">
+									Result truncated
+								</span>
+							)}
+							{loading && (
+								<span className="text-xs text-muted-foreground animate-pulse whitespace-nowrap">
+									Loading...
+								</span>
+							)}
+						</div>
 					</div>
-				</div>
+				)}
 
 				{/* Query panel (collapsible) */}
 				{showQuery && onRunCypher && (
@@ -850,18 +892,20 @@ export function GraphViewer({
 					)}
 
 					{/* Floating legend */}
-					<div className="absolute bottom-3 left-3 z-10">
-						<GraphLegend
-							entries={legendEntries}
-							onToggleVisibility={handleToggleVisibility}
-							onStyleChange={onStyleChange}
-						/>
-					</div>
+					{showLegend && (
+						<div className="absolute bottom-3 left-3 z-10">
+							<GraphLegend
+								entries={legendEntries}
+								onToggleVisibility={handleToggleVisibility}
+								onStyleChange={onStyleChange}
+							/>
+						</div>
+					)}
 				</div>
 			</div>
 
 			{/* Node inspector (right drawer) */}
-			{selectedNode && (
+			{showInspector && selectedNode && (
 				<GraphNodeInspector
 					node={selectedNode}
 					overlay={overlay}
@@ -903,7 +947,7 @@ export function GraphViewer({
 			)}
 
 			{/* Edge inspector (right drawer) */}
-			{selectedEdge && (
+			{showInspector && selectedEdge && (
 				<GraphEdgeInspector
 					edge={selectedEdge}
 					sourceCaption={edgeSourceCaption}

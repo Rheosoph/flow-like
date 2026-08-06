@@ -15,9 +15,9 @@ describe("component event manifest", () => {
 			boundingBoxOverlay: ["boxClick"],
 			button: ["click"],
 			feedback: ["submit"],
-			textField: ["change"],
-			select: ["change"],
-			slider: ["change"],
+			textField: ["change", "input", "submit", "focus", "blur"],
+			select: ["change", "open", "close"],
+			slider: ["change", "input"],
 			checkbox: ["change"],
 			switch: ["change"],
 			radioGroup: ["change"],
@@ -44,6 +44,8 @@ describe("component event manifest", () => {
 				"locate",
 				"viewportChange",
 			],
+			graph: ["nodeClick", "edgeClick"],
+			ontologyGraph: ["nodeClick", "edgeClick"],
 			calendar: ["open", "create", "update", "move", "resize", "delete"],
 			gantt: [
 				"open",
@@ -55,6 +57,9 @@ describe("component event manifest", () => {
 				"link",
 				"reorder",
 			],
+			table: ["rowClick", "cellClick", "selectionChange", "sortChange"],
+			nivoChart: ["pointClick"],
+			plotlyChart: ["pointClick"],
 		};
 
 		expect(Object.keys(COMPONENT_EVENT_MANIFEST).sort()).toEqual(
@@ -82,6 +87,34 @@ describe("component event manifest", () => {
 		]);
 	});
 
+	test("events added after a component shipped inherit neither fallback", () => {
+		const inherited = new Set(["change"]);
+
+		for (const type of ["textField", "slider", "select"] as const) {
+			for (const definition of getComponentEventDefinitions(component(type))) {
+				const expected = inherited.has(definition.id);
+				expect({
+					type,
+					id: definition.id,
+					legacyFallback: definition.legacyFallback,
+					wildcardFallback: definition.wildcardFallback,
+				}).toEqual({
+					type,
+					id: definition.id,
+					legacyFallback: expected,
+					wildcardFallback: expected,
+				});
+			}
+		}
+
+		for (const type of ["table", "nivoChart", "plotlyChart"] as const) {
+			for (const definition of getComponentEventDefinitions(component(type))) {
+				expect(definition.legacyFallback).toBe(false);
+				expect(definition.wildcardFallback).toBe(false);
+			}
+		}
+	});
+
 	test("reads event names and descriptions from a micro-widget contract", () => {
 		const definitions = getComponentEventDefinitions({
 			id: "sales-chart",
@@ -106,12 +139,14 @@ describe("component event manifest", () => {
 				label: "pointSelected",
 				description: "A bucket was clicked",
 				legacyFallback: true,
+				wildcardFallback: true,
 			},
 			{
 				id: "refreshRequested",
 				label: "refreshRequested",
 				description: "The widget emitted “refreshRequested”.",
 				legacyFallback: true,
+				wildcardFallback: true,
 			},
 		]);
 	});
@@ -142,6 +177,7 @@ describe("component event manifest", () => {
 			label: "openDoor",
 			description: "Emitted by the “Door” hotspot.",
 			legacyFallback: false,
+			wildcardFallback: true,
 		});
 		expect(definitions[2]?.description).toBe(
 			"Emitted by the “window” hotspot.",

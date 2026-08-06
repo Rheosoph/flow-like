@@ -38,7 +38,7 @@ pub const COMPONENT_CATALOG: &str = r##"
 
 ### Interactive Components
 - `button` - Clickable button (variants, sizes, loading state, icon)
-- `textField` - Text input; set `multiline` (+ `rows`) for textarea-style long text - there is NO separate textarea/richtext component
+- `textField` - Text input; set `multiline` (+ `rows`) for textarea-style long text - there is NO separate textarea/richtext component; `debounceMs` tunes the pause before the "input" event fires
 - `select` - Dropdown selection (single value from `options`)
 - `slider` - Numeric range slider (min/max/step)
 - `checkbox` - Boolean checkbox
@@ -65,6 +65,8 @@ pub const COMPONENT_CATALOG: &str = r##"
 - `table` - Data table with sorting/pagination
 - `plotlyChart` - Plotly.js charts (line, bar, scatter, pie, area, histogram)
 - `nivoChart` - Nivo charts (25+ chart types)
+- `graph` - Node/edge network graph on a WebGL canvas with legend, search and inspectors (props: nodes, edges, labelStyles, showToolbar, showSearch, showLegend, showInspector, height)
+- `ontologyGraph` - Live explorer for one of the project's ontologies: real data, neighbour expansion, path finding and governed ontology actions (props: ontologyId, appId, limit, allowExpand, allowSearch, allowPaths, allowActions, allowCypher, allowStyleEdit, allowLimitChange, showToolbar, showLegend, height)
 
 ### Planning Components
 - `calendar` - Interactive calendar (month/week/day/agenda) with detail/edit dialogs and right-click menus; fires create/update/move/resize/open/delete actions (props: events, view, date, title, density, editable, selectable, ...)
@@ -118,6 +120,7 @@ is a defect:
 - user draws/edits boxes ON an image (annotation input) -> `imageLabeler`; SHOW detection results -> `boundingBoxOverlay`; predefined clickable regions -> `imageHotspot`
 - maps/geodata -> `geoMap`; schedules/bookings -> `calendar`; project timelines -> `gantt`
 - values over time/categories -> `nivoChart` or `plotlyChart`; row-and-column records -> `table`
+- things connected to things (networks, relationships, dependency maps) -> `graph` with your own nodes/edges; the project's OWN ontology/knowledge graph -> `ontologyGraph` with its `ontologyId` (it loads live data itself — never re-fetch the ontology into a `graph`)
 - loading placeholder shaped like the layout -> `skeleton`; inline waiting -> `spinner`; known fraction -> `progress`
 Only types from this catalog exist. Never invent a type; if nothing fits, compose layout +
 display + input primitives and say in your summary what was approximated.
@@ -174,6 +177,18 @@ Interactive components carry actions INSIDE the component object:
   element values, form payloads, or target ids through the context: the event body fetches
   current element state itself at runtime via Get Element (`a2uiGetElement`), Get Element Value
   (`a2uiGetElementValue`), and Get File Input Files (`a2uiGetFileInputFiles`).
+- Events beyond a component's original one require an EXACT `eventHandlers` entry. They are not
+  reached by `actions[0]` or by a `"*"` handler:
+  - `textField`: "change" (committed on blur or Enter, and only when the value moved),
+    "input" (the user paused while typing - debounced by the `debounceMs` prop, 400 ms default,
+    100 ms floor), "submit" (Enter, or Cmd/Ctrl+Enter in a multiline field; context carries
+    `via`), "focus", "blur". Use "input" for search-as-you-type, "submit" for composers and
+    search boxes, "change" for form fields that should settle before running.
+  - `slider`: "change" (committed at the end of the drag), "input" (paused mid-drag, debounced).
+  - `select`: "change", "open", "close".
+  - `table`: "rowClick", "cellClick" (both carry the source row and its index in the unsorted
+    data), "selectionChange" (needs `selectable`), "sortChange".
+  - `nivoChart` / `plotlyChart`: "pointClick".
 - Other built-in action names: "navigate_page" (context.route, optional context.queryParams)
   and "external_link" (context.url).
 - A board can set or re-point an element's default or named action later with Set Element Action

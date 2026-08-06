@@ -4,26 +4,12 @@ import {
 	Badge,
 	Button,
 	Card,
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
 	IIndexType,
 	Input,
-	Label,
-	Select,
-	SelectContent,
-	SelectItem,
-	SelectTrigger,
-	SelectValue,
-	Switch,
 	Tabs,
 	TabsContent,
 	TabsList,
 	TabsTrigger,
-	Textarea,
 	cn,
 	useAssistantSurface,
 	useBackend,
@@ -43,24 +29,13 @@ import {
 } from "@flow-like/flow-like-ui/components/settings/data-studio/ontology-setup-dialog";
 import { QueryWorkbench } from "@flow-like/flow-like-ui/components/settings/data-studio/query-workbench";
 import { TableDesignerDialog } from "@flow-like/flow-like-ui/components/settings/data-studio/table-designer-dialog";
-import {
-	GraphViewer,
-	getNodeRawId,
-} from "@flow-like/flow-like-ui/components/ui/graph";
+import { OntologyExplorer } from "@flow-like/flow-like-ui/components/ui/graph";
 import LanceDBExplorer from "@flow-like/flow-like-ui/components/ui/lance-viewer";
 import type {
 	CreateOverlayPayload,
 	EdgeLabelMapping,
 	GraphOverlay,
-	GraphPathsResult,
-	InvokeOntologyActionPayload,
-	LabelStyle,
-	OntologyActionDefinition,
-	OntologyActionRun,
-	SubgraphNode,
-	SubgraphResult,
 } from "@flow-like/flow-like-ui/state/backend-state/graph-state";
-import { createId } from "@paralleldrive/cuid2";
 import {
 	AlertTriangle,
 	ArrowDownAZ,
@@ -72,9 +47,7 @@ import {
 	Globe,
 	Layers3,
 	LayoutDashboard,
-	Loader2,
 	Network,
-	Play,
 	Plus,
 	RefreshCw,
 	Search,
@@ -91,12 +64,14 @@ import {
 	useSearchParams,
 } from "next/navigation";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 export interface ExploreDataPageProps {
 	appId: string;
 }
+
+const DEFAULT_TABLE_PAGE_SIZE = 25;
 
 function extractErrorMessage(err: unknown): string {
 	if (err instanceof Error) return err.message;
@@ -199,8 +174,8 @@ function TableView({
 	const pageSizeParam = searchParams?.get("pageSize");
 	const page = pageParam ? Math.max(1, Number.parseInt(pageParam, 10) || 1) : 1;
 	const pageSize = pageSizeParam
-		? Number.parseInt(pageSizeParam, 10) || 25
-		: 25;
+		? Number.parseInt(pageSizeParam, 10) || DEFAULT_TABLE_PAGE_SIZE
+		: DEFAULT_TABLE_PAGE_SIZE;
 	const offset = (page - 1) * pageSize;
 
 	const schema = useInvoke(backend.dbState.getSchema, backend.dbState, [
@@ -221,20 +196,26 @@ function TableView({
 		userScoped,
 	]);
 
+	// The explorer reports its pagination once on mount, which for a deep link is
+	// already what the URL says. Navigating anyway costs a client-side transition
+	// on every mount for no state change, so only write when something differs.
 	const updateUrlParams = useCallback(
 		(newPage: number, newPageSize: number) => {
-			const params = new URLSearchParams(searchParams?.toString() ?? "");
+			const current = searchParams?.toString() ?? "";
+			const params = new URLSearchParams(current);
 			if (newPage > 1) {
 				params.set("page", String(newPage));
 			} else {
 				params.delete("page");
 			}
-			if (newPageSize !== 25) {
+			if (newPageSize !== DEFAULT_TABLE_PAGE_SIZE) {
 				params.set("pageSize", String(newPageSize));
 			} else {
 				params.delete("pageSize");
 			}
-			router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+			const next = params.toString();
+			if (next === current) return;
+			router.replace(`${pathname}?${next}`, { scroll: false });
 		},
 		[router, pathname, searchParams],
 	);
@@ -1399,620 +1380,12 @@ const TableViewLoadingState: React.FC<{
 	</div>
 );
 
-function enrichSubgraphWithStyles(
-	result: SubgraphResult,
-	overlay: GraphOverlay,
-): SubgraphResult {
-	const nodeStyleMap = new Map(
-		overlay.nodes.map((node) => [node.label, node.style]),
-	);
-	const edgeStyleMap = new Map(
-		overlay.edges.map((edge) => [edge.label, edge.style]),
-	);
-
-	const defaultStyle = {
-		color: "#6b7280",
-		icon: "circle",
-		size: { mode: "fixed" as const, value: 6 },
-	};
-
-	return {
-		...result,
-		nodes: result.nodes.map((node) => ({
-			...node,
-			style: nodeStyleMap.get(node.label) ?? node.style ?? defaultStyle,
-		})),
-		edges: result.edges.map((edge) => ({
-			...edge,
-			style: edgeStyleMap.get(edge.label) ?? edge.style ?? defaultStyle,
-		})),
-	};
-}
-
-function mergeSubgraphData(
-	current: SubgraphResult | null,
-	incoming: SubgraphResult,
-): SubgraphResult {
-	if (!current) return incoming;
-
-	const nodeIds = new Set(current.nodes.map((node) => node.id));
-	const edgeIds = new Set(current.edges.map((edge) => edge.id));
-	const warnings = Array.from(
-		new Set([...(current.warnings ?? []), ...(incoming.warnings ?? [])]),
-	);
-
-	return {
-		nodes: [
-			...current.nodes,
-			...incoming.nodes.filter((node) => !nodeIds.has(node.id)),
-		],
-		edges: [
-			...current.edges,
-			...incoming.edges.filter((edge) => !edgeIds.has(edge.id)),
-		],
-		truncated: current.truncated || incoming.truncated,
-		...(warnings.length > 0 ? { warnings } : {}),
-	};
-}
-
-function collectSubtree(
-	parentNodeId: string,
-	childMap: Map<string, Set<string>>,
-	acc: Set<string>,
-): void {
-	const children = childMap.get(parentNodeId);
-	if (!children) return;
-	for (const childId of children) {
-		if (acc.has(childId)) continue;
-		acc.add(childId);
-		collectSubtree(childId, childMap, acc);
-	}
-}
-
-function removeSubtree(
-	current: SubgraphResult | null,
-	removed: Set<string>,
-): SubgraphResult | null {
-	if (!current || removed.size === 0) return current;
-	return {
-		...current,
-		nodes: current.nodes.filter((node) => !removed.has(node.id)),
-		edges: current.edges.filter(
-			(edge) => !removed.has(edge.source) && !removed.has(edge.target),
-		),
-	};
-}
-
-function applyStyleToOverlay(
-	overlay: GraphOverlay,
-	label: string,
-	type: "node" | "edge",
-	style: LabelStyle,
-): GraphOverlay {
-	if (type === "node") {
-		return {
-			...overlay,
-			nodes: overlay.nodes.map((node) =>
-				node.label === label ? { ...node, style } : node,
-			),
-		};
-	}
-	return {
-		...overlay,
-		edges: overlay.edges.map((edge) =>
-			edge.label === label ? { ...edge, style } : edge,
-		),
-	};
-}
-
-function isConflictError(err: unknown): boolean {
-	const message = extractErrorMessage(err).toLowerCase();
-	return (
-		message.includes("409") ||
-		message.includes("conflict") ||
-		message.includes("updated_at") ||
-		message.includes("stale")
-	);
-}
-
-const GRAPH_MAX_NODE_LIMIT = 10_000;
-const GRAPH_NODE_EXPANSION_LIMIT = 500;
-const GRAPH_SEARCH_MATCH_LIMIT = 12;
-const GRAPH_VIEW_LIMIT_MAX = GRAPH_MAX_NODE_LIMIT;
-const GRAPH_MAX_EXPANSION_DEPTH = 2;
-
 const OverlayView: React.FC<{
 	appId: string;
 	overlayId: string;
 	onBack: () => void;
 }> = ({ appId, overlayId, onBack }) => {
-	const backend = useBackend();
 	const [overlay, setOverlay] = useState<GraphOverlay | null>(null);
-	const [data, setData] = useState<SubgraphResult | null>(null);
-	const [loading, setLoading] = useState(true);
-	const [error, setError] = useState<string | null>(null);
-	const [cypherResults, setCypherResults] = useState<unknown[] | null>(null);
-	const [cypherLoading, setCypherLoading] = useState(false);
-	const [cypherError, setCypherError] = useState<string | null>(null);
-	const [nodeLimit, setNodeLimit] = useState(200);
-	const [actionTarget, setActionTarget] = useState<{
-		action: OntologyActionDefinition;
-		node: SubgraphNode;
-	} | null>(null);
-	const [expandedChildren, setExpandedChildren] = useState<
-		Map<string, Set<string>>
-	>(new Map());
-
-	const dataRef = useRef<SubgraphResult | null>(null);
-	const overlayRef = useRef<GraphOverlay | null>(null);
-	const styleTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(
-		new Map(),
-	);
-	const styleRevertRef = useRef<Map<string, LabelStyle>>(new Map());
-	const initialLoadRequestRef = useRef(0);
-
-	useEffect(() => {
-		overlayRef.current = overlay;
-	}, [overlay]);
-
-	useEffect(() => {
-		dataRef.current = data;
-	}, [data]);
-
-	const expandedChildParents = useMemo(
-		() => new Set(expandedChildren.keys()),
-		[expandedChildren],
-	);
-
-	useEffect(() => {
-		const timers = styleTimersRef.current;
-		return () => {
-			for (const timer of timers.values()) clearTimeout(timer);
-			timers.clear();
-		};
-	}, []);
-
-	const loadInitialData = useCallback(
-		async (currentOverlay: GraphOverlay, limitOverride?: number) => {
-			const requestId = ++initialLoadRequestRef.current;
-			setLoading(true);
-			setError(null);
-			try {
-				const graphLimit = Math.min(
-					limitOverride ?? currentOverlay.default_limit ?? 200,
-					GRAPH_VIEW_LIMIT_MAX,
-				);
-
-				const result = await backend.graphState.subgraph(appId, overlayId, {
-					seeds: [],
-					depth: 1,
-					limit: graphLimit,
-				});
-				if (initialLoadRequestRef.current !== requestId) return;
-				setData(enrichSubgraphWithStyles(result, currentOverlay));
-			} catch (err) {
-				if (initialLoadRequestRef.current !== requestId) return;
-				setError(extractErrorMessage(err));
-				setData({ nodes: [], edges: [], truncated: false });
-			} finally {
-				if (initialLoadRequestRef.current === requestId) {
-					setLoading(false);
-				}
-			}
-		},
-		[backend.graphState, appId, overlayId],
-	);
-
-	useEffect(() => {
-		let cancelled = false;
-		(async () => {
-			try {
-				const currentOverlay = await backend.graphState.getOverlay(
-					appId,
-					overlayId,
-				);
-				if (cancelled) return;
-				setOverlay(currentOverlay);
-				const initialLimit = Math.min(
-					currentOverlay.default_limit ?? 200,
-					GRAPH_VIEW_LIMIT_MAX,
-				);
-				setNodeLimit(initialLimit);
-				await loadInitialData(currentOverlay, initialLimit);
-			} catch (err) {
-				if (!cancelled) {
-					setError(extractErrorMessage(err));
-					setLoading(false);
-				}
-			}
-		})();
-		return () => {
-			cancelled = true;
-			initialLoadRequestRef.current += 1;
-		};
-	}, [backend.graphState, appId, overlayId, loadInitialData]);
-
-	const handleRunCypher = useCallback(
-		async (query: string) => {
-			setCypherLoading(true);
-			setCypherError(null);
-			try {
-				const results = await backend.graphState.cypher(appId, overlayId, {
-					query,
-				});
-				setCypherResults(results);
-			} catch (err) {
-				setCypherError(extractErrorMessage(err));
-			} finally {
-				setCypherLoading(false);
-			}
-		},
-		[backend.graphState, appId, overlayId],
-	);
-
-	const handleExpandNode = useCallback(
-		async (
-			nodeId: string,
-			label: string,
-			rawId?: unknown,
-			seedNode?: SubgraphNode,
-			depth?: number,
-		) => {
-			if (!overlay) return;
-
-			if (seedNode) {
-				setData((prev) =>
-					mergeSubgraphData(
-						prev,
-						enrichSubgraphWithStyles(
-							{ nodes: [seedNode], edges: [], truncated: false },
-							overlay,
-						),
-					),
-				);
-			}
-
-			setLoading(true);
-			try {
-				const prefix = `${label}:`;
-				const resolvedId =
-					rawId ??
-					(nodeId.startsWith(prefix) ? nodeId.slice(prefix.length) : nodeId);
-				const resolvedDepth = Math.min(
-					Math.max(1, depth ?? 1),
-					GRAPH_MAX_EXPANSION_DEPTH,
-				);
-				const result = await backend.graphState.neighbors(appId, overlayId, {
-					label,
-					node_id: resolvedId,
-					depth: resolvedDepth,
-					direction: "both",
-					limit: GRAPH_NODE_EXPANSION_LIMIT,
-				});
-				const enriched = enrichSubgraphWithStyles(result, overlay);
-				setData((prev) => mergeSubgraphData(prev, enriched));
-			} catch (err) {
-				toast.error(`Failed to expand neighbors: ${extractErrorMessage(err)}`);
-			} finally {
-				setLoading(false);
-			}
-		},
-		[backend.graphState, appId, overlayId, overlay],
-	);
-
-	const handleExpandChildren = useCallback(
-		async (nodeId: string, label: string, rawId?: unknown) => {
-			if (!overlay) return;
-			setLoading(true);
-			try {
-				const prefix = `${label}:`;
-				const resolvedId =
-					rawId ??
-					(nodeId.startsWith(prefix) ? nodeId.slice(prefix.length) : nodeId);
-				const result = await backend.graphState.children(appId, overlayId, {
-					label,
-					node_id: resolvedId,
-					limit: GRAPH_NODE_EXPANSION_LIMIT,
-				});
-
-				const existingIds = new Set(
-					(dataRef.current?.nodes ?? []).map((node) => node.id),
-				);
-				const insertedChildIds = new Set<string>();
-				for (const edge of result.edges) {
-					if (edge.source === nodeId && !existingIds.has(edge.target)) {
-						insertedChildIds.add(edge.target);
-					}
-				}
-
-				const enriched = enrichSubgraphWithStyles(result, overlay);
-				setData((prev) => mergeSubgraphData(prev, enriched));
-
-				if (insertedChildIds.size > 0) {
-					setExpandedChildren((prev) => {
-						const next = new Map(prev);
-						const merged = new Set(next.get(nodeId) ?? []);
-						for (const id of insertedChildIds) merged.add(id);
-						next.set(nodeId, merged);
-						return next;
-					});
-				}
-			} catch (err) {
-				toast.error(`Failed to expand children: ${extractErrorMessage(err)}`);
-			} finally {
-				setLoading(false);
-			}
-		},
-		[backend.graphState, appId, overlayId, overlay],
-	);
-
-	const handleCollapseChildren = useCallback(
-		(parentNodeId: string) => {
-			if (!expandedChildren.has(parentNodeId)) return;
-			const removed = new Set<string>();
-			collectSubtree(parentNodeId, expandedChildren, removed);
-			if (removed.size > 0) {
-				setData((prev) => removeSubtree(prev, removed));
-			}
-			setExpandedChildren((prev) => {
-				const next = new Map(prev);
-				next.delete(parentNodeId);
-				for (const id of removed) next.delete(id);
-				return next;
-			});
-		},
-		[expandedChildren],
-	);
-
-	const handleSearchNodes = useCallback(
-		async (query: string) =>
-			backend.graphState.searchNodes(appId, overlayId, {
-				query,
-				limit: GRAPH_SEARCH_MATCH_LIMIT,
-			}),
-		[backend.graphState, appId, overlayId],
-	);
-
-	const handleLimitChange = useCallback(
-		(newLimit: number) => {
-			const clampedLimit = Math.min(newLimit, GRAPH_VIEW_LIMIT_MAX);
-			setNodeLimit(clampedLimit);
-			if (overlay) {
-				void loadInitialData(overlay, clampedLimit);
-			}
-		},
-		[overlay, loadInitialData],
-	);
-
-	const persistStyle = useCallback(
-		async (label: string, type: "node" | "edge") => {
-			const current = overlayRef.current;
-			if (!current) return;
-			const revertKey = `${type}:${label}`;
-			try {
-				const saved = await backend.graphState.updateOverlay(appId, overlayId, {
-					expected_updated_at: current.updated_at,
-					nodes: current.nodes,
-					edges: current.edges,
-				});
-				styleRevertRef.current.delete(revertKey);
-				overlayRef.current = saved;
-				setOverlay(saved);
-				setData((prev) =>
-					prev ? enrichSubgraphWithStyles(prev, saved) : prev,
-				);
-			} catch (err) {
-				const previousStyle = styleRevertRef.current.get(revertKey);
-				styleRevertRef.current.delete(revertKey);
-				const base = overlayRef.current;
-				if (previousStyle && base) {
-					const reverted = applyStyleToOverlay(
-						base,
-						label,
-						type,
-						previousStyle,
-					);
-					overlayRef.current = reverted;
-					setOverlay(reverted);
-					setData((prev) =>
-						prev ? enrichSubgraphWithStyles(prev, reverted) : prev,
-					);
-				}
-				toast.error(`Failed to save style: ${extractErrorMessage(err)}`);
-				if (isConflictError(err)) {
-					try {
-						const fresh = await backend.graphState.getOverlay(appId, overlayId);
-						overlayRef.current = fresh;
-						setOverlay(fresh);
-						setData((prev) =>
-							prev ? enrichSubgraphWithStyles(prev, fresh) : prev,
-						);
-					} catch {
-						// The refetch is best-effort; the revert already restored a usable state.
-					}
-				}
-			}
-		},
-		[backend.graphState, appId, overlayId],
-	);
-
-	const handleStyleChange = useCallback(
-		(label: string, type: "node" | "edge", style: LabelStyle) => {
-			const current = overlayRef.current;
-			if (!current) return;
-			const revertKey = `${type}:${label}`;
-
-			if (!styleRevertRef.current.has(revertKey)) {
-				const previousStyle =
-					type === "node"
-						? current.nodes.find((node) => node.label === label)?.style
-						: current.edges.find((edge) => edge.label === label)?.style;
-				if (previousStyle) styleRevertRef.current.set(revertKey, previousStyle);
-			}
-
-			const updatedOverlay = applyStyleToOverlay(current, label, type, style);
-			overlayRef.current = updatedOverlay;
-			setOverlay(updatedOverlay);
-			setData((prev) =>
-				prev ? enrichSubgraphWithStyles(prev, updatedOverlay) : prev,
-			);
-
-			const existingTimer = styleTimersRef.current.get(revertKey);
-			if (existingTimer) clearTimeout(existingTimer);
-			const timer = setTimeout(() => {
-				styleTimersRef.current.delete(revertKey);
-				void persistStyle(label, type);
-			}, 500);
-			styleTimersRef.current.set(revertKey, timer);
-		},
-		[persistStyle],
-	);
-
-	const handleFindPaths = useCallback(
-		async (from: SubgraphNode, to: SubgraphNode): Promise<GraphPathsResult> => {
-			const current = overlayRef.current;
-			if (!current) {
-				throw new Error("The overlay is still loading.");
-			}
-			try {
-				const result = await backend.graphState.paths(appId, overlayId, {
-					from_label: from.label,
-					from_id: getNodeRawId(from, current),
-					to_label: to.label,
-					to_id: getNodeRawId(to, current),
-					max_depth: 4,
-				});
-				if (result.nodes.length > 0 || result.edges.length > 0) {
-					setData((prev) =>
-						mergeSubgraphData(
-							prev,
-							enrichSubgraphWithStyles(
-								{
-									nodes: result.nodes,
-									edges: result.edges,
-									truncated: result.truncated,
-									warnings: result.warnings,
-								},
-								current,
-							),
-						),
-					);
-				}
-				return result;
-			} catch (err) {
-				toast.error(`Path search failed: ${extractErrorMessage(err)}`);
-				throw err;
-			}
-		},
-		[backend.graphState, appId, overlayId],
-	);
-
-	const handleRunAction = useCallback(
-		(action: OntologyActionDefinition, node: SubgraphNode) => {
-			setActionTarget({ action, node });
-		},
-		[],
-	);
-
-	const invokeNodeAction = useCallback(
-		async (
-			action: OntologyActionDefinition,
-			node: SubgraphNode,
-			parameters: Record<string, unknown>,
-			onStatus?: (run: OntologyActionRun) => void,
-		): Promise<OntologyActionRun> => {
-			const current = overlayRef.current;
-			if (!current) throw new Error("The overlay is still loading.");
-			let payload: InvokeOntologyActionPayload = {
-				object_refs: [
-					{
-						object_type: action.object_type,
-						id: getNodeRawId(node, current),
-					},
-				],
-				parameters,
-				idempotency_key: createId(),
-			};
-
-			const isOffline = await backend.isOffline(appId);
-			if (!isOffline && backend.eventState.checkOAuthRequirements) {
-				const prerun = await backend.graphState.prerunOntologyAction(
-					appId,
-					overlayId,
-					action.id,
-				);
-				const oauth = await backend.eventState.checkOAuthRequirements(
-					appId,
-					prerun.oauth_requirements,
-				);
-				if (oauth.missingProviders.length > 0) {
-					window.dispatchEvent(
-						new CustomEvent("flow:oauth-required", {
-							detail: {
-								missingProviders: oauth.missingProviders,
-								appId,
-								boardId: action.board_id ?? "",
-								nodeId: action.start_node_id ?? "",
-								payload,
-							},
-						}),
-					);
-					throw new Error(
-						"OAuth authorization is required. Complete authorization, then confirm the action again.",
-					);
-				}
-				payload = { ...payload, oauth_tokens: oauth.tokens };
-			}
-
-			return backend.graphState.invokeOntologyAction(
-				appId,
-				overlayId,
-				action.id,
-				payload,
-				onStatus,
-			);
-		},
-		[appId, backend, backend.eventState, backend.graphState, overlayId],
-	);
-
-	if (error) {
-		return (
-			<div className="flex flex-col h-full">
-				<div className="flex items-center gap-3 p-4 border-b">
-					<Button variant="ghost" size="icon" onClick={onBack}>
-						<ArrowLeftIcon className="h-4 w-4" />
-					</Button>
-					<h2 className="text-lg font-semibold">Graph Overlay</h2>
-				</div>
-				<div className="flex-1 flex items-center justify-center">
-					<div className="text-center space-y-2">
-						<p className="text-sm text-destructive">{error}</p>
-						<Button variant="outline" onClick={onBack}>
-							Go back
-						</Button>
-					</div>
-				</div>
-			</div>
-		);
-	}
-
-	if (!overlay) {
-		return (
-			<div className="flex flex-col h-full">
-				<div className="flex items-center gap-3 p-4 border-b">
-					<Button variant="ghost" size="icon" onClick={onBack}>
-						<ArrowLeftIcon className="h-4 w-4" />
-					</Button>
-					<h2 className="text-lg font-semibold">Loading...</h2>
-				</div>
-				<div className="flex-1 flex items-center justify-center">
-					<span className="text-sm text-muted-foreground animate-pulse">
-						Loading overlay...
-					</span>
-				</div>
-			</div>
-		);
-	}
 
 	return (
 		<div className="flex flex-col h-full min-h-0">
@@ -2021,8 +1394,10 @@ const OverlayView: React.FC<{
 					<ArrowLeftIcon className="h-4 w-4" />
 				</Button>
 				<div>
-					<h2 className="text-lg font-semibold">{overlay.name}</h2>
-					{overlay.description && (
+					<h2 className="text-lg font-semibold">
+						{overlay?.name ?? "Graph Overlay"}
+					</h2>
+					{overlay?.description && (
 						<p className="text-xs text-muted-foreground">
 							{overlay.description}
 						</p>
@@ -2030,390 +1405,25 @@ const OverlayView: React.FC<{
 				</div>
 			</div>
 			<div className="flex-1 min-h-0">
-				<GraphViewer
-					overlay={overlay}
-					data={data}
-					loading={loading}
-					truncated={data?.truncated}
-					onRunCypher={handleRunCypher}
-					cypherResults={cypherResults}
-					cypherLoading={cypherLoading}
-					cypherError={cypherError}
-					onExpandNode={handleExpandNode}
-					onExpandChildren={handleExpandChildren}
-					onCollapseChildren={handleCollapseChildren}
-					expandedChildParents={expandedChildParents}
-					onSearchNodes={handleSearchNodes}
-					onStyleChange={handleStyleChange}
-					onLimitChange={handleLimitChange}
-					limit={nodeLimit}
-					onFindPaths={handleFindPaths}
-					onRunAction={handleRunAction}
-				/>
-			</div>
-			<GraphActionDialog
-				target={actionTarget}
-				overlay={overlay}
-				onClose={() => setActionTarget(null)}
-				onInvoke={invokeNodeAction}
-			/>
-		</div>
-	);
-};
-
-interface ActionSchemaProperty {
-	type?: string | string[];
-	title?: string;
-	description?: string;
-	default?: unknown;
-	enum?: unknown[];
-}
-
-interface ActionParameterSchema {
-	properties?: Record<string, ActionSchemaProperty>;
-	required?: string[];
-}
-
-const SUCCESSFUL_ACTION_STATUSES = new Set([
-	"complete",
-	"completed",
-	"success",
-	"succeeded",
-	"applied",
-]);
-
-function actionSucceeded(status: string): boolean {
-	return SUCCESSFUL_ACTION_STATUSES.has(status.trim().toLowerCase());
-}
-
-function humanizeParameter(value: string): string {
-	return value
-		.replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-		.replace(/[_-]+/g, " ")
-		.replace(/\b\w/g, (character) => character.toUpperCase());
-}
-
-function toActionParameterSchema(
-	schema?: Record<string, unknown>,
-): ActionParameterSchema | undefined {
-	if (!schema || typeof schema !== "object") return undefined;
-	return schema as ActionParameterSchema;
-}
-
-function parameterType(property: ActionSchemaProperty): string {
-	if (Array.isArray(property.type)) {
-		return property.type.find((type) => type !== "null") ?? "string";
-	}
-	return property.type ?? "string";
-}
-
-function initialActionParameters(
-	schema?: Record<string, unknown>,
-): Record<string, unknown> {
-	const definition = toActionParameterSchema(schema);
-	const properties = definition?.properties ?? {};
-	const required = new Set(definition?.required ?? []);
-	return Object.fromEntries(
-		Object.entries(properties).flatMap(([name, property]) => {
-			if (property.default !== undefined) return [[name, property.default]];
-			if (required.has(name) && parameterType(property) === "boolean") {
-				return [[name, false]];
-			}
-			return [];
-		}),
-	);
-}
-
-const GraphActionDialog: React.FC<{
-	target: {
-		action: OntologyActionDefinition;
-		node: SubgraphNode;
-	} | null;
-	overlay: GraphOverlay | null;
-	onClose: () => void;
-	onInvoke: (
-		action: OntologyActionDefinition,
-		node: SubgraphNode,
-		parameters: Record<string, unknown>,
-		onStatus?: (run: OntologyActionRun) => void,
-	) => Promise<OntologyActionRun>;
-}> = ({ target, overlay, onClose, onInvoke }) => {
-	const action = target?.action ?? null;
-	const node = target?.node ?? null;
-	const [parameters, setParameters] = useState<Record<string, unknown>>({});
-	const [submitting, setSubmitting] = useState(false);
-	const [run, setRun] = useState<OntologyActionRun | null>(null);
-	const [error, setError] = useState<string | null>(null);
-
-	useEffect(() => {
-		setParameters(initialActionParameters(action?.parameter_schema));
-		setRun(null);
-		setError(null);
-		setSubmitting(false);
-	}, [action]);
-
-	const definition = toActionParameterSchema(action?.parameter_schema);
-	const properties = definition?.properties ?? {};
-	const required = new Set(definition?.required ?? []);
-	const missingRequired = [...required].some((name) => {
-		const value = parameters[name];
-		return value === undefined || value === "" || value === null;
-	});
-
-	const mapping = overlay?.nodes.find(
-		(candidate) => candidate.label === node?.label,
-	);
-	const titleProperty =
-		overlay?.object_views?.find((view) =>
-			mapping
-				? view.object_type === mapping.id ||
-					view.object_type === mapping.api_name ||
-					view.object_type === mapping.label
-				: false,
-		)?.title_property ??
-		mapping?.display_column ??
-		mapping?.id_column;
-	const targetTitle =
-		(titleProperty && node?.props?.[titleProperty]) ??
-		node?.caption ??
-		node?.id;
-
-	const succeeded = Boolean(run && actionSucceeded(run.status));
-
-	const handleUpdate = useCallback((name: string, value: unknown) => {
-		setParameters((current) => ({ ...current, [name]: value }));
-	}, []);
-
-	const handleInvoke = useCallback(async () => {
-		if (!action || !node) return;
-		setSubmitting(true);
-		setRun(null);
-		setError(null);
-		try {
-			const result = await onInvoke(action, node, parameters, (nextRun) =>
-				setRun(nextRun),
-			);
-			setRun(result);
-			if (!actionSucceeded(result.status)) {
-				setError(
-					result.error_message ??
-						`The action ended with status ${result.status.toLowerCase()}.`,
-				);
-			}
-		} catch (invokeError) {
-			setError(extractErrorMessage(invokeError));
-		} finally {
-			setSubmitting(false);
-		}
-	}, [action, node, onInvoke, parameters]);
-
-	return (
-		<Dialog
-			open={Boolean(target)}
-			onOpenChange={(open) => {
-				if (!open && !submitting) onClose();
-			}}
-		>
-			<DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
-				<DialogHeader>
-					<DialogTitle className="flex items-center gap-2">
-						<Workflow className="h-4 w-4 text-primary" />
-						{action?.name ?? "Apply action"}
-					</DialogTitle>
-					<DialogDescription>
-						{action?.description ??
-							"Run this governed operation through its saved workflow binding."}
-					</DialogDescription>
-				</DialogHeader>
-				<div className="space-y-4 py-1" aria-busy={submitting}>
-					<div className="rounded-lg border bg-muted/30 p-3">
-						<p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-							Target {node?.label ?? "object"}
-						</p>
-						<p className="mt-1 font-medium">
-							{String(targetTitle ?? "Object")}
-						</p>
-						<p className="mt-0.5 font-mono text-[10px] text-muted-foreground break-all">
-							{node?.id}
-						</p>
-					</div>
-					{Object.keys(properties).length > 0 && (
-						<div className="space-y-3 rounded-lg border p-3">
-							<Label>Parameters</Label>
-							{Object.entries(properties).map(([name, property]) => {
-								const type = parameterType(property);
-								const fieldId = `graph-action-${name}`;
-								const fieldLabel = property.title ?? humanizeParameter(name);
-								const isRequired = required.has(name);
-
-								if (property.enum?.length) {
-									return (
-										<div key={name} className="grid gap-1.5">
-											<Label htmlFor={fieldId}>
-												{fieldLabel}
-												{isRequired ? " *" : ""}
-											</Label>
-											<Select
-												disabled={submitting}
-												value={
-													parameters[name] === undefined
-														? undefined
-														: String(parameters[name])
-												}
-												onValueChange={(value) =>
-													handleUpdate(
-														name,
-														property.enum?.find(
-															(option) => String(option) === value,
-														) ?? value,
-													)
-												}
-											>
-												<SelectTrigger id={fieldId}>
-													<SelectValue
-														placeholder={`Choose ${fieldLabel.toLowerCase()}`}
-													/>
-												</SelectTrigger>
-												<SelectContent>
-													{property.enum.map((option) => (
-														<SelectItem
-															key={String(option)}
-															value={String(option)}
-														>
-															{String(option)}
-														</SelectItem>
-													))}
-												</SelectContent>
-											</Select>
-										</div>
-									);
-								}
-
-								if (type === "boolean") {
-									return (
-										<div
-											key={name}
-											className="flex items-center justify-between gap-4 rounded-md bg-muted/30 p-2.5"
-										>
-											<Label htmlFor={fieldId}>{fieldLabel}</Label>
-											<Switch
-												id={fieldId}
-												disabled={submitting}
-												checked={Boolean(parameters[name])}
-												onCheckedChange={(checked) =>
-													handleUpdate(name, checked)
-												}
-											/>
-										</div>
-									);
-								}
-
-								if (type === "array" || type === "object") {
-									return (
-										<div key={name} className="grid gap-1.5">
-											<Label htmlFor={fieldId}>
-												{fieldLabel}
-												{isRequired ? " *" : ""}
-											</Label>
-											<Textarea
-												id={fieldId}
-												disabled={submitting}
-												className="min-h-24 font-mono text-xs"
-												defaultValue={JSON.stringify(
-													parameters[name] ?? (type === "array" ? [] : {}),
-													null,
-													2,
-												)}
-												onChange={(event) => {
-													try {
-														handleUpdate(name, JSON.parse(event.target.value));
-													} catch {
-														// Keep the last valid value until the JSON parses.
-													}
-												}}
-											/>
-										</div>
-									);
-								}
-
-								return (
-									<div key={name} className="grid gap-1.5">
-										<Label htmlFor={fieldId}>
-											{fieldLabel}
-											{isRequired ? " *" : ""}
-										</Label>
-										<Input
-											id={fieldId}
-											disabled={submitting}
-											type={
-												type === "integer" || type === "number"
-													? "number"
-													: "text"
-											}
-											value={String(parameters[name] ?? "")}
-											onChange={(event) => {
-												const value = event.target.value;
-												handleUpdate(
-													name,
-													type === "integer"
-														? value === ""
-															? ""
-															: Number.parseInt(value, 10)
-														: type === "number"
-															? value === ""
-																? ""
-																: Number.parseFloat(value)
-															: value,
-												);
-											}}
-											placeholder={property.description}
-										/>
-									</div>
-								);
-							})}
+				<OntologyExplorer
+					appId={appId}
+					overlayId={overlayId}
+					allowCypher
+					allowStyleEdit
+					onOverlayLoaded={setOverlay}
+					renderError={(message) => (
+						<div className="flex h-full items-center justify-center">
+							<div className="text-center space-y-2">
+								<p className="text-sm text-destructive">{message}</p>
+								<Button variant="outline" onClick={onBack}>
+									Go back
+								</Button>
+							</div>
 						</div>
 					)}
-					<div aria-live="polite">
-						{run && succeeded && (
-							<div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-sm">
-								Action applied
-								{run.run_id && (
-									<span className="ml-1 font-mono text-[10px] text-muted-foreground">
-										Run {run.run_id}
-									</span>
-								)}
-							</div>
-						)}
-						{error && (
-							<div
-								role="alert"
-								className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm text-destructive"
-							>
-								{error}
-							</div>
-						)}
-					</div>
-				</div>
-				<DialogFooter>
-					<Button variant="ghost" onClick={onClose} disabled={submitting}>
-						{run && succeeded ? "Done" : "Cancel"}
-					</Button>
-					{!succeeded && (
-						<Button
-							onClick={handleInvoke}
-							disabled={submitting || missingRequired || !action || !node}
-						>
-							{submitting ? (
-								<Loader2 className="h-4 w-4 animate-spin" />
-							) : (
-								<Play className="h-4 w-4" />
-							)}
-							Confirm {action?.name ?? "action"}
-						</Button>
-					)}
-				</DialogFooter>
-			</DialogContent>
-		</Dialog>
+				/>
+			</div>
+		</div>
 	);
 };
 

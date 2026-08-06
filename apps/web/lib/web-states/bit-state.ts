@@ -123,10 +123,14 @@ export class WebBitState implements IBitState {
 
 	async getPackFromBit(bit: IBit): Promise<{ bits: IBit[] }> {
 		try {
-			return await apiGet<{ bits: IBit[] }>(
+			// The hub answers this route with a bare `Bit[]`, not a `{ bits }` envelope.
+			const response = await apiGet<IBit[] | { bits?: IBit[] } | undefined>(
 				`bit/${bit.id}/dependencies`,
 				this.backend.auth,
 			);
+			const bits = Array.isArray(response) ? response : response?.bits;
+			if (!Array.isArray(bits) || bits.length === 0) return { bits: [bit] };
+			return { bits };
 		} catch {
 			return { bits: [bit] };
 		}
