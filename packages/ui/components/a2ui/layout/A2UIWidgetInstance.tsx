@@ -180,7 +180,7 @@ export function resolveWidgetInstanceEventRoute(
 		widgetInstance?.eventHandlers,
 		actionId,
 		undefined,
-		false,
+		{ legacyFallback: false },
 	);
 	if (named.source !== "none") {
 		return { kind: "actions", actions: named.actions };

@@ -62,10 +62,32 @@ describe("resolveEventActions", () => {
 			undefined,
 			"viewportChange",
 			[action("legacy")],
-			false,
+			{ legacyFallback: false },
 		);
 
 		expect(result).toEqual({ actions: [], source: "none" });
+	});
+
+	test("events opting out of the wildcard need their own handler", () => {
+		const handlers = { "*": [action("wildcard")] };
+
+		expect(
+			resolveEventActions(handlers, "input", undefined, {
+				wildcardFallback: false,
+			}),
+		).toEqual({ actions: [], source: "none" });
+
+		expect(
+			resolveEventActions(handlers, "change", undefined).actions.map(
+				(item) => item.name,
+			),
+		).toEqual(["wildcard"]);
+
+		expect(
+			resolveEventActions({ ...handlers, input: [action("typed")] }, "input", [
+				action("legacy"),
+			]).actions.map((item) => item.name),
+		).toEqual(["typed"]);
 	});
 
 	test("returns the first resolved action for upload target discovery", () => {

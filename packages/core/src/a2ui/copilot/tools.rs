@@ -115,6 +115,7 @@ Action wiring (same contract for every interactive component):
 - NEVER copy element/dashboard values into the context - the event body reads current element state itself at runtime (Get Element -> Get Element Value / Get File Input Files)
 - Other built-in names: "navigate_page" (context.route, optional context.queryParams) and "external_link" (context.url)
 - Exact eventHandlers entries override the legacy default; an explicit [] disables that event
+- Events added after a component shipped (textField "input"/"submit"/"focus"/"blur", slider "input", select "open"/"close", table "rowClick"/"cellClick"/"selectionChange"/"sortChange", chart "pointClick") need an EXACT entry - they ignore both actions[0] and "*"
 - A board can set or re-point the legacy default or a named event later with Set Element Action (a2uiSetElementAction; optional event_name)
 
 Example:

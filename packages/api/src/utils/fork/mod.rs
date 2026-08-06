@@ -1566,7 +1566,15 @@ pub async fn fork_app_with_visibility(
     // ---- 5/6. Copy content-store files --------------------------------
     // Mirror metadata/ + upload/ + storage/ from src content → dst
     // content. Both stores live under `apps/{id}/` so the prefix
-    // translation is just the id substitution.
+    // translation is just the id substitution. `storage/` carries the
+    // project LanceDB (`storage/db/**`) — tables, graph overlays and
+    // saved queries all ride along as plain objects.
+    //
+    // Every mirror below is deliberately scoped to `apps/{id}` (plus the
+    // app's own metadata media). User-scoped databases live at
+    // `users/{sub}/apps/{id}/db` and are **never** forked: they are
+    // per-user working data, not part of the app, and the destination
+    // starts them empty.
     copy_metadata_with_translation(
         &src_content_store,
         &dst_content_store,
@@ -2363,12 +2371,14 @@ fn rewrite_default_value_ids(default_value: &mut Vec<u8>, maps: &ForkIdMap) {
 }
 
 /// Recursively visits a JSON value and rewrites any string equal to a
-/// known source id. Returns whether anything changed so callers can
-/// skip a re-encode when the payload is untouched.
+/// known source id, plus any page-scoped element reference whose page
+/// head is a known source page. Returns whether anything changed so
+/// callers can skip a re-encode when the payload is untouched.
 fn translate_ids_in_json(value: &mut flow_like_types::Value, maps: &ForkIdMap) -> bool {
     match value {
         flow_like_types::Value::String(s) => {
-            if let Some(translated) = lookup_id(s, maps) {
+            let translated = lookup_id(s, maps).or_else(|| translate_element_ref(s, maps));
+            if let Some(translated) = translated {
                 *s = translated;
                 true
             } else {
@@ -2397,6 +2407,27 @@ fn translate_ids_in_json(value: &mut flow_like_types::Value, maps: &ForkIdMap) -
     }
 }
 
+/// Whole-string translation of any id a pin default may name.
+///
+/// `widgets` is in this chain because the `widget_selector` pin of
+/// `a2ui_instantiate_widget` stores the bare project widget id (see
+/// `WidgetVariable` / `widget-select.tsx`, which commits
+/// `selector: widgetId`), and `fork_widgets` gives every copied widget
+/// a fresh id — so without this the forked node resolves against the
+/// source app's widget and fails with "Widget '…' not found". Package
+/// widget selectors are immune by construction: they are encoded
+/// `pkg:{package_id}/{widget_id}`, never a key of `maps.widgets`, and
+/// package ids are global and must never be rewritten. Legacy
+/// name-based selectors are likewise untouched.
+///
+/// `roles` is here because the `role` pin of the project-user nodes
+/// accepts "Role ID or exact role name" — an id needs translating, a
+/// name is not a map key and passes through.
+///
+/// Deliberately absent: `templates` (no board artifact stores a
+/// template id) and `variables` (variable ids are preserved verbatim
+/// by `remap_board`, so `var_ref` defaults must keep resolving against
+/// the unchanged `board.variables` keys).
 fn lookup_id(src: &str, maps: &ForkIdMap) -> Option<String> {
     maps.nodes
         .get(src)
@@ -2405,7 +2436,30 @@ fn lookup_id(src: &str, maps: &ForkIdMap) -> Option<String> {
         .or_else(|| maps.pages.get(src))
         .or_else(|| maps.pins.get(src))
         .or_else(|| maps.boards.get(src))
+        .or_else(|| maps.widgets.get(src))
+        .or_else(|| maps.roles.get(src))
         .cloned()
+}
+
+/// UI element references are composite: the element picker stores
+/// `"{page_id}/{component_id}"` in the `element_ref` pin default (see
+/// `ElementSelect`), and the runtime keys its `_elements` payload the
+/// same way — `Board::get_execution_elements` prefetches only refs
+/// whose head matches the surface's page id, and `find_element` falls
+/// back to suffix matching *only* for refs without a `/`.
+///
+/// Component ids are page-scoped and survive a fork unchanged, but the
+/// page head does not, so `lookup_id` never matches the composite
+/// string as a whole. Without this pass every `Get Element` /
+/// `Set Element …` node in a forked app keeps pointing at the source
+/// app's page and silently resolves to "element not found".
+fn translate_element_ref(src: &str, maps: &ForkIdMap) -> Option<String> {
+    let (page_id, component_id) = src.split_once('/')?;
+    if component_id.is_empty() {
+        return None;
+    }
+    let new_page_id = maps.pages.get(page_id)?;
+    Some(format!("{}/{}", new_page_id, component_id))
 }
 
 fn remap_event(event: &mut proto::Event, maps: &ForkIdMap) {
@@ -2505,6 +2559,23 @@ async fn copy_one(
     Ok(())
 }
 
+/// Append a `/`-separated *relative* path below `prefix`, one segment at
+/// a time.
+///
+/// `Path::child` treats its argument as a single `PathPart` and
+/// percent-encodes the delimiter, so `prefix.child("db/x.lance/data/y")`
+/// yields `prefix/db%2Fx.lance%2Fdata%2Fy` — one flat key instead of a
+/// nested path. Every content mirror below has to fold per segment or
+/// the destination silently ends up with garbage keys (this is what
+/// used to drop the entire project LanceDB under `storage/db/**` on
+/// online → online forks).
+fn join_relative(prefix: &Path, relative: &str) -> Path {
+    relative
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .fold(prefix.clone(), |acc, segment| acc.child(segment))
+}
+
 async fn copy_object_prefix(
     src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
     dst_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
@@ -2527,11 +2598,7 @@ async fn copy_object_prefix(
             Some(_) => continue,
             None => continue,
         };
-        let dst_path = if suffix.is_empty() {
-            dst_prefix.clone()
-        } else {
-            dst_prefix.child(suffix.to_string())
-        };
+        let dst_path = join_relative(dst_prefix, suffix);
         entries.push((item.location, dst_path));
     }
 
@@ -3297,7 +3364,7 @@ async fn copy_metadata_with_translation(
             _ => None,
         };
         let dst_suffix = translated_suffix.unwrap_or_else(|| suffix.to_string());
-        let dst_path = dst_meta_dir.child(dst_suffix);
+        let dst_path = join_relative(dst_meta_dir, &dst_suffix);
         entries.push((item.location, dst_path));
     }
 
@@ -3678,6 +3745,168 @@ mod tests {
     }
 
     #[test]
+    fn element_ref_pin_defaults_follow_the_page_into_the_fork() {
+        let mut maps = ForkIdMap::default();
+        maps.pages
+            .insert("src_page".to_string(), "dst_page".to_string());
+        maps.pages
+            .insert("src_page_2".to_string(), "dst_page_2".to_string());
+
+        let cases = [
+            // Picker format: "{page_id}/{component_id}".
+            ("src_page/submit-button", "dst_page/submit-button"),
+            // Component ids may themselves contain slashes (nested refs).
+            ("src_page_2/card/title", "dst_page_2/card/title"),
+            // Bare component ids resolve by suffix at runtime — leave them.
+            ("submit-button", "submit-button"),
+            // Unknown heads are user data, not references.
+            ("unknown_page/submit-button", "unknown_page/submit-button"),
+            (
+                "https://example.com/src_page/x",
+                "https://example.com/src_page/x",
+            ),
+            ("src_page/", "src_page/"),
+        ];
+
+        for (input, expected) in cases {
+            let mut default_value = serde_json::to_vec(&flow_like_types::json::json!(input))
+                .expect("serialize pin default");
+            rewrite_default_value_ids(&mut default_value, &maps);
+            let decoded: flow_like_types::Value =
+                serde_json::from_slice(&default_value).expect("decode pin default");
+            assert_eq!(decoded, flow_like_types::json::json!(expected), "{input}");
+        }
+    }
+
+    #[test]
+    fn element_refs_nested_in_struct_pin_defaults_are_translated() {
+        let mut maps = ForkIdMap::default();
+        maps.pages
+            .insert("src_page".to_string(), "dst_page".to_string());
+        maps.nodes
+            .insert("src_node".to_string(), "dst_node".to_string());
+
+        let mut default_value = serde_json::to_vec(&flow_like_types::json::json!({
+            "elementRef": "src_page/chart",
+            "nodeId": "src_node",
+            "label": "src_page is not a ref here",
+        }))
+        .expect("serialize pin default");
+        rewrite_default_value_ids(&mut default_value, &maps);
+
+        let decoded: flow_like_types::Value =
+            serde_json::from_slice(&default_value).expect("decode pin default");
+        assert_eq!(decoded["elementRef"], "dst_page/chart");
+        assert_eq!(decoded["nodeId"], "dst_node");
+        assert_eq!(decoded["label"], "src_page is not a ref here");
+    }
+
+    #[test]
+    fn remapped_boards_keep_element_refs_pointing_at_the_forked_page() {
+        let mut maps = ForkIdMap::default();
+        maps.pages
+            .insert("src_page".to_string(), "dst_page".to_string());
+
+        let pin = proto::Pin {
+            id: "src_pin".to_string(),
+            name: "element_ref".to_string(),
+            default_value: serde_json::to_vec(&flow_like_types::json::json!(
+                "src_page/submit-button"
+            ))
+            .expect("serialize pin default"),
+            ..Default::default()
+        };
+        let node = proto::Node {
+            id: "src_node".to_string(),
+            name: "a2ui_get_element".to_string(),
+            pins: HashMap::from([(pin.id.clone(), pin)]),
+            ..Default::default()
+        };
+        let board = proto::Board {
+            id: "src_board".to_string(),
+            page_ids: vec!["src_page".to_string()],
+            nodes: HashMap::from([(node.id.clone(), node)]),
+            ..Default::default()
+        };
+
+        let remapped = remap_board(board, &mut maps);
+
+        assert_eq!(remapped.page_ids, vec!["dst_page".to_string()]);
+        let pin = remapped
+            .nodes
+            .values()
+            .next()
+            .expect("node survives the remap")
+            .pins
+            .values()
+            .next()
+            .expect("pin survives the remap");
+        let decoded: flow_like_types::Value =
+            serde_json::from_slice(&pin.default_value).expect("decode pin default");
+        assert_eq!(decoded, "dst_page/submit-button");
+    }
+
+    #[test]
+    fn widget_selector_pin_defaults_follow_the_forked_widget_id() {
+        let mut maps = ForkIdMap::default();
+        maps.widgets
+            .insert("src_widget".to_string(), "dst_widget".to_string());
+
+        let cases = [
+            // What the editor writes today: the bare project widget id.
+            ("src_widget", "dst_widget"),
+            // Package widgets are global — the package id must survive.
+            (
+                "pkg:com.example.sales/sales-chart",
+                "pkg:com.example.sales/sales-chart",
+            ),
+            // Legacy boards stored the widget name; it is not a map key.
+            ("Sales Chart", "Sales Chart"),
+        ];
+
+        for (input, expected) in cases {
+            let mut default_value = serde_json::to_vec(&flow_like_types::json::json!(input))
+                .expect("serialize pin default");
+            rewrite_default_value_ids(&mut default_value, &maps);
+            let decoded: flow_like_types::Value =
+                serde_json::from_slice(&default_value).expect("decode pin default");
+            assert_eq!(decoded, flow_like_types::json::json!(expected), "{input}");
+        }
+    }
+
+    #[test]
+    fn role_pin_defaults_translate_ids_but_not_role_names() {
+        let mut maps = ForkIdMap::default();
+        maps.roles
+            .insert("src_role".to_string(), "dst_role".to_string());
+
+        for (input, expected) in [("src_role", "dst_role"), ("Moderator", "Moderator")] {
+            let mut default_value = serde_json::to_vec(&flow_like_types::json::json!(input))
+                .expect("serialize pin default");
+            rewrite_default_value_ids(&mut default_value, &maps);
+            let decoded: flow_like_types::Value =
+                serde_json::from_slice(&default_value).expect("decode pin default");
+            assert_eq!(decoded, flow_like_types::json::json!(expected), "{input}");
+        }
+    }
+
+    #[test]
+    fn variable_ids_stay_out_of_the_pin_default_walk() {
+        // remap_board preserves variable ids, so a var_ref default must keep
+        // resolving against the unchanged board.variables keys.
+        let mut maps = ForkIdMap::default();
+        maps.variables
+            .insert("src_var".to_string(), "dst_var".to_string());
+
+        let mut default_value = serde_json::to_vec(&flow_like_types::json::json!("src_var"))
+            .expect("serialize pin default");
+        rewrite_default_value_ids(&mut default_value, &maps);
+        let decoded: flow_like_types::Value =
+            serde_json::from_slice(&default_value).expect("decode pin default");
+        assert_eq!(decoded, "src_var");
+    }
+
+    #[test]
     fn uploaded_metadata_target_parses_supported_media_metadata_paths() {
         assert_eq!(
             UploadedMetadataTarget::from_relative_path("en.meta"),
@@ -3710,6 +3939,131 @@ mod tests {
         assert_eq!(
             relative_to_prefix("media/apps/source-extra/icon.webp", "media/apps/source"),
             None
+        );
+    }
+
+    #[test]
+    fn join_relative_keeps_nested_paths_nested() {
+        let prefix = Path::from("apps").child("dst").child("storage");
+
+        assert_eq!(
+            join_relative(&prefix, "db/tables.lance/data/chunk.lance").as_ref(),
+            "apps/dst/storage/db/tables.lance/data/chunk.lance"
+        );
+        assert_eq!(
+            join_relative(&prefix, "notes.txt").as_ref(),
+            "apps/dst/storage/notes.txt"
+        );
+        assert_eq!(join_relative(&prefix, "").as_ref(), "apps/dst/storage");
+
+        // The bug this guards against: `child` percent-encodes the
+        // delimiter, flattening the whole relative path into one key.
+        assert_ne!(
+            prefix.child("db/tables.lance/data/chunk.lance").as_ref(),
+            join_relative(&prefix, "db/tables.lance/data/chunk.lance").as_ref()
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_object_prefix_mirrors_the_project_database_tree() {
+        use flow_like_storage::object_store::{ObjectStore, memory::InMemory};
+
+        // Same-deployment forks read and write through one store — mirror
+        // that here so `copy_one` takes its native-copy path.
+        let src: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let dst = src.clone();
+
+        let sources = [
+            "apps/src/storage/db/tables.lance/data/chunk.lance",
+            "apps/src/storage/db/tables.lance/_versions/1.manifest",
+            "apps/src/storage/db/tables.lance/_transactions/1-abc.txn",
+            "apps/src/storage/db/tables.lance/_indices/idx/index.idx",
+            "apps/src/storage/notes.txt",
+        ];
+        for path in sources {
+            src.put(&Path::from(path), bytes::Bytes::from_static(b"x").into())
+                .await
+                .expect("seed source object");
+        }
+
+        copy_object_prefix(
+            &src,
+            &dst,
+            &Path::from("apps/src/storage"),
+            &Path::from("apps/dst/storage"),
+            "app storage",
+        )
+        .await
+        .expect("copy storage prefix");
+
+        let mut copied: Vec<String> = futures::TryStreamExt::try_collect::<Vec<_>>(
+            dst.list(Some(&Path::from("apps/dst/storage"))),
+        )
+        .await
+        .expect("list destination")
+        .into_iter()
+        .map(|meta| meta.location.as_ref().to_string())
+        .collect();
+        copied.sort();
+
+        assert_eq!(
+            copied,
+            vec![
+                "apps/dst/storage/db/tables.lance/_indices/idx/index.idx".to_string(),
+                "apps/dst/storage/db/tables.lance/_transactions/1-abc.txn".to_string(),
+                "apps/dst/storage/db/tables.lance/_versions/1.manifest".to_string(),
+                "apps/dst/storage/db/tables.lance/data/chunk.lance".to_string(),
+                "apps/dst/storage/notes.txt".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_metadata_with_translation_keeps_widget_subpaths_nested() {
+        use flow_like_storage::object_store::{ObjectStore, memory::InMemory};
+
+        let src: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let dst = src.clone();
+
+        for path in [
+            "apps/src/metadata/en.meta",
+            "apps/src/metadata/widgets/src_widget/en.meta",
+        ] {
+            src.put(&Path::from(path), bytes::Bytes::from_static(b"x").into())
+                .await
+                .expect("seed source metadata");
+        }
+
+        let mut maps = ForkIdMap::default();
+        maps.widgets
+            .insert("src_widget".to_string(), "dst_widget".to_string());
+
+        copy_metadata_with_translation(
+            &src,
+            &dst,
+            &Path::from("apps/src/metadata"),
+            &Path::from("apps/dst/metadata"),
+            &maps,
+        )
+        .await
+        .expect("copy metadata prefix");
+
+        let mut copied: Vec<String> = futures::TryStreamExt::try_collect::<Vec<_>>(
+            dst.list(Some(&Path::from("apps/dst/metadata"))),
+        )
+        .await
+        .expect("list destination")
+        .into_iter()
+        .map(|meta| meta.location.as_ref().to_string())
+        .collect();
+        copied.sort();
+
+        assert_eq!(
+            copied,
+            vec![
+                "apps/dst/metadata/en.meta".to_string(),
+                "apps/dst/metadata/widgets/dst_widget/en.meta".to_string(),
+            ]
         );
     }
 }

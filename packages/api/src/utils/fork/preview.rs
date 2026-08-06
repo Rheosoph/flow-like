@@ -37,6 +37,25 @@ impl RemoteTokenSite {
     }
 }
 
+/// The project LanceDB lives at `apps/{app_id}/storage/db`. Its objects
+/// are excluded from the fork's **object count** (never from the byte
+/// total): one table fans out into a file per fragment, per index and
+/// per commit manifest, so a database that is small on disk still runs
+/// into five-digit object counts and would trip
+/// `forking.max_file_count` on every fork. The byte cap stays the real
+/// resource guard.
+pub fn project_db_prefix(app_prefix: &Path) -> Path {
+    app_prefix.child("storage").child("db")
+}
+
+fn is_under_prefix(location: &Path, prefix: &Path) -> bool {
+    let location = location.as_ref();
+    let prefix = prefix.as_ref();
+    location.len() > prefix.len()
+        && location.starts_with(prefix)
+        && location.as_bytes()[prefix.len()] == b'/'
+}
+
 /// Walks `apps/{app_id}/...` and app metadata media, then sums total
 /// bytes + object count across **both** the meta and content stores.
 /// Used by the preview endpoint and by the cross-mode flows for
@@ -62,7 +81,8 @@ pub async fn compute_app_size_and_count(
         .as_generic();
 
     let prefix = Path::from("apps").child(app_id.to_string());
-    let (meta_bytes, meta_count) = sum_prefix(&meta_store, &prefix).await?;
+    let db_prefix = project_db_prefix(&prefix);
+    let (meta_bytes, meta_count) = sum_prefix(&meta_store, &prefix, Some(&db_prefix)).await?;
     // Same physical bucket aliasing → don't double count. We can't
     // detect aliasing reliably from `Arc::ptr_eq` (different `Arc`
     // instances point at the same backing impl), so when meta and
@@ -70,9 +90,10 @@ pub async fn compute_app_size_and_count(
     // accept the duplication as the upper bound (size caps are
     // conservative anyway). For physically separate stores this
     // computes the true total.
-    let (content_bytes, content_count) = sum_prefix(&content_store, &prefix).await?;
+    let (content_bytes, content_count) =
+        sum_prefix(&content_store, &prefix, Some(&db_prefix)).await?;
     let media_prefix = Path::from("media").child("apps").child(app_id.to_string());
-    let (media_bytes, media_count) = sum_prefix(&content_store, &media_prefix).await?;
+    let (media_bytes, media_count) = sum_prefix(&content_store, &media_prefix, None).await?;
     Ok((
         meta_bytes
             .saturating_add(content_bytes)
@@ -104,18 +125,23 @@ pub async fn compute_app_content_size_and_count(
 
     let app_prefix = Path::from("apps").child(app_id.to_string());
     let media_prefix = Path::from("media").child("apps").child(app_id.to_string());
+    let db_prefix = project_db_prefix(&app_prefix);
 
-    let (app_bytes, app_count) = sum_prefix(&content_store, &app_prefix).await?;
-    let (media_bytes, media_count) = sum_prefix(&content_store, &media_prefix).await?;
+    let (app_bytes, app_count) = sum_prefix(&content_store, &app_prefix, Some(&db_prefix)).await?;
+    let (media_bytes, media_count) = sum_prefix(&content_store, &media_prefix, None).await?;
     Ok((
         app_bytes.saturating_add(media_bytes),
         app_count.saturating_add(media_count),
     ))
 }
 
+/// Sums bytes + object count below `prefix`. Objects under
+/// `uncounted_prefix` still contribute their bytes but are left out of
+/// the object count — see [`project_db_prefix`].
 async fn sum_prefix(
     store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
     prefix: &Path,
+    uncounted_prefix: Option<&Path>,
 ) -> Result<(u64, u64), ApiError> {
     let mut total_bytes: u64 = 0;
     let mut count: u64 = 0;
@@ -126,6 +152,9 @@ async fn sum_prefix(
         .map_err(|e| ApiError::internal_error(anyhow!("list app prefix: {e}")))?
     {
         total_bytes = total_bytes.saturating_add(item.size);
+        if uncounted_prefix.is_some_and(|skip| is_under_prefix(&item.location, skip)) {
+            continue;
+        }
         count = count.saturating_add(1);
     }
     Ok((total_bytes, count))

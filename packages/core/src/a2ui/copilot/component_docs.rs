@@ -38,7 +38,7 @@ pub const COMPONENT_CATALOG: &str = r##"
 
 ### Interactive Components
 - `button` - Clickable button (variants, sizes, loading state, icon)
-- `textField` - Text input; set `multiline` (+ `rows`) for textarea-style long text - there is NO separate textarea/richtext component
+- `textField` - Text input; set `multiline` (+ `rows`) for textarea-style long text - there is NO separate textarea/richtext component; `debounceMs` tunes the pause before the "input" event fires
 - `select` - Dropdown selection (single value from `options`)
 - `slider` - Numeric range slider (min/max/step)
 - `checkbox` - Boolean checkbox
@@ -177,6 +177,18 @@ Interactive components carry actions INSIDE the component object:
   element values, form payloads, or target ids through the context: the event body fetches
   current element state itself at runtime via Get Element (`a2uiGetElement`), Get Element Value
   (`a2uiGetElementValue`), and Get File Input Files (`a2uiGetFileInputFiles`).
+- Events beyond a component's original one require an EXACT `eventHandlers` entry. They are not
+  reached by `actions[0]` or by a `"*"` handler:
+  - `textField`: "change" (committed on blur or Enter, and only when the value moved),
+    "input" (the user paused while typing - debounced by the `debounceMs` prop, 400 ms default,
+    100 ms floor), "submit" (Enter, or Cmd/Ctrl+Enter in a multiline field; context carries
+    `via`), "focus", "blur". Use "input" for search-as-you-type, "submit" for composers and
+    search boxes, "change" for form fields that should settle before running.
+  - `slider`: "change" (committed at the end of the drag), "input" (paused mid-drag, debounced).
+  - `select`: "change", "open", "close".
+  - `table`: "rowClick", "cellClick" (both carry the source row and its index in the unsorted
+    data), "selectionChange" (needs `selectable`), "sortChange".
+  - `nivoChart` / `plotlyChart`: "pointClick".
 - Other built-in action names: "navigate_page" (context.route, optional context.queryParams)
   and "external_link" (context.url).
 - A board can set or re-point an element's default or named action later with Set Element Action

@@ -876,6 +876,8 @@ export interface ComponentEventSource {
 export interface ComponentEventTriggerOptions {
 	/** Some newly exposed events had no legacy configured-action behavior. */
 	legacyFallback?: boolean;
+	/** Events added after a component shipped do not inherit its `*` handler. */
+	wildcardFallback?: boolean;
 }
 
 /**
@@ -896,7 +898,7 @@ export function useComponentEventTrigger(componentId: string | undefined) {
 				component.eventHandlers,
 				eventName,
 				component.actions,
-				options.legacyFallback ?? true,
+				options,
 			);
 			for (const action of resolution.actions) {
 				await executeAction(action, componentId, context);

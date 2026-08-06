@@ -5771,6 +5771,7 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 					description:
 						"This handler is configured but is not declared by the current component contract.",
 					legacyFallback: true,
+					wildcardFallback: true,
 				}),
 			);
 		const definitions = [...declared, ...configuredOnly];
@@ -5779,8 +5780,9 @@ function ActionsEditor({ component, onUpdate }: ActionsEditorProps) {
 				id: WILDCARD_EVENT,
 				label: "Wildcard default",
 				description:
-					"Runs for named events that do not have an exact handler. This modern fallback supports an ordered action list.",
+					"Runs for named events that do not have an exact handler, except events added after the component shipped — those need their own handler. Supports an ordered action list.",
 				legacyFallback: true,
+				wildcardFallback: true,
 			});
 		}
 		return definitions;

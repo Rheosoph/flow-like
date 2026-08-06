@@ -489,6 +489,11 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		rows: { type: "boundValue" },
 		maxLength: { type: "boundValue" },
 		required: { type: "boundValue" },
+		debounceMs: {
+			type: "boundValue",
+			description:
+				"Pause in ms before the 'input' event fires (default 400, min 100)",
+		},
 		actions: { type: "actions" },
 	},
 	select: {
@@ -511,6 +516,11 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		disabled: { type: "boundValue" },
 		showValue: { type: "boundValue" },
 		label: { type: "boundValue" },
+		debounceMs: {
+			type: "boundValue",
+			description:
+				"Pause in ms before the 'input' event fires (default 400, min 100)",
+		},
 		actions: { type: "actions" },
 	},
 	checkbox: {

@@ -15,6 +15,9 @@ import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
 import type { BoundValue, SelectComponent } from "../types";
 
+/** Events added after select shipped never inherit `*` or `actions[0]`. */
+const EXACT_ONLY = { legacyFallback: false, wildcardFallback: false };
+
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
 	if (!boundValue) return undefined;
@@ -73,6 +76,15 @@ export function A2UISelect({
 		void triggerEvent("change", component, { value: newValue });
 	};
 
+	const handleOpenChange = (open: boolean) => {
+		void triggerEvent(
+			open ? "open" : "close",
+			component,
+			{ value: value ?? "" },
+			EXACT_ONLY,
+		);
+	};
+
 	return (
 		<div
 			className={cn("space-y-1.5", resolveStyle(style))}
@@ -82,6 +94,7 @@ export function A2UISelect({
 			<Select
 				value={value ?? ""}
 				onValueChange={handleChange}
+				onOpenChange={handleOpenChange}
 				disabled={disabled}
 			>
 				<SelectTrigger>

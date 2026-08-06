@@ -7,6 +7,13 @@ export interface EventActionResolution {
 	source: "event" | "wildcard" | "legacy" | "none";
 }
 
+export interface EventFallbackOptions {
+	/** Allow the component's historical `actions[0]` to run this event. */
+	legacyFallback?: boolean;
+	/** Allow the `*` handler to run this event. */
+	wildcardFallback?: boolean;
+}
+
 function ownsEvent(
 	eventHandlers: EventHandlers | undefined,
 	eventName: string,
@@ -23,12 +30,16 @@ function ownsEvent(
  * Named and wildcard handlers are ordered action lists. An explicitly present
  * empty list disables that event. When neither is present, only `actions[0]`
  * is used because older runtimes intentionally ignored subsequent entries.
+ *
+ * Events added after a component shipped opt out of both fallbacks: a surface
+ * authored before the event existed never meant to subscribe to it, and
+ * high-frequency events such as `input` would otherwise fire a run per pause.
  */
 export function resolveEventActions(
 	eventHandlers: EventHandlers | undefined,
 	eventName: string,
 	legacyActions: Action[] | undefined,
-	legacyFallback = true,
+	fallback: EventFallbackOptions = {},
 ): EventActionResolution {
 	if (ownsEvent(eventHandlers, eventName)) {
 		return {
@@ -37,14 +48,17 @@ export function resolveEventActions(
 		};
 	}
 
-	if (ownsEvent(eventHandlers, WILDCARD_EVENT)) {
+	if (
+		(fallback.wildcardFallback ?? true) &&
+		ownsEvent(eventHandlers, WILDCARD_EVENT)
+	) {
 		return {
 			actions: eventHandlers?.[WILDCARD_EVENT] ?? [],
 			source: "wildcard",
 		};
 	}
 
-	if (legacyFallback && legacyActions?.[0]) {
+	if ((fallback.legacyFallback ?? true) && legacyActions?.[0]) {
 		return { actions: [legacyActions[0]], source: "legacy" };
 	}
 
@@ -55,12 +69,8 @@ export function firstEventAction(
 	eventHandlers: EventHandlers | undefined,
 	eventName: string,
 	legacyActions: Action[] | undefined,
-	legacyFallback = true,
+	fallback: EventFallbackOptions = {},
 ): Action | undefined {
-	return resolveEventActions(
-		eventHandlers,
-		eventName,
-		legacyActions,
-		legacyFallback,
-	).actions[0];
+	return resolveEventActions(eventHandlers, eventName, legacyActions, fallback)
+		.actions[0];
 }

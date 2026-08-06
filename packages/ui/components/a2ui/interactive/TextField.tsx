@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -9,7 +9,19 @@ import { useComponentEventTrigger, useOnAction } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
+import {
+	resolveEventDebounceMs,
+	useDebouncedTrigger,
+} from "../hooks/use-debounced-trigger";
 import type { BoundValue, TextFieldComponent } from "../types";
+import {
+	type EnterKeyState,
+	resolveEnterIntent,
+	shouldReportCommit,
+} from "./text-field-events";
+
+/** Events added after textField shipped never inherit `*` or `actions[0]`. */
+const EXACT_ONLY = { legacyFallback: false, wildcardFallback: false };
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
 	const { resolve } = useData();
@@ -50,7 +62,11 @@ export function A2UITextField({
 	const multiline = useResolved<boolean>(component.multiline);
 	const rows = useResolved<number>(component.rows);
 	const maxLength = useResolved<number>(component.maxLength);
+	const debounceMs = resolveEventDebounceMs(
+		useResolved<number>(component.debounceMs),
+	);
 	const { setByPath } = useData();
+	const { schedule, cancel } = useDebouncedTrigger(debounceMs);
 
 	// Check if value is bound to a path (controlled by data context) or literal (local state)
 	const isPathBound = component.value && "path" in component.value;
@@ -61,11 +77,16 @@ export function A2UITextField({
 	// Track if user is actively typing (to avoid overwriting their input)
 	const [isUserTyping, setIsUserTyping] = useState(false);
 
+	// The value the `change` event last reported. Tabbing through an untouched
+	// field must not run the configured workflow again.
+	const committedValueRef = useRef(resolvedValue ?? "");
+
 	// Sync local state when resolved value changes from external updates (setValue/clear)
 	// Only sync when user is NOT actively typing
 	useEffect(() => {
 		if (!isUserTyping) {
 			setLocalValue(resolvedValue ?? "");
+			committedValueRef.current = resolvedValue ?? "";
 		}
 	}, [resolvedValue, componentId, isUserTyping]);
 
@@ -100,10 +121,35 @@ export function A2UITextField({
 				context: { value: newValue },
 			});
 		}
+
+		schedule(() => {
+			void triggerEvent("input", component, { value: newValue }, EXACT_ONLY);
+		});
 	};
-	const handleCommit = () => {
+
+	const commit = (value: string) => {
+		cancel();
 		setIsUserTyping(false);
-		void triggerEvent("change", component, { value: localValue });
+		if (!shouldReportCommit(committedValueRef.current, value)) return;
+		committedValueRef.current = value;
+		void triggerEvent("change", component, { value });
+	};
+
+	// Submitting keeps focus: a composer has to stay usable for the next message.
+	const handleKeyDown = (
+		event: EnterKeyState & { preventDefault: () => void },
+	) => {
+		const intent = resolveEnterIntent(event, multiline);
+		if (intent.kind !== "submit") return;
+
+		event.preventDefault();
+		commit(displayValue);
+		void triggerEvent(
+			"submit",
+			component,
+			{ value: displayValue, via: intent.via },
+			EXACT_ONLY,
+		);
 	};
 
 	const InputComponent = multiline ? Textarea : Input;
@@ -132,12 +178,24 @@ export function A2UITextField({
 				{...(multiline && rows ? { rows } : {})}
 				className={cn(error && "border-destructive")}
 				onChange={(e) => handleChange(e.target.value)}
-				onBlur={handleCommit}
-				onKeyDown={(event) => {
-					if (!multiline && event.key === "Enter") {
-						event.currentTarget.blur();
-					}
+				onFocus={() => {
+					void triggerEvent(
+						"focus",
+						component,
+						{ value: displayValue },
+						EXACT_ONLY,
+					);
 				}}
+				onBlur={() => {
+					commit(displayValue);
+					void triggerEvent(
+						"blur",
+						component,
+						{ value: displayValue },
+						EXACT_ONLY,
+					);
+				}}
+				onKeyDown={handleKeyDown}
 			/>
 			{helperText && (
 				<p

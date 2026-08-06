@@ -589,6 +589,7 @@ export interface TextFieldComponent extends ComponentBase {
 	rows?: BoundValue;
 	maxLength?: BoundValue;
 	required?: BoundValue;
+	debounceMs?: BoundValue; // pause before the "input" event fires (default 400, min 100)
 }
 
 export interface SelectComponent extends ComponentBase {
@@ -611,6 +612,7 @@ export interface SliderComponent extends ComponentBase {
 	disabled?: BoundValue;
 	showValue?: BoundValue;
 	label?: BoundValue;
+	debounceMs?: BoundValue; // pause before the "input" event fires (default 400, min 100)
 }
 
 export interface CheckboxComponent extends ComponentBase {

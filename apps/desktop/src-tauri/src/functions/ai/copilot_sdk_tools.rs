@@ -3542,6 +3542,7 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "rows",
             "maxLength",
             "required",
+            "debounceMs",
         ]),
         "select" => Some(&[
             "value",
@@ -3560,6 +3561,7 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "disabled",
             "showValue",
             "label",
+            "debounceMs",
         ]),
         "checkbox" => Some(&["checked", "label", "disabled", "indeterminate"]),
         "switch" => Some(&["checked", "label", "disabled"]),
