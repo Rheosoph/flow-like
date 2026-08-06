@@ -18,6 +18,9 @@ export interface AllowForkingSwitcherProps {
 	localApp: IApp;
 	canEdit: boolean;
 	onAllowForkingChange: (appId: string, allow: boolean) => Promise<void>;
+	/** Rendered below the toggle, inside the same card — used for the
+	 * owner's fork-policy editor so the two controls read as one setting. */
+	children?: React.ReactNode;
 }
 
 /**
@@ -30,6 +33,7 @@ export function AllowForkingSwitcher({
 	localApp,
 	canEdit,
 	onAllowForkingChange,
+	children,
 }: Readonly<AllowForkingSwitcherProps>) {
 	const initial = Boolean(localApp.allow_forking);
 	const [allow, setAllow] = useState(initial);
@@ -80,7 +84,7 @@ export function AllowForkingSwitcher({
 					</CardDescription>
 				</div>
 			</CardHeader>
-			<CardContent>
+			<CardContent className="space-y-4">
 				<div className="flex items-center justify-between rounded-md border p-4">
 					<div className="space-y-1 pr-4">
 						<Label htmlFor={inputId} className="text-sm font-medium">
@@ -105,6 +109,7 @@ export function AllowForkingSwitcher({
 						onCheckedChange={handleToggle}
 					/>
 				</div>
+				{children}
 			</CardContent>
 		</Card>
 	);

@@ -6,11 +6,16 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     state::AppState,
+    utils::fork::{ForkDatabaseMode, ForkPolicy},
 };
 
-/// Permission set a caller must have on the source app to fork it. The
-/// fork copies boards, events, templates, widgets, files, and roles, so
-/// the caller must be able to read each of those resource types.
+/// Maximal fork read set — what a fully permissive [`ForkPolicy`] requires.
+/// A fork under the default policy copies boards, events, templates,
+/// widgets, files and roles, so the caller must be able to read all of it.
+///
+/// Prefer [`fork_required_permissions`]: an owner who excludes a category
+/// means it is never copied, and demanding read access to content the fork
+/// won't contain locks people out for no reason.
 pub const FORK_REQUIRED_PERMISSIONS: RolePermissions = RolePermissions::from_bits_truncate(
     RolePermissions::ReadBoards.bits()
         | RolePermissions::ReadEvents.bits()
@@ -19,6 +24,37 @@ pub const FORK_REQUIRED_PERMISSIONS: RolePermissions = RolePermissions::from_bit
         | RolePermissions::ReadWidgets.bits()
         | RolePermissions::ReadRoles.bits(),
 );
+
+/// Read permissions a fork of an app under `policy` actually requires.
+///
+/// The gate is "you may copy only what you may read", so each category
+/// contributes its read permission only when the owner ships it. This is
+/// always a subset of [`FORK_REQUIRED_PERMISSIONS`] — never stricter than
+/// the pre-policy behavior.
+///
+/// `ReadFiles` covers the project database as well as uploaded files: it
+/// implies `ReadDatabase`, and every project-DB route accepts either.
+pub fn fork_required_permissions(policy: &ForkPolicy) -> RolePermissions {
+    let mut required = RolePermissions::empty();
+    if policy.flows {
+        // Events and pages ride along with boards in both engines.
+        required.insert(RolePermissions::ReadBoards);
+        required.insert(RolePermissions::ReadEvents);
+    }
+    if policy.files || policy.databases != ForkDatabaseMode::None {
+        required.insert(RolePermissions::ReadFiles);
+    }
+    if policy.widgets {
+        required.insert(RolePermissions::ReadWidgets);
+    }
+    if policy.templates {
+        required.insert(RolePermissions::ReadTemplates);
+    }
+    if policy.roles {
+        required.insert(RolePermissions::ReadRoles);
+    }
+    required
+}
 
 /// Where the caller wants to land the fork. The cross-mode flows have
 /// different gates than the same-mode flows: anonymous users may *only*
@@ -57,7 +93,7 @@ pub enum ForkPermissionError {
     /// belongs to the app owner — widen the default role — and a generic
     /// "insufficient permissions" gives them nothing to act on.
     #[error(
-        "this app allows forking, but its default role does not grant the read permissions a fork requires (boards, events, files, templates, widgets, roles)"
+        "this app allows forking, but its default role does not grant the read permissions a fork of it requires"
     )]
     DefaultRoleInsufficient,
     /// Anything else (DB lookup failures, etc.)
@@ -133,16 +169,20 @@ pub async fn check_can_fork(
         return Err(ForkPermissionError::Disabled);
     }
 
+    // The owner's policy decides what a fork contains, so it also decides
+    // what the caller has to be able to read.
+    let required = fork_required_permissions(&ForkPolicy::from_app_row(&app_row));
+
     let is_anonymous = matches!(user, AppUser::Unauthorized);
     if is_anonymous {
-        return check_anonymous_fork(state, &app_row, target).await;
+        return check_anonymous_fork(state, &app_row, target, required).await;
     }
 
     let sub = user.sub().map_err(ForkPermissionError::Other)?;
 
     match user.app_permission(app_id, state).await {
         Ok(permission) => {
-            if !permission.has_permission(FORK_REQUIRED_PERMISSIONS) {
+            if !permission.has_permission(required) {
                 return Err(ForkPermissionError::InsufficientPermissions);
             }
         }
@@ -154,7 +194,7 @@ pub async fn check_can_fork(
             if membership_exists(state, &sub, app_id).await? {
                 return Err(ForkPermissionError::Other(err));
             }
-            return check_unjoined_fork(state, &app_row).await;
+            return check_unjoined_fork(state, &app_row, required).await;
         }
     }
 
@@ -173,11 +213,12 @@ pub async fn check_can_fork(
 async fn check_unjoined_fork(
     state: &AppState,
     app_row: &app::Model,
+    required: RolePermissions,
 ) -> Result<app::Model, ForkPermissionError> {
     if !is_public_free_candidate(app_row) {
         return Err(ForkPermissionError::NotAMember);
     }
-    if !default_role_grants_fork(state, app_row).await? {
+    if !default_role_grants_fork(state, app_row, required).await? {
         return Err(ForkPermissionError::DefaultRoleInsufficient);
     }
     Ok(app_row.clone())
@@ -207,15 +248,17 @@ async fn membership_exists(
     Ok(existing.is_some())
 }
 
-/// Whether the app's default member role carries the full fork read set.
+/// Whether the app's default member role carries the fork read set its
+/// policy requires.
 ///
 /// This is the substitute for a caller's own role when they have none. A fork
-/// implicitly reads boards, events, files, templates, widgets and roles, so the
-/// role that would be handed to them on joining has to permit reading all of it
-/// — otherwise the fork would deliver content they are not entitled to see.
+/// reads every category the owner ships, so the role that would be handed to
+/// them on joining has to permit reading all of it — otherwise the fork would
+/// deliver content they are not entitled to see.
 async fn default_role_grants_fork(
     state: &AppState,
     app_row: &app::Model,
+    required: RolePermissions,
 ) -> Result<bool, ForkPermissionError> {
     let Some(default_role_id) = app_row.default_role_id.clone() else {
         return Ok(false);
@@ -238,13 +281,14 @@ async fn default_role_grants_fork(
     // meaningful for a person, but a *default* role carrying it would mean every
     // joiner is an admin. Such a role should not silently satisfy the fork gate.
     let perms = RolePermissions::from_bits_truncate(default_role.permissions);
-    Ok(perms.contains(FORK_REQUIRED_PERMISSIONS))
+    Ok(perms.contains(required))
 }
 
 async fn check_anonymous_fork(
     state: &AppState,
     app_row: &app::Model,
     target: ForkTargetKind,
+    required: RolePermissions,
 ) -> Result<app::Model, ForkPermissionError> {
     if target != ForkTargetKind::Offline {
         return Err(ForkPermissionError::AnonymousOnline);
@@ -262,7 +306,7 @@ async fn check_anonymous_fork(
         return Err(ForkPermissionError::AnonymousIneligible);
     }
 
-    if !default_role_grants_fork(state, app_row).await? {
+    if !default_role_grants_fork(state, app_row, required).await? {
         // Distinct from AnonymousIneligible: the app *is* an eligible candidate,
         // its default role is just too narrow. That is the owner's to fix.
         return Err(ForkPermissionError::DefaultRoleInsufficient);
@@ -301,6 +345,7 @@ mod tests {
             created_at: Default::default(),
             updated_at: Default::default(),
             allow_forking: true,
+            fork_policy: None,
             forked_at: None,
             forked_from: None,
             app_type: None,
@@ -371,5 +416,128 @@ mod tests {
         let admin = RolePermissions::Admin;
         assert!(has_role_permission(&admin, RolePermissions::ReadBoards));
         assert!(!admin.contains(FORK_REQUIRED_PERMISSIONS));
+    }
+
+    #[test]
+    fn the_default_policy_requires_the_full_historic_read_set() {
+        assert_eq!(
+            fork_required_permissions(&ForkPolicy::default()),
+            FORK_REQUIRED_PERMISSIONS,
+            "an unconfigured app must gate exactly as it did before the policy existed"
+        );
+    }
+
+    #[test]
+    fn excluding_a_category_drops_only_its_read_permission() {
+        let no_files = ForkPolicy {
+            files: false,
+            databases: ForkDatabaseMode::None,
+            ..Default::default()
+        };
+        let required = fork_required_permissions(&no_files);
+        assert!(
+            !required.contains(RolePermissions::ReadFiles),
+            "nothing under storage is copied, so ReadFiles must not be demanded"
+        );
+        assert!(required.contains(RolePermissions::ReadBoards));
+        assert!(required.contains(RolePermissions::ReadEvents));
+        assert!(required.contains(RolePermissions::ReadWidgets));
+        assert!(required.contains(RolePermissions::ReadTemplates));
+        assert!(required.contains(RolePermissions::ReadRoles));
+    }
+
+    #[test]
+    fn the_project_database_alone_still_requires_read_files() {
+        // `ReadFiles` implies `ReadDatabase`, and every project-DB route
+        // accepts either — so a schema-only or full database copy keeps
+        // demanding it even when no uploaded files travel.
+        for mode in [ForkDatabaseMode::SchemaOnly, ForkDatabaseMode::WithData] {
+            let policy = ForkPolicy {
+                files: false,
+                databases: mode,
+                ..Default::default()
+            };
+            assert!(
+                fork_required_permissions(&policy).contains(RolePermissions::ReadFiles),
+                "{mode:?} copies database objects and must still gate on ReadFiles"
+            );
+        }
+    }
+
+    #[test]
+    fn the_required_set_is_never_wider_than_the_historic_one() {
+        // The policy may only ever relax the gate. If some future category
+        // adds a permission outside the historic set, this catches it.
+        for policy in policy_matrix() {
+            assert!(
+                FORK_REQUIRED_PERMISSIONS.contains(fork_required_permissions(&policy)),
+                "{policy:?} demands a permission outside FORK_REQUIRED_PERMISSIONS"
+            );
+        }
+    }
+
+    #[test]
+    fn a_fork_that_copies_nothing_readable_demands_nothing() {
+        // Only app metadata and media travel, and those are already visible
+        // to anyone who can reach the app.
+        let empty = ForkPolicy {
+            flows: false,
+            files: false,
+            databases: ForkDatabaseMode::None,
+            roles: false,
+            widgets: false,
+            templates: false,
+        };
+        assert_eq!(fork_required_permissions(&empty), RolePermissions::empty());
+        assert!(shipped_default_role().contains(fork_required_permissions(&empty)));
+    }
+
+    #[test]
+    fn the_shipped_default_role_permits_forking_a_metadata_only_copy() {
+        // The counterpart to `the_shipped_default_role_does_not_permit_forking`:
+        // narrowing the policy far enough is exactly how an owner makes their
+        // app forkable without widening the default role.
+        let flows_only = ForkPolicy {
+            files: false,
+            databases: ForkDatabaseMode::None,
+            roles: false,
+            widgets: false,
+            templates: false,
+            ..Default::default()
+        };
+        let required = fork_required_permissions(&flows_only);
+        assert!(!shipped_default_role().contains(required));
+        let mut widened = shipped_default_role();
+        widened.insert(required);
+        assert!(widened.contains(required));
+        assert!(
+            !widened.contains(FORK_REQUIRED_PERMISSIONS),
+            "granting only what this policy needs must not grant the whole historic set"
+        );
+    }
+
+    fn policy_matrix() -> Vec<ForkPolicy> {
+        let mut policies = Vec::new();
+        for flows in [true, false] {
+            for files in [true, false] {
+                for databases in [
+                    ForkDatabaseMode::None,
+                    ForkDatabaseMode::SchemaOnly,
+                    ForkDatabaseMode::WithData,
+                ] {
+                    for rest in [true, false] {
+                        policies.push(ForkPolicy {
+                            flows,
+                            files,
+                            databases,
+                            roles: rest,
+                            widgets: rest,
+                            templates: rest,
+                        });
+                    }
+                }
+            }
+        }
+        policies
     }
 }

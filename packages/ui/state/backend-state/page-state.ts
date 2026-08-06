@@ -110,11 +110,22 @@ export interface PageListItem {
 	boardId?: string;
 	name: string;
 	description?: string;
+	/** Revision of the stored payload; lets a listing spot a stale cached page. */
+	updatedAt?: string;
 }
 
 export interface IPageState {
 	getPages(appId: string, boardId?: string): Promise<PageListItem[]>;
-	getPage(appId: string, pageId: string, boardId?: string): Promise<IPage>;
+	/**
+	 * `version` reads the page snapshot published with that board version. Without it
+	 * the current (draft) page is returned.
+	 */
+	getPage(
+		appId: string,
+		pageId: string,
+		boardId?: string,
+		version?: [number, number, number],
+	): Promise<IPage>;
 	createPage(
 		appId: string,
 		pageId: string,

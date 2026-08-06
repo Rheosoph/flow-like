@@ -44,6 +44,40 @@ export function isNativePageBoardUnavailableError(error: unknown): boolean {
 	);
 }
 
+/**
+ * The board lists the page, but its payload cannot be read on this device.
+ * A board synced from remote carries page ids, never the page files themselves,
+ * so every device that never opened the app's flow configuration hits this on
+ * its first read. The server holds the authoritative payload in that case.
+ */
+export function isNativePageContentUnavailableError(error: unknown): boolean {
+	const message = nativeErrorMessage(error)?.trim();
+	return Boolean(
+		message?.startsWith("Failed to load page '") &&
+			message.includes(" from board '"),
+	);
+}
+
+/**
+ * Both sides report the page payload's own revision, so equal timestamps mean equal content.
+ * A cached page with no revision predates that contract and is refreshed once; a listing entry
+ * without one carries no evidence of a change and is left alone.
+ */
+export function isCachedPageOutdated(
+	cached: PageListItem | undefined,
+	remote: PageListItem,
+): boolean {
+	if (!cached) return true;
+	if (!remote.updatedAt) return false;
+	if (!cached.updatedAt) return true;
+
+	const remoteUpdated = new Date(remote.updatedAt).getTime();
+	const cachedUpdated = new Date(cached.updatedAt).getTime();
+	if (Number.isNaN(remoteUpdated) || Number.isNaN(cachedUpdated)) return false;
+
+	return remoteUpdated > cachedUpdated;
+}
+
 export class PageState implements IPageState {
 	constructor(private readonly backend: TauriBackend) {}
 
@@ -51,12 +85,14 @@ export class PageState implements IPageState {
 		appId: string,
 		pageId: string,
 		boardId?: string,
+		version?: [number, number, number],
 	): Promise<IPage> {
 		try {
 			return await invoke<IPage>("get_page", {
 				appId,
 				pageId,
 				boardId,
+				version,
 			});
 		} catch (localError) {
 			if (!boardId || !isNativePageBoardUnavailableError(localError)) {
@@ -64,9 +100,9 @@ export class PageState implements IPageState {
 			}
 
 			try {
-				// Native get_page opens the current (unversioned) board manifest. Ensure
+				// Native get_page opens the board manifest for the requested view. Ensure
 				// that exact local storage view exists before retrying the lookup.
-				await this.backend.boardState.getBoard(appId, boardId, undefined, true);
+				await this.backend.boardState.getBoard(appId, boardId, version, true);
 			} catch {
 				// Preserve the authoritative native storage failure when repair itself
 				// is unavailable (offline, unauthenticated, or a real storage error).
@@ -77,8 +113,25 @@ export class PageState implements IPageState {
 				appId,
 				pageId,
 				boardId,
+				version,
 			});
 		}
+	}
+
+	/**
+	 * `update_page` rejects a page without a board id, so a cache write that drops it
+	 * would fail silently and force every later read back onto the network.
+	 */
+	private async cacheRemotePage(
+		appId: string,
+		remotePage: IPage,
+		boardId?: string,
+	): Promise<IPage> {
+		const page = remotePage.boardId
+			? remotePage
+			: { ...remotePage, boardId: boardId };
+		await invoke("update_page", { appId, page }).catch(() => {});
+		return page;
 	}
 
 	private async pushPageToServer(appId: string, page: IPage): Promise<void> {
@@ -101,11 +154,15 @@ export class PageState implements IPageState {
 		appId: string,
 		pageId: string,
 		boardId?: string,
+		version?: [number, number, number],
 	): Promise<IPage | null> {
 		const isOffline = await this.backend.isOffline(appId);
 		if (isOffline || !this.backend.profile || !this.backend.auth) return null;
 
-		const params = boardId ? `?board_id=${encodeURIComponent(boardId)}` : "";
+		const query = new URLSearchParams();
+		if (boardId) query.set("board_id", boardId);
+		if (version) query.set("version", version.join("_"));
+		const params = query.size > 0 ? `?${query.toString()}` : "";
 		return await fetcher<IPage>(
 			this.backend.profile,
 			`apps/${appId}/pages/${pageId}${params}`,
@@ -141,7 +198,15 @@ export class PageState implements IPageState {
 			const result: PageListItem[] = [];
 
 			for (const rp of remotePages) {
-				result.push(localMap.get(rp.pageId) ?? rp);
+				const local = localMap.get(rp.pageId);
+				// A page renamed on another device stays renamed: the server row is
+				// authoritative for listing metadata, the local entry only fills in
+				// what the listing does not carry.
+				result.push(
+					local
+						? { ...local, ...rp, boardId: rp.boardId ?? local.boardId }
+						: rp,
+				);
 			}
 
 			for (const lp of localPages) {
@@ -150,21 +215,28 @@ export class PageState implements IPageState {
 				}
 			}
 
+			const outdated = remotePages.filter((remotePage) =>
+				isCachedPageOutdated(localMap.get(remotePage.pageId), remotePage),
+			);
+
 			const syncTask = (async () => {
-				for (const remotePage of remotePages) {
-					if (!localMap.has(remotePage.pageId)) {
-						try {
-							const fullPage = await this.fetchRemotePage(
+				for (const remotePage of outdated) {
+					try {
+						const fullPage = await this.fetchRemotePage(
+							appId,
+							remotePage.pageId,
+							remotePage.boardId,
+						);
+						if (fullPage) {
+							await invoke("update_page", {
 								appId,
-								remotePage.pageId,
-								remotePage.boardId,
-							);
-							if (fullPage) {
-								await invoke("update_page", { appId, page: fullPage });
-							}
-						} catch {
-							// Individual page sync failure is non-critical
+								page: fullPage.boardId
+									? fullPage
+									: { ...fullPage, boardId: remotePage.boardId },
+							});
 						}
+					} catch {
+						// Individual page sync failure is non-critical
 					}
 				}
 			})();
@@ -176,26 +248,89 @@ export class PageState implements IPageState {
 		}
 	}
 
+	/**
+	 * A pinned board version resolves against the published snapshot, which is immutable:
+	 * whatever answers first is correct, and nothing is written back to the current page
+	 * file. With no snapshot reachable — the common offline case — the current page is the
+	 * last state this device can honestly show, which beats failing the interface.
+	 */
+	private async getVersionedPage(
+		appId: string,
+		pageId: string,
+		version: [number, number, number],
+		boardId?: string,
+	): Promise<IPage> {
+		let versionError: unknown;
+		try {
+			return await this.getNativePage(appId, pageId, boardId, version);
+		} catch (error) {
+			versionError = error;
+		}
+
+		try {
+			const remotePage = await this.fetchRemotePage(
+				appId,
+				pageId,
+				boardId,
+				version,
+			);
+			if (remotePage) return remotePage;
+		} catch (error) {
+			versionError = error;
+		}
+
+		const currentPage = await this.getNativePage(appId, pageId, boardId).catch(
+			() => null,
+		);
+		if (currentPage) {
+			console.warn(
+				`[PageState] Version ${version.join(".")} of page ${pageId} is unavailable; serving the current page instead:`,
+				versionError,
+			);
+			return currentPage;
+		}
+
+		throw versionError;
+	}
+
 	async getPage(
 		appId: string,
 		pageId: string,
 		boardId?: string,
+		version?: [number, number, number],
 	): Promise<IPage> {
+		if (version) {
+			return this.getVersionedPage(appId, pageId, version, boardId);
+		}
+
 		let localPage: IPage | null = null;
 		try {
 			localPage = await this.getNativePage(appId, pageId, boardId);
 		} catch (localError) {
-			if (!isNativePageNotFoundError(localError)) {
+			const nativeMiss = isNativePageNotFoundError(localError);
+			const contentUnavailable =
+				isNativePageContentUnavailableError(localError);
+			if (!nativeMiss && !contentUnavailable) {
 				throw localError;
 			}
-			const remotePage = await this.fetchRemotePage(appId, pageId, boardId);
-			if (remotePage) {
-				await invoke("update_page", { appId, page: remotePage }).catch(
-					() => {},
-				);
-				return remotePage;
+
+			// A page the board knows about but this device cannot read is a normal
+			// state on a device that only ever synced the board manifest. Remote is
+			// the authority for the payload; the native failure is only preserved
+			// when the server cannot answer.
+			let remotePage: IPage | null = null;
+			try {
+				remotePage = await this.fetchRemotePage(appId, pageId, boardId);
+			} catch (remoteError) {
+				if (nativeMiss) throw remoteError;
+				throw localError;
 			}
-			throw new Error(`Page not found: ${pageId}`);
+
+			if (remotePage) {
+				return this.cacheRemotePage(appId, remotePage, boardId);
+			}
+			if (nativeMiss) throw new Error(`Page not found: ${pageId}`);
+			throw localError;
 		}
 
 		let remotePage: IPage | null;

@@ -3,10 +3,12 @@
 import {
 	AlertTriangleIcon,
 	CheckCircle2Icon,
+	CheckIcon,
 	GitForkIcon,
 	HardDriveIcon,
 	KeyRoundIcon,
 	Loader2Icon,
+	MinusIcon,
 	ShieldAlertIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -285,6 +287,8 @@ export function ForkAppDialog({
 					<div className="space-y-4">
 						<ForkPreviewSummary preview={preview} appId={appId} />
 
+						<ForkContentsSummary preview={preview} />
+
 						{!preview.allow_forking && (
 							<Alert variant="destructive">
 								<ShieldAlertIcon className="w-4 h-4" />
@@ -460,11 +464,16 @@ function ForkPreviewSummary({
 				<span className="text-muted-foreground">Size</span>
 			</div>
 			<div className="text-right font-medium">
-				{formatBytes(preview.total_size_bytes)}
+				{formatBytes(preview.selected_size_bytes)}
+				{preview.selected_size_bytes !== preview.total_size_bytes && (
+					<div className="text-xs font-normal text-muted-foreground">
+						of {formatBytes(preview.total_size_bytes)} total
+					</div>
+				)}
 			</div>
 			<div className="text-muted-foreground">Files</div>
 			<div className="text-right font-medium">
-				{preview.total_object_count.toLocaleString()}
+				{preview.selected_object_count.toLocaleString()}
 			</div>
 			<div className="text-muted-foreground">Cap</div>
 			<div className="text-right text-xs text-muted-foreground">
@@ -491,6 +500,94 @@ function ForkPreviewSummary({
 			</div>
 		</div>
 	);
+}
+
+/**
+ * What the source app's owner allows a fork to contain. Read-only — the
+ * forker doesn't choose; this just sets expectations before they commit.
+ */
+function ForkContentsSummary({
+	preview,
+}: Readonly<{ preview: IForkPreviewResponse }>) {
+	const policy = preview.fork_policy;
+	const sizes = preview.size_breakdown;
+	const databaseSize =
+		policy.databases === "with_data" ? sizeHint(sizes.databases) : undefined;
+	const databaseDetail =
+		policy.databases === "with_data"
+			? ["Tables and data", databaseSize].filter(Boolean).join(" · ")
+			: "Tables only, no data";
+
+	const rows: readonly {
+		label: string;
+		included: boolean;
+		detail?: string;
+	}[] = [
+		{ label: "Flows", included: policy.flows, detail: sizeHint(sizes.flows) },
+		{ label: "Files", included: policy.files, detail: sizeHint(sizes.files) },
+		{
+			label: "Databases",
+			included: policy.databases !== "none",
+			detail: databaseDetail,
+		},
+		{
+			label: "Widgets",
+			included: policy.widgets,
+			detail: sizeHint(sizes.widgets),
+		},
+		{
+			label: "Templates",
+			included: policy.templates,
+			detail: sizeHint(sizes.templates),
+		},
+		{ label: "Roles", included: policy.roles },
+	];
+
+	return (
+		<div className="rounded-md border p-4 space-y-2">
+			<p className="text-xs text-muted-foreground">
+				The app owner decides what a fork includes.
+			</p>
+			<ul className="space-y-1.5">
+				{rows.map((row) => (
+					<li
+						key={row.label}
+						className="flex items-center justify-between gap-3 text-sm"
+					>
+						<span className="flex items-center gap-2">
+							{row.included ? (
+								<CheckIcon className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-500" />
+							) : (
+								<MinusIcon className="w-3.5 h-3.5 text-muted-foreground" />
+							)}
+							<span
+								className={
+									row.included
+										? undefined
+										: "text-muted-foreground line-through"
+								}
+							>
+								{row.label}
+							</span>
+						</span>
+						<span className="text-xs text-muted-foreground">
+							{row.included ? row.detail : "Not included"}
+						</span>
+					</li>
+				))}
+			</ul>
+			{!policy.flows && (
+				<p className="text-xs text-muted-foreground border-t pt-2">
+					Without flows this copy has no runnable logic — its events and pages
+					come with the boards, so they aren't included either.
+				</p>
+			)}
+		</div>
+	);
+}
+
+function sizeHint(size: { bytes: number }): string | undefined {
+	return size.bytes > 0 ? formatBytes(size.bytes) : undefined;
 }
 
 function formatBytes(bytes: number): string {

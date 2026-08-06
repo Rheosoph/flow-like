@@ -100,9 +100,10 @@ pub async fn open_shared_app(
     ) && (existing_link.is_none() || refork);
 
     let (target_app_id, fork_map, forked_now) = if should_fork {
-        // Course apps used as templates are typically `Private`, so the
-        // user-facing `allow_forking` flag is irrelevant — the course
-        // flow is a trusted internal caller and bypasses that check.
+        // Course apps used as templates are typically `Private`. This flow
+        // never calls `check_can_fork`, so the user-facing `allow_forking`
+        // flag is deliberately not consulted. The source owner's fork
+        // policy still applies — it is loaded inside the engine.
         let options = ForkOptions {
             source_app_id: &link.app_id,
             target_user_sub: Some(&sub),
@@ -110,8 +111,6 @@ pub async fn open_shared_app(
             language: &language,
             remote_event_token: None,
             requested_visibility: None,
-            include_versions_pointed_to: true,
-            bypass_allow_forking_check: true,
         };
         let (new_app_id, report) = fork_with_options(&state, options).await?;
         (new_app_id, Some(report.id_map), true)

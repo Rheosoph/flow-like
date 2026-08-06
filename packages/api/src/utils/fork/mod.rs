@@ -11,6 +11,8 @@ use crate::{
 };
 
 pub mod cleanup;
+pub mod db_schema;
+pub mod policy;
 pub mod preview;
 use flow_like::utils::compression::{
     compress_to_file, compress_to_file_json, from_compressed, from_compressed_json,
@@ -18,6 +20,7 @@ use flow_like::utils::compression::{
 use flow_like_storage::Path;
 use flow_like_types::{anyhow, create_id, proto};
 use futures_util::TryStreamExt;
+pub use policy::{ForkDatabaseMode, ForkPolicy};
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::{NotSet, Set},
@@ -60,6 +63,8 @@ pub enum SkippedKind {
     Secret,
     /// OAuth tokens cleared on the destination — user must re-link providers
     OAuthRequiresReauth,
+    /// Excluded by the source app owner's fork policy
+    Policy,
     /// Anything else (storage list errors, malformed payloads, etc.)
     Other,
 }
@@ -73,9 +78,16 @@ pub struct SkippedItem {
 }
 
 /// Typed entry point for callers. Replaces the positional `fork_app(state,
-/// user_sub, src_app_id, language)` signature. Internal callers (e.g. the
-/// course flow) can set `bypass_allow_forking_check` to skip the project's
-/// `allow_forking` opt-in; external API endpoints must leave it `false`.
+/// user_sub, src_app_id, language)` signature.
+///
+/// `fork_with_options` performs **no permission checking**. The
+/// `allow_forking` opt-in and the read-permission gate live at the
+/// endpoint layer (`permission::fork_permission::check_can_fork`).
+///
+/// The source app owner's [`policy::ForkPolicy`] **is** enforced here, but
+/// it is deliberately *not* an option: it is loaded from the source `App`
+/// row inside the engine, so a caller can neither supply it nor have it
+/// silently ignored.
 #[derive(Debug, Clone)]
 pub struct ForkOptions<'a> {
     pub source_app_id: &'a str,
@@ -89,16 +101,11 @@ pub struct ForkOptions<'a> {
     /// Override destination visibility. Default for online targets is
     /// `Private`; for `OfflineBundle` it's forced to `Offline`.
     pub requested_visibility: Option<flow_like::app::AppVisibility>,
-    /// Copy versioned files referenced by events/pages/templates. Default `true`.
-    pub include_versions_pointed_to: bool,
-    /// Trusted-internal escape hatch (course flow). Skips the
-    /// `app.allow_forking` opt-in check; permission checks still apply.
-    pub bypass_allow_forking_check: bool,
 }
 
 impl<'a> ForkOptions<'a> {
     /// Default options matching the existing course-fork behavior:
-    /// online same-store, no token, no anonymous caller, copy versions.
+    /// online same-store, no token, no anonymous caller.
     pub fn for_user(source_app_id: &'a str, user_sub: &'a str, language: &'a str) -> Self {
         Self {
             source_app_id,
@@ -107,8 +114,6 @@ impl<'a> ForkOptions<'a> {
             language,
             remote_event_token: None,
             requested_visibility: None,
-            include_versions_pointed_to: true,
-            bypass_allow_forking_check: false,
         }
     }
 }
@@ -217,7 +222,17 @@ pub struct OfflineMetaBundle {
     pub new_app_id: String,
     pub id_map: ForkIdMap,
     pub skipped: Vec<SkippedItem>,
+    pub warnings: Vec<String>,
     pub blobs: Vec<MetaBlob>,
+    /// The source owner's policy, so the desktop can show what it got.
+    pub policy: ForkPolicy,
+    /// Source-relative content prefixes the desktop must not mirror.
+    /// Advisory — the caller already holds `ReadFiles` on the source, so
+    /// this keeps the copy honest rather than protecting the bytes.
+    pub content_exclude_prefixes: Vec<String>,
+    /// Populated for schema-only database forks: the desktop creates
+    /// these tables empty in its local project DB.
+    pub db_table_schemas: Vec<db_schema::ForkTableSchema>,
 }
 
 /// Build an offline-fork bundle without going through the
@@ -286,6 +301,17 @@ pub async fn compute_offline_fork_bundle(
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("read source manifest: {e}")))?;
     overlay_app_row_into_manifest(state, src_app_id, &mut manifest_proto).await?;
+
+    // Owner-defined policy, loaded server-side. The desktop is told what
+    // it may pull, but the credential it receives still covers the whole
+    // source content prefix — the forker already holds `ReadFiles` on the
+    // source, so narrowing it would protect nothing.
+    let src_app_row = app::Entity::find_by_id(src_app_id)
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+    let policy = ForkPolicy::from_app_row(&src_app_row);
+    let mut warnings: Vec<String> = Vec::new();
 
     // ---- ID allocation: union(manifest, DB) -----------------------
     // The manifest may be stale relative to the DB (events / pages /
@@ -368,7 +394,25 @@ pub async fn compute_offline_fork_bundle(
     // after page copying so the final board lists only pages that
     // actually made it into the bundle.
     let mut remapped_boards: Vec<(String, String, proto::Board)> = Vec::new();
-    for src_board_id in &manifest_proto.boards.clone() {
+    if !policy.flows {
+        for src_board_id in &manifest_proto.boards {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Policy,
+                source_id: src_board_id.clone(),
+                reason: "flows are excluded by the source app's fork policy".to_string(),
+            });
+        }
+        warnings.push(
+            "This fork contains no flows, so it has no runnable logic — only the app shell."
+                .to_string(),
+        );
+    }
+    for src_board_id in manifest_proto
+        .boards
+        .clone()
+        .iter()
+        .filter(|_| policy.flows)
+    {
         let board_path = src_prefix.child(format!("{}.board", src_board_id));
         let mut board_proto: proto::Board =
             match from_compressed::<proto::Board>(src_meta_store.clone(), board_path).await {
@@ -558,6 +602,15 @@ pub async fn compute_offline_fork_bundle(
             }
         }
 
+        // Same guard as the online engine: `remap_event` translates
+        // `default_page_id` unconditionally and nothing downstream
+        // validates it, so drop the pointer when the page did not ship.
+        if let Some(default_page) = event_proto.default_page_id.as_deref()
+            && !shipped_pages.contains(default_page)
+        {
+            event_proto.default_page_id = None;
+        }
+
         let new_event_id = maps.translate_event(&src_event_id);
         remap_event(&mut event_proto, &maps);
         let bytes = encode_proto(&event_proto).await?;
@@ -607,7 +660,22 @@ pub async fn compute_offline_fork_bundle(
     }
 
     // ---- 5. Widgets ------------------------------------------------
-    for (src_widget_id, new_widget_id) in maps.widgets.clone().iter() {
+    if !policy.widgets {
+        for src_widget_id in maps.widgets.keys() {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Policy,
+                source_id: src_widget_id.clone(),
+                reason: "widgets are excluded by the source app's fork policy".to_string(),
+            });
+        }
+        if !maps.widgets.is_empty() {
+            warnings.push(
+                "Widgets were not copied. Nodes that instantiate a widget by id will fail at run time."
+                    .to_string(),
+            );
+        }
+    }
+    for (src_widget_id, new_widget_id) in maps.widgets.clone().iter().filter(|_| policy.widgets) {
         let src_path = src_prefix.child(format!("{}.widget", src_widget_id));
         let mut widget: flow_like_types::Value =
             match from_compressed_json(src_meta_store.clone(), src_path).await {
@@ -633,11 +701,23 @@ pub async fn compute_offline_fork_bundle(
     }
 
     // ---- 6. Templates (proto::Board) ------------------------------
-    let template_pairs: Vec<(String, String)> = maps
-        .templates
-        .iter()
-        .map(|(s, d)| (s.clone(), d.clone()))
-        .collect();
+    if !policy.templates {
+        for src_template_id in maps.templates.keys() {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Policy,
+                source_id: src_template_id.clone(),
+                reason: "templates are excluded by the source app's fork policy".to_string(),
+            });
+        }
+    }
+    let template_pairs: Vec<(String, String)> = if policy.templates {
+        maps.templates
+            .iter()
+            .map(|(s, d)| (s.clone(), d.clone()))
+            .collect()
+    } else {
+        Vec::new()
+    };
     for (src_template_id, new_template_id) in template_pairs {
         let src_path = src_prefix.child(format!("{}.template", src_template_id));
         let board_proto: proto::Board =
@@ -737,11 +817,53 @@ pub async fn compute_offline_fork_bundle(
         data_b64: base64::engine::general_purpose::STANDARD.encode(manifest_bytes),
     });
 
+    // Schema-only forks ship the source's Arrow schemas inline and tell
+    // the desktop to skip those tables' objects. Reserved artifact tables
+    // (`__x__`) carry Data Studio configuration and are mirrored whole, so
+    // they are neither excluded nor recreated.
+    let (db_table_schemas, skip_tables) = match policy.databases {
+        ForkDatabaseMode::SchemaOnly => {
+            let schemas = db_schema::read_project_db_schemas(state, src_app_id).await?;
+            let names = schemas.iter().map(|s| s.table.clone()).collect::<Vec<_>>();
+            if !names.is_empty() {
+                warnings.push(format!(
+                    "{} database table(s) arrive empty. Indices were not copied — rebuild them in Data Studio.",
+                    names.len()
+                ));
+            }
+            (schemas, names)
+        }
+        _ => (Vec::new(), Vec::new()),
+    };
+    let content_exclude_prefixes = policy::offline_content_exclude_prefixes(&policy, &skip_tables);
+    if !policy.files {
+        skipped.push(SkippedItem {
+            kind: SkippedKind::Policy,
+            source_id: "upload/".to_string(),
+            reason: "uploaded files are excluded by the source app's fork policy".to_string(),
+        });
+        warnings.push(
+            "Uploaded files were not copied. Flow paths pointing at them will not resolve in the fork."
+                .to_string(),
+        );
+    }
+    if policy.databases == ForkDatabaseMode::None {
+        skipped.push(SkippedItem {
+            kind: SkippedKind::Policy,
+            source_id: "storage/db".to_string(),
+            reason: "the project database is excluded by the source app's fork policy".to_string(),
+        });
+    }
+
     Ok(OfflineMetaBundle {
         new_app_id,
         id_map: maps,
         skipped,
+        warnings,
         blobs,
+        policy,
+        content_exclude_prefixes,
+        db_table_schemas,
     })
 }
 
@@ -1089,7 +1211,7 @@ pub async fn fork_with_options(
                 .requested_visibility
                 .clone()
                 .unwrap_or(flow_like::app::AppVisibility::Private);
-            let (new_app_id, id_map, skipped) = fork_app_with_visibility(
+            fork_app_with_visibility(
                 state,
                 user_sub,
                 options.source_app_id,
@@ -1097,15 +1219,7 @@ pub async fn fork_with_options(
                 options.remote_event_token,
                 visibility,
             )
-            .await?;
-            Ok((
-                new_app_id,
-                ForkReport {
-                    id_map,
-                    skipped,
-                    ..Default::default()
-                },
-            ))
+            .await
         }
         ForkTarget::OfflineBundle => Err(ApiError::bad_request(
             "offline-bundle forks are not materialized via fork_with_options — call compute_offline_fork_bundle directly",
@@ -1148,7 +1262,7 @@ pub async fn fork_app_with_visibility(
     language: &str,
     remote_event_token: Option<&str>,
     dst_visibility: flow_like::app::AppVisibility,
-) -> Result<(String, ForkIdMap, Vec<SkippedItem>), ApiError> {
+) -> Result<(String, ForkReport), ApiError> {
     use crate::routes::app::events::db::{db_model_to_event, event_to_db_model};
     use flow_like_types::{FromProto, ToProto};
 
@@ -1194,6 +1308,7 @@ pub async fn fork_app_with_visibility(
     // multiple stages (events, sinks, packages) and returned alongside
     // the id map. Pre-allocated so every detection site can `.push`.
     let mut skipped: Vec<SkippedItem> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
 
     // ---- 2. Read DB rows up front --------------------------------------
     // The DB is authoritative for app/meta/event/page/widget/template/role
@@ -1220,6 +1335,14 @@ pub async fn fork_app_with_visibility(
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
+
+    // The source owner decides what a fork of their app contains. Loaded
+    // here rather than taken from the caller so it cannot be supplied and
+    // then silently ignored. ID allocation below stays exhaustive: a
+    // reference to an excluded artifact resolves to a destination id with
+    // nothing behind it (a local dangling ref) rather than falling back to
+    // the source id and pointing into someone else's app.
+    let policy = ForkPolicy::from_app_row(&src_app_row);
 
     let src_meta_rows = meta::Entity::find()
         .filter(meta::Column::AppId.eq(src_app_id))
@@ -1345,9 +1468,25 @@ pub async fn fork_app_with_visibility(
     // Page DB rows, then wait until page copying finishes before
     // writing boards so stale board files cannot hide pages or point
     // at missing ones.
+    // Boards are the structural root: `shipped_boards` gates pages, events
+    // and the versioned-board archives, so excluding flows cascades through
+    // the rest of the pipeline without any further branching.
     let mut new_board_protos: Vec<(String, String, proto::Board)> = Vec::new();
     let mut shipped_boards: HashSet<String> = Default::default();
-    for src_board_id in &src_app_proto.boards {
+    if !policy.flows {
+        for src_board_id in &src_app_proto.boards {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Policy,
+                source_id: src_board_id.clone(),
+                reason: "flows are excluded by the source app's fork policy".to_string(),
+            });
+        }
+        warnings.push(
+            "This fork contains no flows, so it has no runnable logic — only the app shell."
+                .to_string(),
+        );
+    }
+    for src_board_id in src_app_proto.boards.iter().filter(|_| policy.flows) {
         let board_path = src_prefix.child(format!("{}.board", src_board_id));
         let mut board_proto: proto::Board =
             match from_compressed::<proto::Board>(src_meta_store.clone(), board_path).await {
@@ -1485,6 +1624,17 @@ pub async fn fork_app_with_visibility(
             }
         }
 
+        // `remap_event` translates `default_page_id` unconditionally, and
+        // nothing downstream validates it. Drop the pointer when the page
+        // did not ship — whether the fork policy excluded it or its source
+        // file was unreadable — so the event doesn't open a page that
+        // exists nowhere.
+        if let Some(default_page) = event_proto.default_page_id.as_deref()
+            && !shipped_pages.contains(default_page)
+        {
+            event_proto.default_page_id = None;
+        }
+
         remap_event(&mut event_proto, &maps);
         let new_event_id = event_proto.id.clone();
         let dst_event_path = dst_events_dir.child(format!("{}.event", new_event_id));
@@ -1541,27 +1691,55 @@ pub async fn fork_app_with_visibility(
     // action ids) are widget-scoped and don't need cross-app translation;
     // only the top-level widget id is rewritten. Page-level WidgetInstance
     // bindings (event_id / page_id) live inside `Page` JSON, not here.
-    let shipped_widgets = fork_widgets(
-        &src_meta_store,
-        &dst_meta_store,
-        &src_prefix,
-        &dst_prefix,
-        &maps,
-    )
-    .await?;
+    let shipped_widgets = if policy.widgets {
+        fork_widgets(
+            &src_meta_store,
+            &dst_meta_store,
+            &src_prefix,
+            &dst_prefix,
+            &maps,
+        )
+        .await?
+    } else {
+        for src_widget_id in maps.widgets.keys() {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Policy,
+                source_id: src_widget_id.clone(),
+                reason: "widgets are excluded by the source app's fork policy".to_string(),
+            });
+        }
+        if !maps.widgets.is_empty() {
+            warnings.push(
+                "Widgets were not copied. Nodes that instantiate a widget by id will fail at run time."
+                    .to_string(),
+            );
+        }
+        HashSet::new()
+    };
 
     // ---- 4c. Templates: load proto::Board, run remap, save -----------
     // Templates *are* boards on disk (`{template_id}.template` is a
     // serialized proto::Board), so we run the same `remap_board` pass
     // we use for live boards. The template id rewrite is layered on top.
-    let shipped_templates = fork_templates(
-        &src_meta_store,
-        &dst_meta_store,
-        &src_prefix,
-        &dst_prefix,
-        &mut maps,
-    )
-    .await?;
+    let shipped_templates = if policy.templates {
+        fork_templates(
+            &src_meta_store,
+            &dst_meta_store,
+            &src_prefix,
+            &dst_prefix,
+            &mut maps,
+        )
+        .await?
+    } else {
+        for src_template_id in maps.templates.keys() {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Policy,
+                source_id: src_template_id.clone(),
+                reason: "templates are excluded by the source app's fork policy".to_string(),
+            });
+        }
+        HashSet::new()
+    };
 
     // ---- 5/6. Copy content-store files --------------------------------
     // Mirror metadata/ + upload/ + storage/ from src content → dst
@@ -1581,35 +1759,96 @@ pub async fn fork_app_with_visibility(
         &src_prefix.child("metadata"),
         &dst_prefix.child("metadata"),
         &maps,
+        &shipped_widgets,
+        &shipped_templates,
     )
     .await?;
 
-    copy_object_prefix(
-        &src_content_store,
-        &dst_content_store,
-        &src_prefix.child("upload"),
-        &dst_prefix.child("upload"),
-        "upload storage",
-    )
-    .await?;
-    copy_object_prefix(
-        &src_content_store,
-        &dst_content_store,
-        &src_prefix.child("storage"),
-        &dst_prefix.child("storage"),
-        "app storage",
-    )
-    .await?;
-    copy_object_prefix(
-        &src_content_store,
-        &dst_content_store,
-        &Path::from("media")
-            .child("apps")
-            .child(src_app_id.to_string()),
-        &Path::from("media").child("apps").child(new_app_id.clone()),
-        "app metadata media",
-    )
-    .await?;
+    let mut copy_tally = CopyTally::default();
+    if policy.files {
+        copy_tally.add(
+            copy_object_prefix(
+                &src_content_store,
+                &dst_content_store,
+                &src_prefix.child("upload"),
+                &dst_prefix.child("upload"),
+                "upload storage",
+                None,
+            )
+            .await?,
+        );
+    } else {
+        skipped.push(SkippedItem {
+            kind: SkippedKind::Policy,
+            source_id: "upload/".to_string(),
+            reason: "uploaded files are excluded by the source app's fork policy".to_string(),
+        });
+        warnings.push(
+            "Uploaded files were not copied. Flow paths pointing at them will not resolve in the fork."
+                .to_string(),
+        );
+    }
+
+    // `storage/` is two things: the project LanceDB under `storage/db/**`
+    // and flow-written scratch under `storage/{node_id}/`. Only the former
+    // is policy-gated, so the skip predicate is per-object rather than a
+    // whole-prefix branch.
+    let storage_skip = policy::storage_skip(&policy);
+    copy_tally.add(
+        copy_object_prefix(
+            &src_content_store,
+            &dst_content_store,
+            &src_prefix.child("storage"),
+            &dst_prefix.child("storage"),
+            "app storage",
+            storage_skip.as_deref(),
+        )
+        .await?,
+    );
+
+    // Metadata media is never policy-gated: `Meta.icon` / `thumbnail` /
+    // `preview_media` carry ids verbatim into the destination rows, so
+    // dropping the bytes would leave broken images everywhere.
+    copy_tally.add(
+        copy_object_prefix(
+            &src_content_store,
+            &dst_content_store,
+            &Path::from("media")
+                .child("apps")
+                .child(src_app_id.to_string()),
+            &Path::from("media").child("apps").child(new_app_id.clone()),
+            "app metadata media",
+            None,
+        )
+        .await?,
+    );
+
+    match policy.databases {
+        ForkDatabaseMode::WithData => {}
+        ForkDatabaseMode::None => skipped.push(SkippedItem {
+            kind: SkippedKind::Policy,
+            source_id: "storage/db".to_string(),
+            reason: "the project database is excluded by the source app's fork policy".to_string(),
+        }),
+        ForkDatabaseMode::SchemaOnly => {
+            let created =
+                db_schema::copy_project_db_schemas(state, src_app_id, &new_app_id).await?;
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Policy,
+                source_id: "storage/db".to_string(),
+                reason: format!(
+                    "{} table(s) were recreated empty — the source app's fork policy excludes database rows",
+                    created.len()
+                ),
+            });
+            if !created.is_empty() {
+                warnings.push(format!(
+                    "{} database table(s) were recreated empty. Indices were not copied — rebuild them in Data Studio.",
+                    created.len()
+                ));
+            }
+        }
+    }
 
     // ---- 7. Rewrite the manifest --------------------------------------
     // The manifest's id lists are rebuilt from union(manifest, DB) and
@@ -1715,7 +1954,29 @@ pub async fn fork_app_with_visibility(
     // just inserts the destination versions.
     let src_owner_role_id = src_app_row.owner_role_id.clone();
     let src_default_role_id = src_app_row.default_role_id.clone();
-    let roles_to_copy: Vec<role::Model> = src_role_rows;
+    // Excluding roles never means "no roles": an app is unusable without an
+    // owner role (Membership.role_id is NOT NULL) and a NULL default role
+    // breaks every join / invite / purchase path. The destination gets a
+    // freshly minted Owner / Admin / User set instead, matching a
+    // newly created app.
+    let roles_to_copy: Vec<role::Model> = if policy.roles {
+        src_role_rows
+    } else {
+        for r in &src_role_rows {
+            skipped.push(SkippedItem {
+                kind: SkippedKind::Policy,
+                source_id: r.id.clone(),
+                reason: "roles are excluded by the source app's fork policy".to_string(),
+            });
+        }
+        if !src_role_rows.is_empty() {
+            warnings.push(
+                "Roles were not copied — the fork starts with fresh Owner, Admin and User roles. Nodes that reference a role by ID will not resolve (references by name still work)."
+                    .to_string(),
+            );
+        }
+        Vec::new()
+    };
 
     // Filter packages: only carry packages the destination owner can
     // actually use. Anything public+free is always carried; private and
@@ -1783,6 +2044,9 @@ pub async fn fork_app_with_visibility(
                     execution_mode: Set(src_app_row.execution_mode.clone()),
                     bits: Set(src_app_row.bits.clone()),
                     allow_forking: Set(false),
+                    // A fork does not inherit the source's fork policy — the
+                    // new owner opts in and picks their own.
+                    fork_policy: Set(None),
                     forked_from: Set(Some(src_app_row.id.clone())),
                     forked_at: Set(Some(now)),
                     created_at: Set(now),
@@ -1841,10 +2105,15 @@ pub async fn fork_app_with_visibility(
                 // description, permission bits, and attributes. IDs are
                 // remapped via `maps_arc.roles` (pre-allocated outside
                 // the txn).
+                // The role map is pre-allocated for every source role
+                // regardless of the fork policy, so a mapped id is only
+                // safe to point `App.ownerRoleId` / `defaultRoleId` at
+                // once the row behind it exists.
+                let mut inserted_role_ids: HashSet<String> = HashSet::new();
                 for r in &roles_to_copy {
                     let new_role_id = maps_arc.roles.get(&r.id).cloned().unwrap_or_else(create_id);
                     let new_role = role::ActiveModel {
-                        id: Set(new_role_id),
+                        id: Set(new_role_id.clone()),
                         name: Set(r.name.clone()),
                         description: Set(r.description.clone()),
                         permissions: Set(r.permissions),
@@ -1854,6 +2123,7 @@ pub async fn fork_app_with_visibility(
                         updated_at: Set(now),
                     };
                     new_role.insert(txn).await?;
+                    inserted_role_ids.insert(new_role_id);
                 }
 
                 // Resolve the destination's owner + default-member
@@ -1865,13 +2135,14 @@ pub async fn fork_app_with_visibility(
                 let dst_owner_role_id = match src_owner_role_id
                     .as_deref()
                     .and_then(|src_id| maps_arc.roles.get(src_id).cloned())
+                    .filter(|id| inserted_role_ids.contains(id))
                 {
                     Some(id) => id,
                     None => {
-                        // Source had no owner role recorded, or its
-                        // pointer was stale. Invent one so the
-                        // destination is at least valid; caller
-                        // becomes the owner regardless.
+                        // Source had no owner role recorded, its pointer
+                        // was stale, or the fork policy excluded roles.
+                        // Invent one so the destination is at least valid;
+                        // caller becomes the owner regardless.
                         let synthetic_id = create_id();
                         let synthetic = role::ActiveModel {
                             id: Set(synthetic_id.clone()),
@@ -1887,13 +2158,48 @@ pub async fn fork_app_with_visibility(
                         synthetic_id
                     }
                 };
-                // For the default role, an unresolved pointer just
-                // becomes None (the column is nullable). Better to
-                // ship without a default-member role than synthesize
-                // one with permissions the source never had.
-                let dst_default_role_id = src_default_role_id
+                // A NULL default role is a live footgun: it hard-fails
+                // every join-request, invite, purchase and role-delete
+                // path. When the source pointer doesn't resolve to an
+                // inserted row, mint the same Admin + User pair a newly
+                // created app gets and make User the default.
+                let dst_default_role_id = match src_default_role_id
                     .as_deref()
-                    .and_then(|src_id| maps_arc.roles.get(src_id).cloned());
+                    .and_then(|src_id| maps_arc.roles.get(src_id).cloned())
+                    .filter(|id| inserted_role_ids.contains(id))
+                {
+                    Some(id) => Some(id),
+                    None => {
+                        let admin_role = role::ActiveModel {
+                            id: Set(create_id()),
+                            name: Set("Admin".to_string()),
+                            description: Set(Some("Admin role".to_string())),
+                            permissions: Set(RolePermissions::Admin.bits()),
+                            app_id: Set(Some(new_app_id_db.clone())),
+                            attributes: NotSet,
+                            created_at: Set(now),
+                            updated_at: Set(now),
+                        };
+                        admin_role.insert(txn).await?;
+
+                        let mut user_permission = RolePermissions::ReadTemplates;
+                        user_permission.insert(RolePermissions::ExecuteEvents);
+                        user_permission.insert(RolePermissions::ListEvents);
+                        let user_role_id = create_id();
+                        let user_role = role::ActiveModel {
+                            id: Set(user_role_id.clone()),
+                            name: Set("User".to_string()),
+                            description: Set(Some("User role".to_string())),
+                            permissions: Set(user_permission.bits()),
+                            app_id: Set(Some(new_app_id_db.clone())),
+                            attributes: NotSet,
+                            created_at: Set(now),
+                            updated_at: Set(now),
+                        };
+                        user_role.insert(txn).await?;
+                        Some(user_role_id)
+                    }
+                };
 
                 let mut app_active = inserted_app.into_active_model();
                 app_active.owner_role_id = Set(Some(dst_owner_role_id.clone()));
@@ -2104,7 +2410,16 @@ pub async fn fork_app_with_visibility(
 
     skipped.extend(package_skips);
     skipped.extend(sink_skips);
-    Ok((new_app_id, maps, skipped))
+    Ok((
+        new_app_id,
+        ForkReport {
+            id_map: maps,
+            skipped,
+            warnings,
+            bytes_copied: copy_tally.bytes,
+            objects_copied: copy_tally.objects,
+        },
+    ))
 }
 
 /// Offline → online uploads come from the desktop content layout, where
@@ -2121,12 +2436,16 @@ pub async fn materialize_uploaded_app_media(
     let src_media_dir = Path::from("apps").child(app_id.to_string()).child("media");
     let dst_media_dir = Path::from("media").child("apps").child(app_id.to_string());
 
+    // NOT a fork: this is offline → online upload finalization, and the
+    // source is deleted immediately below. A skip predicate here would
+    // destroy the objects it declined to copy — always pass `None`.
     copy_object_prefix(
         &content_store,
         &content_store,
         &src_media_dir,
         &dst_media_dir,
         "uploaded app metadata media",
+        None,
     )
     .await?;
     delete_object_prefix(
@@ -2576,17 +2895,41 @@ fn join_relative(prefix: &Path, relative: &str) -> Path {
         .fold(prefix.clone(), |acc, segment| acc.child(segment))
 }
 
+/// Bytes + objects a single prefix mirror moved. Summed into
+/// [`ForkReport::bytes_copied`] / [`ForkReport::objects_copied`].
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct CopyTally {
+    pub objects: u64,
+    pub bytes: u64,
+}
+
+impl CopyTally {
+    fn add(&mut self, other: CopyTally) {
+        self.objects = self.objects.saturating_add(other.objects);
+        self.bytes = self.bytes.saturating_add(other.bytes);
+    }
+}
+
+/// Mirrors `src_prefix` onto `dst_prefix`.
+///
+/// `skip_relative` is evaluated against the source-relative suffix (e.g.
+/// `db/foo.lance/data/0.lance` under `apps/{id}/storage`) and decides
+/// *before* an object is scheduled, so a policy exclusion is never
+/// confused with a copy failure and excluded objects never enter the
+/// concurrency fan-out.
 async fn copy_object_prefix(
     src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
     dst_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
     src_prefix: &Path,
     dst_prefix: &Path,
     label: &str,
-) -> Result<(), ApiError> {
+    skip_relative: Option<&(dyn Fn(&str) -> bool + Send + Sync)>,
+) -> Result<CopyTally, ApiError> {
     use futures::StreamExt;
 
     let mut listing = src_store.list(Some(src_prefix));
     let mut entries: Vec<(Path, Path)> = Vec::new();
+    let mut tally = CopyTally::default();
     while let Some(item) = listing
         .try_next()
         .await
@@ -2598,7 +2941,11 @@ async fn copy_object_prefix(
             Some(_) => continue,
             None => continue,
         };
+        if skip_relative.is_some_and(|skip| skip(suffix)) {
+            continue;
+        }
         let dst_path = join_relative(dst_prefix, suffix);
+        tally.bytes = tally.bytes.saturating_add(item.size);
         entries.push((item.location, dst_path));
     }
 
@@ -2611,8 +2958,9 @@ async fn copy_object_prefix(
         .await;
     for r in results {
         r?;
+        tally.objects = tally.objects.saturating_add(1);
     }
-    Ok(())
+    Ok(tally)
 }
 
 async fn delete_object_prefix(
@@ -3317,12 +3665,20 @@ async fn fork_templates(
 /// segment that names a `widget_id`, `template_id`, or `page_id` so it
 /// matches the destination's id space. App-level files (e.g. `metadata/
 /// {lang}.meta`) are copied verbatim.
+///
+/// `shipped_widgets` / `shipped_templates` are the source ids that
+/// actually made it into the destination. Metadata for anything else is
+/// dropped rather than translated — the fork policy can exclude a whole
+/// category, and carrying its metadata would leave rows describing
+/// artifacts that do not exist.
 async fn copy_metadata_with_translation(
     src_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
     dst_store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
     src_meta_dir: &Path,
     dst_meta_dir: &Path,
     maps: &ForkIdMap,
+    shipped_widgets: &HashSet<String>,
+    shipped_templates: &HashSet<String>,
 ) -> Result<(), ApiError> {
     use futures::StreamExt;
 
@@ -3349,6 +3705,8 @@ async fn copy_metadata_with_translation(
         // category. e.g. `widgets/{src_id}/{lang}.meta` becomes
         // `widgets/{dst_id}/{lang}.meta`.
         let translated_suffix = match suffix.split('/').collect::<Vec<_>>().as_slice() {
+            ["widgets", id, ..] if !shipped_widgets.contains(*id) => continue,
+            ["templates", id, ..] if !shipped_templates.contains(*id) => continue,
             ["widgets", id, rest @ ..] => {
                 Some(translated_metadata_path("widgets", id, rest, &maps.widgets))
             }
@@ -3986,12 +4344,13 @@ mod tests {
                 .expect("seed source object");
         }
 
-        copy_object_prefix(
+        let tally = copy_object_prefix(
             &src,
             &dst,
             &Path::from("apps/src/storage"),
             &Path::from("apps/dst/storage"),
             "app storage",
+            None,
         )
         .await
         .expect("copy storage prefix");
@@ -4016,6 +4375,118 @@ mod tests {
                 "apps/dst/storage/notes.txt".to_string(),
             ]
         );
+        assert_eq!(tally.objects, 5);
+        assert_eq!(tally.bytes, 5, "each seeded object is one byte");
+    }
+
+    /// The policy must never split a `{table}.lance/` directory: a table
+    /// is only openable with `data/`, `_versions/`, `_transactions/` and
+    /// `_indices/` all present. Schema-only drops whole user tables and
+    /// keeps reserved artifact tables intact.
+    #[tokio::test]
+    async fn copy_object_prefix_honours_the_schema_only_skip_predicate() {
+        use flow_like_storage::object_store::{ObjectStore, memory::InMemory};
+
+        let src: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let dst = src.clone();
+
+        let sources = [
+            "apps/src/storage/db/tables.lance/data/chunk.lance",
+            "apps/src/storage/db/tables.lance/_versions/1.manifest",
+            "apps/src/storage/db/tables.lance/_transactions/1-abc.txn",
+            "apps/src/storage/db/tables.lance/_indices/idx/index.idx",
+            "apps/src/storage/db/__graph_overlays__.lance/data/chunk.lance",
+            "apps/src/storage/db/__graph_overlays__.lance/_versions/1.manifest",
+            "apps/src/storage/notes.txt",
+            "apps/src/storage/node_scratch/out.json",
+        ];
+        for path in sources {
+            src.put(&Path::from(path), bytes::Bytes::from_static(b"x").into())
+                .await
+                .expect("seed source object");
+        }
+
+        let policy = ForkPolicy {
+            databases: ForkDatabaseMode::SchemaOnly,
+            ..Default::default()
+        };
+        let skip = policy::storage_skip(&policy);
+        copy_object_prefix(
+            &src,
+            &dst,
+            &Path::from("apps/src/storage"),
+            &Path::from("apps/dst/storage"),
+            "app storage",
+            skip.as_deref(),
+        )
+        .await
+        .expect("copy storage prefix");
+
+        let mut copied: Vec<String> = futures::TryStreamExt::try_collect::<Vec<_>>(
+            dst.list(Some(&Path::from("apps/dst/storage"))),
+        )
+        .await
+        .expect("list destination")
+        .into_iter()
+        .map(|meta| meta.location.as_ref().to_string())
+        .collect();
+        copied.sort();
+
+        assert_eq!(
+            copied,
+            vec![
+                "apps/dst/storage/db/__graph_overlays__.lance/_versions/1.manifest".to_string(),
+                "apps/dst/storage/db/__graph_overlays__.lance/data/chunk.lance".to_string(),
+                "apps/dst/storage/node_scratch/out.json".to_string(),
+                "apps/dst/storage/notes.txt".to_string(),
+            ],
+            "user tables drop whole, reserved tables and flow scratch stay"
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_object_prefix_skips_the_whole_database_when_excluded() {
+        use flow_like_storage::object_store::{ObjectStore, memory::InMemory};
+
+        let src: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let dst = src.clone();
+
+        for path in [
+            "apps/src/storage/db/tables.lance/data/chunk.lance",
+            "apps/src/storage/db/__graph_overlays__.lance/data/chunk.lance",
+            "apps/src/storage/notes.txt",
+        ] {
+            src.put(&Path::from(path), bytes::Bytes::from_static(b"x").into())
+                .await
+                .expect("seed source object");
+        }
+
+        let policy = ForkPolicy {
+            databases: ForkDatabaseMode::None,
+            ..Default::default()
+        };
+        let skip = policy::storage_skip(&policy);
+        copy_object_prefix(
+            &src,
+            &dst,
+            &Path::from("apps/src/storage"),
+            &Path::from("apps/dst/storage"),
+            "app storage",
+            skip.as_deref(),
+        )
+        .await
+        .expect("copy storage prefix");
+
+        let copied: Vec<String> = futures::TryStreamExt::try_collect::<Vec<_>>(
+            dst.list(Some(&Path::from("apps/dst/storage"))),
+        )
+        .await
+        .expect("list destination")
+        .into_iter()
+        .map(|meta| meta.location.as_ref().to_string())
+        .collect();
+
+        assert_eq!(copied, vec!["apps/dst/storage/notes.txt".to_string()]);
     }
 
     #[tokio::test]
@@ -4038,12 +4509,15 @@ mod tests {
         maps.widgets
             .insert("src_widget".to_string(), "dst_widget".to_string());
 
+        let shipped_widgets = HashSet::from(["src_widget".to_string()]);
         copy_metadata_with_translation(
             &src,
             &dst,
             &Path::from("apps/src/metadata"),
             &Path::from("apps/dst/metadata"),
             &maps,
+            &shipped_widgets,
+            &HashSet::new(),
         )
         .await
         .expect("copy metadata prefix");
@@ -4065,5 +4539,119 @@ mod tests {
                 "apps/dst/metadata/widgets/dst_widget/en.meta".to_string(),
             ]
         );
+    }
+
+    /// Metadata for a category the policy excluded must be dropped, not
+    /// translated — otherwise the fork carries rows describing widgets
+    /// and templates that were never copied.
+    #[tokio::test]
+    async fn copy_metadata_with_translation_drops_metadata_for_unshipped_artifacts() {
+        use flow_like_storage::object_store::{ObjectStore, memory::InMemory};
+
+        let src: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let dst = src.clone();
+
+        for path in [
+            "apps/src/metadata/en.meta",
+            "apps/src/metadata/widgets/src_widget/en.meta",
+            "apps/src/metadata/templates/src_template/en.meta",
+        ] {
+            src.put(&Path::from(path), bytes::Bytes::from_static(b"x").into())
+                .await
+                .expect("seed source metadata");
+        }
+
+        let mut maps = ForkIdMap::default();
+        maps.widgets
+            .insert("src_widget".to_string(), "dst_widget".to_string());
+        maps.templates
+            .insert("src_template".to_string(), "dst_template".to_string());
+
+        copy_metadata_with_translation(
+            &src,
+            &dst,
+            &Path::from("apps/src/metadata"),
+            &Path::from("apps/dst/metadata"),
+            &maps,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .await
+        .expect("copy metadata prefix");
+
+        let copied: Vec<String> = futures::TryStreamExt::try_collect::<Vec<_>>(
+            dst.list(Some(&Path::from("apps/dst/metadata"))),
+        )
+        .await
+        .expect("list destination")
+        .into_iter()
+        .map(|meta| meta.location.as_ref().to_string())
+        .collect();
+
+        assert_eq!(
+            copied,
+            vec!["apps/dst/metadata/en.meta".to_string()],
+            "app-level metadata always travels; excluded artifacts' metadata does not"
+        );
+    }
+
+    #[test]
+    fn selected_totals_drop_the_excluded_categories() {
+        use crate::utils::fork::preview::{ForkCategorySize, ForkSizeBreakdown};
+
+        let breakdown = ForkSizeBreakdown {
+            always: ForkCategorySize {
+                bytes: 10,
+                objects: 1,
+            },
+            flows: ForkCategorySize {
+                bytes: 20,
+                objects: 2,
+            },
+            files: ForkCategorySize {
+                bytes: 40,
+                objects: 4,
+            },
+            databases: ForkCategorySize {
+                bytes: 800,
+                objects: 0,
+            },
+            widgets: ForkCategorySize {
+                bytes: 5,
+                objects: 1,
+            },
+            templates: ForkCategorySize {
+                bytes: 5,
+                objects: 1,
+            },
+        };
+
+        assert_eq!(breakdown.total(), (880, 9));
+        assert_eq!(breakdown.selected(&ForkPolicy::default()), (880, 9));
+
+        // The product win: an app whose database blows the cap becomes
+        // forkable once the owner excludes it.
+        let no_db = ForkPolicy {
+            databases: ForkDatabaseMode::None,
+            ..Default::default()
+        };
+        assert_eq!(breakdown.selected(&no_db), (80, 9));
+
+        // Schema-only ships no rows either, so it costs the same.
+        let schema_only = ForkPolicy {
+            databases: ForkDatabaseMode::SchemaOnly,
+            ..Default::default()
+        };
+        assert_eq!(breakdown.selected(&schema_only), (80, 9));
+
+        let minimal = ForkPolicy {
+            flows: true,
+            files: false,
+            databases: ForkDatabaseMode::None,
+            roles: false,
+            widgets: false,
+            templates: false,
+        };
+        assert_eq!(breakdown.selected(&minimal), (30, 3));
     }
 }

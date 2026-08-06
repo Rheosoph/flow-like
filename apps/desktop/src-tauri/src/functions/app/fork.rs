@@ -18,7 +18,10 @@
 //!      and lists the source content prefix; for each file, copies
 //!      to the desktop's local **content** store, translating any
 //!      `metadata/{widgets|templates|pages}/{src_id}/...` segment
-//!      via `id_map`.
+//!      via `id_map`. Paths under `content_exclude_prefixes` — the
+//!      owner's fork policy — are skipped in both stages.
+//!   3. Recreates `db_table_schemas` as empty tables in the local
+//!      project database, for schema-only database forks.
 //!
 //! The desktop's destination app id is **distinct** from the
 //! server-generated `new_app_id` returned by the begin endpoint; the
@@ -30,7 +33,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use flow_like::credentials::SharedCredentials;
-use flow_like::flow_like_storage::{Path, object_store::ObjectStore};
+use flow_like::flow_like_storage::{
+    Path,
+    arrow_schema::Schema,
+    databases::vector::lancedb::LanceDBVectorStore,
+    lancedb::{Connection, table::WriteOptions},
+    object_store::ObjectStore,
+};
 use flow_like::profile::ProfileApp;
 use flow_like_types::anyhow;
 use flow_like_types::base64::{self, Engine as _};
@@ -76,6 +85,24 @@ pub struct ApplyForkBundleArgs {
     pub template_id_map: HashMap<String, String>,
     #[serde(default)]
     pub page_id_map: HashMap<String, String>,
+    /// Source-relative prefixes (rooted at `apps/{src_app_id}/`) the
+    /// owner's fork policy excludes. Applied to both the inline blobs
+    /// and the mirrored source listing.
+    #[serde(default)]
+    pub content_exclude_prefixes: Vec<String>,
+    /// Arrow schemas of the source's user tables on a schema-only
+    /// database fork. Their `.lance` directories are excluded from the
+    /// mirror; each table is recreated empty locally instead.
+    #[serde(default)]
+    pub db_table_schemas: Vec<ForkTableSchemaInput>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct ForkTableSchemaInput {
+    pub table: String,
+    /// serde-serialized `arrow_schema::Schema`. Decoded per table so one
+    /// malformed schema doesn't fail the whole apply.
+    pub schema: serde_json::Value,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -84,6 +111,8 @@ pub struct ApplyForkBundleResponse {
     pub meta_blobs_written: u64,
     pub content_objects_copied: u64,
     pub content_bytes_copied: u64,
+    pub content_objects_skipped: u64,
+    pub db_tables_created: u64,
     pub failures: Vec<BundleFileFailure>,
 }
 
@@ -271,6 +300,7 @@ pub async fn apply_fork_bundle(
     let mut meta_blobs_written: u64 = 0;
     let mut content_objects_copied: u64 = 0;
     let mut content_bytes_copied: u64 = 0;
+    let mut content_objects_skipped: u64 = 0;
     let mut failures: Vec<BundleFileFailure> = Vec::new();
     let mut manifest_written = false;
     let mut inline_content_paths: HashSet<String> = HashSet::new();
@@ -278,6 +308,14 @@ pub async fn apply_fork_bundle(
     // ---- Stage 1: inline blobs (decode body → local stores) -----
     for blob in args.meta_blobs {
         let relative_path = blob.relative_path.trim_matches('/').to_string();
+        // `manifest.app` is never excludable — the check below this loop
+        // hard-errors without it, and no policy prefix can match it.
+        if relative_path != "manifest.app"
+            && is_excluded(&relative_path, &args.content_exclude_prefixes)
+        {
+            content_objects_skipped = content_objects_skipped.saturating_add(1);
+            continue;
+        }
         let dst_path = relative_path
             .split('/')
             .filter(|s| !s.is_empty())
@@ -342,6 +380,13 @@ pub async fn apply_fork_bundle(
         if relative_path.is_empty() {
             continue;
         }
+        // Matched on the SOURCE-relative path: `translate_content_path`
+        // rewrites `metadata/{widgets|templates|pages}/{id}` segments,
+        // which the policy prefixes are stated against.
+        if is_excluded(&relative_path, &args.content_exclude_prefixes) {
+            content_objects_skipped = content_objects_skipped.saturating_add(1);
+            continue;
+        }
 
         let translated = translate_content_path(
             &relative_path,
@@ -378,6 +423,15 @@ pub async fn apply_fork_bundle(
         }
     }
 
+    // ---- Stage 3: schema-only tables (empty local project DB) -----
+    let db_tables_created = create_empty_project_tables(
+        &app_handle,
+        &args.app_id,
+        &args.db_table_schemas,
+        &mut failures,
+    )
+    .await;
+
     register_profile_app(&app_handle, &args.app_id).await?;
 
     Ok(ApplyForkBundleResponse {
@@ -385,8 +439,98 @@ pub async fn apply_fork_bundle(
         meta_blobs_written,
         content_objects_copied,
         content_bytes_copied,
+        content_objects_skipped,
+        db_tables_created,
         failures,
     })
+}
+
+/// Recreates the source's user tables as **empty** tables in the local
+/// project database. A schema-only fork excludes every `{table}.lance/`
+/// directory from the content mirror, so without this the destination has
+/// the Data Studio configuration but no tables behind it. Per-table
+/// failures are collected — a fork with one unusable schema still applies.
+async fn create_empty_project_tables(
+    app_handle: &AppHandle,
+    app_id: &str,
+    schemas: &[ForkTableSchemaInput],
+    failures: &mut Vec<BundleFileFailure>,
+) -> u64 {
+    if schemas.is_empty() {
+        return 0;
+    }
+
+    let (connection, write_options) = match open_local_project_db(app_handle, app_id).await {
+        Ok(opened) => opened,
+        Err(e) => {
+            for entry in schemas {
+                failures.push(BundleFileFailure {
+                    kind_and_path: format!("db:{}", entry.table),
+                    reason: format!("open local project db: {e}"),
+                });
+            }
+            return 0;
+        }
+    };
+
+    let mut created: u64 = 0;
+    for entry in schemas {
+        match create_one_empty_table(&connection, write_options.as_ref(), entry).await {
+            Ok(()) => created = created.saturating_add(1),
+            Err(e) => failures.push(BundleFileFailure {
+                kind_and_path: format!("db:{}", entry.table),
+                reason: e.to_string(),
+            }),
+        }
+    }
+    created
+}
+
+async fn open_local_project_db(
+    app_handle: &AppHandle,
+    app_id: &str,
+) -> flow_like_types::Result<(Connection, Option<WriteOptions>)> {
+    let state = TauriFlowLikeState::construct(app_handle).await?;
+    let config = state.config.read().await;
+    let builder = config
+        .callbacks
+        .build_project_database
+        .clone()
+        .ok_or_else(|| anyhow!("No database builder found"))?;
+    let write_options = config.callbacks.lance_write_options.clone();
+    drop(config);
+
+    let db_dir = Path::from("apps")
+        .child(app_id)
+        .child("storage")
+        .child("db");
+    let connection = builder(db_dir)
+        .execute()
+        .await
+        .map_err(|e| anyhow!("connect: {e}"))?;
+    Ok((connection, write_options))
+}
+
+async fn create_one_empty_table(
+    connection: &Connection,
+    write_options: Option<&WriteOptions>,
+    entry: &ForkTableSchemaInput,
+) -> flow_like_types::Result<()> {
+    // LanceDB's listing backend panics on an invalid table name while
+    // deriving the table URI — never hand it an unvalidated server value.
+    LanceDBVectorStore::validate_table_name(&entry.table)?;
+    let schema: Schema =
+        serde_json::from_value(entry.schema.clone()).map_err(|e| anyhow!("decode schema: {e}"))?;
+    let mut store =
+        LanceDBVectorStore::from_connection(connection.clone(), entry.table.clone()).await;
+    if let Some(opts) = write_options {
+        store.set_write_options(opts.clone());
+    }
+    store
+        .create_empty_table(schema, true)
+        .await
+        .map_err(|e| anyhow!("create empty table: {e}"))?;
+    Ok(())
 }
 
 /// Translate a content-store relative path. Currently the only
@@ -510,6 +654,16 @@ fn is_content_blob_path(relative_path: &str) -> bool {
 /// `utils::fork::preview::project_db_prefix` on the server.
 fn is_project_db_path(relative_path: &str) -> bool {
     relative_path.starts_with("storage/db/")
+}
+
+/// Owner fork policy, applied to a source-relative path. The server already
+/// stripped what it ships inline; this keeps the mirrored source listing
+/// honest. Not a security boundary — the forker holds `ReadFiles` on the
+/// source either way.
+fn is_excluded(relative_path: &str, excludes: &[String]) -> bool {
+    excludes
+        .iter()
+        .any(|prefix| relative_path.starts_with(prefix.as_str()))
 }
 
 fn is_missing_prefix_error(error: &impl std::fmt::Display) -> bool {

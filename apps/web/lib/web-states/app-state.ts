@@ -20,8 +20,10 @@ import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-
 import type {
 	IBeginOfflineForkBody,
 	IBeginOfflineForkResponse,
+	IForkPolicy,
 	IForkPreviewResponse,
 	IForkPreviewTarget,
+	IForkSettings,
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
@@ -271,6 +273,24 @@ export class WebAppState implements IAppState {
 		await apiPatch(
 			`apps/${appId}/settings/forking`,
 			{ allow_forking: allow },
+			this.backend.auth,
+		);
+	}
+
+	async getForkSettings(appId: string): Promise<IForkSettings> {
+		return apiGet<IForkSettings>(
+			`apps/${appId}/settings/forking`,
+			this.backend.auth,
+		);
+	}
+
+	async changeAppForkPolicy(
+		appId: string,
+		policy: IForkPolicy,
+	): Promise<void> {
+		await apiPatch(
+			`apps/${appId}/settings/forking`,
+			{ fork_policy: policy },
 			this.backend.auth,
 		);
 	}

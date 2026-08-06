@@ -51,6 +51,8 @@ pub struct Model {
     pub updated_at: DateTime,
     #[sea_orm(column_name = "allowForking")]
     pub allow_forking: bool,
+    #[sea_orm(column_name = "forkPolicy", column_type = "JsonBinary", nullable)]
+    pub fork_policy: Option<Json>,
     #[sea_orm(column_name = "forkedAt")]
     pub forked_at: Option<DateTime>,
     #[sea_orm(column_name = "forkedFrom", column_type = "Text", nullable)]

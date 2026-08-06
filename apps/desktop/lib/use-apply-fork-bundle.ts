@@ -18,6 +18,10 @@ interface ApplyForkBundleResponse {
 	meta_blobs_written: number;
 	content_objects_copied: number;
 	content_bytes_copied: number;
+	/** Objects the owner's fork policy excluded from the mirror. */
+	content_objects_skipped: number;
+	/** Tables recreated empty for a schema-only database fork. */
+	db_tables_created: number;
 	failures: { kind_and_path: string; reason: string }[];
 }
 
@@ -35,6 +39,21 @@ function createProfileApp(appId: string): IProfileApp {
 		pinned: false,
 		pinned_order: null,
 	};
+}
+
+/** Trailing ", 5 skipped by fork policy, 2 tables created" — empty when
+ * the owner's policy excluded nothing. */
+function formatPolicyEffects(result: ApplyForkBundleResponse): string {
+	const parts: string[] = [];
+	if (result.content_objects_skipped > 0)
+		parts.push(`${result.content_objects_skipped} skipped by fork policy`);
+	if (result.db_tables_created > 0)
+		parts.push(
+			`${result.db_tables_created} empty table${
+				result.db_tables_created === 1 ? "" : "s"
+			} created`,
+		);
+	return parts.length > 0 ? `, ${parts.join(", ")}` : "";
 }
 
 function formatBytes(bytes: number): string {
@@ -83,6 +102,9 @@ export function useApplyForkBundle() {
 								widget_id_map: idMap?.widgets ?? {},
 								template_id_map: idMap?.templates ?? {},
 								page_id_map: idMap?.pages ?? {},
+								content_exclude_prefixes:
+									response.content_exclude_prefixes ?? [],
+								db_table_schemas: response.db_table_schemas ?? [],
 							},
 						},
 					);
@@ -94,15 +116,16 @@ export function useApplyForkBundle() {
 
 					const totalCopied =
 						result.meta_blobs_written + result.content_objects_copied;
+					const policyEffects = formatPolicyEffects(result);
 					if (result.failures.length === 0) {
 						toast.success(
 							`Applied ${totalCopied} files (${formatBytes(
 								result.content_bytes_copied,
-							)} content)`,
+							)} content)${policyEffects}`,
 						);
 					} else {
 						toast.warning(
-							`Applied ${totalCopied} files, ${result.failures.length} failed — re-open the dialog to retry`,
+							`Applied ${totalCopied} files${policyEffects}, ${result.failures.length} failed — re-open the dialog to retry`,
 						);
 					}
 

@@ -161,6 +161,7 @@ pub async fn begin_online_fork(
                     execution_mode: Set(ExecutionMode::Any),
                     bits: Set(Some(Vec::new())),
                     allow_forking: Set(false),
+                    fork_policy: Set(None),
                     forked_from: Set(source_app_id_owned),
                     forked_at: Set(Some(now)),
                     created_at: Set(now),

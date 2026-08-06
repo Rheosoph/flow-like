@@ -4,6 +4,7 @@ use crate::{
     entity::{event, event_sink},
     error::ApiError,
     state::AppState,
+    utils::fork::{ForkDatabaseMode, ForkPolicy},
 };
 use flow_like_storage::Path;
 use flow_like_types::anyhow;
@@ -56,15 +57,86 @@ fn is_under_prefix(location: &Path, prefix: &Path) -> bool {
         && location.as_bytes()[prefix.len()] == b'/'
 }
 
-/// Walks `apps/{app_id}/...` and app metadata media, then sums total
-/// bytes + object count across **both** the meta and content stores.
-/// Used by the preview endpoint and by the cross-mode flows for
-/// size-cap enforcement — the cap is on the user-visible bundle,
-/// which spans both stores plus `media/apps/{app_id}`.
-pub async fn compute_app_size_and_count(
+/// Bytes + object count for one fork category.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, ToSchema)]
+pub struct ForkCategorySize {
+    pub bytes: u64,
+    pub objects: u64,
+}
+
+impl ForkCategorySize {
+    fn add(&mut self, bytes: u64, counted: bool) {
+        self.bytes = self.bytes.saturating_add(bytes);
+        if counted {
+            self.objects = self.objects.saturating_add(1);
+        }
+    }
+
+    fn merge(&mut self, other: ForkCategorySize) {
+        self.bytes = self.bytes.saturating_add(other.bytes);
+        self.objects = self.objects.saturating_add(other.objects);
+    }
+}
+
+/// Per-category size of a source app, so the fork preview can show what
+/// the owner's policy actually costs and the caps can be enforced against
+/// the *selected* subset rather than the whole app.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, ToSchema)]
+pub struct ForkSizeBreakdown {
+    /// Always copied regardless of policy: manifest, events, pages,
+    /// metadata and app media.
+    pub always: ForkCategorySize,
+    pub flows: ForkCategorySize,
+    pub files: ForkCategorySize,
+    pub databases: ForkCategorySize,
+    pub widgets: ForkCategorySize,
+    pub templates: ForkCategorySize,
+}
+
+impl ForkSizeBreakdown {
+    /// Whole-app totals — what a fully permissive fork copies.
+    pub fn total(&self) -> (u64, u64) {
+        let mut sum = self.always;
+        sum.merge(self.flows);
+        sum.merge(self.files);
+        sum.merge(self.databases);
+        sum.merge(self.widgets);
+        sum.merge(self.templates);
+        (sum.bytes, sum.objects)
+    }
+
+    /// Totals after applying `policy` — what the fork will really copy.
+    /// Schema-only databases contribute effectively nothing: the reserved
+    /// artifact tables that ride along are tiny and the user rows don't
+    /// travel at all.
+    pub fn selected(&self, policy: &ForkPolicy) -> (u64, u64) {
+        let mut sum = self.always;
+        if policy.flows {
+            sum.merge(self.flows);
+        }
+        if policy.files {
+            sum.merge(self.files);
+        }
+        if policy.databases == ForkDatabaseMode::WithData {
+            sum.merge(self.databases);
+        }
+        if policy.widgets {
+            sum.merge(self.widgets);
+        }
+        if policy.templates {
+            sum.merge(self.templates);
+        }
+        (sum.bytes, sum.objects)
+    }
+}
+
+/// Walks `apps/{app_id}/...` and app metadata media, bucketing every
+/// object into the fork category that owns it. One pass per store — the
+/// per-category split is free relative to the listing itself.
+pub async fn compute_fork_size_breakdown(
     state: &AppState,
     app_id: &str,
-) -> Result<(u64, u64), ApiError> {
+) -> Result<ForkSizeBreakdown, ApiError> {
     let credentials = state
         .master_credentials()
         .await
@@ -81,8 +153,9 @@ pub async fn compute_app_size_and_count(
         .as_generic();
 
     let prefix = Path::from("apps").child(app_id.to_string());
-    let db_prefix = project_db_prefix(&prefix);
-    let (meta_bytes, meta_count) = sum_prefix(&meta_store, &prefix, Some(&db_prefix)).await?;
+    let mut breakdown = ForkSizeBreakdown::default();
+
+    bucket_prefix(&meta_store, &prefix, &mut breakdown, classify_meta).await?;
     // Same physical bucket aliasing → don't double count. We can't
     // detect aliasing reliably from `Arc::ptr_eq` (different `Arc`
     // instances point at the same backing impl), so when meta and
@@ -90,18 +163,124 @@ pub async fn compute_app_size_and_count(
     // accept the duplication as the upper bound (size caps are
     // conservative anyway). For physically separate stores this
     // computes the true total.
-    let (content_bytes, content_count) =
-        sum_prefix(&content_store, &prefix, Some(&db_prefix)).await?;
+    bucket_prefix(&content_store, &prefix, &mut breakdown, classify_content).await?;
+
     let media_prefix = Path::from("media").child("apps").child(app_id.to_string());
-    let (media_bytes, media_count) = sum_prefix(&content_store, &media_prefix, None).await?;
-    Ok((
-        meta_bytes
-            .saturating_add(content_bytes)
-            .saturating_add(media_bytes),
-        meta_count
-            .saturating_add(content_count)
-            .saturating_add(media_count),
-    ))
+    bucket_prefix(&content_store, &media_prefix, &mut breakdown, |_| {
+        (ForkCategory::Always, true)
+    })
+    .await?;
+
+    Ok(breakdown)
+}
+
+/// Enforces the deployment's fork caps against what the owner's policy
+/// will actually copy. Sharing this between the online and offline entry
+/// points keeps them from drifting apart from each other — and from the
+/// preview endpoint, which decides whether the fork button is enabled.
+pub async fn ensure_fork_within_limits(
+    state: &AppState,
+    app_id: &str,
+    policy: &ForkPolicy,
+) -> Result<(), ApiError> {
+    let breakdown = compute_fork_size_breakdown(state, app_id).await?;
+    let (selected_size, selected_count) = breakdown.selected(policy);
+    let max_size = state.platform_config.forking.max_size_bytes;
+    let max_count = state.platform_config.forking.max_file_count;
+    if selected_size > max_size {
+        return Err(ApiError::bad_request(format!(
+            "source app exceeds the deployment's fork size cap ({selected_size} bytes > {max_size} bytes)"
+        )));
+    }
+    if selected_count > max_count {
+        return Err(ApiError::bad_request(format!(
+            "source app exceeds the deployment's fork file-count cap ({selected_count} > {max_count})"
+        )));
+    }
+    Ok(())
+}
+
+/// Walks `apps/{app_id}/...` and app metadata media, then sums total
+/// bytes + object count across **both** the meta and content stores.
+/// Used by the preview endpoint and by the cross-mode flows for
+/// size-cap enforcement — the cap is on the user-visible bundle,
+/// which spans both stores plus `media/apps/{app_id}`.
+pub async fn compute_app_size_and_count(
+    state: &AppState,
+    app_id: &str,
+) -> Result<(u64, u64), ApiError> {
+    Ok(compute_fork_size_breakdown(state, app_id).await?.total())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ForkCategory {
+    Always,
+    Flows,
+    Files,
+    Databases,
+    Widgets,
+    Templates,
+}
+
+/// Meta store layout: boards and their version archives are flows;
+/// `.widget` / `.template` files are their own categories; the manifest,
+/// events and pages always travel.
+fn classify_meta(relative: &str) -> (ForkCategory, bool) {
+    if relative.starts_with("versions/") || relative.ends_with(".board") {
+        return (ForkCategory::Flows, true);
+    }
+    if relative.ends_with(".widget") {
+        return (ForkCategory::Widgets, true);
+    }
+    if relative.ends_with(".template") {
+        return (ForkCategory::Templates, true);
+    }
+    (ForkCategory::Always, true)
+}
+
+/// Content store layout: `upload/` is user files, `storage/db/` is the
+/// project database, everything else (metadata, flow scratch) always
+/// travels. Database objects contribute bytes but are never counted —
+/// see [`project_db_prefix`].
+fn classify_content(relative: &str) -> (ForkCategory, bool) {
+    if relative.starts_with("upload/") {
+        return (ForkCategory::Files, true);
+    }
+    if relative.starts_with("storage/db/") {
+        return (ForkCategory::Databases, false);
+    }
+    (ForkCategory::Always, true)
+}
+
+async fn bucket_prefix(
+    store: &Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    prefix: &Path,
+    breakdown: &mut ForkSizeBreakdown,
+    classify: impl Fn(&str) -> (ForkCategory, bool),
+) -> Result<(), ApiError> {
+    let mut listing = store.list(Some(prefix));
+    while let Some(item) = listing
+        .try_next()
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("list app prefix: {e}")))?
+    {
+        let location = item.location.as_ref();
+        let relative = match location.strip_prefix(prefix.as_ref()) {
+            Some(rest) if rest.is_empty() || rest.starts_with('/') => rest.trim_start_matches('/'),
+            _ => continue,
+        };
+        let (category, counted) = classify(relative);
+        let bucket = match category {
+            ForkCategory::Always => &mut breakdown.always,
+            ForkCategory::Flows => &mut breakdown.flows,
+            ForkCategory::Files => &mut breakdown.files,
+            ForkCategory::Databases => &mut breakdown.databases,
+            ForkCategory::Widgets => &mut breakdown.widgets,
+            ForkCategory::Templates => &mut breakdown.templates,
+        };
+        bucket.add(item.size, counted);
+    }
+    Ok(())
 }
 
 /// Same as [`compute_app_size_and_count`] but only for the content

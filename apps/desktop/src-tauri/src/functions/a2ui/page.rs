@@ -15,6 +15,13 @@ pub struct PageInfo {
     pub board_id: Option<String>,
     pub name: String,
     pub description: Option<String>,
+    /// Payload revision, so a listing can tell a stale local copy from a current one.
+    pub updated_at: Option<String>,
+}
+
+fn page_revision(page: &Page) -> Option<String> {
+    let datetime: chrono::DateTime<chrono::Utc> = page.updated_at.into();
+    Some(datetime.to_rfc3339())
 }
 
 #[tauri::command(async)]
@@ -41,6 +48,7 @@ pub async fn get_pages(
                                 board_id: Some(board_id_filter.clone()),
                                 name: page.name.clone(),
                                 description: page.title.clone(),
+                                updated_at: page_revision(&page),
                             });
                         }
                     }
@@ -67,6 +75,7 @@ pub async fn get_pages(
                                     board_id: Some(board_id.clone()),
                                     name: page.name.clone(),
                                     description: page.title.clone(),
+                                    updated_at: page_revision(&page),
                                 });
                             }
                         }
@@ -89,6 +98,7 @@ pub async fn get_page(
     app_id: String,
     page_id: String,
     board_id: Option<String>,
+    version: Option<(u32, u32, u32)>,
 ) -> Result<Page, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
@@ -100,7 +110,7 @@ pub async fn get_page(
 
     if let Some(bid) = board_id {
         let board = app
-            .open_board(bid.clone(), None, None)
+            .open_board(bid.clone(), None, version)
             .await
             .map_err(|error| {
                 TauriFunctionError::new(&format!(
@@ -116,20 +126,12 @@ pub async fn get_page(
         {
             return Err(TauriFunctionError::new("Page not found in specified board"));
         }
-        return board_guard
-            .load_page(&page_id, None)
-            .await
-            .map_err(|error| {
-                TauriFunctionError::new(&format!(
-                    "Failed to load page '{}' from board '{}': {}",
-                    page_id, bid, error
-                ))
-            });
+        return load_page_from_board(&board_guard, &page_id, &bid, version).await;
     }
 
     for bid in app.boards.iter() {
         let board = app
-            .open_board(bid.clone(), None, None)
+            .open_board(bid.clone(), None, version)
             .await
             .map_err(|error| {
                 TauriFunctionError::new(&format!(
@@ -145,18 +147,31 @@ pub async fn get_page(
         {
             continue;
         }
-        return board_guard
-            .load_page(&page_id, None)
-            .await
-            .map_err(|error| {
-                TauriFunctionError::new(&format!(
-                    "Failed to load page '{}' from board '{}': {}",
-                    page_id, bid, error
-                ))
-            });
+        return load_page_from_board(&board_guard, &page_id, bid, version).await;
     }
 
     Err(TauriFunctionError::new("Page not found"))
+}
+
+/// A pinned board version must read the page snapshot published with it — the current
+/// page file belongs to the draft board and can have diverged arbitrarily.
+async fn load_page_from_board(
+    board: &flow_like::flow::board::Board,
+    page_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+) -> Result<Page, TauriFunctionError> {
+    let loaded = match version {
+        Some(version) => board.load_versioned_page(page_id, version, None).await,
+        None => board.load_page(page_id, None).await,
+    };
+
+    loaded.map_err(|error| {
+        TauriFunctionError::new(&format!(
+            "Failed to load page '{}' from board '{}': {}",
+            page_id, board_id, error
+        ))
+    })
 }
 
 #[derive(serde::Serialize)]

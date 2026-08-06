@@ -27,8 +27,12 @@ export class WebPageState implements IPageState {
 		appId: string,
 		pageId: string,
 		boardId?: string,
+		version?: [number, number, number],
 	): Promise<IPage> {
-		const params = boardId ? `?board_id=${boardId}` : "";
+		const query = new URLSearchParams();
+		if (boardId) query.set("board_id", boardId);
+		if (version) query.set("version", version.join("_"));
+		const params = query.size > 0 ? `?${query.toString()}` : "";
 		return apiGet<IPage>(
 			`apps/${appId}/pages/${pageId}${params}`,
 			this.backend.auth,

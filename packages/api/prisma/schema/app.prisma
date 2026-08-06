@@ -105,6 +105,11 @@ model App {
   /// Project owner opts in to the Fork-an-app feature. Apps default to
   /// false; without this flag the fork endpoints reject the request.
   allowForking Boolean @default(false)
+  /// Owner-defined fork policy: which asset categories a fork of this app
+  /// copies, and how the project database is handled. NULL = platform
+  /// default (copy everything), which preserves pre-#756 behavior for
+  /// every existing row.
+  forkPolicy   Json?
   /// For forked apps: the source app's id, kept as a free-form string so a
   /// fork survives even if the source app is later deleted.
   forkedFrom   String?

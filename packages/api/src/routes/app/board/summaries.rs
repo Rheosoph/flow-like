@@ -107,18 +107,12 @@ pub async fn board_summaries(
         .await?;
 
     let mut pages_by_board: HashMap<String, Vec<PageInfo>> = HashMap::new();
-    for p in all_pages {
+    for p in &all_pages {
         if let Some(ref board_id) = p.board_id {
             pages_by_board
                 .entry(board_id.clone())
                 .or_default()
-                .push(PageInfo {
-                    app_id: app_id.clone(),
-                    page_id: p.id,
-                    board_id: p.board_id,
-                    name: p.name,
-                    description: p.description,
-                });
+                .push(PageInfo::from_row(&app_id, p));
         }
     }
 
