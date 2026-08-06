@@ -301,10 +301,13 @@ export function UsePageContent({
 	const redirectedAppRef = useRef<string | null>(null);
 	const goToStore = useCallback(() => {
 		if (!appId || embedded) return;
+		// The store needs the network it is being used to escape to. Staying put keeps
+		// whatever this device cached on screen until the connection returns.
+		if (!isOnline) return;
 		if (redirectedAppRef.current === appId) return;
 		redirectedAppRef.current = appId;
 		router.replace(storeHref);
-	}, [appId, embedded, router, storeHref]);
+	}, [appId, embedded, isOnline, router, storeHref]);
 
 	// --- Computed: usable event types ---
 
