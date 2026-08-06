@@ -624,6 +624,27 @@ export function A2UITable({
 		[columns, component, triggerEvent],
 	);
 
+	// One handler on the row keeps the row keyboard-reachable; the column comes
+	// from the cell that was actually hit, so the selection column cannot shift
+	// the index the board receives.
+	const handleRowActivate = React.useCallback(
+		(row: TableRowModel, target: EventTarget | null, fromPointer: boolean) => {
+			handleRowClick(row);
+			if (!fromPointer) return;
+
+			const cell =
+				target instanceof Element
+					? target.closest("[data-column-index]")
+					: null;
+			const columnIndex = Number.parseInt(
+				cell?.getAttribute("data-column-index") ?? "",
+				10,
+			);
+			if (Number.isInteger(columnIndex)) handleCellClick(row, columnIndex);
+		},
+		[handleCellClick, handleRowClick],
+	);
+
 	const rowsInteractive = Boolean(
 		component.eventHandlers?.rowClick?.length ||
 			component.eventHandlers?.cellClick?.length,
@@ -882,19 +903,29 @@ export function A2UITable({
 									selectable && selectedRows.has(row.index) && "bg-primary/10",
 									rowsInteractive && "cursor-pointer",
 								)}
+								tabIndex={rowsInteractive ? 0 : undefined}
 								onClick={
-									rowsInteractive ? () => handleRowClick(row) : undefined
+									rowsInteractive
+										? (event) => handleRowActivate(row, event.target, true)
+										: undefined
+								}
+								onKeyDown={
+									rowsInteractive
+										? (event) => {
+												if (event.key !== "Enter" && event.key !== " ") return;
+												event.preventDefault();
+												handleRowActivate(row, event.target, false);
+											}
+										: undefined
 								}
 							>
 								{selectable && (
-									<td
-										className="w-8 px-2 py-1.5"
-										onClick={(event) => event.stopPropagation()}
-									>
+									<td className="w-8 px-2 py-1.5">
 										<Checkbox
 											checked={selectedRows.has(row.index)}
 											onCheckedChange={() => toggleRowSelection(row.index)}
 											className="h-3.5 w-3.5"
+											onClick={(event) => event.stopPropagation()}
 										/>
 									</td>
 								)}
@@ -909,16 +940,12 @@ export function A2UITable({
 									return (
 										<td
 											key={colIdx}
+											data-column-index={colIdx}
 											className={cn(
 												"px-2 py-1.5",
 												alignClass,
 												compact && "py-1",
 											)}
-											onClick={
-												rowsInteractive
-													? () => handleCellClick(row, colIdx)
-													: undefined
-											}
 										>
 											{row.cells[colIdx]}
 										</td>
