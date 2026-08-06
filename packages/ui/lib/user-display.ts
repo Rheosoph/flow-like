@@ -43,10 +43,17 @@ const IDP_HANDLE_PREFIXES = [
 const UUID_PATTERN =
 	/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+// Kept in lockstep with `is_opaque_identifier` in packages/api/src/routes/user/identity.rs.
 function isOpaqueIdentifier(lower: string): boolean {
 	if (UUID_PATTERN.test(lower)) return true;
-	if (!/[a-z0-9]/.test(lower)) return true;
-	if (lower.length >= 10 && !/[a-z]/.test(lower)) return true;
+
+	const alphanumeric = lower.replace(/[^a-z0-9]/g, "").length;
+	if (alphanumeric === 0) return true;
+
+	// Google subs are long digit runs.
+	if (alphanumeric >= 10 && !/[a-z]/.test(lower)) return true;
+
+	// Apple subs look like `001234.9f8e7d6c5b4a….0123`; Cognito subs are hex blobs.
 	return (
 		lower.length >= 20 && /^[0-9a-f._-]+$/.test(lower) && /[0-9]/.test(lower)
 	);
@@ -133,17 +140,20 @@ export function userDisplayName(
 
 /**
  * Secondary line under the name — the handle, or the email when it adds something
- * the name does not already say.
+ * the name does not already say. Returns undefined when it would merely repeat the
+ * primary line, which is what happens for a user who has a handle but no name.
  */
 export function userSecondaryLabel(
 	user?: UserDisplayLike | null,
 ): string | undefined {
 	if (!user) return undefined;
+	const primary = userDisplayName(user, "");
+
 	const handle = userHandle(user);
-	if (handle) return `@${handle}`;
+	if (handle) return handle === primary ? undefined : `@${handle}`;
 
 	const email = clean(user.email);
-	if (email && email !== userDisplayName(user, "")) return email;
+	if (email && email !== primary) return email;
 	return undefined;
 }
 

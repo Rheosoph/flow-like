@@ -26,7 +26,8 @@ use std::{any::Any, sync::Arc};
 /// The iPhone failure at 1024 that motivated this cap was measured with the CoreML provider active,
 /// which cost ~2.9 GB on its own at 512 tokens — more than the CPU provider needs at 4096. With
 /// CoreML no longer registered (see `collect_execution_providers`), the same model at two threads
-/// needs +0.12 GB at 1024 and +0.71 GB at 2048. 2048 therefore has real headroom;
+/// needs +0.12 GB at 1024 and +0.71 GB at 2048, so 2048 fits. Going past it costs 2.88 GB at 4096,
+/// which no iOS process survives — treat this as the ceiling unless a device measurement says more.
 const MOBILE_MAX_SEQ: usize = 2048;
 const DESKTOP_MAX_SEQ: usize = 8192;
 
@@ -233,8 +234,7 @@ impl LocalEmbeddingModel {
         )?);
         // No overlap: overlapping tokens would be counted twice by the pooling average and bias it
         // toward chunk boundaries. Overlap belongs to `get_splitter`, which feeds a retrieval index.
-        let chunker =
-            TextSplitter::new(ChunkConfig::new(chunk_capacity).with_sizer(sizer.clone()));
+        let chunker = TextSplitter::new(ChunkConfig::new(chunk_capacity).with_sizer(sizer.clone()));
 
         let default_return_model = LocalEmbeddingModel {
             bit,

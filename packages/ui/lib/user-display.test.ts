@@ -85,8 +85,10 @@ describe("userHandle", () => {
 });
 
 describe("userSecondaryLabel", () => {
-	test("renders the handle with an @", () => {
-		expect(userSecondaryLabel({ preferred_username: "felix" })).toBe("@felix");
+	test("renders the handle with an @ beneath a real name", () => {
+		expect(
+			userSecondaryLabel({ name: "Felix Schultz", preferred_username: "felix" }),
+		).toBe("@felix");
 	});
 
 	test("falls back to the email when it adds information", () => {
@@ -99,6 +101,12 @@ describe("userSecondaryLabel", () => {
 		expect(userSecondaryLabel({ email: "ops@example.com" })).toBe(
 			"ops@example.com",
 		);
+	});
+
+	// A handle-only user would otherwise render "felix" over "@felix".
+	test("stays quiet when the handle is already the primary line", () => {
+		expect(userSecondaryLabel({ preferred_username: "felix" })).toBeUndefined();
+		expect(userSecondaryLabel({ username: "felix" })).toBeUndefined();
 	});
 
 	test("stays quiet when the email is verbatim the displayed name", () => {

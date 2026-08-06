@@ -23,7 +23,13 @@ fn normalize_avatar_extension(extension: &str) -> Result<&'static str, ApiError>
         .iter()
         .find(|allowed| **allowed == lowered)
         .copied()
-        .ok_or(ApiError::BAD_REQUEST)
+        .ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "Unsupported avatar extension {:?}, expected one of {}",
+                extension,
+                ALLOWED_AVATAR_EXTENSIONS.join(", ")
+            ))
+        })
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]

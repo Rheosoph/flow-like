@@ -4,7 +4,9 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::user::{
-        identity::{RankableUser, SearchTerm, escape_like_pattern, score_candidate},
+        identity::{
+            RankableUser, SearchTerm, escape_like_pattern, is_idp_handle, score_candidate,
+        },
         sign_avatar,
     },
     state::AppState,
@@ -332,9 +334,15 @@ pub async fn user_search(
         .all(&state.db)
         .await?;
 
+    // Pasting an id or address that already resolved needs no substring scan; typing
+    // a name still gets one, so near-matches keep showing up alongside an exact hit.
+    let resolved_identifier =
+        !exact_matches.is_empty() && (trimmed.contains('@') || is_idp_handle(trimmed));
+
     // A one-character term matches most of the table, so it is not worth scanning for.
     let term = SearchTerm::parse(trimmed);
     let fuzzy_matches = match &term {
+        Some(_) if resolved_identifier => Vec::new(),
         Some(term) => {
             let pattern = term.like_pattern();
             let pool = (limit * CANDIDATE_POOL_FACTOR).min(MAX_CANDIDATE_POOL);
