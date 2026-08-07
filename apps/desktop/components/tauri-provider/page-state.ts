@@ -68,6 +68,8 @@ export function isCachedPageOutdated(
 	remote: PageListItem,
 ): boolean {
 	if (!cached) return true;
+	// An unreadable local payload is worth replacing whatever the revisions claim.
+	if (cached.unavailable) return true;
 	if (!remote.updatedAt) return false;
 	if (!cached.updatedAt) return true;
 
@@ -201,10 +203,17 @@ export class PageState implements IPageState {
 				const local = localMap.get(rp.pageId);
 				// A page renamed on another device stays renamed: the server row is
 				// authoritative for listing metadata, the local entry only fills in
-				// what the listing does not carry.
+				// what the listing does not carry. An unreadable local file is not worth
+				// flagging while the server can still serve the page — the sync below
+				// repairs it.
 				result.push(
 					local
-						? { ...local, ...rp, boardId: rp.boardId ?? local.boardId }
+						? {
+								...local,
+								...rp,
+								boardId: rp.boardId ?? local.boardId,
+								unavailable: false,
+							}
 						: rp,
 				);
 			}

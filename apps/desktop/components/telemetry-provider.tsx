@@ -470,7 +470,7 @@ export function TelemetryProvider({
 	}, []);
 
 	const showConsentPrompt =
-		settings !== undefined && settings.enabled == null && available;
+		settings != null && settings.enabled == null && available;
 
 	return (
 		<>

@@ -199,6 +199,20 @@ impl Layer {
     }
 }
 
+/// A page the board lists but whose payload could not be read on this host.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
+pub struct UnreadablePage {
+    pub page_id: String,
+    pub reason: String,
+}
+
+/// The readable pages of a board plus the ids it lists that could not be read.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default)]
+pub struct LoadedPages {
+    pub pages: Vec<Page>,
+    pub unreadable: Vec<UnreadablePage>,
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone)]
 pub struct Board {
     pub id: String,
@@ -1746,16 +1760,34 @@ impl Board {
         self.load_page_with_legacy_fallback(&store, page_id).await
     }
 
+    /// Read every page the board lists.
+    ///
+    /// A board carries page ids, its pages are separate files, and the two can legitimately
+    /// disagree: a board synced from a remote arrives before its payloads do. One unreadable
+    /// page must therefore never cost the caller the rest of the board — the ids that failed
+    /// are reported alongside the pages that loaded so callers can surface or repair them.
+    /// Only a board-level storage failure is an error.
     pub async fn load_all_pages(
         &self,
         store: Option<Arc<dyn ObjectStore>>,
-    ) -> flow_like_types::Result<Vec<Page>> {
+    ) -> flow_like_types::Result<LoadedPages> {
         let store = self.get_store(store).await?;
-        let mut pages = Vec::with_capacity(self.page_ids.len());
+        let mut loaded = LoadedPages {
+            pages: Vec::with_capacity(self.page_ids.len()),
+            unreadable: Vec::new(),
+        };
+
         for page_id in &self.page_ids {
-            pages.push(self.load_page_with_legacy_fallback(&store, page_id).await?);
+            match self.load_page_with_legacy_fallback(&store, page_id).await {
+                Ok(page) => loaded.pages.push(page),
+                Err(error) => loaded.unreadable.push(UnreadablePage {
+                    page_id: page_id.clone(),
+                    reason: error.to_string(),
+                }),
+            }
         }
-        Ok(pages)
+
+        Ok(loaded)
     }
 
     /// Load a page from the canonical board-scoped binary-proto path,
@@ -2430,6 +2462,39 @@ mod tests {
             .unwrap()
             .schema = Some("[]".to_string());
         assert!(board.action_parameter_schema(&start_id).is_err());
+    }
+
+    #[tokio::test]
+    async fn listing_pages_survives_one_unreadable_payload() {
+        use crate::a2ui::widget::Page;
+
+        let state = flow_state().await;
+        let mut board = super::Board::new(None, Path::from("boards"), state);
+        board
+            .save_page(&Page::new("page-1", "First", "/"), None)
+            .await
+            .unwrap();
+        board
+            .save_page(&Page::new("page-2", "Second", "/second"), None)
+            .await
+            .unwrap();
+        // A board synced from a remote knows page ids whose payloads never arrived.
+        board.page_ids.push("page-missing".to_string());
+
+        let loaded = board.load_all_pages(None).await.unwrap();
+
+        assert_eq!(
+            loaded
+                .pages
+                .iter()
+                .map(|page| page.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["page-1", "page-2"],
+            "an unreadable page must not cost the caller the rest of the board"
+        );
+        assert_eq!(loaded.unreadable.len(), 1);
+        assert_eq!(loaded.unreadable[0].page_id, "page-missing");
+        assert!(!loaded.unreadable[0].reason.is_empty());
     }
 
     #[tokio::test]

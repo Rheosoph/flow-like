@@ -112,6 +112,12 @@ export interface PageListItem {
 	description?: string;
 	/** Revision of the stored payload; lets a listing spot a stale cached page. */
 	updatedAt?: string;
+	/**
+	 * The board lists this page but its payload could not be read where the listing came
+	 * from. Set only when no copy is reachable — a local file that the server can still
+	 * serve is repaired in the background instead of being flagged.
+	 */
+	unavailable?: boolean;
 }
 
 export interface IPageState {

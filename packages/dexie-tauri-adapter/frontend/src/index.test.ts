@@ -1,24 +1,7 @@
-import { beforeEach, describe, expect, it, mock } from "bun:test";
-
-// Mock @tauri-apps/api/core before importing our module
-const invokeResults = new Map<string, unknown>();
-mock.module("@tauri-apps/api/core", () => ({
-	invoke: async (cmd: string, args?: Record<string, unknown>) => {
-		const handler = invokeResults.get(cmd);
-		if (typeof handler === "function") return handler(args);
-		if (handler !== undefined) return handler;
-		throw new Error(`Unhandled invoke: ${cmd}`);
-	},
-}));
-
-// Mock dexie — provide Dexie.waitFor to keep tests working
-const DexieMock = {
-	waitFor: async <T>(promise: Promise<T>): Promise<T> => promise,
-};
-mock.module("dexie", () => ({
-	default: DexieMock,
-	__esModule: true,
-}));
+import { beforeEach, describe, expect, it } from "bun:test";
+// Registers the shared @tauri-apps/api/core mock (shared across test files
+// because bun caches ./index per process).
+import { invokeResults } from "./test-utils/invoke-mock";
 
 const { dexieTauriBlobOffload, configureBlobOffload } = await import("./index");
 

@@ -68,6 +68,7 @@ import {
 	SidebarRail,
 	Textarea,
 	useBackend,
+	useDeveloperMode,
 	useInvalidateInvoke,
 	useInvoke,
 	useSidebar,
@@ -153,6 +154,7 @@ const data = {
 			icon: AnimatedBrainIcon,
 			isActive: false,
 			permission: false,
+			devOnly: true,
 			items: [],
 		},
 		{
@@ -786,6 +788,7 @@ interface INavItem {
 	icon?: NavIcon;
 	isActive?: boolean;
 	permission?: boolean;
+	devOnly?: boolean;
 	items?: {
 		title: string;
 		url: string;
@@ -964,6 +967,7 @@ function NavMain({
 	const router = useRouter();
 	const pathname = usePathname();
 	const { open } = useSidebar();
+	const { developerMode } = useDeveloperMode();
 	const hasAccessToken = Boolean(auth?.user?.access_token);
 	const info = useInvoke(
 		backend.userState.getInfo,
@@ -980,6 +984,7 @@ function NavMain({
 				<SidebarMenu>
 					{items
 						.filter((item) => !item.permission)
+						.filter((item) => !item.devOnly || developerMode)
 						.map((item) =>
 							item.items && item.items.length > 0 ? (
 								<NavCollapsible
@@ -995,24 +1000,26 @@ function NavMain({
 						)}
 				</SidebarMenu>
 			</SidebarGroup>
-			<SidebarGroup>
-				<SidebarGroupLabel>Development</SidebarGroupLabel>
-				<SidebarMenu>
-					{devItems.map((item) =>
-						item.items && item.items.length > 0 ? (
-							<NavCollapsible
-								key={item.url}
-								item={item}
-								pathname={pathname}
-								sidebarOpen={open}
-								onNavigate={router.push}
-							/>
-						) : (
-							<NavFlatItem key={item.url} item={item} pathname={pathname} />
-						),
-					)}
-				</SidebarMenu>
-			</SidebarGroup>
+			{developerMode && (
+				<SidebarGroup>
+					<SidebarGroupLabel>Development</SidebarGroupLabel>
+					<SidebarMenu>
+						{devItems.map((item) =>
+							item.items && item.items.length > 0 ? (
+								<NavCollapsible
+									key={item.url}
+									item={item}
+									pathname={pathname}
+									sidebarOpen={open}
+									onNavigate={router.push}
+								/>
+							) : (
+								<NavFlatItem key={item.url} item={item} pathname={pathname} />
+							),
+						)}
+					</SidebarMenu>
+				</SidebarGroup>
+			)}
 			{(info.data?.permission ?? 0) > 0 && (
 				<SidebarGroup>
 					<SidebarGroupLabel>Admin Area</SidebarGroupLabel>
@@ -1086,6 +1093,7 @@ export function NavUser({
 	const { isMobile } = useSidebar();
 	const auth = useAuth();
 	const backend = useBackend();
+	const { developerMode } = useDeveloperMode();
 	const hasAccessToken = Boolean(auth?.user?.access_token);
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -1236,24 +1244,28 @@ export function NavUser({
 											Notifications
 										</DropdownMenuItem>
 									</Link>
-									<Link href="/account/pat">
-										<DropdownMenuItem className="gap-2 p-2">
-											<KeyIcon className="size-4" />
-											Token
-										</DropdownMenuItem>
-									</Link>
-									<Link href="/settings/sinks">
-										<DropdownMenuItem className="gap-2 p-2">
-											<ZapIcon className="size-4" />
-											Active Sinks
-										</DropdownMenuItem>
-									</Link>
-									<Link href="/settings/statistics">
-										<DropdownMenuItem className="gap-2 p-2">
-											<BarChart3 className="size-4" />
-											Board Statistics
-										</DropdownMenuItem>
-									</Link>
+									{developerMode && (
+										<>
+											<Link href="/account/pat">
+												<DropdownMenuItem className="gap-2 p-2">
+													<KeyIcon className="size-4" />
+													Token
+												</DropdownMenuItem>
+											</Link>
+											<Link href="/settings/sinks">
+												<DropdownMenuItem className="gap-2 p-2">
+													<ZapIcon className="size-4" />
+													Active Sinks
+												</DropdownMenuItem>
+											</Link>
+											<Link href="/settings/statistics">
+												<DropdownMenuItem className="gap-2 p-2">
+													<BarChart3 className="size-4" />
+													Board Statistics
+												</DropdownMenuItem>
+											</Link>
+										</>
+									)}
 								</DropdownMenuGroup>
 								<DropdownMenuSeparator />
 								<DropdownMenuItem

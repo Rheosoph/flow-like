@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-sql-exec"
+description = "Enables the sql_exec command without any pre-configured scope."
+commands.allow = ["sql_exec"]
+
+[[permission]]
+identifier = "deny-sql-exec"
+description = "Denies the sql_exec command without any pre-configured scope."
+commands.deny = ["sql_exec"]

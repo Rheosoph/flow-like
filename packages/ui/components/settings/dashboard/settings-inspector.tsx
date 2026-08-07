@@ -14,8 +14,9 @@ import {
 	XIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useDeveloperMode } from "../../../hooks/use-developer-mode";
 import type { IApp, IMetadata } from "../../../lib";
 import { IAppCategory, IAppStatus, type IAppType } from "../../../lib";
 import { formatAppCategory } from "../../../lib/app-category";
@@ -179,12 +180,26 @@ export function SettingsInspector({
 	slots?: InspectorSlots;
 }>) {
 	const backend = useBackend();
+	const { developerMode } = useDeveloperMode();
 	const [newTag, setNewTag] = useState("");
 	const [longDescOpen, setLongDescOpen] = useState(false);
 	const [longDescDraft, setLongDescDraft] = useState("");
 
 	const { draftApp, draftMetadata, setDraftApp, setDraftMetadata } = draft;
-	const active = PANELS.find((entry) => entry.id === panel) ?? PANELS[0];
+	const panels = useMemo(
+		() =>
+			developerMode
+				? PANELS
+				: PANELS.filter(
+						(entry) => !["listing", "compliance", "release"].includes(entry.id),
+					),
+		[developerMode],
+	);
+	// A deep link to a hidden panel falls back to the first visible one.
+	const activePanel = panels.some((entry) => entry.id === panel)
+		? panel
+		: panels[0].id;
+	const active = panels.find((entry) => entry.id === activePanel) ?? panels[0];
 
 	const handleMediaUpload = useCallback(
 		(type: "thumbnail" | "icon") => {
@@ -259,7 +274,7 @@ export function SettingsInspector({
 
 				<div className="flex min-h-0 flex-1 flex-col sm:flex-row">
 					<nav className="flex shrink-0 overflow-x-auto border-b py-2 sm:block sm:w-42 sm:overflow-x-hidden sm:overflow-y-auto sm:border-r sm:border-b-0">
-						{PANELS.map((entry) => {
+						{panels.map((entry) => {
 							const Icon = entry.icon;
 							const dirty = draft.isPanelDirty(entry.id);
 							return (
@@ -269,7 +284,7 @@ export function SettingsInspector({
 									onClick={() => onPanelChange(entry.id)}
 									className={cn(
 										"flex w-auto shrink-0 items-center gap-2 whitespace-nowrap px-3 py-2 text-left text-xs transition-colors sm:w-full sm:whitespace-normal",
-										entry.id === panel
+										entry.id === activePanel
 											? "bg-primary/10 font-medium text-primary"
 											: "text-muted-foreground hover:bg-muted hover:text-foreground",
 										entry.id === "advanced" && "text-destructive",
@@ -290,13 +305,13 @@ export function SettingsInspector({
 							<PanelHeader
 								title={active.label}
 								description={active.description}
-								dirty={draft.isPanelDirty(panel)}
+								dirty={draft.isPanelDirty(activePanel)}
 								saving={draft.isSaving}
-								onSave={() => draft.savePanel(panel)}
-								onReset={() => draft.resetPanel(panel)}
+								onSave={() => draft.savePanel(activePanel)}
+								onReset={() => draft.resetPanel(activePanel)}
 							/>
 
-							{panel === "identity" && draftMetadata && draftApp && (
+							{activePanel === "identity" && draftMetadata && draftApp && (
 								<div className="space-y-4">
 									<div className="space-y-2">
 										<Label>App type</Label>
@@ -447,7 +462,7 @@ export function SettingsInspector({
 								</div>
 							)}
 
-							{panel === "access" && (
+							{activePanel === "access" && (
 								<div className="space-y-4">
 									{slots?.access ?? (
 										<p className="text-sm text-muted-foreground">
@@ -457,7 +472,7 @@ export function SettingsInspector({
 								</div>
 							)}
 
-							{panel === "listing" && draftApp && draftMetadata && (
+							{activePanel === "listing" && draftApp && draftMetadata && (
 								<div className="space-y-4">
 									<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
 										<div className="space-y-2">
@@ -580,7 +595,7 @@ export function SettingsInspector({
 								</div>
 							)}
 
-							{panel === "compliance" && (
+							{activePanel === "compliance" && (
 								<div className="space-y-4">
 									{slots?.compliance ?? (
 										<p className="text-sm text-muted-foreground">
@@ -590,7 +605,7 @@ export function SettingsInspector({
 								</div>
 							)}
 
-							{panel === "release" && draftApp && (
+							{activePanel === "release" && draftApp && (
 								<div className="space-y-4">
 									<div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
 										<div className="space-y-2">
@@ -666,7 +681,7 @@ export function SettingsInspector({
 								</div>
 							)}
 
-							{panel === "advanced" && (
+							{activePanel === "advanced" && (
 								<div className="space-y-4">
 									{slots?.advanced}
 									{canEdit && (

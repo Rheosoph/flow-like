@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-sql-open"
+description = "Enables the sql_open command without any pre-configured scope."
+commands.allow = ["sql_open"]
+
+[[permission]]
+identifier = "deny-sql-open"
+description = "Denies the sql_open command without any pre-configured scope."
+commands.deny = ["sql_open"]

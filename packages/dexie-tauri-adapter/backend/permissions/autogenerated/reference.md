@@ -12,6 +12,9 @@ Default permissions for the blob offload plugin – allows all commands.
 - `allow-blob-configure`
 - `allow-blob-inc-refs`
 - `allow-blob-dec-refs`
+- `allow-sql-open`
+- `allow-sql-exec`
+- `allow-sql-close`
 
 ## Permission Table
 
@@ -226,6 +229,84 @@ Enables the blob_store_batch command without any pre-configured scope.
 <td>
 
 Denies the blob_store_batch command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`flow-like-dexie-blob-offload:allow-sql-close`
+
+</td>
+<td>
+
+Enables the sql_close command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`flow-like-dexie-blob-offload:deny-sql-close`
+
+</td>
+<td>
+
+Denies the sql_close command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`flow-like-dexie-blob-offload:allow-sql-exec`
+
+</td>
+<td>
+
+Enables the sql_exec command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`flow-like-dexie-blob-offload:deny-sql-exec`
+
+</td>
+<td>
+
+Denies the sql_exec command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`flow-like-dexie-blob-offload:allow-sql-open`
+
+</td>
+<td>
+
+Enables the sql_open command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`flow-like-dexie-blob-offload:deny-sql-open`
+
+</td>
+<td>
+
+Denies the sql_open command without any pre-configured scope.
 
 </td>
 </tr>

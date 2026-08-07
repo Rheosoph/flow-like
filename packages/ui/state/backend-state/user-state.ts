@@ -12,6 +12,7 @@ export interface IUserUpdate {
 	avatar_extension?: string;
 	accepted_terms_version?: string;
 	tutorial_completed?: boolean;
+	dev_mode?: boolean;
 }
 
 /**
@@ -77,6 +78,7 @@ export interface IUserInfo {
 	permission?: number;
 	accepted_terms_version?: string;
 	tutorial_completed?: boolean;
+	dev_mode?: boolean;
 
 	status?: string;
 	tier?: string;

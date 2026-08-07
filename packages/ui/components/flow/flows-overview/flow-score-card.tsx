@@ -171,6 +171,9 @@ function PageChip({
 	route,
 	href,
 }: Readonly<{ page: PageListItem; route?: string; href?: string }>) {
+	// The board lists the page but no copy of its content is reachable, so its name and
+	// route are unknown too — saying so beats rendering a chip that opens onto nothing.
+	const unavailable = page.unavailable === true;
 	const content = (
 		<>
 			<FileTextIcon className="size-2.5 shrink-0 opacity-70" />
@@ -180,24 +183,26 @@ function PageChip({
 			<span
 				className={cn(
 					"shrink-0 font-mono text-[9px]",
-					route
+					route && !unavailable
 						? "text-muted-foreground/70"
 						: "text-amber-600 dark:text-amber-400",
 				)}
 			>
-				{route ?? "no route"}
+				{unavailable ? "unavailable" : (route ?? "no route")}
 			</span>
 		</>
 	);
 	const className = cn(
 		"inline-flex min-w-0 max-w-[60%] items-center gap-1 rounded border px-1.5 py-0.5 transition-colors",
-		route
+		route && !unavailable
 			? "border-border/60 bg-muted/40 hover:border-border"
 			: "border-dashed border-amber-500/50 bg-amber-500/5",
 	);
-	const title = route
-		? `${page.name} — served at ${route}`
-		: `${page.name} — no route event points at this page`;
+	const title = unavailable
+		? `${page.name} — this page's content could not be loaded on this device`
+		: route
+			? `${page.name} — served at ${route}`
+			: `${page.name} — no route event points at this page`;
 
 	if (!href) {
 		return (

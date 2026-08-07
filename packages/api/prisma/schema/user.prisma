@@ -29,6 +29,7 @@ model User {
   permission           BigInt  @default(0)
   acceptedTermsVersion String?
   tutorialCompleted    Boolean @default(false)
+  devMode              Boolean @default(false)
 
   memberships                 Membership[]
   profiles                    Profile[]

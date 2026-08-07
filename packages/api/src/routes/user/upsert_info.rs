@@ -39,6 +39,7 @@ pub struct UpsertInfoBody {
     pub avatar_extension: Option<String>,
     pub accepted_terms_version: Option<String>,
     pub tutorial_completed: Option<bool>,
+    pub dev_mode: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, ToSchema)]
@@ -135,6 +136,9 @@ pub async fn upsert_info(
 
     if let Some(tutorial_completed) = payload.tutorial_completed {
         updated_user.tutorial_completed = Set(tutorial_completed);
+    }
+    if let Some(dev_mode) = payload.dev_mode {
+        updated_user.dev_mode = Set(dev_mode);
     }
     updated_user.updated_at = Set(chrono::Utc::now().naive_utc());
     updated_user.update(&state.db).await?;

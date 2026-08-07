@@ -9,6 +9,7 @@ import {
 	FileText,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { useDeveloperMode } from "../../../hooks/use-developer-mode";
 import { useModelNames } from "../../../hooks/use-model-names";
 import { cn, modelLabel } from "../../../lib";
 import {
@@ -35,11 +36,13 @@ function outcomeClass(outcome: IAgentDebugReport["outcome"]) {
 }
 
 export function AgentDebugReport({ report }: { report: IAgentDebugReport }) {
+	const { developerMode } = useDeveloperMode();
 	const [open, setOpen] = useState(false);
 	const [copied, setCopied] = useState<"json" | "markdown" | null>(null);
 	const modelNames = useModelNames(
 		useMemo(() => [report.model], [report.model]),
 	);
+	if (!developerMode) return null;
 	const modelName = report.model
 		? modelLabel(report.model, modelNames).label
 		: undefined;

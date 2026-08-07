@@ -41,6 +41,7 @@ import {
 	VisibilityIcon,
 	toastError,
 	useBackend,
+	useDeveloperMode,
 	useExecutionServiceOptional,
 	useInvoke,
 	useMobileHeader,
@@ -111,6 +112,7 @@ const navigationItems: {
 	visibilities?: IAppVisibility[];
 	requiresPaid?: boolean;
 	disabled?: boolean;
+	devOnly?: boolean;
 }[] = [
 	{
 		href: "/library/config",
@@ -139,6 +141,7 @@ const navigationItems: {
 		icon: WorkflowIcon,
 		description: "Business logic and workflow definitions",
 		group: "Build",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/pages",
@@ -146,6 +149,7 @@ const navigationItems: {
 		icon: SparklesIcon,
 		description: "Events, pages, and path-based navigation",
 		group: "Build",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/templates",
@@ -153,6 +157,7 @@ const navigationItems: {
 		icon: CopyIcon,
 		description: "Reusable Flow templates",
 		group: "Build",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/widgets",
@@ -160,6 +165,7 @@ const navigationItems: {
 		icon: LayoutGridIcon,
 		description: "Reusable UI components and widgets",
 		group: "Build",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/storage",
@@ -174,6 +180,7 @@ const navigationItems: {
 		icon: UserIcon,
 		description: "Browse and search your private app files",
 		group: "Data",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/explore",
@@ -181,6 +188,7 @@ const navigationItems: {
 		icon: DatabaseIcon,
 		description: "Model, explore, operate, and share project data",
 		group: "Data",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/packages",
@@ -188,6 +196,7 @@ const navigationItems: {
 		icon: PackageIcon,
 		description: "Manage WASM packages for this app",
 		group: "Data",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/team",
@@ -214,6 +223,7 @@ const navigationItems: {
 			IAppVisibility.Private,
 		],
 		group: "Collaborate",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/roles",
@@ -226,6 +236,7 @@ const navigationItems: {
 			IAppVisibility.PublicRequestAccess,
 		],
 		group: "Collaborate",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/sales",
@@ -235,6 +246,7 @@ const navigationItems: {
 		visibilities: [IAppVisibility.Public, IAppVisibility.PublicRequestAccess],
 		requiresPaid: true,
 		group: "Insights",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/analytics",
@@ -242,6 +254,7 @@ const navigationItems: {
 		icon: ChartAreaIcon,
 		description: "Performance metrics and insights",
 		group: "Insights",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/endpoints",
@@ -249,6 +262,7 @@ const navigationItems: {
 		icon: GlobeIcon,
 		description: "API endpoints and integrations",
 		group: "Insights",
+		devOnly: true,
 	},
 	{
 		href: "/library/config/publication",
@@ -256,6 +270,7 @@ const navigationItems: {
 		icon: SendIcon,
 		description: "Track publication review status and auditor feedback",
 		group: "Insights",
+		devOnly: true,
 	},
 ];
 
@@ -337,12 +352,15 @@ export default function Id({
 		[publicationRequests.data],
 	);
 
+	const { developerMode } = useDeveloperMode();
+
 	// Nav items visible for this app's visibility + paywall state — shared by the
 	// desktop sidebar and the mobile bottom-sheet switcher (no double filtering).
 	const visibleNavItems = useMemo(
 		() =>
 			navigationItems.filter(
 				(item) =>
+					(!item.devOnly || developerMode) &&
 					(!item.visibilities ||
 						item.visibilities.includes(
 							online?.visibility ?? IAppVisibility.Offline,
@@ -350,7 +368,7 @@ export default function Id({
 					(!item.requiresPaid ||
 						(app.data?.price != null && app.data.price > 0)),
 			),
-		[online?.visibility, app.data?.price],
+		[online?.visibility, app.data?.price, developerMode],
 	);
 
 	const activeItem = useMemo(

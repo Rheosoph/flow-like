@@ -3,6 +3,7 @@ export * from "./use-board-bridge";
 export * from "./use-invoke";
 export * from "./use-hub";
 export * from "./use-features";
+export * from "./use-developer-mode";
 export * from "./use-mobile";
 export * from "./use-network-status";
 export * from "./use-oauth-execution";

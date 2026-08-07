@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@flow-like/flow-like-ui";
+import { Button, Switch, useDeveloperMode } from "@flow-like/flow-like-ui";
 import { GitHubLogoIcon } from "@radix-ui/react-icons";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -9,6 +9,7 @@ import {
 	BookOpen,
 	Boxes,
 	Cloud,
+	Code2,
 	GitFork,
 	LayoutGrid,
 	type LucideIcon,
@@ -574,6 +575,7 @@ export function TutorialDialog() {
 	const [step, setStep] = useState(0);
 	const [supportsBackdrop, setSupportsBackdrop] = useState(true);
 	const reduced = usePrefersReducedMotion();
+	const { developerMode, setDeveloperMode } = useDeveloperMode();
 	const total = STEPS.length;
 	const active = STEPS[step];
 
@@ -842,6 +844,27 @@ export function TutorialDialog() {
 												<ArrowRight className="ml-auto size-4 text-muted-foreground transition-transform group-hover:translate-x-0.5 group-hover:text-foreground" />
 											</a>
 										))}
+									</div>
+								)}
+
+								{active.id === "community" && (
+									<div className="mt-4 flex items-center gap-3.5 rounded-xl border border-border bg-muted/50 p-3.5">
+										<span className="grid size-10 flex-none place-items-center rounded-lg bg-muted text-primary">
+											<Code2 className="size-5" />
+										</span>
+										<span className="flex flex-col leading-tight">
+											<b className="text-sm font-bold">Planning to build?</b>
+											<small className="text-xs text-muted-foreground">
+												Developer mode unhides flows, events, and data tooling.
+												Change it anytime in Settings.
+											</small>
+										</span>
+										<Switch
+											aria-label="Enable developer mode"
+											className="ml-auto"
+											checked={developerMode}
+											onCheckedChange={setDeveloperMode}
+										/>
 									</div>
 								)}
 							</motion.section>
