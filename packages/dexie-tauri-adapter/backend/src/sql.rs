@@ -78,6 +78,23 @@ fn column_to_json(row: &rusqlite::Row, idx: usize) -> JsonValue {
     }
 }
 
+fn configure_connection(conn: &Connection) -> Result<(), String> {
+    conn.busy_timeout(std::time::Duration::from_secs(10))
+        .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
+    // `PRAGMA journal_mode` returns the resulting mode as a row; plain
+    // pragma_update fails on that when rusqlite's `extra_check` feature is
+    // unified in by the app build.
+    conn.pragma_update_and_check(None, "journal_mode", "WAL", |_row| Ok(()))
+        .map_err(|e| format!("Failed to enable WAL: {e}"))?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(|e| format!("Failed to set synchronous: {e}"))?;
+    // Truncate the WAL back after checkpoints; frequent large writes
+    // (query-cache persister) otherwise grow it unbounded.
+    conn.pragma_update_and_check(None, "journal_size_limit", 8_388_608_i64, |_row| Ok(()))
+        .map_err(|e| format!("Failed to set journal_size_limit: {e}"))?;
+    Ok(())
+}
+
 fn run_query(conn: &Connection, query: &SqlQuery, read_only: bool) -> SqlResult {
     let mut stmt = match conn.prepare(&query.sql) {
         Ok(stmt) => stmt,
@@ -181,15 +198,7 @@ impl SqlStore {
             }
             let conn = Connection::open(&path)
                 .map_err(|e| format!("Failed to open sqlite db {}: {e}", path.display()))?;
-            conn.busy_timeout(std::time::Duration::from_secs(10))
-                .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
-            // `PRAGMA journal_mode` returns the resulting mode as a row;
-            // plain pragma_update fails on that when rusqlite's `extra_check`
-            // feature is unified in by the app build.
-            conn.pragma_update_and_check(None, "journal_mode", "WAL", |_row| Ok(()))
-                .map_err(|e| format!("Failed to enable WAL: {e}"))?;
-            conn.pragma_update(None, "synchronous", "NORMAL")
-                .map_err(|e| format!("Failed to set synchronous: {e}"))?;
+            configure_connection(&conn)?;
             Ok(conn)
         })
         .await

@@ -5,8 +5,8 @@ import "../lib/init-idb-sqlite";
 import {
 	ExecutionEngineProviderComponent,
 	ExecutionServiceProvider,
-	PersistQueryClientProvider,
 	QueryClient,
+	QueryClientProvider,
 	ReactFlowProvider,
 } from "@flow-like/flow-like-ui";
 import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
@@ -18,8 +18,11 @@ import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
 import { TooltipProvider } from "@flow-like/flow-like-ui/components/ui/tooltip";
 import { GlobalUpgradeDialog } from "@flow-like/flow-like-ui/components/upgrade/upgrade-dialog";
 import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
-import { createIDBPersister } from "@flow-like/flow-like-ui/lib/persister";
 import { isWebkitLite } from "@flow-like/flow-like-ui/lib/platform";
+import {
+	cleanupLegacyQueryCacheBlob,
+	createSmartQueryPersister,
+} from "@flow-like/flow-like-ui/lib/query-persister";
 import { useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { DesktopAuthProvider } from "../components/auth-provider";
@@ -44,7 +47,10 @@ import { initBlobOffload } from "../lib/init-blob-offload";
 
 initBlobOffload();
 
-const persister = createIDBPersister();
+// Per-query persistence: each query is written individually as it
+// resolves and restored lazily on first mount — no whole-client blob.
+// Retention policy (denylist + size cap) lives in query-persister.ts.
+const queryPersister = createSmartQueryPersister();
 const queryClient = new QueryClient({
 	defaultOptions: {
 		queries: {
@@ -56,6 +62,7 @@ const queryClient = new QueryClient({
 			refetchOnMount: true,
 			retry: 1,
 			retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+			persister: queryPersister.persisterFn,
 		},
 	},
 });
@@ -69,6 +76,16 @@ function NetworkAwareProvider({ children }: { children: React.ReactNode }) {
 		document.documentElement.dataset.engine = isWebkitLite()
 			? "webkit"
 			: "blink";
+	}, []);
+
+	useEffect(() => {
+		// Off the critical path: sweep expired persisted queries and drop the
+		// legacy whole-client cache blob (12MB) from the old persister.
+		const handle = window.setTimeout(() => {
+			void queryPersister.persisterGc();
+			void cleanupLegacyQueryCacheBlob();
+		}, 5000);
+		return () => window.clearTimeout(handle);
 	}, []);
 
 	useEffect(() => {
@@ -93,13 +110,7 @@ export function Providers({
 	return (
 		<IdbMigrationGate>
 			<ReactFlowProvider>
-				<PersistQueryClientProvider
-					client={queryClient}
-					persistOptions={{
-						persister,
-						maxAge: 24 * 60 * 60 * 1000,
-					}}
-				>
+				<QueryClientProvider client={queryClient}>
 					<NetworkAwareProvider>
 						<IOSWebviewHardening />
 						<NetworkStatusIndicator />
@@ -148,7 +159,7 @@ export function Providers({
 							</TooltipProvider>
 						</ThemeProvider>
 					</NetworkAwareProvider>
-				</PersistQueryClientProvider>
+				</QueryClientProvider>
 			</ReactFlowProvider>
 		</IdbMigrationGate>
 	);

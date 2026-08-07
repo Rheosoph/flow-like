@@ -563,6 +563,7 @@
         "@slate-yjs/react": "^1.1.0",
         "@tabler/icons-react": "^3.28.1",
         "@tanstack/query-async-storage-persister": "^5.62.16",
+        "@tanstack/query-persist-client-core": "^5.62.16",
         "@tanstack/react-query": "^5.63.0",
         "@tanstack/react-query-persist-client": "^5.63.0",
         "@tanstack/react-table": "^8.20.6",

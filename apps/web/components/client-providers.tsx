@@ -2,21 +2,24 @@
 import {
 	ExecutionEngineProviderComponent,
 	ExecutionServiceProvider,
-	PersistQueryClientProvider,
 	QueryClient,
+	QueryClientProvider,
 	ReactFlowProvider,
 } from "@flow-like/flow-like-ui";
 import { FlowPilotBubbleButton } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-button";
 import { GlobalChatOverlay } from "@flow-like/flow-like-ui/components/global-chat/global-chat-overlay";
 import { GlobalToolBridge } from "@flow-like/flow-like-ui/components/global-chat/global-tool-bridge";
-import { GlobalUpgradeDialog } from "@flow-like/flow-like-ui/components/upgrade/upgrade-dialog";
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
 import { TooltipProvider } from "@flow-like/flow-like-ui/components/ui/tooltip";
+import { GlobalUpgradeDialog } from "@flow-like/flow-like-ui/components/upgrade/upgrade-dialog";
 import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
 import { runIDBCleanup } from "@flow-like/flow-like-ui/lib/idb-cleanup";
-import { createIDBPersister } from "@flow-like/flow-like-ui/lib/persister";
+import {
+	cleanupLegacyQueryCacheBlob,
+	createSmartQueryPersister,
+} from "@flow-like/flow-like-ui/lib/query-persister";
 import { useEffect } from "react";
 import { AppSidebar } from "../components/app-sidebar";
 import { WebAuthProvider } from "../components/auth-provider";
@@ -28,7 +31,10 @@ import { TelemetryProvider } from "../components/telemetry-provider";
 import { ThemeLoader } from "../components/theme-loader";
 import { WebProvider } from "../components/web-provider";
 
-const persister = createIDBPersister();
+// Per-query persistence: each query is written individually as it
+// resolves and restored lazily on first mount — no whole-client blob.
+// Retention policy (denylist + size cap) lives in query-persister.ts.
+const queryPersister = createSmartQueryPersister();
 const queryClient = new QueryClient({
 	defaultOptions: {
 		queries: {
@@ -40,6 +46,7 @@ const queryClient = new QueryClient({
 			refetchOnMount: true,
 			retry: 1,
 			retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 30000),
+			persister: queryPersister.persisterFn,
 		},
 	},
 });
@@ -62,19 +69,17 @@ function NetworkAwareProvider({ children }: { children: React.ReactNode }) {
 
 export function ClientProviders({ children }: { children: React.ReactNode }) {
 	useEffect(() => {
-		const timer = setTimeout(() => runIDBCleanup().catch(() => {}), 5_000);
+		const timer = setTimeout(() => {
+			runIDBCleanup().catch(() => {});
+			void queryPersister.persisterGc();
+			void cleanupLegacyQueryCacheBlob();
+		}, 5_000);
 		return () => clearTimeout(timer);
 	}, []);
 
 	return (
 		<ReactFlowProvider>
-			<PersistQueryClientProvider
-				client={queryClient}
-				persistOptions={{
-					persister,
-					maxAge: 24 * 60 * 60 * 1000,
-				}}
-			>
+			<QueryClientProvider client={queryClient}>
 				<NetworkAwareProvider>
 					<NetworkStatusIndicator />
 					<ThemeProvider
@@ -113,7 +118,7 @@ export function ClientProviders({ children }: { children: React.ReactNode }) {
 						</TooltipProvider>
 					</ThemeProvider>
 				</NetworkAwareProvider>
-			</PersistQueryClientProvider>
+			</QueryClientProvider>
 		</ReactFlowProvider>
 	);
 }
