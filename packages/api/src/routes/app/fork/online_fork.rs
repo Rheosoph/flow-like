@@ -4,8 +4,8 @@ use crate::{
     permission::fork_permission::{ForkTargetKind, check_can_fork},
     state::AppState,
     utils::fork::{
-        ForkOptions, ForkReport, ForkTarget, fork_with_options,
-        preview::{compute_app_size_and_count, detect_remote_token_sites},
+        ForkOptions, ForkPolicy, ForkReport, ForkTarget, fork_with_options,
+        preview::{detect_remote_token_sites, ensure_fork_within_limits},
     },
 };
 use axum::{
@@ -73,23 +73,10 @@ pub async fn online_fork(
     Path(app_id): Path<String>,
     Json(body): Json<OnlineForkBody>,
 ) -> Result<Json<OnlineForkResponse>, ApiError> {
-    let _src_app = check_can_fork(&user, &app_id, &state, ForkTargetKind::Online).await?;
+    let src_app = check_can_fork(&user, &app_id, &state, ForkTargetKind::Online).await?;
 
-    let (total_size, total_count) = compute_app_size_and_count(&state, &app_id).await?;
-    let max_size = state.platform_config.forking.max_size_bytes;
-    let max_count = state.platform_config.forking.max_file_count;
-    if total_size > max_size {
-        return Err(ApiError::bad_request(format!(
-            "source app exceeds the deployment's fork size cap ({} bytes > {} bytes)",
-            total_size, max_size
-        )));
-    }
-    if total_count > max_count {
-        return Err(ApiError::bad_request(format!(
-            "source app exceeds the deployment's fork file-count cap ({} > {})",
-            total_count, max_count
-        )));
-    }
+    let policy = ForkPolicy::from_app_row(&src_app);
+    ensure_fork_within_limits(&state, &app_id, &policy).await?;
 
     let token_sites = detect_remote_token_sites(&state, &app_id).await?;
     let needs_replaceable_token = token_sites.iter().any(|s| s.is_token_replaceable());
@@ -113,8 +100,6 @@ pub async fn online_fork(
         language: &language,
         remote_event_token: body.remote_event_token.as_deref(),
         requested_visibility: Some(flow_like::app::AppVisibility::Private),
-        include_versions_pointed_to: true,
-        bypass_allow_forking_check: false,
     };
     let (new_app_id, report) = fork_with_options(&state, options).await?;
 

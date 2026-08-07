@@ -47,6 +47,7 @@ bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-
 bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-roles.plan.json
 bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-studio.plan.json
 bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-reference.plan.json
+bun run docs:screenshot -- --plan apps/desktop/lib/doc-screenshot/examples/docs-developer-mode.plan.json
 ```
 
 Each plan starts from application routes and performs the navigation and UI

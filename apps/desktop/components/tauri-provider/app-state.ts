@@ -18,8 +18,10 @@ import type { IAppSearchSort } from "@flow-like/flow-like-ui/lib/schema/app/app-
 import type {
 	IBeginOfflineForkBody,
 	IBeginOfflineForkResponse,
+	IForkPolicy,
 	IForkPreviewResponse,
 	IForkPreviewTarget,
+	IForkSettings,
 	IOnlineForkBody,
 	IOnlineForkResponse,
 } from "@flow-like/flow-like-ui/lib/schema/app/fork";
@@ -783,6 +785,43 @@ export class AppState implements IAppState {
 					method: "PATCH",
 					body: JSON.stringify({
 						allow_forking: allow,
+					}),
+				},
+				this.backend.auth,
+			);
+		}
+	}
+
+	async getForkSettings(appId: string): Promise<IForkSettings> {
+		if (await this.backend.isOffline(appId)) {
+			throw new Error("Forking settings are only available for online apps.");
+		}
+
+		if (!this.backend.profile || !this.backend.auth) {
+			throw new Error("Profile or auth not set. Cannot read fork settings.");
+		}
+
+		return fetcher<IForkSettings>(
+			this.backend.profile,
+			`apps/${appId}/settings/forking`,
+			{ method: "GET" },
+			this.backend.auth,
+		);
+	}
+
+	async changeAppForkPolicy(appId: string, policy: IForkPolicy): Promise<void> {
+		if (await this.backend.isOffline(appId)) {
+			throw new Error("Forking settings are only available for online apps.");
+		}
+
+		if (this.backend.profile && this.backend.auth && this.backend.queryClient) {
+			await fetcher<IApp>(
+				this.backend.profile,
+				`apps/${appId}/settings/forking`,
+				{
+					method: "PATCH",
+					body: JSON.stringify({
+						fork_policy: policy,
 					}),
 				},
 				this.backend.auth,

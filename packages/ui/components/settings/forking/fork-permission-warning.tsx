@@ -5,24 +5,74 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../hooks";
 import { RolePermissions } from "../../../lib/permission/role-permission";
+import type { IForkPolicy } from "../../../lib/schema/app/fork";
 import { useBackend } from "../../../state/backend-state";
 import type { IBackendRole } from "../../../state/backend-state/types";
 import { Alert, AlertDescription, AlertTitle } from "../../ui/alert";
 import { Button } from "../../ui/button";
 
-/** Required fork permissions paired with user-facing labels. Order mirrors
- * `FORK_REQUIRED_PERMISSIONS` in packages/api/src/permission/fork_permission.rs. */
-const FORK_REQUIRED_PERMISSION_LABELS: ReadonlyArray<{
+/** Which fork categories make each read permission necessary. A category the
+ * owner excludes is never copied, so its permission is not demanded.
+ * Mirrors `fork_required_permissions` in
+ * packages/api/src/permission/fork_permission.rs. */
+const FORK_PERMISSION_REQUIREMENTS: ReadonlyArray<{
 	permission: RolePermissions;
 	label: string;
+	/** Why the fork needs it — shown so the owner can see which setting to
+	 * change instead of granting the permission. */
+	reason: string;
+	requiredBy: (policy: IForkPolicy) => boolean;
 }> = [
-	{ permission: RolePermissions.ReadBoards, label: "Read Boards" },
-	{ permission: RolePermissions.ReadEvents, label: "Read Events" },
-	{ permission: RolePermissions.ReadFiles, label: "Read Files" },
-	{ permission: RolePermissions.ReadTemplates, label: "Read Templates" },
-	{ permission: RolePermissions.ReadWidgets, label: "Read Widgets" },
-	{ permission: RolePermissions.ReadRoles, label: "Read Roles" },
+	{
+		permission: RolePermissions.ReadBoards,
+		label: "Read Boards",
+		reason: "Flows",
+		requiredBy: (policy) => policy.flows,
+	},
+	{
+		permission: RolePermissions.ReadEvents,
+		label: "Read Events",
+		reason: "Flows",
+		requiredBy: (policy) => policy.flows,
+	},
+	{
+		// `ReadFiles` implies `ReadDatabase`, and the project-database routes
+		// accept either, so both categories map onto this one permission.
+		permission: RolePermissions.ReadFiles,
+		label: "Read Files",
+		reason: "Files and databases",
+		requiredBy: (policy) => policy.files || policy.databases !== "none",
+	},
+	{
+		permission: RolePermissions.ReadTemplates,
+		label: "Read Templates",
+		reason: "Templates",
+		requiredBy: (policy) => policy.templates,
+	},
+	{
+		permission: RolePermissions.ReadWidgets,
+		label: "Read Widgets",
+		reason: "Widgets",
+		requiredBy: (policy) => policy.widgets,
+	},
+	{
+		permission: RolePermissions.ReadRoles,
+		label: "Read Roles",
+		reason: "Roles",
+		requiredBy: (policy) => policy.roles,
+	},
 ];
+
+/** Permissive fallback matching the server's NULL-policy default, used while
+ * the owner's policy is still loading and for viewers who can't read it. */
+const PERMISSIVE_FORK_POLICY: IForkPolicy = {
+	flows: true,
+	files: true,
+	databases: "with_data",
+	roles: true,
+	widgets: true,
+	templates: true,
+};
 
 export interface ForkPermissionWarningProps {
 	appId: string;
@@ -30,6 +80,9 @@ export interface ForkPermissionWarningProps {
 	enabled: boolean;
 	/** Owner-only: gates the one-click fix. */
 	canEdit: boolean;
+	/** The owner's fork policy. Only the categories it ships need read
+	 * permissions. Falls back to the permissive default when unknown. */
+	policy?: IForkPolicy;
 }
 
 /**
@@ -44,6 +97,7 @@ export function ForkPermissionWarning({
 	appId,
 	enabled,
 	canEdit,
+	policy,
 }: Readonly<ForkPermissionWarningProps>) {
 	const backend = useBackend();
 	const roles = useInvoke(
@@ -54,27 +108,38 @@ export function ForkPermissionWarning({
 	);
 	const [fixing, setFixing] = useState(false);
 
+	const effectivePolicy = policy ?? PERMISSIVE_FORK_POLICY;
+	const required = useMemo(
+		() =>
+			FORK_PERMISSION_REQUIREMENTS.filter((r) => r.requiredBy(effectivePolicy)),
+		[effectivePolicy],
+	);
+
 	const { defaultRole, missing } = useMemo(() => {
 		if (!roles.data) {
-			return { defaultRole: undefined, missing: [] as string[] };
+			return { defaultRole: undefined, missing: [] };
 		}
 		const defaultRoleId = roles.data[0];
 		const allRoles = roles.data[1];
 		const role = allRoles.find((r) => r.id === defaultRoleId);
-		if (!role) return { defaultRole: undefined, missing: [] as string[] };
+		if (!role) return { defaultRole: undefined, missing: [] };
 		const perms = new RolePermissions(role.permissions);
-		const missingLabels = FORK_REQUIRED_PERMISSION_LABELS.filter(
-			({ permission }) => !perms.contains(permission),
-		).map(({ label }) => label);
-		return { defaultRole: role, missing: missingLabels };
-	}, [roles.data]);
+		return {
+			defaultRole: role,
+			missing: required.filter(({ permission }) => !perms.contains(permission)),
+		};
+	}, [roles.data, required]);
 
 	const handleFix = useCallback(async () => {
 		if (!defaultRole || fixing) return;
 		setFixing(true);
 		try {
-			const updated = new RolePermissions(defaultRole.permissions).insert(
-				RolePermissions.ForkRequired,
+			// Grant only what this app's fork policy actually needs — never the
+			// whole historic set, or excluding a category would still widen the
+			// default role beyond the app's own settings.
+			const updated = required.reduce(
+				(perms, { permission }) => perms.insert(permission),
+				new RolePermissions(defaultRole.permissions),
 			);
 			const next: IBackendRole = {
 				...defaultRole,
@@ -92,7 +157,7 @@ export function ForkPermissionWarning({
 		} finally {
 			setFixing(false);
 		}
-	}, [appId, backend.roleState, defaultRole, fixing, roles]);
+	}, [appId, backend.roleState, defaultRole, fixing, required, roles]);
 
 	if (!enabled || !defaultRole || missing.length === 0) return null;
 
@@ -108,10 +173,19 @@ export function ForkPermissionWarning({
 					button stays hidden for members.
 				</p>
 				<ul className="list-disc pl-5">
-					{missing.map((label) => (
-						<li key={label}>{label}</li>
+					{missing.map(({ label, reason }) => (
+						<li key={label}>
+							{label}
+							<span className="text-xs opacity-80"> — needed for {reason}</span>
+						</li>
 					))}
 				</ul>
+				{canEdit && (
+					<p className="text-xs">
+						Only what this app's fork settings include is required. Excluding a
+						category above removes its permission from this list.
+					</p>
+				)}
 				{canEdit ? (
 					<Button
 						type="button"

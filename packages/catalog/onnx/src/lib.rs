@@ -11,6 +11,7 @@
 //! - Audio processing (VAD)
 //! - Batch inference
 //! - Named Entity Recognition (NER)
+//! - Zero-shot NER (GLiNER)
 
 use std::sync::Arc;
 
@@ -24,8 +25,8 @@ pub use onnx::*;
 
 // Re-export submodules for external access
 pub use onnx::{
-    audio, batch, classification, depth, detection, face, face_id, feature, load, ner, ocr, pose,
-    segmentation,
+    audio, batch, classification, depth, detection, face, face_id, feature, gliner, load, ner, ocr,
+    pose, segmentation,
 };
 
 include!(concat!(env!("OUT_DIR"), "/node_registry.rs"));

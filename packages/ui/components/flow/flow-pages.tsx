@@ -133,6 +133,7 @@ export function FlowPages({ appId, boardId, onOpenPage }: FlowPagesProps) {
 									pageId={pageInfo.pageId}
 									name={pageInfo.name}
 									description={pageInfo.description}
+									unavailable={pageInfo.unavailable === true}
 									onOpen={() => handleOpenPage(pageInfo.pageId)}
 									onDelete={() => handleDeletePage(pageInfo.pageId)}
 								/>
@@ -198,12 +199,14 @@ function PageCard({
 	pageId,
 	name,
 	description,
+	unavailable,
 	onOpen,
 	onDelete,
 }: {
 	pageId: string;
 	name: string;
 	description?: string;
+	unavailable?: boolean;
 	onOpen: () => void;
 	onDelete: () => void;
 }) {
@@ -229,10 +232,18 @@ function PageCard({
 			</div>
 			<div className="min-w-0 flex-1">
 				<h4 className="font-medium text-sm truncate">{name}</h4>
-				{description && (
-					<p className="text-xs text-muted-foreground line-clamp-1">
-						{description}
+				{unavailable ? (
+					// The board still lists the page, so it is not deleted — its content just
+					// isn't readable here. Naming that beats a card that opens onto nothing.
+					<p className="text-xs text-amber-600 dark:text-amber-400 line-clamp-1">
+						Content unavailable on this device
 					</p>
+				) : (
+					description && (
+						<p className="text-xs text-muted-foreground line-clamp-1">
+							{description}
+						</p>
+					)
 				)}
 			</div>
 			<div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">

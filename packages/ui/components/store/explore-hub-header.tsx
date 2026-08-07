@@ -2,6 +2,8 @@
 
 import { LayoutGrid, Package } from "lucide-react";
 import Link from "next/link";
+import { useMemo } from "react";
+import { useDeveloperMode } from "../../hooks/use-developer-mode";
 import { cn } from "../../lib/utils";
 
 const HUB_TABS = [
@@ -36,6 +38,11 @@ export function ExploreHubHeader({
 	className?: string;
 	actions?: React.ReactNode;
 }>) {
+	const { developerMode } = useDeveloperMode();
+	const tabs = useMemo(
+		() => HUB_TABS.filter((tab) => tab.key !== "packages" || developerMode),
+		[developerMode],
+	);
 	return (
 		<div
 			className={cn(
@@ -57,7 +64,7 @@ export function ExploreHubHeader({
 					aria-label="Explore sections"
 					className="inline-flex items-center rounded-full border border-border/40 bg-muted/30 p-1"
 				>
-					{HUB_TABS.map((tab) => {
+					{tabs.map((tab) => {
 						const isActive = tab.key === active;
 						return (
 							<Link

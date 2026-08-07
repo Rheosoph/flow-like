@@ -23611,6 +23611,7 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "rand 0.9.3",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",

@@ -59,6 +59,7 @@ import {
 	SidebarRail,
 	Textarea,
 	useBackend,
+	useDeveloperMode,
 	useInvalidateInvoke,
 	useInvoke,
 	useSidebar,
@@ -124,6 +125,7 @@ const data = {
 			icon: AnimatedBrainIcon,
 			isActive: false,
 			permission: false,
+			devOnly: true,
 			items: [],
 		},
 		{
@@ -674,6 +676,7 @@ interface INavItem {
 	icon?: NavIcon;
 	isActive?: boolean;
 	permission?: boolean;
+	devOnly?: boolean;
 	items?: {
 		title: string;
 		url: string;
@@ -831,6 +834,7 @@ function NavMain({
 	const router = useRouter();
 	const pathname = usePathname();
 	const { open } = useSidebar();
+	const { developerMode } = useDeveloperMode();
 	const info = useInvoke(backend.userState.getInfo, backend.userState, []);
 
 	return (
@@ -840,6 +844,7 @@ function NavMain({
 				<SidebarMenu>
 					{items
 						.filter((item) => !item.permission)
+						.filter((item) => !item.devOnly || developerMode)
 						.map((item) =>
 							item.items && item.items.length > 0 ? (
 								<NavCollapsible
@@ -948,6 +953,7 @@ export function NavUser({
 	const { isMobile } = useSidebar();
 	const auth = useAuth();
 	const backend = useBackend();
+	const { developerMode } = useDeveloperMode();
 	const authQueryDeps = [auth?.user?.profile?.sub, auth?.isAuthenticated];
 	const profile = useInvoke(
 		backend.userState.getProfile,
@@ -1102,18 +1108,22 @@ export function NavUser({
 											Notifications
 										</DropdownMenuItem>
 									</a>
-									<a href="/account/pat">
-										<DropdownMenuItem className="gap-2 p-2">
-											<KeyIcon className="size-4" />
-											Token
-										</DropdownMenuItem>
-									</a>
-									<a href="/settings/sinks">
-										<DropdownMenuItem className="gap-2 p-2">
-											<ZapIcon className="size-4" />
-											Active Sinks
-										</DropdownMenuItem>
-									</a>
+									{developerMode && (
+										<>
+											<a href="/account/pat">
+												<DropdownMenuItem className="gap-2 p-2">
+													<KeyIcon className="size-4" />
+													Token
+												</DropdownMenuItem>
+											</a>
+											<a href="/settings/sinks">
+												<DropdownMenuItem className="gap-2 p-2">
+													<ZapIcon className="size-4" />
+													Active Sinks
+												</DropdownMenuItem>
+											</a>
+										</>
+									)}
 								</DropdownMenuGroup>
 								<DropdownMenuSeparator />
 								<DropdownMenuItem

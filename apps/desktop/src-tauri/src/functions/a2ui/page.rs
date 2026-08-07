@@ -2,7 +2,7 @@ use crate::{
     functions::TauriFunctionError,
     state::{TauriFlowLikeState, TauriSettingsState},
 };
-use flow_like::{a2ui::widget::Page, app::App, bit::Metadata};
+use flow_like::{a2ui::widget::Page, app::App, bit::Metadata, flow::board::LoadedPages};
 use serde::Serialize;
 use std::collections::HashMap;
 use tauri::AppHandle;
@@ -15,6 +15,49 @@ pub struct PageInfo {
     pub board_id: Option<String>,
     pub name: String,
     pub description: Option<String>,
+    /// Payload revision, so a listing can tell a stale local copy from a current one.
+    pub updated_at: Option<String>,
+    /// The board lists this page but its payload could not be read here. The entry is still
+    /// reported so it can be shown and re-synced instead of silently vanishing.
+    pub unavailable: bool,
+}
+
+fn page_revision(page: &Page) -> Option<String> {
+    let datetime: chrono::DateTime<chrono::Utc> = page.updated_at.into();
+    Some(datetime.to_rfc3339())
+}
+
+fn collect_board_pages(app_id: &str, board_id: &str, loaded: LoadedPages, out: &mut Vec<PageInfo>) {
+    for page in loaded.pages {
+        out.push(PageInfo {
+            app_id: app_id.to_string(),
+            page_id: page.id.clone(),
+            board_id: Some(board_id.to_string()),
+            name: page.name.clone(),
+            description: page.title.clone(),
+            updated_at: page_revision(&page),
+            unavailable: false,
+        });
+    }
+
+    for unreadable in loaded.unreadable {
+        tracing::warn!(
+            "Board {} lists page {} but its payload is unreadable: {}",
+            board_id,
+            unreadable.page_id,
+            unreadable.reason
+        );
+        out.push(PageInfo {
+            app_id: app_id.to_string(),
+            page_id: unreadable.page_id.clone(),
+            board_id: Some(board_id.to_string()),
+            // Nothing else survives an unreadable payload; the id is all this host knows.
+            name: unreadable.page_id,
+            description: None,
+            updated_at: None,
+            unavailable: true,
+        });
+    }
 }
 
 #[tauri::command(async)]
@@ -28,55 +71,23 @@ pub async fn get_pages(
 
     let mut result = Vec::new();
 
-    if let Some(board_id_filter) = &board_id {
-        match app.open_board(board_id_filter.clone(), None, None).await {
+    let board_ids: Vec<String> = match &board_id {
+        Some(board_id_filter) => vec![board_id_filter.clone()],
+        None => app.boards.clone(),
+    };
+
+    for board_id in board_ids {
+        match app.open_board(board_id.clone(), None, None).await {
             Ok(board) => {
                 let board_guard = board.lock().await;
                 match board_guard.load_all_pages(None).await {
-                    Ok(pages) => {
-                        for page in pages {
-                            result.push(PageInfo {
-                                app_id: app_id.clone(),
-                                page_id: page.id.clone(),
-                                board_id: Some(board_id_filter.clone()),
-                                name: page.name.clone(),
-                                description: page.title.clone(),
-                            });
-                        }
-                    }
-                    Err(e) => tracing::error!(
-                        "Failed to load pages for board {}: {:?}",
-                        board_id_filter,
-                        e
-                    ),
-                }
-            }
-            Err(e) => tracing::error!("Failed to open board {}: {:?}", board_id_filter, e),
-        }
-    } else {
-        for board_id in app.boards.iter() {
-            match app.open_board(board_id.to_string(), None, None).await {
-                Ok(board) => {
-                    let board_guard = board.lock().await;
-                    match board_guard.load_all_pages(None).await {
-                        Ok(pages) => {
-                            for page in pages {
-                                result.push(PageInfo {
-                                    app_id: app_id.clone(),
-                                    page_id: page.id.clone(),
-                                    board_id: Some(board_id.clone()),
-                                    name: page.name.clone(),
-                                    description: page.title.clone(),
-                                });
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to load pages for board {}: {:?}", board_id, e)
-                        }
+                    Ok(loaded) => collect_board_pages(&app_id, &board_id, loaded, &mut result),
+                    Err(e) => {
+                        tracing::error!("Failed to load pages for board {}: {:?}", board_id, e)
                     }
                 }
-                Err(e) => tracing::error!("Failed to open board {}: {:?}", board_id, e),
             }
+            Err(e) => tracing::error!("Failed to open board {}: {:?}", board_id, e),
         }
     }
 
@@ -89,6 +100,7 @@ pub async fn get_page(
     app_id: String,
     page_id: String,
     board_id: Option<String>,
+    version: Option<(u32, u32, u32)>,
 ) -> Result<Page, TauriFunctionError> {
     let flow_like_state = TauriFlowLikeState::construct(&handler).await?;
 
@@ -100,7 +112,7 @@ pub async fn get_page(
 
     if let Some(bid) = board_id {
         let board = app
-            .open_board(bid.clone(), None, None)
+            .open_board(bid.clone(), None, version)
             .await
             .map_err(|error| {
                 TauriFunctionError::new(&format!(
@@ -116,20 +128,12 @@ pub async fn get_page(
         {
             return Err(TauriFunctionError::new("Page not found in specified board"));
         }
-        return board_guard
-            .load_page(&page_id, None)
-            .await
-            .map_err(|error| {
-                TauriFunctionError::new(&format!(
-                    "Failed to load page '{}' from board '{}': {}",
-                    page_id, bid, error
-                ))
-            });
+        return load_page_from_board(&board_guard, &page_id, &bid, version).await;
     }
 
     for bid in app.boards.iter() {
         let board = app
-            .open_board(bid.clone(), None, None)
+            .open_board(bid.clone(), None, version)
             .await
             .map_err(|error| {
                 TauriFunctionError::new(&format!(
@@ -145,18 +149,31 @@ pub async fn get_page(
         {
             continue;
         }
-        return board_guard
-            .load_page(&page_id, None)
-            .await
-            .map_err(|error| {
-                TauriFunctionError::new(&format!(
-                    "Failed to load page '{}' from board '{}': {}",
-                    page_id, bid, error
-                ))
-            });
+        return load_page_from_board(&board_guard, &page_id, bid, version).await;
     }
 
     Err(TauriFunctionError::new("Page not found"))
+}
+
+/// A pinned board version must read the page snapshot published with it — the current
+/// page file belongs to the draft board and can have diverged arbitrarily.
+async fn load_page_from_board(
+    board: &flow_like::flow::board::Board,
+    page_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+) -> Result<Page, TauriFunctionError> {
+    let loaded = match version {
+        Some(version) => board.load_versioned_page(page_id, version, None).await,
+        None => board.load_page(page_id, None).await,
+    };
+
+    loaded.map_err(|error| {
+        TauriFunctionError::new(&format!(
+            "Failed to load page '{}' from board '{}': {}",
+            page_id, board_id, error
+        ))
+    })
 }
 
 #[derive(serde::Serialize)]
@@ -177,8 +194,16 @@ pub async fn get_page_by_route(
     for board_id in app.boards.iter() {
         if let Ok(board) = app.open_board(board_id.to_string(), None, None).await {
             let board_guard = board.lock().await;
-            if let Ok(pages) = board_guard.load_all_pages(None).await {
-                for page in pages {
+            if let Ok(loaded) = board_guard.load_all_pages(None).await {
+                for unreadable in &loaded.unreadable {
+                    tracing::warn!(
+                        "Board {} lists page {} but its payload is unreadable: {}",
+                        board_id,
+                        unreadable.page_id,
+                        unreadable.reason
+                    );
+                }
+                for page in loaded.pages {
                     if page.route == route {
                         return Ok(Some(PageWithBoardId {
                             page,

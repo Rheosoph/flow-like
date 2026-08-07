@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	type IStoreRedirectState,
 	loadPageAfterBoardSync,
+	pageLoadErrorMessage,
 	resolveStoreRedirect,
 } from "./use-page-content";
 
@@ -20,6 +21,7 @@ function redirectState(
 		eventsLoaded: true,
 		eventsFailed: false,
 		eventsFetching: false,
+		offline: false,
 		...overrides,
 	};
 }
@@ -104,6 +106,29 @@ describe("store redirect", () => {
 		}
 	});
 
+	test("never ejects an offline device to an unreachable store", () => {
+		expect(
+			resolveStoreRedirect(
+				redirectState({
+					offline: true,
+					appInLocalProfile: false,
+					remoteAppLoaded: false,
+					remoteAppFailed: true,
+					eventsFailed: true,
+					eventsLoaded: false,
+				}),
+			),
+		).toEqual({ pending: false, redirect: false });
+	});
+
+	test("still waits for a pending access check while offline", () => {
+		expect(
+			resolveStoreRedirect(
+				redirectState({ offline: true, localProfileCheckPending: true }),
+			),
+		).toEqual({ pending: true, redirect: false });
+	});
+
 	test("never ejects an embedded interface", () => {
 		expect(
 			resolveStoreRedirect(
@@ -159,6 +184,29 @@ describe("page board synchronization", () => {
 		expect(calls).toEqual(["board:start", "board:ready", "page"]);
 	});
 
+	test("reads the pinned version's page, not the draft board's", async () => {
+		const page = { id: "page-1", boardId: "board-1" };
+		const seen: unknown[] = [];
+		const boardState = { async getBoard() {} };
+		const pageState = {
+			async getPage(...args: unknown[]) {
+				seen.push(args);
+				return page;
+			},
+		};
+
+		await loadPageAfterBoardSync(
+			boardState as never,
+			pageState as never,
+			"app-1",
+			"page-1",
+			"board-1",
+			[2, 1, 0],
+		);
+
+		expect(seen).toEqual([["app-1", "page-1", "board-1", [2, 1, 0]]]);
+	});
+
 	test("still lets page state fall back when board synchronization fails", async () => {
 		const calls: string[] = [];
 		const page = { id: "page-1", boardId: "board-1" };
@@ -185,5 +233,21 @@ describe("page board synchronization", () => {
 			),
 		).resolves.toBe(page);
 		expect(calls).toEqual(["board", "page"]);
+	});
+});
+
+describe("page load failures", () => {
+	test("keeps the native failure readable for the retry surface", () => {
+		expect(
+			pageLoadErrorMessage({
+				error:
+					"Failed to load page 'page-1' from board 'board-1': page page-1 not found at canonical path",
+			}),
+		).toContain("Failed to load page 'page-1'");
+		expect(pageLoadErrorMessage(new Error("network unavailable"))).toBe(
+			"network unavailable",
+		);
+		expect(pageLoadErrorMessage("boom")).toBe("boom");
+		expect(pageLoadErrorMessage(undefined)).toBe("Unknown error");
 	});
 });

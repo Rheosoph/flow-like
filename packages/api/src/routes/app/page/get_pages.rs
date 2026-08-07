@@ -24,6 +24,22 @@ pub struct PageInfo {
     pub board_id: Option<String>,
     pub name: String,
     pub description: Option<String>,
+    /// Revision of the stored page payload, mirrored from it on write. Clients compare
+    /// this against their cached copy to refresh pages that changed elsewhere.
+    pub updated_at: Option<String>,
+}
+
+impl PageInfo {
+    pub fn from_row(app_id: &str, page: &page::Model) -> Self {
+        Self {
+            app_id: app_id.to_string(),
+            page_id: page.id.clone(),
+            board_id: page.board_id.clone(),
+            name: page.name.clone(),
+            description: page.description.clone(),
+            updated_at: Some(page.updated_at.and_utc().to_rfc3339()),
+        }
+    }
 }
 
 #[utoipa::path(
@@ -57,14 +73,8 @@ pub async fn get_pages(
     let pages = query_builder.all(&state.db).await?;
 
     let result = pages
-        .into_iter()
-        .map(|page| PageInfo {
-            app_id: app_id.clone(),
-            page_id: page.id,
-            board_id: page.board_id,
-            name: page.name,
-            description: page.description,
-        })
+        .iter()
+        .map(|page| PageInfo::from_row(&app_id, page))
         .collect();
 
     Ok(Json(result))

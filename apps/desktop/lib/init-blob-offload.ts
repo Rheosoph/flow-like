@@ -1,6 +1,8 @@
 import { dexieTauriBlobOffload } from "@flow-like/dexie-tauri-blob-offload";
+import { patchDexieDependencies } from "@flow-like/dexie-tauri-blob-offload/idb-sqlite";
 import { chatDb } from "@flow-like/flow-like-ui/components/interfaces/chat-default/chat-db";
 import { flowpilotDB } from "@flow-like/flow-like-ui/lib/flowpilot-db";
+import Dexie from "dexie";
 import { runtimeVarsDB } from "./runtime-vars-db";
 
 let initialized = false;
@@ -14,6 +16,10 @@ let initialized = false;
 export function initBlobOffload(threshold = 200) {
 	if (initialized) return;
 	initialized = true;
+
+	// Safety net for import-order slips: Dexie snapshots indexedDB/IDBKeyRange
+	// at module evaluation, which may predate the SQLite shim install.
+	patchDexieDependencies(Dexie);
 
 	const middleware = dexieTauriBlobOffload(threshold);
 

@@ -9,6 +9,7 @@ import {
 	handleUpgradeRequiredError,
 	nowSystemTime,
 	useBackend,
+	useDeveloperMode,
 	useFeatures,
 	useInvalidateInvoke,
 	useInvoke,
@@ -43,6 +44,26 @@ interface SpotlightWrapperProps {
 	children: React.ReactNode;
 }
 
+const DEV_ONLY_PATHS = [
+	"/developer",
+	"/library/config/flows",
+	"/library/config/events",
+	"/library/config/explore",
+	"/flow",
+	"/settings/statistics",
+	"/settings/sinks",
+	"/account/pat",
+];
+
+function isDevOnlyPath(path: string): boolean {
+	return DEV_ONLY_PATHS.some(
+		(prefix) =>
+			path === prefix ||
+			path.startsWith(`${prefix}?`) ||
+			path.startsWith(`${prefix}/`),
+	);
+}
+
 export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const router = useRouter();
 	const pathname = usePathname();
@@ -51,6 +72,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	const auth = useAuth();
 	const backend = useBackend();
 	const features = useFeatures();
+	const { developerMode } = useDeveloperMode();
 	const invalidate = useInvalidateInvoke();
 	const [crashReportOpen, setCrashReportOpen] = useState(false);
 	const [telemetrySettings, setTelemetrySettings] = useState<
@@ -144,7 +166,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 	}, [appMetadata.data, currentProfile.data]);
 
 	const openBoardItems = useMemo<SpotlightItem[]>(() => {
-		if (!openBoards.data) return [];
+		if (!openBoards.data || !developerMode) return [];
 
 		return openBoards.data.map(([appId, boardId, boardName]) => ({
 			id: `open-board-${boardId}`,
@@ -156,7 +178,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 			priority: 180,
 			action: () => router.push(`/flow?id=${boardId}&app=${appId}`),
 		}));
-	}, [openBoards.data, router]);
+	}, [openBoards.data, router, developerMode]);
 
 	const handleNavigate = useCallback(
 		(path: string) => {
@@ -357,7 +379,10 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		}
 
 		if (shortcuts && shortcuts.length > 0) {
-			for (const shortcut of shortcuts.slice(0, 5)) {
+			const visibleShortcuts = developerMode
+				? shortcuts
+				: shortcuts.filter((shortcut) => !isDevOnlyPath(shortcut.path));
+			for (const shortcut of visibleShortcuts.slice(0, 5)) {
 				// Get icon from shortcut or from app metadata
 				let iconUrl = shortcut.icon;
 				if (!iconUrl && shortcut.appId && appMetadata.data) {
@@ -582,6 +607,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 		currentProfile.data,
 		handleProfileChange,
 		appMetadata.data,
+		developerMode,
 	]);
 
 	const handleQuickCreateProject = useCallback(

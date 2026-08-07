@@ -12,10 +12,107 @@ use flow_like::flow::{
 };
 use flow_like_catalog_core::FlowPath;
 #[cfg(feature = "execute")]
-use flow_like_model_provider::ml::ort::{session::Session, value::Outlet};
+use flow_like_model_provider::ml::ort::{
+    session::{Session, builder::GraphOptimizationLevel},
+    value::Outlet,
+};
 #[cfg(feature = "execute")]
 use flow_like_types::json::json;
 use flow_like_types::{Result, anyhow, async_trait};
+#[cfg(feature = "execute")]
+use std::borrow::Cow;
+
+/// Sidecar names ONNX exporters use for tensors that do not fit in the 2 GB protobuf limit.
+/// `optimum`/`transformers.js` write `model.onnx_data`, `torch.onnx.export` writes
+/// `model.onnx.data`.
+#[cfg(feature = "execute")]
+pub fn external_data_candidates(file_name: &str) -> Vec<String> {
+    let stem = file_name.strip_suffix(".onnx").unwrap_or(file_name);
+    let mut candidates = vec![
+        format!("{file_name}_data"),
+        format!("{file_name}.data"),
+        format!("{stem}.data"),
+    ];
+    candidates.retain(|candidate| candidate != file_name);
+    candidates.dedup();
+    candidates
+}
+
+/// Pull any external tensor file sitting next to the graph in the same store. The registered
+/// name has to match the `location` the graph references, which is the bare file name.
+#[cfg(feature = "execute")]
+async fn fetch_external_data(
+    context: &mut ExecutionContext,
+    path: &FlowPath,
+) -> Vec<(String, Vec<u8>)> {
+    let (parent, file_name) = match path.path.rfind('/') {
+        Some(index) => path.path.split_at(index + 1),
+        None => ("", path.path.as_str()),
+    };
+
+    let mut found = Vec::new();
+    for candidate in external_data_candidates(file_name) {
+        let sibling = FlowPath::new(
+            format!("{parent}{candidate}"),
+            path.store_ref.clone(),
+            path.cache_store_ref.clone(),
+        );
+        if let Ok(bytes) = sibling.get(context, false).await
+            && !bytes.is_empty()
+        {
+            found.push((candidate, bytes));
+        }
+    }
+    found
+}
+
+/// Retry a graph that the default loader rejected, relaxing one assumption at a time:
+/// fp16 and q4f16 exports trip ORT's level-3 fusions, and graphs above the 2 GB protobuf limit
+/// need their tensor sidecar handed over explicitly.
+#[cfg(feature = "execute")]
+async fn load_with_fallbacks(
+    context: &mut ExecutionContext,
+    path: &FlowPath,
+    bytes: &[u8],
+    direct_error: flow_like_model_provider::ml::ort::Error,
+) -> Result<Session> {
+    let reduced = configured_session_builder()?
+        .with_optimization_level(GraphOptimizationLevel::Level2)
+        .map_err(|error| anyhow!("Failed to lower graph optimization level: {error}"))?
+        .commit_from_memory(bytes);
+    let reduced_error = match reduced {
+        Ok(session) => return Ok(session),
+        Err(error) => error,
+    };
+
+    let external = fetch_external_data(context, path).await;
+    if external.is_empty() {
+        return Err(anyhow!(
+            "Failed to load ONNX model `{}`: {direct_error} (also failed at reduced graph optimization: {reduced_error})",
+            path.path
+        ));
+    }
+
+    let names: Vec<String> = external.iter().map(|(name, _)| name.clone()).collect();
+    let mut builder = configured_session_builder()?
+        .with_optimization_level(GraphOptimizationLevel::Level2)
+        .map_err(|error| anyhow!("Failed to lower graph optimization level: {error}"))?;
+    for (name, data) in external {
+        builder = builder
+            .with_external_initializer_file_in_memory(&name, Cow::Owned(data))
+            .map_err(|error| {
+                anyhow!("Failed to register external tensor file `{name}`: {error}")
+            })?;
+    }
+
+    builder.commit_from_memory(bytes).map_err(|error| {
+        anyhow!(
+            "Failed to load ONNX model `{}` with external tensor data [{}]: {error}",
+            path.path,
+            names.join(", ")
+        )
+    })
+}
 
 // ## Loader Utilities
 // Identifying ONNX-I/Os
@@ -552,7 +649,16 @@ impl NodeLogic for LoadOnnxNode {
             // callers that reach the node without going through a FlowLike runtime bootstrap.
             let ep_info = ensure_ort_initialized()?;
 
-            let session = configured_session_builder()?.commit_from_memory(&bytes)?;
+            // Bound separately so the builder is dropped before any await; it is not `Send`.
+            let direct_load = configured_session_builder()?.commit_from_memory(&bytes);
+            let session = match direct_load {
+                Ok(session) => session,
+                // fp16/q4f16 exports and graphs above the 2 GB protobuf limit both fail here.
+                // Retry with relaxed optimization and the tensor sidecar pulled from the store.
+                Err(direct_error) => {
+                    load_with_fallbacks(context, &path, &bytes, direct_error).await?
+                }
+            };
 
             // wrap ONNX session with provider metadata
             // we try to determine the here to fail fast in case of incompatible ONNX assets

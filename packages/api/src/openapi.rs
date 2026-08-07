@@ -170,6 +170,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::internal::delete_app::delete_app,
         crate::routes::app::internal::change_visibility::change_visibility,
         crate::routes::app::internal::change_forking::change_forking,
+        crate::routes::app::internal::change_forking::get_forking,
         crate::routes::app::fork::preview::get_fork_preview,
         crate::routes::app::fork::begin_offline::begin_offline_fork,
         crate::routes::app::fork::begin_online::begin_online_fork,
@@ -940,6 +941,12 @@ impl Modify for SecurityAddon {
         crate::routes::admin::telemetry::dashboards::CreateTelemetryDashboardPayload,
         crate::routes::admin::telemetry::dashboards::UpdateTelemetryDashboardPayload,
         crate::utils::fork::ForkIdMap,
+        crate::utils::fork::ForkPolicy,
+        crate::utils::fork::ForkDatabaseMode,
+        crate::utils::fork::db_schema::ForkTableSchema,
+        crate::utils::fork::preview::ForkCategorySize,
+        crate::utils::fork::preview::ForkSizeBreakdown,
+        crate::routes::app::internal::change_forking::ForkSettingsResponse,
         crate::routes::app::fork::preview::ForkPreviewTarget,
     ))
 )]

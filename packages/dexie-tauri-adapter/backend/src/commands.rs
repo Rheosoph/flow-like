@@ -2,11 +2,17 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager, Runtime};
 
+use crate::sql::{SqlQuery, SqlResult, SqlStore};
 use crate::store::{BlobEntry, BlobRef, BlobRefEntry, BlobStore};
 
 fn get_store<R: Runtime>(app: &AppHandle<R>) -> Result<tauri::State<'_, BlobStore>, String> {
     app.try_state::<BlobStore>()
         .ok_or_else(|| "BlobStore not initialized".to_string())
+}
+
+fn get_sql_store<R: Runtime>(app: &AppHandle<R>) -> Result<tauri::State<'_, SqlStore>, String> {
+    app.try_state::<SqlStore>()
+        .ok_or_else(|| "SqlStore not initialized".to_string())
 }
 
 #[tauri::command]
@@ -95,4 +101,35 @@ pub async fn blob_dec_refs<R: Runtime>(
 ) -> Result<Vec<String>, String> {
     let store = get_store(&app)?;
     store.dec_refs(&hashes).await
+}
+
+#[tauri::command]
+pub async fn sql_open<R: Runtime>(app: AppHandle<R>, name: String) -> Result<u64, String> {
+    let store = get_sql_store(&app)?;
+    let result = store.open(&name).await;
+    if let Err(e) = &result {
+        tracing::warn!("[idb-sql] open {name:?} failed: {e}");
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn sql_exec<R: Runtime>(
+    app: AppHandle<R>,
+    conn_id: u64,
+    queries: Vec<SqlQuery>,
+    read_only: bool,
+) -> Result<Vec<SqlResult>, String> {
+    let store = get_sql_store(&app)?;
+    let result = store.exec(conn_id, queries, read_only).await;
+    if let Err(e) = &result {
+        tracing::warn!("[idb-sql] exec conn={conn_id} failed: {e}");
+    }
+    result
+}
+
+#[tauri::command]
+pub async fn sql_close<R: Runtime>(app: AppHandle<R>, conn_id: u64) -> Result<(), String> {
+    let store = get_sql_store(&app)?;
+    store.close(conn_id)
 }

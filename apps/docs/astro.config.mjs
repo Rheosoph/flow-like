@@ -105,6 +105,7 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 						{ label: "What is Flow-Like?", slug: "start/what-is-flow-like" },
 						{ label: "Download & Install", slug: "start/get" },
 						{ label: "First Steps", slug: "start/first-use" },
+						{ label: "Developer Mode", slug: "start/developer-mode" },
 						{ label: "Login & Accounts", slug: "start/login" },
 						{ label: "AI Models", slug: "start/models" },
 						{ label: "Profiles", slug: "start/profiles" },

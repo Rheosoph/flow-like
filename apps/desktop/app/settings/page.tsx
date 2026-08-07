@@ -5,6 +5,8 @@ import {
 	CardDescription,
 	CardHeader,
 	CardTitle,
+	DeveloperModeCard,
+	useDeveloperMode,
 } from "@flow-like/flow-like-ui";
 import {
 	BarChart3,
@@ -22,6 +24,7 @@ import {
 	Zap,
 } from "lucide-react";
 import Link from "next/link";
+import { useMemo } from "react";
 
 interface SettingsCard {
 	title: string;
@@ -29,6 +32,7 @@ interface SettingsCard {
 	href: string;
 	icon: LucideIcon;
 	external?: boolean;
+	devOnly?: boolean;
 }
 
 interface SettingsSection {
@@ -73,6 +77,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 				description: "Installed packages and explore the marketplace",
 				href: "/settings/registry",
 				icon: Package,
+				devOnly: true,
 			},
 			{
 				title: "Sinks & Triggers",
@@ -80,6 +85,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 					"Manage active event triggers like webhooks, cron jobs, and more",
 				href: "/settings/sinks",
 				icon: Zap,
+				devOnly: true,
 			},
 		],
 	},
@@ -103,6 +109,7 @@ const SETTINGS_SECTIONS: SettingsSection[] = [
 				description: "Node usage, category distribution, and board analytics",
 				href: "/settings/statistics",
 				icon: BarChart3,
+				devOnly: true,
 			},
 			{
 				title: "Privacy & Telemetry",
@@ -160,6 +167,17 @@ function SettingsCardItem({ card }: Readonly<{ card: SettingsCard }>) {
 }
 
 export default function SettingsPage() {
+	const { developerMode } = useDeveloperMode();
+
+	const sections = useMemo(
+		() =>
+			SETTINGS_SECTIONS.map((section) => ({
+				...section,
+				cards: section.cards.filter((card) => developerMode || !card.devOnly),
+			})).filter((section) => section.cards.length > 0),
+		[developerMode],
+	);
+
 	return (
 		<div className="h-full flex flex-col max-h-full overflow-auto min-h-0">
 			<div className="container mx-auto px-2 pb-4 flex flex-col gap-8">
@@ -169,7 +187,7 @@ export default function SettingsPage() {
 						Manage your preferences, models, and integrations
 					</p>
 				</div>
-				{SETTINGS_SECTIONS.map((section) => (
+				{sections.map((section) => (
 					<div key={section.label} className="flex flex-col gap-3">
 						<h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
 							{section.label}
@@ -181,6 +199,12 @@ export default function SettingsPage() {
 						</div>
 					</div>
 				))}
+				<div className="flex flex-col gap-3">
+					<h2 className="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+						Developer
+					</h2>
+					<DeveloperModeCard />
+				</div>
 			</div>
 		</div>
 	);

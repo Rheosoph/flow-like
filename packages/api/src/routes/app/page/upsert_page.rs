@@ -18,6 +18,16 @@ pub struct PageUpsert {
     pub page: Page,
 }
 
+/// The row's revision is what `get_pages` hands to clients to decide whether their cached
+/// page is stale, so it has to be the same clock the cached payload carries — `get_page`'s
+/// merge already treats the payload timestamp as authoritative. A clock running far ahead
+/// would freeze the revision for everyone else, so the future is capped.
+fn payload_revision(page: &Page) -> chrono::NaiveDateTime {
+    let stamped: chrono::DateTime<chrono::Utc> = page.updated_at.into();
+    let ceiling = chrono::Utc::now() + chrono::Duration::minutes(5);
+    stamped.min(ceiling).naive_utc()
+}
+
 #[utoipa::path(
     put,
     path = "/apps/{app_id}/pages/{page_id}",
@@ -118,7 +128,7 @@ pub async fn upsert_page(
             board_id: Set(Some(board_id.clone())),
             version: Set(page.version.map(|v| format!("{}.{}.{}", v.0, v.1, v.2))),
             created_at: Set(chrono::Utc::now().naive_utc()),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            updated_at: Set(payload_revision(&page)),
         };
 
         page::Entity::insert(new_page)
@@ -132,7 +142,7 @@ pub async fn upsert_page(
             app_id: Set(app_id.to_string()),
             board_id: Set(Some(board_id.clone())),
             version: Set(page.version.map(|v| format!("{}.{}.{}", v.0, v.1, v.2))),
-            updated_at: Set(chrono::Utc::now().naive_utc()),
+            updated_at: Set(payload_revision(&page)),
             ..Default::default()
         };
 

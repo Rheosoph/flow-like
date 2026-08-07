@@ -12,13 +12,15 @@ use flow_like_catalog_core::FlowPath;
 #[cfg(feature = "execute")]
 use flow_like_model_provider::ml::{
     ndarray::Array2,
-    ort::{inputs, value::Value},
+    ort::{inputs, session::Session, value::Value},
 };
 use flow_like_types::{Result, anyhow, async_trait, json::json};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "execute")]
 use std::str::FromStr;
+#[cfg(feature = "execute")]
+use tokenizers::Tokenizer;
 
 /// Tagging scheme used by the NER model
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default, PartialEq, Eq)]
@@ -366,6 +368,26 @@ pub fn merge_entities(
     entities
 }
 
+/// Tighten entity spans onto the text they actually cover. BPE tokenizers fold the preceding
+/// space into a token's offsets, which otherwise leaks into the entity text.
+pub fn trim_entity_spans(entities: &mut Vec<NamedEntity>, text: &str) {
+    for entity in entities.iter_mut() {
+        if entity.end_char > text.len() || entity.start_char >= entity.end_char {
+            continue;
+        }
+        let span = &text[entity.start_char..entity.end_char];
+        let trimmed = span.trim();
+        if trimmed.len() == span.len() {
+            continue;
+        }
+        let leading = span.len() - span.trim_start().len();
+        entity.start_char += leading;
+        entity.end_char = entity.start_char + trimmed.len();
+        entity.text = trimmed.to_string();
+    }
+    entities.retain(|entity| entity.start_char < entity.end_char);
+}
+
 /// Reconstruct entity text from tokens or original text
 fn reconstruct_text(
     tokens: &[String],
@@ -385,6 +407,316 @@ fn reconstruct_text(
             .join("")
             .replace(" ##", "")
     }
+}
+
+/// Label set assumed when the caller supplies none. Matches CoNLL-2003 ordering.
+pub const CONLL_2003_LABELS: [&str; 9] = [
+    "O", "B-MISC", "I-MISC", "B-PER", "I-PER", "B-ORG", "I-ORG", "B-LOC", "I-LOC",
+];
+
+/// Graph inputs this node knows how to build. Anything else means the model is not a plain
+/// token classifier and cannot be driven from here.
+#[cfg(feature = "execute")]
+const SUPPORTED_MODEL_INPUTS: [&str; 3] = ["input_ids", "attention_mask", "token_type_ids"];
+
+/// Inputs that identify a GLiNER / span-based zero-shot graph, used to explain the rejection.
+#[cfg(feature = "execute")]
+const SPAN_MODEL_INPUTS: [&str; 5] = [
+    "words_mask",
+    "text_lengths",
+    "span_idx",
+    "span_mask",
+    "class_ids",
+];
+
+/// Parameters for a single NER inference pass
+#[derive(Clone, Debug)]
+pub struct NerOptions {
+    /// Entity label names in model output order. Empty falls back to [`CONLL_2003_LABELS`].
+    pub labels: Vec<String>,
+    /// Minimum per-token confidence for a label to count as an entity tag
+    pub threshold: f32,
+    /// Maximum tokenized sequence length
+    pub max_length: usize,
+}
+
+impl Default for NerOptions {
+    fn default() -> Self {
+        Self {
+            labels: Vec::new(),
+            threshold: 0.5,
+            max_length: 512,
+        }
+    }
+}
+
+/// Reject graphs that are not plain token classifiers before spending an inference on them.
+#[cfg(feature = "execute")]
+fn ensure_token_classification_inputs(session: &Session) -> Result<()> {
+    let names: Vec<&str> = session.inputs().iter().map(|input| input.name()).collect();
+
+    if !names.contains(&"input_ids") {
+        return Err(anyhow!(
+            "ONNX model has no `input_ids` input (inputs: [{}]); the NER node only drives token-classification graphs",
+            names.join(", ")
+        ));
+    }
+
+    let unsupported: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| !SUPPORTED_MODEL_INPUTS.contains(name))
+        .collect();
+
+    if unsupported.is_empty() {
+        return Ok(());
+    }
+
+    let hint = if unsupported
+        .iter()
+        .any(|name| SPAN_MODEL_INPUTS.contains(name))
+    {
+        ". This is a GLiNER zero-shot/span graph — use the Zero-Shot NER (GLiNER) node instead"
+    } else {
+        ""
+    };
+
+    Err(anyhow!(
+        "ONNX model requires inputs the NER node cannot supply: [{}]{}",
+        unsupported.join(", "),
+        hint
+    ))
+}
+
+/// Run token classification and decode entities. Every shape and dtype assumption is checked so
+/// an incompatible model fails loudly instead of yielding an empty result.
+#[cfg(feature = "execute")]
+pub fn infer_ner(
+    session: &mut Session,
+    tokenizer: &Tokenizer,
+    text: &str,
+    options: &NerOptions,
+) -> Result<NerResult> {
+    ensure_token_classification_inputs(session)?;
+
+    let encoding = tokenizer
+        .encode(text, true)
+        .map_err(|e| anyhow!("Tokenization failed: {}", e))?;
+
+    let tokens: Vec<String> = encoding.get_tokens().to_vec();
+    let offsets: Vec<(usize, usize)> = encoding.get_offsets().to_vec();
+    let special_tokens_mask: Vec<u32> = encoding.get_special_tokens_mask().to_vec();
+    let word_ids: Vec<Option<u32>> = encoding.get_word_ids().to_vec();
+
+    let max_length = options.max_length.max(1);
+    let seq_len = encoding.get_ids().len().min(max_length);
+    if seq_len == 0 {
+        return Err(anyhow!("Tokenizer produced no tokens for the input text"));
+    }
+
+    let input_ids: Vec<i64> = encoding
+        .get_ids()
+        .iter()
+        .take(seq_len)
+        .map(|&id| id as i64)
+        .collect();
+    let attention_mask: Vec<i64> = encoding
+        .get_attention_mask()
+        .iter()
+        .take(seq_len)
+        .map(|&mask| mask as i64)
+        .collect();
+
+    let batch_size = 1usize;
+    let input_ids_value =
+        Value::from_array(Array2::from_shape_vec((batch_size, seq_len), input_ids)?)?;
+    let attention_mask_value = Value::from_array(Array2::from_shape_vec(
+        (batch_size, seq_len),
+        attention_mask,
+    )?)?;
+
+    let has_token_type_ids = session
+        .inputs()
+        .iter()
+        .any(|input| input.name() == "token_type_ids");
+
+    let outputs = if has_token_type_ids {
+        let token_type_ids_value = Value::from_array(Array2::from_shape_vec(
+            (batch_size, seq_len),
+            vec![0i64; seq_len],
+        )?)?;
+        session.run(inputs![
+            "input_ids" => input_ids_value,
+            "attention_mask" => attention_mask_value,
+            "token_type_ids" => token_type_ids_value
+        ])?
+    } else {
+        session.run(inputs![
+            "input_ids" => input_ids_value,
+            "attention_mask" => attention_mask_value
+        ])?
+    };
+
+    let logits_key = outputs
+        .keys()
+        .find(|key| key.contains("logits") || key.contains("output"))
+        .or_else(|| outputs.keys().next())
+        .ok_or_else(|| anyhow!("NER model produced no outputs"))?
+        .to_string();
+
+    let logits = outputs[logits_key.as_str()]
+        .try_extract_array::<f32>()
+        .map_err(|e| {
+            anyhow!(
+                "NER model output `{}` is not a float32 tensor ({:?}); this node cannot decode it. Error: {}",
+                logits_key,
+                outputs[logits_key.as_str()].dtype(),
+                e
+            )
+        })?;
+
+    let shape = logits.shape();
+    if shape.len() != 3 {
+        return Err(anyhow!(
+            "NER model output `{}` has shape {:?}; expected a rank-3 [batch, sequence, labels] token-classification tensor",
+            logits_key,
+            shape
+        ));
+    }
+    if shape[0] != batch_size {
+        return Err(anyhow!(
+            "NER model output `{}` has batch dimension {}; expected {}",
+            logits_key,
+            shape[0],
+            batch_size
+        ));
+    }
+    if shape[1] != seq_len {
+        return Err(anyhow!(
+            "NER model output `{}` has sequence dimension {} but {} tokens were fed in; the model does not emit one prediction per token",
+            logits_key,
+            shape[1],
+            seq_len
+        ));
+    }
+
+    let num_labels = shape[2];
+    let label_names: Vec<String> = if options.labels.is_empty() {
+        if num_labels != CONLL_2003_LABELS.len() {
+            return Err(anyhow!(
+                "NER model emits {} labels but no label names were supplied and the CoNLL-2003 fallback only covers {}. Pass the model's id2label values (from its config.json) to the Labels pin",
+                num_labels,
+                CONLL_2003_LABELS.len()
+            ));
+        }
+        CONLL_2003_LABELS.iter().map(|s| s.to_string()).collect()
+    } else {
+        if options.labels.len() != num_labels {
+            return Err(anyhow!(
+                "{} label names were supplied but the model emits {} labels; the Labels pin must list every class in model output order",
+                options.labels.len(),
+                num_labels
+            ));
+        }
+        options.labels.clone()
+    };
+
+    let mut token_predictions = Vec::new();
+    let mut parsed_labels = Vec::new();
+    let mut confidences = Vec::new();
+    let mut valid_offsets = Vec::new();
+    let mut valid_tokens = Vec::new();
+    let mut previous_word: Option<u32> = None;
+
+    for (token_idx, token) in tokens.iter().enumerate().take(seq_len) {
+        if special_tokens_mask.get(token_idx).copied().unwrap_or(0) == 1 {
+            continue;
+        }
+
+        let (char_start, char_end) = offsets.get(token_idx).copied().unwrap_or((0, 0));
+
+        let mut max_idx = 0;
+        let mut max_val = f32::NEG_INFINITY;
+        for label_idx in 0..num_labels {
+            let val = logits[[0, token_idx, label_idx]];
+            if val > max_val {
+                max_val = val;
+                max_idx = label_idx;
+            }
+        }
+
+        if !max_val.is_finite() {
+            return Err(anyhow!(
+                "NER model produced a non-finite logit at token {}; the graph or its quantization is broken",
+                token_idx
+            ));
+        }
+
+        let exp_sum: f32 = (0..num_labels)
+            .map(|label_idx| (logits[[0, token_idx, label_idx]] - max_val).exp())
+            .sum();
+        let confidence = if exp_sum > 0.0 { 1.0 / exp_sum } else { 0.0 };
+
+        let label_str = label_names[max_idx].as_str();
+
+        token_predictions.push(TokenPrediction {
+            token: token.to_string(),
+            label: label_str.to_string(),
+            confidence,
+            start: char_start,
+            end: char_end,
+        });
+
+        let predicted = if confidence >= options.threshold {
+            EntityLabel::from_str(label_str)
+        } else {
+            EntityLabel::O
+        };
+
+        // A word split into several sub-tokens is one entity, so a continuation piece may never
+        // open a new one: `Red` + `##mond` stays a single `Redmond`. It can still be `O` — that
+        // is how a tokenizer which folds trailing punctuation into the word (SentencePiece
+        // reads `Redmond,` as one word) keeps the comma out of the span.
+        let word_id = word_ids.get(token_idx).copied().flatten();
+        let continues_word = word_id.is_some() && word_id == previous_word;
+        previous_word = word_id;
+
+        let label = if continues_word && predicted != EntityLabel::O {
+            match parsed_labels.last().and_then(EntityLabel::entity_type) {
+                Some(entity_type) => EntityLabel::Inside(entity_type.to_string()),
+                None => EntityLabel::O,
+            }
+        } else {
+            predicted
+        };
+
+        let is_outside = label == EntityLabel::O;
+        parsed_labels.push(label);
+        confidences.push(if is_outside { 0.0 } else { confidence });
+        valid_offsets.push((char_start, char_end));
+        valid_tokens.push(token.clone());
+    }
+
+    if token_predictions.is_empty() {
+        return Err(anyhow!(
+            "Every token was masked as special; the tokenizer does not match this model"
+        ));
+    }
+
+    let mut entities = merge_entities(
+        &valid_tokens,
+        &parsed_labels,
+        &confidences,
+        Some(&valid_offsets),
+        text,
+    );
+    trim_entity_spans(&mut entities, text);
+
+    Ok(NerResult {
+        entities,
+        tokens: token_predictions,
+        text: text.to_string(),
+    })
 }
 
 #[crate::register_node]
@@ -509,185 +841,43 @@ impl NodeLogic for NerNode {
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         #[cfg(feature = "execute")]
         {
-            use tokenizers::Tokenizer;
-
             context.deactivate_exec_pin("exec_out").await?;
 
             let model_ref: NodeOnnxSession = context.evaluate_pin("model").await?;
             let tokenizer_path: FlowPath = context.evaluate_pin("tokenizer").await?;
             let text: String = context.evaluate_pin("text").await?;
-            let labels_input: Vec<String> =
-                context.evaluate_pin("labels").await.unwrap_or_default();
+            let labels: Vec<String> = context.evaluate_pin("labels").await.unwrap_or_default();
             let _scheme: TaggingScheme = context.evaluate_pin("scheme").await.unwrap_or_default();
             let threshold: f64 = context.evaluate_pin("threshold").await.unwrap_or(0.5);
             let max_length: i64 = context.evaluate_pin("max_length").await.unwrap_or(512);
 
-            // Load tokenizer
             let tokenizer_bytes = tokenizer_path.get(context, false).await?;
             let tokenizer_json = String::from_utf8(tokenizer_bytes)
                 .map_err(|e| anyhow!("Invalid tokenizer.json encoding: {}", e))?;
             let tokenizer = Tokenizer::from_str(&tokenizer_json)
                 .map_err(|e| anyhow!("Failed to load tokenizer: {}", e))?;
 
-            // Tokenize input
-            let encoding = tokenizer
-                .encode(text.as_str(), true)
-                .map_err(|e| anyhow!("Tokenization failed: {}", e))?;
-
-            let input_ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
-            let attention_mask: Vec<i64> = encoding
-                .get_attention_mask()
-                .iter()
-                .map(|&m| m as i64)
-                .collect();
-            let tokens: Vec<String> = encoding.get_tokens().to_vec();
-            let offsets: Vec<(usize, usize)> = encoding.get_offsets().to_vec();
-            let special_tokens_mask: Vec<u32> = encoding.get_special_tokens_mask().to_vec();
-
-            // Truncate if needed
-            let seq_len = (input_ids.len()).min(max_length as usize);
-            let input_ids: Vec<i64> = input_ids.into_iter().take(seq_len).collect();
-            let attention_mask: Vec<i64> = attention_mask.into_iter().take(seq_len).collect();
-
-            // Get session
-            let session_wrapper = model_ref.get_session(context).await?;
-            let mut session_guard = session_wrapper.lock().await;
-            let session = &mut session_guard.session;
-
-            // Create input tensors
-            let batch_size = 1usize;
-            let input_ids_arr = Array2::from_shape_vec((batch_size, seq_len), input_ids.clone())?;
-            let attention_mask_arr = Array2::from_shape_vec((batch_size, seq_len), attention_mask)?;
-
-            let input_ids_value = Value::from_array(input_ids_arr)?;
-            let attention_mask_value = Value::from_array(attention_mask_arr)?;
-
-            // Check for token_type_ids input (BERT has it, RoBERTa doesn't)
-            let has_token_type_ids = session
-                .inputs()
-                .iter()
-                .any(|i| i.name() == "token_type_ids");
-
-            // Run inference
-            let outputs = if has_token_type_ids {
-                let token_type_ids: Vec<i64> = vec![0i64; seq_len];
-                let token_type_ids_arr =
-                    Array2::from_shape_vec((batch_size, seq_len), token_type_ids)?;
-                let token_type_ids_value = Value::from_array(token_type_ids_arr)?;
-                session.run(inputs![
-                    "input_ids" => input_ids_value,
-                    "attention_mask" => attention_mask_value,
-                    "token_type_ids" => token_type_ids_value
-                ])?
-            } else {
-                session.run(inputs![
-                    "input_ids" => input_ids_value,
-                    "attention_mask" => attention_mask_value
-                ])?
+            let options = NerOptions {
+                labels,
+                threshold: threshold as f32,
+                max_length: max_length.max(1) as usize,
             };
 
-            // Get logits - try common output names
-            let logits_key = outputs
-                .keys()
-                .find(|k| k.contains("logits") || k.contains("output"))
-                .or_else(|| outputs.keys().next())
-                .ok_or_else(|| anyhow!("No output from NER model"))?;
-            let logits = outputs[logits_key].try_extract_array::<f32>()?;
-
-            // Get default labels or use provided ones
-            let label_names: Vec<String> = if !labels_input.is_empty() {
-                labels_input
-            } else {
-                // CoNLL-2003 default labels (common for BERT-base-NER)
-                vec![
-                    "O".to_string(),
-                    "B-MISC".to_string(),
-                    "I-MISC".to_string(),
-                    "B-PER".to_string(),
-                    "I-PER".to_string(),
-                    "B-ORG".to_string(),
-                    "I-ORG".to_string(),
-                    "B-LOC".to_string(),
-                    "I-LOC".to_string(),
-                ]
+            let result = {
+                let session_wrapper = model_ref.get_session(context).await?;
+                let mut session_guard = session_wrapper.lock().await;
+                infer_ner(&mut session_guard.session, &tokenizer, &text, &options)?
             };
 
-            // Process predictions
-            let num_labels = logits.shape().last().copied().unwrap_or(label_names.len());
-            let mut token_predictions = Vec::new();
-            let mut parsed_labels = Vec::new();
-            let mut confidences = Vec::new();
-            let mut valid_offsets = Vec::new();
-            let mut valid_tokens = Vec::new();
+            let entity_count = result.entities.len() as i64;
 
-            for (token_idx, token) in tokens.iter().enumerate().take(seq_len) {
-                // Skip special tokens ([CLS], [SEP], [PAD])
-                let is_special = special_tokens_mask.get(token_idx).copied().unwrap_or(0) == 1;
-                if is_special {
-                    continue;
-                }
-
-                let (char_start, char_end) = offsets.get(token_idx).copied().unwrap_or((0, 0));
-
-                // Find max logit
-                let mut max_idx = 0;
-                let mut max_val = f32::NEG_INFINITY;
-                let mut logit_sum = 0.0f32;
-
-                for label_idx in 0..num_labels {
-                    let val = logits[[0, token_idx, label_idx]];
-                    logit_sum += val.exp();
-                    if val > max_val {
-                        max_val = val;
-                        max_idx = label_idx;
-                    }
-                }
-
-                let confidence = max_val.exp() / logit_sum;
-                let label_str = label_names.get(max_idx).map(|s| s.as_str()).unwrap_or("O");
-
-                token_predictions.push(TokenPrediction {
-                    token: token.to_string(),
-                    label: label_str.to_string(),
-                    confidence,
-                    start: char_start,
-                    end: char_end,
-                });
-
-                // Parse label and apply threshold
-                if confidence >= threshold as f32 {
-                    parsed_labels.push(EntityLabel::from_str(label_str));
-                    confidences.push(confidence);
-                } else {
-                    parsed_labels.push(EntityLabel::O);
-                    confidences.push(0.0);
-                }
-                valid_offsets.push((char_start, char_end));
-                valid_tokens.push(token.clone());
-            }
-
-            // Merge tokens into entities
-            let entities = merge_entities(
-                &valid_tokens,
-                &parsed_labels,
-                &confidences,
-                Some(&valid_offsets),
-                &text,
-            );
-
-            let result = NerResult {
-                entities: entities.clone(),
-                tokens: token_predictions,
-                text: text.clone(),
-            };
-
-            let entity_count = entities.len() as i64;
-
-            context.set_pin_value("result", json!(result)).await?;
-            context.set_pin_value("entities", json!(entities)).await?;
+            context
+                .set_pin_value("entities", json!(result.entities))
+                .await?;
             context
                 .set_pin_value("entity_count", json!(entity_count))
                 .await?;
+            context.set_pin_value("result", json!(result)).await?;
             context.activate_exec_pin("exec_out").await?;
         }
 
@@ -789,6 +979,67 @@ mod tests {
             Some("ORG")
         );
         assert_eq!(EntityLabel::O.entity_type(), None);
+    }
+
+    #[test]
+    fn test_trim_entity_spans_strips_bpe_leading_space() {
+        let text = "met Satya Nadella today";
+        let mut entities = vec![NamedEntity {
+            text: " Satya".to_string(),
+            entity_type: "PER".to_string(),
+            start_char: 3,
+            end_char: 9,
+            start_token: 1,
+            end_token: 2,
+            confidence: 0.9,
+        }];
+
+        trim_entity_spans(&mut entities, text);
+
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].text, "Satya");
+        assert_eq!(entities[0].start_char, 4);
+        assert_eq!(entities[0].end_char, 9);
+        assert_eq!(
+            &text[entities[0].start_char..entities[0].end_char],
+            entities[0].text
+        );
+    }
+
+    #[test]
+    fn test_trim_entity_spans_drops_whitespace_only() {
+        let text = "a b";
+        let mut entities = vec![NamedEntity {
+            text: " ".to_string(),
+            entity_type: "LOC".to_string(),
+            start_char: 1,
+            end_char: 2,
+            start_token: 1,
+            end_token: 2,
+            confidence: 0.9,
+        }];
+
+        trim_entity_spans(&mut entities, text);
+
+        assert!(entities.is_empty());
+    }
+
+    #[test]
+    fn test_subword_continuation_merges_into_one_entity() {
+        // What a WordPiece model emits for "Redmond": both pieces tagged B-LOC.
+        let tokens = vec!["Red".to_string(), "##mond".to_string()];
+        let labels = vec![
+            EntityLabel::Begin("LOC".to_string()),
+            EntityLabel::Inside("LOC".to_string()),
+        ];
+        let confidences = vec![0.99, 0.98];
+        let offsets = vec![(0, 3), (3, 7)];
+
+        let entities = merge_entities(&tokens, &labels, &confidences, Some(&offsets), "Redmond");
+
+        assert_eq!(entities.len(), 1);
+        assert_eq!(entities[0].text, "Redmond");
+        assert_eq!(entities[0].entity_type, "LOC");
     }
 
     #[test]

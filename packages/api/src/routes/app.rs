@@ -67,7 +67,8 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/{app_id}/settings/forking",
-            patch(internal::change_forking::change_forking),
+            patch(internal::change_forking::change_forking)
+                .get(internal::change_forking::get_forking),
         )
         .route("/{app_id}/fork", post(fork::online_fork::online_fork))
         .route(
@@ -482,6 +483,9 @@ impl From<flow_like::app::App> for app::Model {
             secondary_category: app.secondary_category.map(|cat| cat.into()),
             app_type: app.app_type.map(|kind| kind.into()),
             allow_forking: app.allow_forking,
+            // Server-authoritative and absent from the core `App` struct —
+            // `upsert_app` must never clobber the owner's fork policy.
+            fork_policy: None,
             forked_from: app.forked_from,
             forked_at: app.forked_at.and_then(|t| {
                 t.duration_since(SystemTime::UNIX_EPOCH).ok().and_then(|d| {

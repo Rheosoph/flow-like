@@ -10,6 +10,58 @@ import type { IAppCategory, IAppExecutionMode } from "./app";
 /** Where the caller wants the fork to land. */
 export type IForkPreviewTarget = "online" | "offline";
 
+/** How the project database travels with a fork. */
+export type IForkDatabaseMode = "none" | "schema_only" | "with_data";
+
+/**
+ * Owner-defined description of what a fork of an app contains. The person
+ * forking gets no choice — this is read-only everywhere except the source
+ * app's own settings. An app that never configured one reports the
+ * permissive default (everything on, `with_data`).
+ */
+export interface IForkPolicy {
+	flows: boolean;
+	files: boolean;
+	databases: IForkDatabaseMode;
+	/** No-op offline — an offline bundle ships no role rows at all. */
+	roles: boolean;
+	widgets: boolean;
+	templates: boolean;
+}
+
+/** Bytes + object count for one fork category. */
+export interface IForkCategorySize {
+	bytes: number;
+	objects: number;
+}
+
+/**
+ * Per-category size of the source app. Database objects contribute bytes
+ * but are deliberately left out of the object counts.
+ */
+export interface IForkSizeBreakdown {
+	/** Copied regardless of policy: manifest, events, pages, metadata, media. */
+	always: IForkCategorySize;
+	flows: IForkCategorySize;
+	files: IForkCategorySize;
+	databases: IForkCategorySize;
+	widgets: IForkCategorySize;
+	templates: IForkCategorySize;
+}
+
+/** One source table's Arrow schema, for a schema-only database fork. */
+export interface IForkTableSchema {
+	table: string;
+	/** serde-serialized `arrow_schema::Schema`. */
+	schema: unknown;
+}
+
+/** Project-level fork settings (GET /apps/{app_id}/settings/forking). */
+export interface IForkSettings {
+	allow_forking: boolean;
+	fork_policy: IForkPolicy;
+}
+
 /** A single replaceable / re-auth-required token site on the source. */
 export type IRemoteTokenSite =
 	| { HttpAuthToken: { event_id: string } }
@@ -22,7 +74,15 @@ export interface IForkPreviewResponse {
 	total_object_count: number;
 	max_size_bytes: number;
 	max_file_count: number;
+	/** Whether the fork fits both caps *after* the owner's policy is applied. */
 	within_limits: boolean;
+	/** The source owner's policy. Display-only for the forker. */
+	fork_policy: IForkPolicy;
+	size_breakdown: IForkSizeBreakdown;
+	/** Bytes actually copied once the policy is applied. */
+	selected_size_bytes: number;
+	/** Objects actually copied once the policy is applied. */
+	selected_object_count: number;
 	requires_token: boolean;
 	remote_token_sites: IRemoteTokenSite[];
 	allow_forking: boolean;
@@ -97,6 +157,12 @@ export interface IBeginOfflineForkResponse {
 	 * populated when the deployment has a meta/content store-split
 	 * misconfiguration. Show as a warning. */
 	content_store_leaks?: string[];
+	/** The source owner's policy — display only. */
+	fork_policy: IForkPolicy;
+	/** Prefixes under `source_content_prefix` the desktop must not mirror. */
+	content_exclude_prefixes: string[];
+	/** Tables to create empty locally for a schema-only database fork. */
+	db_table_schemas: IForkTableSchema[];
 }
 
 export interface IOnlineForkResponse {

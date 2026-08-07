@@ -172,8 +172,8 @@ impl NodeLogic for GetElement {
 }
 
 async fn find_component_in_board(board: &Board, element_id: &str) -> Option<SurfaceComponent> {
-    let pages = board.load_all_pages(None).await.ok()?;
-    for page in pages {
+    let loaded = board.load_all_pages(None).await.ok()?;
+    for page in loaded.pages {
         for component in &page.components {
             if component.id == element_id
                 || element_id.ends_with(&format!("/{}", component.id))

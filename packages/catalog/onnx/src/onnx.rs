@@ -29,6 +29,8 @@ pub mod face;
 pub mod face_id;
 /// ONNX Image Feature Extractor Nodes
 pub mod feature;
+/// ONNX GLiNER Zero-Shot NER Nodes
+pub mod gliner;
 /// ONNX Model Loader Nodes
 pub mod load;
 /// ONNX Named Entity Recognition (NER) Nodes

@@ -26,6 +26,7 @@ export type {
 	IUseInterfaceProps,
 	SinkAvailability,
 } from "./interfaces";
+export * from "./interface-load-error";
 export * from "./no-default";
 export * from "./page-interface";
 export * from "./use-page-content";
