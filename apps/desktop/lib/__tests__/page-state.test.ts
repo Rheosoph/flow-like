@@ -347,6 +347,21 @@ describe("cached page freshness", () => {
 		).toBe(true);
 	});
 
+	test("replaces an unreadable local payload whatever the revisions claim", () => {
+		expect(isCachedPageOutdated({ ...remote, unavailable: true }, remote)).toBe(
+			true,
+		);
+		expect(
+			isCachedPageOutdated(
+				{ ...remote, unavailable: true },
+				{
+					...remote,
+					updatedAt: undefined,
+				},
+			),
+		).toBe(true);
+	});
+
 	test("never churns when the listing carries no revision", () => {
 		expect(
 			isCachedPageOutdated(remote, { ...remote, updatedAt: undefined }),

@@ -43,7 +43,7 @@ export async function setCrashReportsEnabled(
 export function isCrashReportingEnabled(
 	settings: ITelemetrySettings | undefined,
 ): boolean {
-	return settings !== undefined && settings.crashReports !== false;
+	return settings != null && settings.crashReports !== false;
 }
 
 export function isUsageTelemetryEnabled(
