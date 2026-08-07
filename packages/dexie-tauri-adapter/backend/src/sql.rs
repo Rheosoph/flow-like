@@ -97,10 +97,8 @@ fn run_query(conn: &Connection, query: &SqlQuery, read_only: bool) -> SqlResult 
     }
 
     let params: Vec<rusqlite::types::Value> = query.args.iter().map(bind_arg).collect();
-    let params_refs: Vec<&dyn rusqlite::ToSql> = params
-        .iter()
-        .map(|v| v as &dyn rusqlite::ToSql)
-        .collect();
+    let params_refs: Vec<&dyn rusqlite::ToSql> =
+        params.iter().map(|v| v as &dyn rusqlite::ToSql).collect();
 
     if stmt.column_count() > 0 {
         let column_names: Vec<String> = stmt
@@ -185,7 +183,10 @@ impl SqlStore {
                 .map_err(|e| format!("Failed to open sqlite db {}: {e}", path.display()))?;
             conn.busy_timeout(std::time::Duration::from_secs(10))
                 .map_err(|e| format!("Failed to set busy timeout: {e}"))?;
-            conn.pragma_update(None, "journal_mode", "WAL")
+            // `PRAGMA journal_mode` returns the resulting mode as a row;
+            // plain pragma_update fails on that when rusqlite's `extra_check`
+            // feature is unified in by the app build.
+            conn.pragma_update_and_check(None, "journal_mode", "WAL", |_row| Ok(()))
                 .map_err(|e| format!("Failed to enable WAL: {e}"))?;
             conn.pragma_update(None, "synchronous", "NORMAL")
                 .map_err(|e| format!("Failed to set synchronous: {e}"))?;
@@ -422,7 +423,12 @@ mod tests {
         let (_tmp, store) = make_store();
         let id = store.open("close.sqlite").await.unwrap();
         store.close(id).unwrap();
-        assert!(store.exec(id, vec![q("SELECT 1", vec![])], false).await.is_err());
+        assert!(
+            store
+                .exec(id, vec![q("SELECT 1", vec![])], false)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

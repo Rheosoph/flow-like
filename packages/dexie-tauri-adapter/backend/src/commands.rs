@@ -106,7 +106,11 @@ pub async fn blob_dec_refs<R: Runtime>(
 #[tauri::command]
 pub async fn sql_open<R: Runtime>(app: AppHandle<R>, name: String) -> Result<u64, String> {
     let store = get_sql_store(&app)?;
-    store.open(&name).await
+    let result = store.open(&name).await;
+    if let Err(e) = &result {
+        tracing::warn!("[idb-sql] open {name:?} failed: {e}");
+    }
+    result
 }
 
 #[tauri::command]
@@ -117,7 +121,11 @@ pub async fn sql_exec<R: Runtime>(
     read_only: bool,
 ) -> Result<Vec<SqlResult>, String> {
     let store = get_sql_store(&app)?;
-    store.exec(conn_id, queries, read_only).await
+    let result = store.exec(conn_id, queries, read_only).await;
+    if let Err(e) = &result {
+        tracing::warn!("[idb-sql] exec conn={conn_id} failed: {e}");
+    }
+    result
 }
 
 #[tauri::command]
