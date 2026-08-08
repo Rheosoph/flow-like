@@ -45,7 +45,7 @@ fi
 ADAPTER="$HOME/.wasi-sdk/wasi_snapshot_preview1.reactor.wasm"
 if [ ! -f "$ADAPTER" ]; then
     echo "Downloading WASI preview1 reactor adapter..."
-    curl -fsSL "https://github.com/bytecodealliance/wasmtime/releases/download/v31.0.0/wasi_snapshot_preview1.reactor.wasm" \
+    curl -fsSL "https://github.com/bytecodealliance/wasmtime/releases/download/v47.0.3/wasi_snapshot_preview1.reactor.wasm" \
         -o "$ADAPTER"
 fi
 """

@@ -180,7 +180,7 @@ impl NodeLogic for RegisterAthenaNode {
         let output_location: String = context.evaluate_pin("output_location").await?;
         let table_name: String = context.evaluate_pin("table_name").await?;
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
 
         // Build Athena connection options based on credential mode
         let sql = match credential_mode.as_str() {
@@ -459,7 +459,7 @@ impl NodeLogic for MountAthenaQueryNode {
             .await
             .unwrap_or_else(|_| "parquet".to_string());
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
 
         // Parse S3 URL to extract bucket
         let s3_url = Url::parse(&s3_path)?;

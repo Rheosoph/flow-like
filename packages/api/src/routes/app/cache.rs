@@ -31,6 +31,10 @@ pub struct CacheEntryQuery {
     pub key: String,
     #[serde(default)]
     pub scope: Option<String>,
+    /// Optional grouping for bulk invalidation; entries written with a namespace can
+    /// only be read back with the same one.
+    #[serde(default)]
+    pub namespace: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -68,6 +72,10 @@ pub struct WriteCacheRequest {
     #[serde(default)]
     #[schema(value_type = String)]
     pub scope: CacheScope,
+    /// Optional grouping so related entries can be invalidated in one call. Omit for
+    /// unnamespaced entries, which are not bulk deletable.
+    #[serde(default)]
+    pub namespace: Option<String>,
     /// Seconds until the entry expires. Omit to use the deployment default; pass `0` to
     /// keep the entry until it is explicitly deleted.
     #[serde(default)]
@@ -116,7 +124,8 @@ pub struct DeleteCacheResponse {
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("key" = String, Query, description = "Cache key to read"),
-        ("scope" = Option<String>, Query, description = "'app' (shared, default) or 'user' (private to the caller)")
+        ("scope" = Option<String>, Query, description = "'app' (shared, default) or 'user' (private to the caller)"),
+        ("namespace" = Option<String>, Query, description = "Namespace the entry was written with, if any")
     ),
     responses(
         (status = 200, description = "Cache lookup result", body = ReadCacheResponse),
@@ -140,7 +149,8 @@ pub async fn read_cache_entry(
 
     let scope = parse_scope(query.scope.as_deref())?;
     let key = limits.validate_key(&query.key).map_err(to_api_error)?;
-    let cache_key = build_key(&app_id, scope, &key, &permission)?;
+    let namespace = validate_namespace(&limits, query.namespace.as_deref())?;
+    let cache_key = build_key(&app_id, scope, &namespace, &key, &permission)?;
 
     let entry = store.get(&cache_key).await.map_err(to_api_error)?;
 
@@ -171,7 +181,8 @@ pub async fn read_cache_entry(
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("key" = String, Query, description = "Cache key to check"),
-        ("scope" = Option<String>, Query, description = "'app' (shared, default) or 'user' (private to the caller)")
+        ("scope" = Option<String>, Query, description = "'app' (shared, default) or 'user' (private to the caller)"),
+        ("namespace" = Option<String>, Query, description = "Namespace the entry was written with, if any")
     ),
     responses(
         (status = 200, description = "Existence check result", body = ExistsCacheResponse),
@@ -195,7 +206,8 @@ pub async fn cache_entry_exists(
 
     let scope = parse_scope(query.scope.as_deref())?;
     let key = limits.validate_key(&query.key).map_err(to_api_error)?;
-    let cache_key = build_key(&app_id, scope, &key, &permission)?;
+    let namespace = validate_namespace(&limits, query.namespace.as_deref())?;
+    let cache_key = build_key(&app_id, scope, &namespace, &key, &permission)?;
 
     let found = store.exists(&cache_key).await.map_err(to_api_error)?;
 
@@ -232,13 +244,14 @@ pub async fn write_cache_entry(
     let store = cache_store(&state)?;
 
     let key = limits.validate_key(&body.key).map_err(to_api_error)?;
+    let namespace = validate_namespace(&limits, body.namespace.as_deref())?;
     limits.validate_value(&body.value).map_err(to_api_error)?;
     let expires_at = limits
         .resolve_expiry(body.ttl_seconds, chrono::Utc::now().timestamp_millis())
         .map_err(to_api_error)?;
 
     let entry = SetCacheEntry {
-        key: build_key(&app_id, body.scope, &key, &permission)?,
+        key: build_key(&app_id, body.scope, &namespace, &key, &permission)?,
         value: body.value,
         expires_at,
     };
@@ -267,7 +280,8 @@ pub async fn write_cache_entry(
     params(
         ("app_id" = String, Path, description = "Application ID"),
         ("key" = String, Query, description = "Cache key to remove"),
-        ("scope" = Option<String>, Query, description = "'app' (shared, default) or 'user' (private to the caller)")
+        ("scope" = Option<String>, Query, description = "'app' (shared, default) or 'user' (private to the caller)"),
+        ("namespace" = Option<String>, Query, description = "Namespace the entry was written with, if any")
     ),
     responses(
         (status = 200, description = "Deletion result", body = DeleteCacheResponse),
@@ -291,13 +305,92 @@ pub async fn delete_cache_entry(
 
     let scope = parse_scope(query.scope.as_deref())?;
     let key = limits.validate_key(&query.key).map_err(to_api_error)?;
-    let cache_key = build_key(&app_id, scope, &key, &permission)?;
+    let namespace = validate_namespace(&limits, query.namespace.as_deref())?;
+    let cache_key = build_key(&app_id, scope, &namespace, &key, &permission)?;
 
     let deleted = store.delete(&cache_key).await.map_err(to_api_error)?;
 
     Ok(Json(DeleteCacheResponse {
         deleted,
         key,
+        scope,
+    }))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CacheNamespaceQuery {
+    pub namespace: String,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteNamespaceResponse {
+    /// How many entries were removed.
+    pub deleted: i64,
+    pub namespace: String,
+    /// `app` or `user`.
+    #[schema(value_type = String)]
+    pub scope: CacheScope,
+}
+
+/// Invalidate a whole cache namespace.
+#[utoipa::path(
+    delete,
+    path = "/apps/{app_id}/cache/namespace",
+    tag = "app",
+    description = "Remove every cached value in a namespace, including entries with no lifetime. Use this to invalidate related entries in one call instead of deleting keys one by one.",
+    params(
+        ("app_id" = String, Path, description = "Application ID"),
+        ("namespace" = String, Query, description = "Namespace to clear; every entry written with this namespace is removed"),
+        ("scope" = Option<String>, Query, description = "'app' (shared, default) or 'user' (private to the caller)")
+    ),
+    responses(
+        (status = 200, description = "Invalidation result", body = DeleteNamespaceResponse),
+        (status = 400, description = "Invalid or empty namespace"),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden — execution permission required"),
+        (status = 503, description = "Cache backend is not configured")
+    ),
+    security(("bearer_auth" = []), ("api_key" = []), ("executor_jwt" = []))
+)]
+#[tracing::instrument(name = "DELETE /apps/{app_id}/cache/namespace", skip(state, user))]
+pub async fn delete_cache_namespace(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(app_id): Path<String>,
+    Query(query): Query<CacheNamespaceQuery>,
+) -> Result<Json<DeleteNamespaceResponse>, ApiError> {
+    let permission = authorize(&user, &app_id, &state).await?;
+    let limits = CacheLimits::from_env();
+    let store = cache_store(&state)?;
+
+    let scope = parse_scope(query.scope.as_deref())?;
+    // Namespaces obey the same shape rules as keys (non-empty, bounded), so reuse the
+    // key validation. Requiring a namespace keeps this endpoint from doubling as an
+    // accidental "wipe the whole scope".
+    let namespace = limits
+        .validate_key(&query.namespace)
+        .map_err(|_| ApiError::bad_request("A non-empty namespace is required"))?;
+
+    // The key itself is irrelevant here; build_key is reused only for its scope and
+    // user-identity resolution (and its refusal to serve an anonymous user scope).
+    let identity = build_key(&app_id, scope, &namespace, "-", &permission)?;
+
+    let deleted = store
+        .delete_namespace(
+            &identity.app_id,
+            identity.scope,
+            &identity.user_id,
+            &identity.namespace,
+        )
+        .await
+        .map_err(to_api_error)?;
+
+    Ok(Json(DeleteNamespaceResponse {
+        deleted,
+        namespace,
         scope,
     }))
 }
@@ -333,19 +426,31 @@ fn parse_scope(raw: Option<&str>) -> Result<CacheScope, ApiError> {
         None => Ok(CacheScope::App),
         Some(value) if value.trim().is_empty() => Ok(CacheScope::App),
         Some(value) => CacheScope::parse(value).ok_or_else(|| {
-            ApiError::bad_request(format!("Unknown cache scope '{value}'; expected app or user"))
+            ApiError::bad_request(format!(
+                "Unknown cache scope '{value}'; expected app or user"
+            ))
         }),
+    }
+}
+
+/// An omitted or blank namespace normalizes to the empty string (unnamespaced); a
+/// present one obeys the same shape limits as a key.
+fn validate_namespace(limits: &CacheLimits, raw: Option<&str>) -> Result<String, ApiError> {
+    match raw.map(str::trim) {
+        None | Some("") => Ok(String::new()),
+        Some(namespace) => limits.validate_key(namespace).map_err(to_api_error),
     }
 }
 
 fn build_key(
     app_id: &str,
     scope: CacheScope,
+    namespace: &str,
     key: &str,
     permission: &AppPermissionResponse,
 ) -> Result<CacheKey, ApiError> {
     if !scope.is_user() {
-        return Ok(CacheKey::app(app_id, key));
+        return Ok(CacheKey::app(app_id, namespace, key));
     }
 
     // App-connection principals carry no user identity of their own, and a run started
@@ -360,7 +465,7 @@ fn build_key(
         ));
     }
 
-    Ok(CacheKey::user(app_id, user_id, key))
+    Ok(CacheKey::user(app_id, user_id, namespace, key))
 }
 
 fn to_api_error(error: CacheStoreError) -> ApiError {
@@ -370,7 +475,10 @@ fn to_api_error(error: CacheStoreError) -> ApiError {
         CacheStoreError::Contention(message) => ApiError::conflict(message),
         other => {
             tracing::error!(error = %other, "Cache backend operation failed");
-            ApiError::internal_error(flow_like_types::anyhow!("Cache operation failed: {}", other))
+            ApiError::internal_error(flow_like_types::anyhow!(
+                "Cache operation failed: {}",
+                other
+            ))
         }
     }
 }

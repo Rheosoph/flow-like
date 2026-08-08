@@ -5,10 +5,6 @@
 
 [advisories]
 ignore = [
-    # fast-float 0.2.0 — segmentation fault due to missing bounds check (RUSTSEC-2025-0003)
-    # Blocked by: polars 0.39.2 → lancedb 0.27.2; no fixed fast-float 0.2.x available.
-    "RUSTSEC-2025-0003",
-
     # rsa 0.9.10 — Marvin Attack timing side-channel (RUSTSEC-2023-0071)
     # Blocked by: no patched rsa release as of 2026-05-16.
     "RUSTSEC-2023-0071",

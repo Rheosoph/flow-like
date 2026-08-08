@@ -5,6 +5,8 @@ pub mod databases;
 pub mod external_stores;
 pub mod mount_store;
 pub mod query;
+pub mod query_cached;
+pub mod register_excel;
 pub mod register_lance;
 pub mod register_table;
 pub mod session;

@@ -12,6 +12,7 @@
 pub mod delete;
 pub mod get_or_write;
 pub mod has;
+pub mod invalidate;
 pub mod open;
 pub mod read;
 pub mod write;
@@ -29,6 +30,11 @@ use crate::remote_util::{api_base_url, control_plane_http_client};
 const LOCAL_CACHE_DIR: &str = "cache";
 const LOCAL_APP_SCOPE_DIR: &str = "global";
 const LOCAL_USER_SCOPE_DIR: &str = "user";
+
+/// Offline entries are capped like the server-side cache (`CacheLimits`), so a flow
+/// built against local storage does not silently depend on values a cloud deployment
+/// will reject.
+const LOCAL_MAX_VALUE_BYTES: usize = 1024 * 1024;
 
 /// Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the
 /// wire; kept as its own type so the pin dropdown can carry friendly labels.
@@ -62,25 +68,27 @@ impl CacheScope {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct FlowCache {
     pub scope: CacheScope,
-    /// Optional prefix so unrelated flows in the same app cannot collide on short keys.
+    /// Optional grouping travelling alongside every key. Entries sharing a namespace
+    /// can be invalidated together; unrelated flows also use it to keep short keys
+    /// from colliding.
     #[serde(default)]
     pub namespace: String,
 }
 
 impl FlowCache {
-    /// Fully qualified key sent to the backend.
-    pub fn qualify(&self, key: &str) -> flow_like_types::Result<String> {
+    /// The namespace sent to the backend: trimmed, empty meaning unnamespaced.
+    pub fn namespace(&self) -> &str {
+        self.namespace.trim()
+    }
+
+    /// The key sent to the backend. Namespace and key travel as separate fields — the
+    /// backends key their storage on both — so neither can impersonate the other.
+    pub fn validated_key(&self, key: &str) -> flow_like_types::Result<String> {
         let key = key.trim();
         if key.is_empty() {
             return Err(flow_like_types::anyhow!("Cache key must not be empty"));
         }
-
-        let namespace = self.namespace.trim();
-        if namespace.is_empty() {
-            return Ok(key.to_string());
-        }
-
-        Ok(format!("{namespace}/{key}"))
+        Ok(key.to_string())
     }
 }
 
@@ -105,10 +113,14 @@ enum CacheTransport {
     },
 }
 
-/// On-disk shape for offline entries. The key is stored alongside the value because the
-/// filename is a hash, which makes an unexpected collision detectable rather than silent.
+/// On-disk shape for offline entries. Namespace and key are stored alongside the value
+/// because the filename is a hash — this makes an unexpected collision detectable
+/// rather than silent, and lets namespace invalidation identify entries by reading
+/// them.
 #[derive(Debug, Serialize, Deserialize)]
 struct LocalCacheRecord {
+    #[serde(default)]
+    namespace: String,
     key: String,
     value: Value,
     expires_at: Option<i64>,
@@ -163,14 +175,9 @@ fn resolve_transport(context: &ExecutionContext) -> flow_like_types::Result<Cach
     })
 }
 
-fn local_entry_path(
-    root: &Path,
-    scope: CacheScope,
-    sub: &str,
-    qualified_key: &str,
-) -> flow_like_types::Result<Path> {
-    let scoped = match scope {
-        CacheScope::App => root.child(LOCAL_APP_SCOPE_DIR),
+fn local_scope_dir(root: &Path, scope: CacheScope, sub: &str) -> flow_like_types::Result<Path> {
+    match scope {
+        CacheScope::App => Ok(root.child(LOCAL_APP_SCOPE_DIR)),
         CacheScope::User => {
             let sub = sub.trim();
             if sub.is_empty() {
@@ -178,12 +185,27 @@ fn local_entry_path(
                     "User-scoped cache requires an identifiable user"
                 ));
             }
-            root.child(LOCAL_USER_SCOPE_DIR).child(sub.to_string())
+            Ok(root.child(LOCAL_USER_SCOPE_DIR).child(sub.to_string()))
         }
-    };
+    }
+}
 
-    // Keys are arbitrary user input; hashing keeps them filesystem-safe and bounded.
-    let file = blake3::hash(qualified_key.as_bytes()).to_hex().to_string();
+fn local_entry_path(
+    root: &Path,
+    scope: CacheScope,
+    sub: &str,
+    namespace: &str,
+    key: &str,
+) -> flow_like_types::Result<Path> {
+    let scoped = local_scope_dir(root, scope, sub)?;
+
+    // Namespace and key are arbitrary user input; hashing keeps the filename safe and
+    // bounded, and the length prefix keeps ("ab", "c") distinct from ("a", "bc").
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(&(namespace.len() as u64).to_le_bytes());
+    hasher.update(namespace.as_bytes());
+    hasher.update(key.as_bytes());
+    let file = hasher.finalize().to_hex().to_string();
     Ok(scoped.child(format!("{file}.json")))
 }
 
@@ -193,7 +215,8 @@ pub async fn cache_get(
     cache: &FlowCache,
     key: &str,
 ) -> flow_like_types::Result<Option<CacheHit>> {
-    let qualified = cache.qualify(key)?;
+    let key = cache.validated_key(key)?;
+    let namespace = cache.namespace();
 
     match resolve_transport(context)? {
         CacheTransport::Remote {
@@ -203,7 +226,11 @@ pub async fn cache_get(
         } => {
             let response = control_plane_http_client()
                 .get(format!("{base_url}/apps/{app_id}/cache"))
-                .query(&[("key", qualified.as_str()), ("scope", cache.scope.as_str())])
+                .query(&[
+                    ("key", key.as_str()),
+                    ("scope", cache.scope.as_str()),
+                    ("namespace", namespace),
+                ])
                 .bearer_auth(&token)
                 .send()
                 .await?;
@@ -236,9 +263,9 @@ pub async fn cache_get(
         }
 
         CacheTransport::Local { store, root } => {
-            let path = local_entry_path(&root, cache.scope, local_sub(context), &qualified)?;
+            let path = local_entry_path(&root, cache.scope, local_sub(context), namespace, &key)?;
 
-            Ok(read_local_record(&store, &path, &qualified)
+            Ok(read_local_record(&store, &path, namespace, &key)
                 .await?
                 .map(|record| CacheHit {
                     value: record.value,
@@ -253,7 +280,8 @@ pub async fn cache_get(
 async fn read_local_record(
     store: &FlowLikeStore,
     path: &Path,
-    qualified_key: &str,
+    namespace: &str,
+    key: &str,
 ) -> flow_like_types::Result<Option<LocalCacheRecord>> {
     let generic = store.as_generic();
 
@@ -272,9 +300,9 @@ async fn read_local_record(
         }
     };
 
-    // The filename is a hash of the key, so a mismatch means a hash collision rather
-    // than the entry we asked for.
-    if record.key != qualified_key {
+    // The filename is a hash of namespace and key, so a mismatch means a hash
+    // collision rather than the entry we asked for.
+    if record.namespace != namespace || record.key != key {
         return Ok(None);
     }
 
@@ -290,17 +318,30 @@ async fn read_local_record(
 async fn write_local_record(
     store: &FlowLikeStore,
     path: &Path,
-    qualified_key: &str,
+    namespace: &str,
+    key: &str,
     value: Value,
     ttl_seconds: Option<u64>,
 ) -> flow_like_types::Result<Option<i64>> {
+    let encoded_value = flow_like_types::json::to_vec(&value)?;
+    if encoded_value.len() > LOCAL_MAX_VALUE_BYTES {
+        return Err(flow_like_types::anyhow!(
+            "Cache value is {} bytes, exceeding the {} byte cache limit. The cache is \
+             for small, hot values — write large payloads to the app's storage instead \
+             and cache the path or a summary.",
+            encoded_value.len(),
+            LOCAL_MAX_VALUE_BYTES
+        ));
+    }
+
     let updated_at = now_ms();
     let expires_at = ttl_seconds
         .filter(|ttl| *ttl > 0)
         .map(|ttl| updated_at + (ttl as i64) * 1_000);
 
     let record = LocalCacheRecord {
-        key: qualified_key.to_string(),
+        namespace: namespace.to_string(),
+        key: key.to_string(),
         value,
         expires_at,
         updated_at,
@@ -318,7 +359,8 @@ pub async fn cache_has(
     cache: &FlowCache,
     key: &str,
 ) -> flow_like_types::Result<bool> {
-    let qualified = cache.qualify(key)?;
+    let key = cache.validated_key(key)?;
+    let namespace = cache.namespace();
 
     match resolve_transport(context)? {
         CacheTransport::Remote {
@@ -328,7 +370,11 @@ pub async fn cache_has(
         } => {
             let response = control_plane_http_client()
                 .get(format!("{base_url}/apps/{app_id}/cache/exists"))
-                .query(&[("key", qualified.as_str()), ("scope", cache.scope.as_str())])
+                .query(&[
+                    ("key", key.as_str()),
+                    ("scope", cache.scope.as_str()),
+                    ("namespace", namespace),
+                ])
                 .bearer_auth(&token)
                 .send()
                 .await?;
@@ -351,10 +397,12 @@ pub async fn cache_has(
         }
 
         CacheTransport::Local { store, root } => {
-            let path = local_entry_path(&root, cache.scope, local_sub(context), &qualified)?;
+            let path = local_entry_path(&root, cache.scope, local_sub(context), namespace, &key)?;
             // A HEAD tells us the file is there but not whether its lifetime has
             // elapsed, and the expiry lives inside the file — so this reads it.
-            Ok(read_local_record(&store, &path, &qualified).await?.is_some())
+            Ok(read_local_record(&store, &path, namespace, &key)
+                .await?
+                .is_some())
         }
     }
 }
@@ -371,7 +419,8 @@ pub async fn cache_get_or_set(
     value: Value,
     ttl_seconds: Option<u64>,
 ) -> flow_like_types::Result<(Value, bool)> {
-    let qualified = cache.qualify(key)?;
+    let key = cache.validated_key(key)?;
+    let namespace = cache.namespace();
 
     match resolve_transport(context)? {
         CacheTransport::Remote {
@@ -383,7 +432,8 @@ pub async fn cache_get_or_set(
                 .put(format!("{base_url}/apps/{app_id}/cache"))
                 .bearer_auth(&token)
                 .json(&flow_like_types::json::json!({
-                    "key": qualified,
+                    "key": key,
+                    "namespace": namespace,
                     "value": value,
                     "scope": cache.scope.as_str(),
                     "ttlSeconds": ttl_seconds,
@@ -412,9 +462,9 @@ pub async fn cache_get_or_set(
         }
 
         CacheTransport::Local { store, root } => {
-            let path = local_entry_path(&root, cache.scope, local_sub(context), &qualified)?;
+            let path = local_entry_path(&root, cache.scope, local_sub(context), namespace, &key)?;
 
-            if let Some(record) = read_local_record(&store, &path, &qualified).await? {
+            if let Some(record) = read_local_record(&store, &path, namespace, &key).await? {
                 return Ok((record.value, false));
             }
 
@@ -423,7 +473,7 @@ pub async fn cache_get_or_set(
             // are two flows in the same process hitting the same key in the same
             // instant; the loser's value simply wins. Cloud runs go through the atomic
             // backend path above.
-            write_local_record(&store, &path, &qualified, value.clone(), ttl_seconds).await?;
+            write_local_record(&store, &path, namespace, &key, value.clone(), ttl_seconds).await?;
             Ok((value, true))
         }
     }
@@ -437,7 +487,8 @@ pub async fn cache_set(
     value: Value,
     ttl_seconds: Option<u64>,
 ) -> flow_like_types::Result<Option<i64>> {
-    let qualified = cache.qualify(key)?;
+    let key = cache.validated_key(key)?;
+    let namespace = cache.namespace();
 
     match resolve_transport(context)? {
         CacheTransport::Remote {
@@ -449,7 +500,8 @@ pub async fn cache_set(
                 .put(format!("{base_url}/apps/{app_id}/cache"))
                 .bearer_auth(&token)
                 .json(&flow_like_types::json::json!({
-                    "key": qualified,
+                    "key": key,
+                    "namespace": namespace,
                     "value": value,
                     "scope": cache.scope.as_str(),
                     "ttlSeconds": ttl_seconds,
@@ -476,8 +528,8 @@ pub async fn cache_set(
         }
 
         CacheTransport::Local { store, root } => {
-            let path = local_entry_path(&root, cache.scope, local_sub(context), &qualified)?;
-            write_local_record(&store, &path, &qualified, value, ttl_seconds).await
+            let path = local_entry_path(&root, cache.scope, local_sub(context), namespace, &key)?;
+            write_local_record(&store, &path, namespace, &key, value, ttl_seconds).await
         }
     }
 }
@@ -488,7 +540,8 @@ pub async fn cache_delete(
     cache: &FlowCache,
     key: &str,
 ) -> flow_like_types::Result<bool> {
-    let qualified = cache.qualify(key)?;
+    let key = cache.validated_key(key)?;
+    let namespace = cache.namespace();
 
     match resolve_transport(context)? {
         CacheTransport::Remote {
@@ -498,7 +551,11 @@ pub async fn cache_delete(
         } => {
             let response = control_plane_http_client()
                 .delete(format!("{base_url}/apps/{app_id}/cache"))
-                .query(&[("key", qualified.as_str()), ("scope", cache.scope.as_str())])
+                .query(&[
+                    ("key", key.as_str()),
+                    ("scope", cache.scope.as_str()),
+                    ("namespace", namespace),
+                ])
                 .bearer_auth(&token)
                 .send()
                 .await?;
@@ -522,13 +579,97 @@ pub async fn cache_delete(
         }
 
         CacheTransport::Local { store, root } => {
-            let path = local_entry_path(&root, cache.scope, local_sub(context), &qualified)?;
+            let path = local_entry_path(&root, cache.scope, local_sub(context), namespace, &key)?;
             let generic = store.as_generic();
             let existed = generic.head(&path).await.is_ok();
             if existed {
                 generic.delete(&path).await?;
             }
             Ok(existed)
+        }
+    }
+}
+
+/// Remove every entry in the cache handle's namespace, regardless of lifetime.
+/// Returns how many entries were removed.
+pub async fn cache_invalidate_namespace(
+    context: &ExecutionContext,
+    cache: &FlowCache,
+) -> flow_like_types::Result<i64> {
+    let namespace = cache.namespace();
+    if namespace.is_empty() {
+        return Err(flow_like_types::anyhow!(
+            "Invalidation requires a cache handle with a namespace; refusing to delete every entry in the scope"
+        ));
+    }
+
+    match resolve_transport(context)? {
+        CacheTransport::Remote {
+            base_url,
+            app_id,
+            token,
+        } => {
+            let response = control_plane_http_client()
+                .delete(format!("{base_url}/apps/{app_id}/cache/namespace"))
+                .query(&[("namespace", namespace), ("scope", cache.scope.as_str())])
+                .bearer_auth(&token)
+                .send()
+                .await?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body = response.text().await.unwrap_or_default();
+                return Err(flow_like_types::anyhow!(
+                    "Cache namespace invalidation failed with status {status}: {body}"
+                ));
+            }
+
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct InvalidateResponse {
+                deleted: i64,
+            }
+
+            let parsed: InvalidateResponse = response.json().await?;
+            Ok(parsed.deleted)
+        }
+
+        CacheTransport::Local { store, root } => {
+            // Filenames are hashes, so each record is read to learn which namespace it
+            // belongs to — the record stores it for exactly this purpose. Unreadable
+            // files are skipped rather than deleted; the read path already quarantines
+            // corrupt entries when they are actually accessed.
+            let scoped = local_scope_dir(&root, cache.scope, local_sub(context))?;
+            let generic = store.as_generic();
+
+            use futures::StreamExt;
+            let entries: Vec<_> = generic
+                .list(Some(&scoped))
+                .collect::<Vec<_>>()
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut deleted = 0i64;
+            for meta in entries {
+                let Ok(result) = generic.get(&meta.location).await else {
+                    continue;
+                };
+                let Ok(bytes) = result.bytes().await else {
+                    continue;
+                };
+                let Ok(record) = flow_like_types::json::from_slice::<LocalCacheRecord>(&bytes)
+                else {
+                    continue;
+                };
+
+                if record.namespace == namespace {
+                    generic.delete(&meta.location).await?;
+                    deleted += 1;
+                }
+            }
+
+            Ok(deleted)
         }
     }
 }
@@ -546,43 +687,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn namespace_prefixes_keys_and_empty_keys_are_rejected() {
+    fn keys_are_trimmed_and_empty_keys_are_rejected() {
         let plain = FlowCache {
             scope: CacheScope::App,
             namespace: String::new(),
         };
-        assert_eq!(plain.qualify(" token ").unwrap(), "token");
-        assert!(plain.qualify("   ").is_err());
+        assert_eq!(plain.validated_key(" token ").unwrap(), "token");
+        assert!(plain.validated_key("   ").is_err());
 
         let scoped = FlowCache {
             scope: CacheScope::User,
             namespace: " billing ".to_string(),
         };
-        assert_eq!(scoped.qualify("plan").unwrap(), "billing/plan");
+        assert_eq!(scoped.namespace(), "billing");
     }
 
     #[test]
-    fn local_paths_separate_scopes_and_users() {
+    fn local_paths_separate_scopes_users_and_namespaces() {
         let root = Path::from("apps").child("app-1").child(LOCAL_CACHE_DIR);
 
-        let app = local_entry_path(&root, CacheScope::App, "", "k").unwrap();
-        let alice = local_entry_path(&root, CacheScope::User, "alice", "k").unwrap();
-        let bob = local_entry_path(&root, CacheScope::User, "bob", "k").unwrap();
+        let app = local_entry_path(&root, CacheScope::App, "", "", "k").unwrap();
+        let alice = local_entry_path(&root, CacheScope::User, "alice", "", "k").unwrap();
+        let bob = local_entry_path(&root, CacheScope::User, "bob", "", "k").unwrap();
 
         assert_ne!(app.as_ref(), alice.as_ref());
         assert_ne!(alice.as_ref(), bob.as_ref());
         assert!(app.as_ref().contains("/global/"));
         assert!(alice.as_ref().contains("/user/alice/"));
 
+        // Namespace participates in the filename, and the length prefix keeps
+        // ("ab", "c") distinct from ("a", "bc").
+        let ns = local_entry_path(&root, CacheScope::App, "", "reports", "k").unwrap();
+        assert_ne!(app.as_ref(), ns.as_ref());
+        let ab_c = local_entry_path(&root, CacheScope::App, "", "ab", "c").unwrap();
+        let a_bc = local_entry_path(&root, CacheScope::App, "", "a", "bc").unwrap();
+        assert_ne!(ab_c.as_ref(), a_bc.as_ref());
+
         // A user-scoped entry with no identity must fail rather than silently share the
         // app bucket.
-        assert!(local_entry_path(&root, CacheScope::User, "  ", "k").is_err());
+        assert!(local_entry_path(&root, CacheScope::User, "  ", "", "k").is_err());
     }
 
     #[test]
     fn keys_with_path_separators_stay_inside_the_scope_directory() {
         let root = Path::from("apps").child("app-1").child(LOCAL_CACHE_DIR);
-        let traversal = local_entry_path(&root, CacheScope::App, "", "../../escape").unwrap();
+        let traversal =
+            local_entry_path(&root, CacheScope::App, "", "../ns", "../../escape").unwrap();
         assert!(traversal.as_ref().starts_with("apps/app-1/cache/global/"));
         assert!(!traversal.as_ref().contains(".."));
     }

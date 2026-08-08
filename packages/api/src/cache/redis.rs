@@ -40,7 +40,23 @@ impl RedisCacheStore {
     }
 
     fn entry_key(key: &CacheKey) -> String {
-        format!("{KEY_PREFIX}{}", key.composite())
+        format!("{KEY_PREFIX}{}:{}", key.app_id, key.sort_key())
+    }
+
+    /// Every Redis key of one `(app, scope, user, namespace)` slice starts with this,
+    /// because the sort key hashes its segments into fixed-width blocks — so namespace
+    /// invalidation is a literal `starts_with`, no parsing and no glob escaping.
+    fn namespace_key_prefix(
+        app_id: &str,
+        scope: flow_like_types::cache::CacheScope,
+        user_id: &str,
+        namespace: &str,
+    ) -> String {
+        format!(
+            "{KEY_PREFIX}{}:{}",
+            app_id,
+            CacheKey::namespace_sort_prefix(scope, user_id, namespace)
+        )
     }
 
     fn app_index_key(app_id: &str) -> String {
@@ -191,6 +207,52 @@ impl CacheStore for RedisCacheStore {
         Ok(removed > 0)
     }
 
+    async fn delete_namespace(
+        &self,
+        app_id: &str,
+        scope: flow_like_types::cache::CacheScope,
+        user_id: &str,
+        namespace: &str,
+    ) -> Result<i64, CacheStoreError> {
+        if namespace.is_empty() {
+            return Err(CacheStoreError::InvalidInput(
+                "Namespace invalidation requires a non-empty namespace".to_string(),
+            ));
+        }
+
+        // The per-app index names every key this app has written, so no SCAN is needed.
+        let prefix = Self::namespace_key_prefix(app_id, scope, user_id, namespace);
+        let index_key = Self::app_index_key(app_id);
+        let mut conn = self.conn.lock().await;
+
+        let members: Vec<String> = conn
+            .smembers(&index_key)
+            .await
+            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+
+        let matching: Vec<String> = members
+            .into_iter()
+            .filter(|member| member.starts_with(&prefix))
+            .collect();
+
+        if matching.is_empty() {
+            return Ok(0);
+        }
+
+        // DEL counts only keys that still existed; expired members are pruned from the
+        // index all the same.
+        let removed: i64 = conn
+            .del(matching.clone())
+            .await
+            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+        let _: i64 = conn
+            .srem(&index_key, matching)
+            .await
+            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+
+        Ok(removed)
+    }
+
     async fn delete_app(&self, app_id: &str) -> Result<i64, CacheStoreError> {
         let index_key = Self::app_index_key(app_id);
         let mut conn = self.conn.lock().await;
@@ -230,6 +292,28 @@ impl CacheStore for RedisCacheStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn namespace_prefix_covers_exactly_its_entries() {
+        use flow_like_types::cache::CacheScope;
+
+        let entry = RedisCacheStore::entry_key(&CacheKey::app("app-1", "reports", "daily"));
+
+        let own = RedisCacheStore::namespace_key_prefix("app-1", CacheScope::App, "", "reports");
+        assert!(entry.starts_with(&own));
+
+        let other_ns =
+            RedisCacheStore::namespace_key_prefix("app-1", CacheScope::App, "", "billing");
+        assert!(!entry.starts_with(&other_ns));
+
+        let other_app =
+            RedisCacheStore::namespace_key_prefix("app-2", CacheScope::App, "", "reports");
+        assert!(!entry.starts_with(&other_app));
+
+        let user_scope =
+            RedisCacheStore::namespace_key_prefix("app-1", CacheScope::User, "alice", "reports");
+        assert!(!entry.starts_with(&user_scope));
+    }
 
     #[test]
     fn ttl_rounds_up_and_never_reaches_zero() {

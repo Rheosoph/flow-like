@@ -24,11 +24,11 @@ impl NodeLogic for GetOrWriteCacheNode {
         let mut node = Node::new(
             "cache_get_or_write",
             "Get or Write Cache",
-            "Returns the cached value, or stores the fallback and returns that. Exactly one caller gets Written = true, even when several runs reach this node at the same moment.",
+            "Returns the cached value, or stores the fallback and returns that. Exactly one caller gets Written = true, even when several runs reach this node at the same moment. The cache is for small, hot values (about 1 MB max) — persist large data to the app's storage instead.",
             "Data/Cache",
         );
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin(
             "exec_in",
@@ -46,13 +46,18 @@ impl NodeLogic for GetOrWriteCacheNode {
         .set_schema::<FlowCache>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
-        node.add_input_pin("key", "Key", "The key to read or claim", VariableType::String);
+        node.add_input_pin(
+            "key",
+            "Key",
+            "The key to read or claim",
+            VariableType::String,
+        );
 
         node.add_input_pin(
             "fallback",
             "Fallback",
-            "Value to store when the key holds nothing live",
-            VariableType::Struct,
+            "Value to store when the key holds nothing live — any type",
+            VariableType::Generic,
         );
 
         node.add_input_pin(
@@ -73,8 +78,8 @@ impl NodeLogic for GetOrWriteCacheNode {
         node.add_output_pin(
             "value",
             "Value",
-            "The value now held under the key",
-            VariableType::Struct,
+            "The value now held under the key — whatever type was stored",
+            VariableType::Generic,
         );
 
         node.add_output_pin(

@@ -124,7 +124,7 @@ lambda = ["aws-config", "aws-sdk-lambda", "aws_lambda_events"]
 sqs = ["aws-config", "aws-sdk-sqs"]
 # State store backends
 redis = ["dep:redis", "dep:tokio"]
-dynamodb = ["aws-config", "aws-sdk-dynamodb"]  # Uses FlowLikeStore (object_store) for large payloads
+dynamodb = ["aws-config", "aws-sdk-dynamodb", "dep:tokio"]  # Uses FlowLikeStore (object_store) for large payloads
 s3 = ["aws-config", "aws-sdk-s3"]
 sentry = ["dep:sentry"]
 full=[

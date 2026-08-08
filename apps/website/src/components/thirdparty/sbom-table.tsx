@@ -167,13 +167,6 @@ const FEATURED_LIBRARIES: FeaturedLibrary[] = [
 		category: "Query Engine",
 	},
 	{
-		name: "polars",
-		displayName: "Polars",
-		description: "Lightning-fast DataFrame library for Rust and Python.",
-		url: "https://pola.rs",
-		category: "Data Processing",
-	},
-	{
 		name: "arrow",
 		displayName: "Apache Arrow",
 		description:

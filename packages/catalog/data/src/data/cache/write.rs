@@ -24,11 +24,11 @@ impl NodeLogic for WriteCacheNode {
         let mut node = Node::new(
             "cache_write",
             "Write Cache",
-            "Stores a value in the app's cache, optionally with a lifetime after which it disappears on its own.",
+            "Stores a value in the app's cache, optionally with a lifetime after which it disappears on its own. The cache is for small, hot values (about 1 MB max) — persist large data to the app's storage instead.",
             "Data/Cache",
         );
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin(
             "exec_in",
@@ -51,8 +51,8 @@ impl NodeLogic for WriteCacheNode {
         node.add_input_pin(
             "value",
             "Value",
-            "The value to store",
-            VariableType::Struct,
+            "The value to store — a struct, array, string, number or boolean",
+            VariableType::Generic,
         );
 
         node.add_input_pin(

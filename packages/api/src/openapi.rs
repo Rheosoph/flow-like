@@ -362,6 +362,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::cache::cache_entry_exists,
         crate::routes::app::cache::write_cache_entry,
         crate::routes::app::cache::delete_cache_entry,
+        crate::routes::app::cache::delete_cache_namespace,
         // Data routes
         crate::routes::app::data::upload_files::upload_files,
         crate::routes::app::data::upload_files::upload_user_files,
@@ -584,6 +585,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::cache::WriteCacheRequest,
         crate::routes::app::cache::WriteCacheResponse,
         crate::routes::app::cache::DeleteCacheResponse,
+        crate::routes::app::cache::DeleteNamespaceResponse,
         crate::routes::admin::cache::SweepCacheResponse,
         // OAuth schemas
         crate::routes::oauth::TokenExchangeRequest,

@@ -201,13 +201,24 @@ pub fn sync_node_with_catalog(placed_node: &mut Node, catalog_node: &Node) {
                 if placed_pin.data_type != catalog_pin.data_type
                     || placed_pin.value_type != catalog_pin.value_type
                 {
+                    // Widening a data pin to Generic cannot invalidate anything: a
+                    // Generic pin accepts every connection the old type held. Keep
+                    // the wires and the value; only the type label changes.
+                    let widens_to_generic = catalog_pin.data_type
+                        == crate::flow::variable::VariableType::Generic
+                        && placed_pin.data_type != crate::flow::variable::VariableType::Execution
+                        && placed_pin.value_type == catalog_pin.value_type;
+
                     placed_pin.data_type = catalog_pin.data_type.clone();
                     placed_pin.value_type = catalog_pin.value_type.clone();
-                    // Clear connections since type changed
-                    placed_pin.connected_to.clear();
-                    placed_pin.depends_on.clear();
-                    // Reset to catalog default value
-                    placed_pin.default_value = catalog_pin.default_value.clone();
+
+                    if !widens_to_generic {
+                        // Clear connections since type changed
+                        placed_pin.connected_to.clear();
+                        placed_pin.depends_on.clear();
+                        // Reset to catalog default value
+                        placed_pin.default_value = catalog_pin.default_value.clone();
+                    }
                 }
 
                 // Update schema reference
@@ -432,6 +443,30 @@ mod tests {
         // Connection should be cleared due to type change
         assert!(synced_pin.connected_to.is_empty());
         assert_eq!(synced_pin.data_type, VariableType::Integer);
+    }
+
+    #[test]
+    fn test_sync_keeps_connections_when_widening_to_generic() {
+        let mut placed = Node::new("test", "Test", "desc", "Cat");
+        let pin = placed.add_input_pin("value", "Value", "desc", VariableType::Struct);
+        pin.connected_to.insert("upstream_pin".to_string());
+        pin.default_value = Some(vec![1, 2, 3]);
+        placed.version = Some(1);
+
+        let mut catalog = Node::new("test", "Test", "desc", "Cat");
+        // Struct -> Generic widening: every existing connection stays valid.
+        catalog.add_input_pin("value", "Value", "desc", VariableType::Generic);
+        catalog.version = Some(2);
+
+        sync_node_with_catalog(&mut placed, &catalog);
+
+        let synced_pin = placed.get_pin_by_name("value").unwrap();
+        assert_eq!(synced_pin.data_type, VariableType::Generic);
+        assert!(
+            synced_pin.connected_to.contains("upstream_pin"),
+            "widening to Generic must not sever existing wires"
+        );
+        assert_eq!(synced_pin.default_value, Some(vec![1, 2, 3]));
     }
 
     #[test]
