@@ -7,7 +7,6 @@ import {
 	CopyIcon,
 	EditIcon,
 	MessageSquareIcon,
-	PaperclipIcon,
 	ThumbsDownIcon,
 	ThumbsUpIcon,
 	XIcon,
@@ -35,13 +34,14 @@ import {
 import { StreamingTextEditor } from "../../ui/streaming-text-editor";
 import { AgentDebugReport } from "./agent-debug-report";
 import { AppReferences } from "./app-references";
-import { FilePreview, type ProcessedAttachment } from "./attachment";
+import { type ProcessedAttachment, getDisplayFileName } from "./attachment";
 import {
 	FileDialog,
 	FileDialogPreview,
 	canPreviewFile,
 	downloadFile,
 } from "./attachment-dialog";
+import { AttachmentStrip } from "./attachment-strip";
 import type { IAttachment, IMessage } from "./chat-db";
 import { useProcessedAttachments } from "./hooks/use-processed-attachments";
 import { buildInlineSegments } from "./inline-segments";
@@ -328,9 +328,6 @@ const MessageActions = ({
 	onFeedbackClick,
 	onEdit,
 	onCopy,
-	allFiles,
-	hiddenFilesCount,
-	onFileClick,
 }: {
 	isUser: boolean;
 	hasFooterContent: boolean;
@@ -342,9 +339,6 @@ const MessageActions = ({
 	onFeedbackClick: () => void;
 	onEdit: () => void;
 	onCopy: () => void;
-	allFiles: ProcessedAttachment[];
-	hiddenFilesCount: number;
-	onFileClick: (file: ProcessedAttachment) => void;
 }) => (
 	<div
 		className={cn(
@@ -395,9 +389,6 @@ const MessageActions = ({
 				</Badge>
 			</button>
 		)}
-		{hiddenFilesCount > 0 && (
-			<FileDialog files={allFiles} handleFileClick={onFileClick} />
-		)}
 		{!isUser && (
 			<MessageActionButton onClick={onEdit} title="Edit message">
 				<EditIcon className="w-4 h-4" />
@@ -408,123 +399,6 @@ const MessageActions = ({
 		</MessageActionButton>
 	</div>
 );
-
-const AttachmentSection = ({
-	files,
-	onFileClick,
-	onFullscreen,
-}: {
-	files: ProcessedAttachment[];
-	onFileClick: (file: ProcessedAttachment) => void;
-	onFullscreen?: (file: ProcessedAttachment) => void;
-}) => {
-	const { visibleAudio, visibleImages, visibleVideo, visibleDocuments } =
-		useMemo(() => {
-			const audioFiles = files.filter((file) => file.type === "audio");
-			const imageFiles = files.filter((file) => file.type === "image");
-			const videoFiles = files.filter((file) => file.type === "video");
-			const documentFiles = files.filter(
-				(file) => !["audio", "image", "video"].includes(file.type),
-			);
-
-			return {
-				visibleAudio: audioFiles.slice(0, 1),
-				visibleImages: imageFiles.slice(0, 4),
-				visibleVideo: videoFiles.slice(0, 1),
-				visibleDocuments: documentFiles.slice(0, 3),
-			};
-		}, [files]);
-
-	const getImageGridClassName = useCallback((count: number) => {
-		if (count === 1) return "grid-cols-1";
-		if (count === 2) return "grid-cols-2";
-		if (count >= 3) return "grid-cols-2";
-		return "grid-cols-1";
-	}, []);
-
-	return (
-		<div
-			className="flex flex-col gap-2"
-			style={{ maxWidth: "var(--fl-chat-measure, 38rem)" }}
-		>
-			{visibleAudio.length > 0 && (
-				<div className="mt-2">
-					{visibleAudio.map((file) => (
-						<FilePreview key={file.url} file={file} onClick={onFileClick} />
-					))}
-				</div>
-			)}
-
-			{visibleImages.length > 0 && (
-				<div
-					className={cn(
-						"mt-2 grid gap-2",
-						getImageGridClassName(visibleImages.length),
-					)}
-				>
-					{visibleImages.map((file) => (
-						<FilePreview
-							key={file.url}
-							file={file}
-							showFullscreenButton={true}
-							onFullscreen={onFullscreen}
-							inGrid={visibleImages.length > 1}
-						/>
-					))}
-				</div>
-			)}
-
-			{visibleVideo.length > 0 && (
-				<div className="mt-2">
-					{visibleVideo.map((file) => (
-						<FilePreview key={file.url} file={file} onClick={onFileClick} />
-					))}
-				</div>
-			)}
-
-			{visibleDocuments.length > 0 && (
-				<div className="mt-2 flex flex-col gap-1.5">
-					{visibleDocuments.map((file) => (
-						<button
-							key={file.url}
-							type="button"
-							onClick={() => onFileClick(file)}
-							className="group flex flex-col gap-1.5 rounded-xl border bg-transparent px-3.5 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
-							style={{ borderColor: "var(--fl-chat-rule, var(--border))" }}
-						>
-							<div className="flex items-center gap-2">
-								<PaperclipIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-								<span className="min-w-0 flex-1 truncate text-sm font-medium">
-									{file.name}
-								</span>
-								<span className="shrink-0 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">
-									{file.type}
-								</span>
-								{file.pageNumber !== undefined && (
-									<Badge variant="secondary" className="shrink-0 text-[10px]">
-										p.{file.pageNumber}
-									</Badge>
-								)}
-							</div>
-							{file.previewText && (
-								<p
-									className="line-clamp-2 text-muted-foreground"
-									style={{
-										fontFamily: "var(--fl-chat-prose-font)",
-										fontSize: "0.8125rem",
-										lineHeight: 1.55,
-									}}
-								>
-									{file.previewText}
-								</p>
-							)}
-						</button>
-					))}
-				</div>
-			)}
-		</div>
-	);
-};
 
 export const MessageComponent = memo(
 	function MessageComponent({
@@ -549,16 +423,6 @@ export const MessageComponent = memo(
 		const [collapsedMaxHeight, setCollapsedMaxHeight] = useState(
 			COLLAPSED_ASK_LINES * 22,
 		);
-
-		const getDisplayFileName = useCallback((name: string) => {
-			try {
-				const decoded = decodeURIComponent(name);
-				const parts = decoded.split(/[/\\]/);
-				return parts[parts.length - 1];
-			} catch {
-				return name;
-			}
-		}, []);
 
 		const messageContent = useMemo(() => {
 			if (typeof message.inner.content === "string") {
@@ -615,33 +479,6 @@ export const MessageComponent = memo(
 			messageContent.attachments,
 		);
 
-		const hiddenFilesCount = useMemo(() => {
-			const audioFiles = processedAttachments.filter(
-				(file) => file.type === "audio",
-			);
-			const imageFiles = processedAttachments.filter(
-				(file) => file.type === "image",
-			);
-			const videoFiles = processedAttachments.filter(
-				(file) => file.type === "video",
-			);
-			const documentFiles = processedAttachments.filter(
-				(file) => !["audio", "image", "video"].includes(file.type),
-			);
-
-			const hiddenAudio = audioFiles.slice(1);
-			const hiddenImages = imageFiles.slice(4);
-			const hiddenVideo = videoFiles.slice(1);
-			const hiddenDocuments = documentFiles.slice(3);
-
-			return (
-				hiddenAudio.length +
-				hiddenImages.length +
-				hiddenVideo.length +
-				hiddenDocuments.length
-			);
-		}, [processedAttachments]);
-
 		// A long paste should not push the answer off screen. The cap is measured
 		// from the rendered line height rather than assumed, and the observer stays
 		// attached so the toggle disappears again if the content shrinks.
@@ -674,6 +511,11 @@ export const MessageComponent = memo(
 				// Download non-previewable files
 				downloadFile(file);
 			}
+		}, []);
+
+		const showAllAttachments = useCallback(() => {
+			setDialogSelectedFile(null);
+			setShowFileDialog(true);
 		}, []);
 
 		const copyToClipboard = useCallback(() => {
@@ -982,10 +824,11 @@ export const MessageComponent = memo(
 								)}
 							</Button>
 						)}
-						<AttachmentSection
+						<AttachmentStrip
 							files={processedAttachments}
 							onFileClick={handleFileClick}
 							onFullscreen={setFullscreenFile}
+							onShowAll={showAllAttachments}
 						/>
 						{(message.widgets?.length ?? 0) > 0 && (
 							<MessageWidgets
@@ -1016,9 +859,6 @@ export const MessageComponent = memo(
 								onFeedbackClick={() => setShowFeedbackDialog(true)}
 								onEdit={() => setShowEditDialog(true)}
 								onCopy={copyToClipboard}
-								allFiles={processedAttachments}
-								hiddenFilesCount={hiddenFilesCount}
-								onFileClick={handleFileClick}
 							/>
 						)}
 					</div>

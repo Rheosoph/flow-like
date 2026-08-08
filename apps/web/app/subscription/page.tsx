@@ -10,6 +10,7 @@ import { Loader2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { currentRelativeUrl } from "../../lib/return-url";
 
 export default function SubscriptionPageWrapper() {
 	const backend = useBackend();
@@ -60,7 +61,12 @@ export default function SubscriptionPageWrapper() {
 			<main className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
 				<div className="text-center p-6 border rounded-lg shadow-lg bg-card">
 					<h3>Please log in to view subscription options.</h3>
-					<Button onClick={() => auth.signinRedirect()} className="mt-4">
+					<Button
+						onClick={() =>
+							auth.signinRedirect({ url_state: currentRelativeUrl() })
+						}
+						className="mt-4"
+					>
 						Log In
 					</Button>
 				</div>

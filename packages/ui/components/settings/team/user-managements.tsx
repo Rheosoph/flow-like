@@ -3,6 +3,7 @@
 import {
 	CrownIcon,
 	FilterIcon,
+	MailIcon,
 	MoreVerticalIcon,
 	SettingsIcon,
 	ShieldIcon,
@@ -40,6 +41,7 @@ import {
 	DropdownMenuTrigger,
 	EmptyState,
 	type IBackendRole,
+	type IInvite,
 	type IMember,
 	Label,
 	RolePermissions,
@@ -51,6 +53,7 @@ import {
 	Skeleton,
 	useBackend,
 	useInfiniteInvoke,
+	useInvalidateInfiniteInvoke,
 	useInvalidateInvoke,
 	useInvoke,
 } from "../../../";
@@ -60,6 +63,8 @@ import {
 	userInitials,
 	userSecondaryLabel,
 } from "../../../lib/user-display";
+import { apiErrorMessage } from "../../../lib/api-error";
+import { formatRelativeTime } from "../../../lib/date";
 import {
 	SectionHeading,
 	StatusChip,
@@ -68,6 +73,7 @@ import {
 	TEAM_ROW_TITLE,
 	TeamHint,
 	TeamRowActions,
+	TeamRowNote,
 	TeamSearchInput,
 	TeamSection,
 	TeamToolbar,
@@ -86,12 +92,21 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 	const roles = useInvoke(backend.roleState.getRoles, backend.roleState, [
 		appId,
 	]);
+	const {
+		data: invitePages,
+		hasNextPage: hasMoreInvites,
+		fetchNextPage: fetchMoreInvites,
+		isFetchingNextPage: isFetchingMoreInvites,
+	} = useInfiniteInvoke(backend.teamState.getAppInvites, backend.teamState, [
+		appId,
+	]);
 
 	const [searchQuery, setSearchQuery] = useState("");
 	const [roleFilter, setRoleFilter] = useState<string>("all");
 	const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(new Set());
 
 	const members = useMemo(() => team?.pages.flat() ?? [], [team]);
+	const invites = useMemo(() => invitePages?.pages.flat() ?? [], [invitePages]);
 	const roleList = roles.data?.[1];
 
 	const filteredTeam = useMemo(() => {
@@ -111,12 +126,26 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 
 	const searchTerm = searchQuery.trim();
 
+	// Pending invites carry no role yet, so a role filter necessarily excludes them.
+	const visibleInvites = useMemo(
+		() => (roleFilter === "all" ? invites : []),
+		[invites, roleFilter],
+	);
+
 	const visibleCount = useMemo(
 		() =>
 			searchTerm.length === 0
 				? filteredTeam.length
 				: filteredTeam.filter((member) => !hiddenIds.has(member.id)).length,
 		[filteredTeam, hiddenIds, searchTerm],
+	);
+
+	const visibleInviteCount = useMemo(
+		() =>
+			searchTerm.length === 0
+				? visibleInvites.length
+				: visibleInvites.filter((invite) => !hiddenIds.has(invite.id)).length,
+		[visibleInvites, hiddenIds, searchTerm],
 	);
 
 	const isFiltering = searchTerm.length > 0 || roleFilter !== "all";
@@ -128,7 +157,11 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 				icon={UsersIcon}
 				title="People with access"
 				count={members.length}
-				description="Everyone who can open this app. Roles decide what they can change."
+				description={
+					invites.length > 0
+						? "Everyone who can open this app, plus invitations that haven't been accepted yet. Roles decide what they can change."
+						: "Everyone who can open this app. Roles decide what they can change."
+				}
 			/>
 
 			<TeamToolbar>
@@ -162,6 +195,30 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 					</>
 				) : (
 					<>
+						{visibleInvites.map((invite) => (
+							<PendingInvite
+								key={invite.id}
+								invite={invite}
+								appId={appId}
+								searchQuery={searchQuery}
+								onMatchChange={reportMatch}
+							/>
+						))}
+
+						{hasMoreInvites && (
+							<Button
+								variant="outline"
+								size="sm"
+								className="w-full"
+								onClick={() => fetchMoreInvites()}
+								disabled={isFetchingMoreInvites}
+							>
+								{isFetchingMoreInvites
+									? "Loading..."
+									: "Load More Pending Invites"}
+							</Button>
+						)}
+
 						{filteredTeam.map((member) => (
 							<Member
 								key={member.id}
@@ -172,7 +229,7 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 							/>
 						))}
 
-						{visibleCount === 0 && (
+						{visibleCount === 0 && visibleInviteCount === 0 && (
 							<EmptyState
 								className="max-w-full"
 								title="No members found"
@@ -203,7 +260,13 @@ export function UserManagement({ appId }: Readonly<{ appId: string }>) {
 				<TeamHint>
 					{`Showing ${visibleCount} of ${members.length} loaded ${
 						members.length === 1 ? "member" : "members"
-					}${hasNextPage ? " · more can be loaded" : ""}`}
+					}${hasNextPage ? " · more can be loaded" : ""}${
+						invites.length > 0
+							? ` · ${invites.length} pending ${
+									invites.length === 1 ? "invitation" : "invitations"
+								}`
+							: ""
+					}`}
 				</TeamHint>
 			)}
 		</TeamSection>
@@ -218,6 +281,123 @@ function MemberRowSkeleton() {
 				<Skeleton className="h-4 w-45" />
 				<Skeleton className="h-3 w-30" />
 			</div>
+		</div>
+	);
+}
+
+/**
+ * An invitation that hasn't been accepted yet. Shown in the same list as members
+ * so an admin can see who is *expected* to have access, but muted and badged so
+ * it never reads as an actual member.
+ */
+function PendingInvite({
+	invite,
+	appId,
+	searchQuery,
+	onMatchChange,
+}: Readonly<{
+	invite: IInvite;
+	appId: string;
+	searchQuery: string;
+	onMatchChange: (id: string, matches: boolean) => void;
+}>) {
+	const backend = useBackend();
+	const invalidateInfinite = useInvalidateInfiniteInvoke();
+	const user = useInvoke(backend.userState.lookupUser, backend.userState, [
+		invite.user_id,
+	]);
+	const userData = user.data;
+
+	const matches = useMemo(() => {
+		const query = searchQuery.trim().toLowerCase();
+		if (query.length === 0) return true;
+		if (!userData) return true;
+		return [
+			userData?.name,
+			userData?.preferred_username,
+			userData?.username,
+			userData?.email,
+		]
+			.filter((value): value is string => Boolean(value))
+			.some((value) => value.toLowerCase().includes(query));
+	}, [searchQuery, userData]);
+
+	useEffect(() => {
+		onMatchChange(invite.id, matches);
+	}, [invite.id, matches, onMatchChange]);
+
+	const handleRevoke = useCallback(async () => {
+		try {
+			await backend.teamState.revokeAppInvite(appId, invite.id);
+			await invalidateInfinite(backend.teamState.getAppInvites, [appId]);
+			toast.success("Invitation revoked.");
+		} catch (error) {
+			console.error("Failed to revoke invitation:", error);
+			toast.error(
+				apiErrorMessage(
+					error,
+					"Failed to revoke the invitation. Please try again.",
+				),
+			);
+		}
+	}, [appId, invite.id, backend, invalidateInfinite]);
+
+	if (!matches) return null;
+
+	const evaluatedName = userDisplayName(userData, "Invited user");
+	const handle = userSecondaryLabel(userData);
+
+	return (
+		<div className={teamRowClass({ align: "start" })}>
+			<Avatar className="size-9 shrink-0 opacity-60">
+				<AvatarImage src={userAvatarUrl(userData)} alt={evaluatedName} />
+				<AvatarFallback className="text-[11px] font-semibold text-muted-foreground">
+					{userInitials(userData)}
+				</AvatarFallback>
+			</Avatar>
+
+			<div className="min-w-0 flex-1">
+				<div className={TEAM_ROW_TITLE}>
+					<span className="truncate text-muted-foreground">
+						{evaluatedName}
+					</span>
+					{handle && <span className={TEAM_ROW_HANDLE}>{handle}</span>}
+				</div>
+				<div className={TEAM_ROW_META}>
+					<StatusChip tone="attention" icon={MailIcon} pip>
+						Invitation pending
+					</StatusChip>
+					<span>invited {formatRelativeTime(invite.created_at)}</span>
+				</div>
+				{invite.message && <TeamRowNote>{invite.message}</TeamRowNote>}
+			</div>
+
+			<TeamRowActions>
+				<AlertDialog>
+					<AlertDialogTrigger asChild>
+						<Button variant="ghost" size="icon" className="size-8">
+							<Trash2Icon className="size-4" />
+						</Button>
+					</AlertDialogTrigger>
+					<AlertDialogContent>
+						<AlertDialogHeader>
+							<AlertDialogTitle>Revoke Invitation</AlertDialogTitle>
+							<AlertDialogDescription>
+								{`Revoke the invitation for ${evaluatedName}? They will no longer be able to accept it, and it disappears from their notifications.`}
+							</AlertDialogDescription>
+						</AlertDialogHeader>
+						<AlertDialogFooter>
+							<AlertDialogCancel>Cancel</AlertDialogCancel>
+							<AlertDialogAction
+								className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+								onClick={handleRevoke}
+							>
+								Revoke
+							</AlertDialogAction>
+						</AlertDialogFooter>
+					</AlertDialogContent>
+				</AlertDialog>
+			</TeamRowActions>
 		</div>
 	);
 }

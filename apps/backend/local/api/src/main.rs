@@ -4,8 +4,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use dotenv::dotenv;
 use flow_like_api::axum;
-use flow_like_api::construct_router;
 use flow_like_api::cache::sweeper::{CacheSweeperConfig, spawn_cache_sweeper};
+use flow_like_api::construct_router;
 use flow_like_api::execution::{RunSweeperConfig, spawn_run_sweeper};
 use flow_like_api::telemetry::{
     SpanExportConfig, TelemetryAlertConfig, TelemetryRollupConfig, TelemetrySweeperConfig,

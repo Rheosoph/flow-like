@@ -34,6 +34,7 @@ import { IOSWebviewHardening } from "../components/ios-webview-hardening";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
+import { PendingInviteRedeemer } from "../components/pending-invite-redeemer";
 import { RpaPermissionProvider } from "../components/rpa";
 import { RuntimeVariablesProviderComponent } from "../components/runtime-variables-provider";
 import { SpotlightWrapper } from "../components/spotlight-wrapper";
@@ -134,6 +135,7 @@ export function Providers({
 										<OAuthCallbackHandler>
 											<OAuthExecutionProvider>
 												<DesktopAuthProvider>
+													<PendingInviteRedeemer />
 													<NotificationProvider />
 													<RuntimeVariablesProviderComponent>
 														<ExecutionServiceProvider>

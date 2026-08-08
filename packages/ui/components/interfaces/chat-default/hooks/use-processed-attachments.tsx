@@ -1,12 +1,16 @@
 import { useMemo } from "react";
-import type { ProcessedAttachment } from "../attachment";
+import {
+	type ProcessedAttachment,
+	getDisplayFileName,
+	getFileExtension,
+} from "../attachment";
 import type { IAttachment } from "../chat-db";
 
 export const useProcessedAttachments = (attachments: IAttachment[]) => {
 	return useMemo(() => {
 		const processed: ProcessedAttachment[] = [];
 
-		attachments.forEach((attachment) => {
+		for (const attachment of attachments) {
 			const attachmentUrl =
 				typeof attachment === "string" ? attachment : attachment.url;
 			const attachmentData: Partial<IAttachment> =
@@ -100,9 +104,13 @@ export const useProcessedAttachments = (attachments: IAttachment[]) => {
 				}
 			}
 
+			const displayName = getDisplayFileName(name);
+
 			processed.push({
 				url: attachmentUrl,
 				name,
+				displayName,
+				ext: getFileExtension(displayName),
 				type,
 				pageNumber: attachmentData.page,
 				isDataUrl,
@@ -111,7 +119,7 @@ export const useProcessedAttachments = (attachments: IAttachment[]) => {
 				size: attachmentData.size,
 				anchor: attachmentData.anchor,
 			});
-		});
+		}
 
 		return processed;
 	}, [attachments]);

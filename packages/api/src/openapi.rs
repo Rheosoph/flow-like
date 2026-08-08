@@ -271,6 +271,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::team::manage_join_request::accept_join_request,
         crate::routes::app::team::manage_join_request::reject_join_request,
         crate::routes::app::team::invite_user::invite_user,
+        crate::routes::app::team::invites::list_app_invites,
+        crate::routes::app::team::invites::revoke_invite,
         crate::routes::app::team::purchase::purchase,
         crate::routes::app::team::remove_user::remove_user,
         // App connection routes (app-to-app access)

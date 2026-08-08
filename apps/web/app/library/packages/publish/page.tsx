@@ -45,6 +45,7 @@ import { useCallback, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { post } from "../../../../lib/api";
+import { currentRelativeUrl } from "../../../../lib/return-url";
 
 interface PublishFormData {
 	id: string;
@@ -383,7 +384,13 @@ export default function PublishPackagePage() {
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
-						<Button onClick={() => auth.signinRedirect()}>Sign In</Button>
+						<Button
+							onClick={() =>
+								auth.signinRedirect({ url_state: currentRelativeUrl() })
+							}
+						>
+							Sign In
+						</Button>
 					</CardContent>
 				</Card>
 			</main>

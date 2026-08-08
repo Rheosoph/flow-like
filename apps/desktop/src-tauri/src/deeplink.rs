@@ -34,6 +34,13 @@ pub enum DeepLinkIntent {
 }
 
 pub fn handle_deep_link(app_handle: &AppHandle, urls: &Vec<Url>) {
+    dispatch_deep_links(app_handle, urls, false);
+}
+
+/// `replayed` marks re-emissions of the launch URL (`get_current()` returns it
+/// for the whole process lifetime). The frontend deduplicates replayed events
+/// but always honors fresh ones, so clicking the same link twice works.
+fn dispatch_deep_links(app_handle: &AppHandle, urls: &Vec<Url>, replayed: bool) {
     #[cfg(desktop)]
     {
         use tauri::Manager;
@@ -70,10 +77,10 @@ pub fn handle_deep_link(app_handle: &AppHandle, urls: &Vec<Url>) {
                 emit(
                     app_handle,
                     "deeplink/store",
-                    json::json!({ "appId": app_id, "packageId": package_id }),
+                    json::json!({ "appId": app_id, "packageId": package_id, "replayed": replayed }),
                 );
             }
-            DeepLinkIntent::Join => handle_join(app_handle, url),
+            DeepLinkIntent::Join => handle_join(app_handle, url, replayed),
             DeepLinkIntent::Unknown => handle_unknown(app_handle, url),
         }
     }
@@ -95,7 +102,7 @@ pub fn deeplink_replay_pending(app_handle: AppHandle) {
                 "Replaying {} pending deep link(s) for the frontend",
                 urls.len()
             );
-            handle_deep_link(&app_handle, &urls);
+            dispatch_deep_links(&app_handle, &urls, true);
         }
         Ok(_) => {}
         Err(error) => tracing::warn!("Failed to read pending deep links: {error}"),
@@ -309,7 +316,7 @@ fn handle_trigger(app_handle: &AppHandle, url: &Url, app_id: &str, route: &str) 
     }
 }
 
-fn handle_join(app_handle: &AppHandle, url: &Url) {
+fn handle_join(app_handle: &AppHandle, url: &Url, replayed: bool) {
     let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
     let app_id = params.get("appId").map(|v| v.to_string());
     let token = params.get("token").map(|v| v.to_string());
@@ -319,7 +326,7 @@ fn handle_join(app_handle: &AppHandle, url: &Url) {
     emit(
         app_handle,
         "deeplink/join",
-        json::json!({ "appId": app_id, "token": token }),
+        json::json!({ "appId": app_id, "token": token, "replayed": replayed }),
     );
 }
 

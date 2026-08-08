@@ -17,6 +17,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 import { useAuth } from "react-oidc-context";
+import { currentRelativeUrl } from "../lib/return-url";
 
 export function SignInRequired() {
 	const auth = useAuth();
@@ -25,7 +26,9 @@ export function SignInRequired() {
 	const handleSignIn = async () => {
 		setIsRedirecting(true);
 		try {
-			await auth.signinRedirect();
+			// url_state rides the OAuth round trip itself, so the pre-login
+			// location survives even where browser storage does not.
+			await auth.signinRedirect({ url_state: currentRelativeUrl() });
 		} catch (error) {
 			console.error("Sign-in redirect failed:", error);
 			setIsRedirecting(false);

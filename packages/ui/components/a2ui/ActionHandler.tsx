@@ -1687,6 +1687,14 @@ export function useExecuteAction() {
 						break;
 					}
 					default:
+						// Streaming surfaces (A2UIInterface) legitimately forward their own action
+						// names to the server, so this stays a forward rather than a rejection.
+						// On a page nothing consumes it, which used to make a mis-wired action
+						// indistinguishable from a working one — hence the explicit warning.
+						console.warn(
+							`[A2UI] Action "${name}" is not a built-in action; nothing will run unless this surface handles it server-side. Built-in actions: workflow_event (context.nodeId), widget_event (context.actionId), navigate_page, external_link, navigate_app_config, navigate_app_overview, submit_feedback.`,
+							{ surfaceId, triggeringComponentId, context },
+						);
 						if (onAction) {
 							onAction({
 								type: "userAction",

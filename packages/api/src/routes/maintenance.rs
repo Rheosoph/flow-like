@@ -11,7 +11,9 @@ use axum::{
 };
 use flow_like_types::{
     cache::CacheCleanupResult,
-    maintenance::{MaintenanceRunRequest, MaintenanceRunResponse, TelemetryAlertsMaintenanceResult},
+    maintenance::{
+        MaintenanceRunRequest, MaintenanceRunResponse, TelemetryAlertsMaintenanceResult,
+    },
 };
 
 use crate::{

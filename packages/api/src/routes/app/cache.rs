@@ -370,9 +370,9 @@ pub async fn delete_cache_namespace(
     // Namespaces obey the same shape rules as keys (non-empty, bounded), so reuse the
     // key validation. Requiring a namespace keeps this endpoint from doubling as an
     // accidental "wipe the whole scope".
-    let namespace = limits
-        .validate_key(&query.namespace)
-        .map_err(|_| ApiError::bad_request("A non-empty namespace is required"))?;
+    let namespace = limits.validate_key(&query.namespace).map_err(|error| {
+        ApiError::bad_request(format!("A valid namespace is required: {error}"))
+    })?;
 
     // The key itself is irrelevant here; build_key is reused only for its scope and
     // user-identity resolution (and its refusal to serve an anonymous user scope).
@@ -434,11 +434,14 @@ fn parse_scope(raw: Option<&str>) -> Result<CacheScope, ApiError> {
 }
 
 /// An omitted or blank namespace normalizes to the empty string (unnamespaced); a
-/// present one obeys the same shape limits as a key.
+/// present one obeys the same shape limits as a key. The error is re-attributed so an
+/// oversized namespace does not read as a complaint about the (valid) key.
 fn validate_namespace(limits: &CacheLimits, raw: Option<&str>) -> Result<String, ApiError> {
     match raw.map(str::trim) {
         None | Some("") => Ok(String::new()),
-        Some(namespace) => limits.validate_key(namespace).map_err(to_api_error),
+        Some(namespace) => limits
+            .validate_key(namespace)
+            .map_err(|error| ApiError::bad_request(format!("Invalid namespace: {error}"))),
     }
 }
 

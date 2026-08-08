@@ -31,10 +31,11 @@ const LOCAL_CACHE_DIR: &str = "cache";
 const LOCAL_APP_SCOPE_DIR: &str = "global";
 const LOCAL_USER_SCOPE_DIR: &str = "user";
 
-/// Offline entries are capped like the server-side cache (`CacheLimits`), so a flow
-/// built against local storage does not silently depend on values a cloud deployment
-/// will reject.
+/// Offline entries are capped like the server-side cache (`CacheLimits` defaults), so a
+/// flow built against local storage does not silently depend on values a cloud
+/// deployment will reject.
 const LOCAL_MAX_VALUE_BYTES: usize = 1024 * 1024;
+const LOCAL_MAX_KEY_BYTES: usize = 512;
 
 /// Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the
 /// wire; kept as its own type so the pin dropdown can carry friendly labels.
@@ -76,9 +77,18 @@ pub struct FlowCache {
 }
 
 impl FlowCache {
-    /// The namespace sent to the backend: trimmed, empty meaning unnamespaced.
-    pub fn namespace(&self) -> &str {
-        self.namespace.trim()
+    /// The namespace sent to the backend: trimmed, empty meaning unnamespaced. Bounded
+    /// like keys so offline flows match the server-side limits.
+    pub fn validated_namespace(&self) -> flow_like_types::Result<&str> {
+        let namespace = self.namespace.trim();
+        if namespace.len() > LOCAL_MAX_KEY_BYTES {
+            return Err(flow_like_types::anyhow!(
+                "Cache namespace is {} bytes, exceeding the {} byte limit",
+                namespace.len(),
+                LOCAL_MAX_KEY_BYTES
+            ));
+        }
+        Ok(namespace)
     }
 
     /// The key sent to the backend. Namespace and key travel as separate fields — the
@@ -87,6 +97,13 @@ impl FlowCache {
         let key = key.trim();
         if key.is_empty() {
             return Err(flow_like_types::anyhow!("Cache key must not be empty"));
+        }
+        if key.len() > LOCAL_MAX_KEY_BYTES {
+            return Err(flow_like_types::anyhow!(
+                "Cache key is {} bytes, exceeding the {} byte limit",
+                key.len(),
+                LOCAL_MAX_KEY_BYTES
+            ));
         }
         Ok(key.to_string())
     }
@@ -216,7 +233,7 @@ pub async fn cache_get(
     key: &str,
 ) -> flow_like_types::Result<Option<CacheHit>> {
     let key = cache.validated_key(key)?;
-    let namespace = cache.namespace();
+    let namespace = cache.validated_namespace()?;
 
     match resolve_transport(context)? {
         CacheTransport::Remote {
@@ -360,7 +377,7 @@ pub async fn cache_has(
     key: &str,
 ) -> flow_like_types::Result<bool> {
     let key = cache.validated_key(key)?;
-    let namespace = cache.namespace();
+    let namespace = cache.validated_namespace()?;
 
     match resolve_transport(context)? {
         CacheTransport::Remote {
@@ -420,7 +437,7 @@ pub async fn cache_get_or_set(
     ttl_seconds: Option<u64>,
 ) -> flow_like_types::Result<(Value, bool)> {
     let key = cache.validated_key(key)?;
-    let namespace = cache.namespace();
+    let namespace = cache.validated_namespace()?;
 
     match resolve_transport(context)? {
         CacheTransport::Remote {
@@ -488,7 +505,7 @@ pub async fn cache_set(
     ttl_seconds: Option<u64>,
 ) -> flow_like_types::Result<Option<i64>> {
     let key = cache.validated_key(key)?;
-    let namespace = cache.namespace();
+    let namespace = cache.validated_namespace()?;
 
     match resolve_transport(context)? {
         CacheTransport::Remote {
@@ -541,7 +558,7 @@ pub async fn cache_delete(
     key: &str,
 ) -> flow_like_types::Result<bool> {
     let key = cache.validated_key(key)?;
-    let namespace = cache.namespace();
+    let namespace = cache.validated_namespace()?;
 
     match resolve_transport(context)? {
         CacheTransport::Remote {
@@ -596,7 +613,7 @@ pub async fn cache_invalidate_namespace(
     context: &ExecutionContext,
     cache: &FlowCache,
 ) -> flow_like_types::Result<i64> {
-    let namespace = cache.namespace();
+    let namespace = cache.validated_namespace()?;
     if namespace.is_empty() {
         return Err(flow_like_types::anyhow!(
             "Invalidation requires a cache handle with a namespace; refusing to delete every entry in the scope"
@@ -664,8 +681,12 @@ pub async fn cache_invalidate_namespace(
                 };
 
                 if record.namespace == namespace {
-                    generic.delete(&meta.location).await?;
-                    deleted += 1;
+                    // Files legitimately vanish between list and delete: reads reclaim
+                    // expired entries, and two invalidations can run concurrently. One
+                    // vanished file must not abort the rest of the sweep.
+                    if generic.delete(&meta.location).await.is_ok() {
+                        deleted += 1;
+                    }
                 }
             }
 
@@ -699,7 +720,18 @@ mod tests {
             scope: CacheScope::User,
             namespace: " billing ".to_string(),
         };
-        assert_eq!(scoped.namespace(), "billing");
+        assert_eq!(scoped.validated_namespace().unwrap(), "billing");
+
+        let oversized = FlowCache {
+            scope: CacheScope::App,
+            namespace: "n".repeat(LOCAL_MAX_KEY_BYTES + 1),
+        };
+        assert!(oversized.validated_namespace().is_err());
+        assert!(
+            plain
+                .validated_key(&"k".repeat(LOCAL_MAX_KEY_BYTES + 1))
+                .is_err()
+        );
     }
 
     #[test]

@@ -39,6 +39,22 @@ import {
 	apiPut,
 } from "./api-utils";
 
+// The hub serializes the sea-orm model directly: JSON key `type` with values
+// "Workflow"/"System". The UI contract is `notification_type` with
+// "WORKFLOW"/"SYSTEM", so map it here at the boundary.
+function normalizeRemoteNotification(raw: INotification): INotification {
+	const rawType =
+		(raw as { notification_type?: string }).notification_type ??
+		(raw as { type?: string }).type;
+	return {
+		...raw,
+		notification_type:
+			typeof rawType === "string" && rawType.toUpperCase() === "WORKFLOW"
+				? "WORKFLOW"
+				: "SYSTEM",
+	};
+}
+
 // API returns snake_case fields, frontend expects camelCase
 interface ApiProfile {
 	id: string;
@@ -198,10 +214,11 @@ export class WebUserState implements IUserState {
 		}
 
 		try {
-			return await apiGet<INotification[]>(
+			const remote = await apiGet<INotification[]>(
 				`user/notifications/list?${params}`,
 				this.backend.auth,
 			);
+			return remote.map(normalizeRemoteNotification);
 		} catch {
 			return [];
 		}
@@ -335,7 +352,9 @@ export class WebUserState implements IUserState {
 	}
 
 	private async prepareProfile(apiProfile: ApiProfile): Promise<IProfile> {
-		const profile = await this.mergeOfflineApps(transformApiProfile(apiProfile));
+		const profile = await this.mergeOfflineApps(
+			transformApiProfile(apiProfile),
+		);
 		return this.syncRemoteShortcuts(profile);
 	}
 
@@ -526,11 +545,7 @@ export class WebUserState implements IUserState {
 			throw new Error("Profile ID is required");
 		}
 
-		await apiPost(
-			`profile/${profileId}`,
-			{ shortcuts },
-			this.backend.auth,
-		);
+		await apiPost(`profile/${profileId}`, { shortcuts }, this.backend.auth);
 	}
 
 	private async saveToOfflineStorage(

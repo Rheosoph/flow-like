@@ -514,7 +514,7 @@ async fn handle_wasm_purchase_completed(
     // Send notification and dispatch push
     let frontend_url =
         std::env::var("FRONTEND_URL").unwrap_or_else(|_| "https://app.flow-like.com".to_string());
-    let link = format!("{}/nodes?id={}", frontend_url, package_id);
+    let link = format!("{}/store/packages?id={}", frontend_url, package_id);
 
     let _notification_id = dispatch_notification(
         state,

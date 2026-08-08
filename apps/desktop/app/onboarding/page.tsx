@@ -191,7 +191,9 @@ export default function Onboarding() {
 							profileId: firstProfileId,
 						});
 						await invalidate("get_profiles");
-						router.replace("/");
+						// Re-check: a deep link (e.g. /join) may have navigated away
+						// during the awaits above — don't drag the user back to home.
+						if (!cancelled) router.replace("/");
 						return;
 					}
 				}

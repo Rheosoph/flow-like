@@ -2051,7 +2051,8 @@ mod tests {
         .expect("graph should accept bound nodes and edges");
 
         assert!(
-            serde_json::from_value::<A2UIComponentType>(json!({ "type": "ontologyGraph" })).is_err()
+            serde_json::from_value::<A2UIComponentType>(json!({ "type": "ontologyGraph" }))
+                .is_err()
         );
         let component: A2UIComponentType = serde_json::from_value(json!({
             "type": "ontologyGraph",

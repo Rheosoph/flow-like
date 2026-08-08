@@ -3949,6 +3949,18 @@ const MAX_UI_COMPONENT_ID_CHARS: usize = 120;
 const MAX_UI_CUSTOM_CSS_CHARS: usize = 12_000;
 const MAX_UI_STYLE_STRING_CHARS: usize = 1_000;
 const MAX_UI_ACTIONS: usize = 20;
+/// The action names `ActionHandler.tsx` dispatches. Anything else falls through its `default`
+/// branch into a no-op `userAction`, so the control renders but never runs — keep in sync with
+/// `executeAction` there and with `BUILTIN_ACTION_NAMES` in `validateComponents.ts`.
+const BUILTIN_ACTION_NAMES: &[&str] = &[
+    "workflow_event",
+    "widget_event",
+    "navigate_page",
+    "external_link",
+    "navigate_app_config",
+    "navigate_app_overview",
+    "submit_feedback",
+];
 const MAX_UI_EVENT_HANDLERS: usize = 64;
 const MAX_UI_EVENT_NAME_CHARS: usize = 128;
 
@@ -4463,24 +4475,66 @@ fn validate_actions_value(
             }
         }
 
-        match action_obj.get("name").and_then(Value::as_str) {
-            Some(name) if !name.trim().is_empty() => {}
-            _ => errors.push(format!(
-                "{}: {path}[{index}].name must be a non-empty string",
+        let name = match action_obj.get("name").and_then(Value::as_str) {
+            Some(name) if !name.trim().is_empty() => Some(name.trim()),
+            _ => {
+                errors.push(format!(
+                    "{}: {path}[{index}].name must be a non-empty string",
+                    component_id,
+                ));
+                None
+            }
+        };
+
+        let context = match action_obj.get("context") {
+            Some(Value::Object(context)) => Some(context),
+            Some(_) => {
+                errors.push(format!(
+                    "{}: {path}[{index}].context must be an object",
+                    component_id,
+                ));
+                None
+            }
+            None => {
+                errors.push(format!(
+                    "{}: {path}[{index}].context is required",
+                    component_id,
+                ));
+                None
+            }
+        };
+
+        let Some(name) = name else { continue };
+
+        if !BUILTIN_ACTION_NAMES.contains(&name) {
+            errors.push(format!(
+                "{}: {path}[{index}].name '{}' is not a built-in action. The name is a fixed verb, never a board node / event / widget action id — put that id in the context instead. Valid: {}. To run a board event use {{\"name\": \"workflow_event\", \"context\": {{\"nodeId\": \"<event node id>\"}}}}; to run a widget action use {{\"name\": \"widget_event\", \"context\": {{\"actionId\": \"<widget action id>\"}}}}",
                 component_id,
-            )),
+                name,
+                BUILTIN_ACTION_NAMES.join(", "),
+            ));
+            continue;
         }
 
-        match action_obj.get("context") {
-            Some(Value::Object(_)) => {}
-            Some(_) => errors.push(format!(
-                "{}: {path}[{index}].context must be an object",
+        let Some(context) = context else { continue };
+
+        // A routing action without its target id renders a control that does nothing, which is
+        // indistinguishable from a wired one until a user clicks it.
+        let required_key = match name {
+            "workflow_event" => Some(("nodeId", "the id of an event entry node on the board")),
+            "widget_event" => Some(("actionId", "the id of an action declared on the widget")),
+            _ => None,
+        };
+        if let Some((key, meaning)) = required_key
+            && !context
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        {
+            errors.push(format!(
+                "{}: {path}[{index}] is a '{name}' action but its context has no '{key}' — it would render a control that does nothing. Set context.{key} to {meaning}.",
                 component_id,
-            )),
-            None => errors.push(format!(
-                "{}: {path}[{index}].context is required",
-                component_id,
-            )),
+            ));
         }
     }
 }
@@ -5925,8 +5979,20 @@ mod tests {
     /// catalog embedded in the system prompt plus the detailed schema pages).
     fn documented_component_types() -> Vec<String> {
         let mut types = Vec::new();
+        // Only the "Quick Reference" section lists component TYPES. Later sections use the same
+        // bullet shape for component PROPS (voiceInput's `- \`value\` - binding path …`), which
+        // must not be mistaken for a type.
+        let mut in_type_list = false;
         for line in flow_like::a2ui::copilot::COMPONENT_CATALOG.lines() {
-            if let Some(rest) = line.trim().strip_prefix("- `")
+            let trimmed = line.trim();
+            if let Some(heading) = trimmed.strip_prefix("## ") {
+                in_type_list = heading.starts_with("Quick Reference");
+                continue;
+            }
+            if !in_type_list {
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("- `")
                 && let Some(end) = rest.find('`')
             {
                 types.push(rest[..end].to_string());
@@ -6056,6 +6122,94 @@ mod tests {
         assert_eq!(
             validated[0]["component"]["eventHandlers"],
             components[0]["component"]["eventHandlers"]
+        );
+    }
+
+    #[test]
+    fn emit_ui_rejects_action_names_that_are_not_built_in() {
+        // The reported failure: the model names the action after the board event node (or after a
+        // widget action id) instead of using the fixed `workflow_event`/`widget_event` verbs.
+        // ActionHandler.tsx drops those, so the button renders and silently does nothing.
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Approve" },
+                "actions": [{ "name": "approve_request", "context": {} }],
+                "eventHandlers": {
+                    "click": [{ "name": "custom:refresh_dashboard", "context": {} }]
+                }
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("actions[0].name 'approve_request'")),
+            "legacy action with an invented name must be rejected: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("eventHandlers.click[0].name 'custom:refresh_dashboard'")
+            }),
+            "named handler with an invented name must be rejected: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("workflow_event") && error.contains("widget_event")),
+            "the rejection must teach the correct contract: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn emit_ui_rejects_routing_actions_without_their_target_id() {
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Run" },
+                "actions": [{ "name": "workflow_event", "context": {} }],
+                "eventHandlers": {
+                    "click": [{ "name": "widget_event", "context": { "actionId": "  " } }]
+                }
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("actions[0]") && error.contains("'nodeId'")),
+            "workflow_event without nodeId must be rejected: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers.click[0]")
+                    && error.contains("'actionId'")),
+            "widget_event without actionId must be rejected: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn emit_ui_accepts_the_widget_action_contract() {
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Approve" },
+                "actions": [
+                    { "name": "widget_event", "context": { "actionId": "approve" } }
+                ]
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors.is_empty(),
+            "the documented widget action shape must validate: {errors:?}"
         );
     }
 

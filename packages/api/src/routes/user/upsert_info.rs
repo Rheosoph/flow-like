@@ -18,7 +18,10 @@ const ALLOWED_AVATAR_EXTENSIONS: &[&str] = &["webp", "png", "jpg", "jpeg", "gif"
 /// The extension is user input that ends up in a storage path, so it is matched
 /// against an allowlist rather than sanitized.
 fn normalize_avatar_extension(extension: &str) -> Result<&'static str, ApiError> {
-    let lowered = extension.trim().trim_start_matches('.').to_ascii_lowercase();
+    let lowered = extension
+        .trim()
+        .trim_start_matches('.')
+        .to_ascii_lowercase();
     ALLOWED_AVATAR_EXTENSIONS
         .iter()
         .find(|allowed| **allowed == lowered)

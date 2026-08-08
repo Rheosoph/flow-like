@@ -113,7 +113,8 @@ Properties:
 Action wiring (same contract for every interactive component):
 - "workflow_event" invokes ONE named board event; context carries routing ids ONLY (nodeId, optional boardId/appId)
 - NEVER copy element/dashboard values into the context - the event body reads current element state itself at runtime (Get Element -> Get Element Value / Get File Input Files)
-- Other built-in names: "navigate_page" (context.route, optional context.queryParams) and "external_link" (context.url)
+- Other built-in names: "navigate_page" (context.route, optional context.queryParams), "external_link" (context.url) and "widget_event" (context.actionId, inside a widget only)
+- The action "name" is one of those FIXED verbs - never a board node name, event name or widget action id; those go in the context. An unrecognized name is dropped at runtime (the control renders and does nothing) and emit_ui rejects it
 - Exact eventHandlers entries override the legacy default; an explicit [] disables that event
 - Events added after a component shipped (textField "input"/"submit"/"focus"/"blur", slider "input", select "open"/"close", table "rowClick"/"cellClick"/"selectionChange"/"sortChange", chart "pointClick") need an EXACT entry - they ignore both actions[0] and "*"
 - A board can set or re-point the legacy default or a named event later with Set Element Action (a2uiSetElementAction; optional event_name)
@@ -381,7 +382,7 @@ Properties:
 - height: BoundValue (string, CSS value e.g. "600px")
 - responsive: BoundValue (boolean) - auto agenda on narrow widths
 - compactBreakpoint: BoundValue (number, px)
-- actions: legacy default action; interactions fire with _action_context { interaction: "create"|"update"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
+- actions: legacy default action, same contract as button - [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"update"|"move"|"resize"|"open"|"delete", id?, start, end, ... }
 - eventHandlers: optional ordered action lists keyed by "create" | "update" | "move" | "resize" | "open" | "delete"
 
 Example:
@@ -417,7 +418,7 @@ Properties:
 - height: BoundValue (string, CSS value e.g. "600px")
 - responsive: BoundValue (boolean) - auto compact on narrow widths
 - compactBreakpoint: BoundValue (number, px)
-- actions: legacy default action; interactions fire with _action_context { interaction: "create"|"update"|"move"|"resize"|"open"|"delete"|"link"|"reorder", id?, start?, end?, fromId?, toId? }
+- actions: legacy default action, same contract as button - [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]; interactions fire with _action_context { interaction: "create"|"update"|"move"|"resize"|"open"|"delete"|"link"|"reorder", id?, start?, end?, fromId?, toId? }
 - eventHandlers: optional ordered action lists keyed by "create" | "update" | "move" | "resize" | "open" | "delete" | "link" | "reorder"
 
 Example:
@@ -741,6 +742,34 @@ mod tests {
         }
     }
 
+    /// Substring search that ignores matches inside a longer identifier, so a documented event
+    /// name like `selectionChange` is not mistaken for the legacy `onChange` prop.
+    fn contains_standalone(haystack: &str, needle: &str) -> bool {
+        let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+        let boundary_before = needle.starts_with(is_ident);
+        let boundary_after = needle.ends_with(is_ident);
+        haystack.match_indices(needle).any(|(index, matched)| {
+            let before_ok = !boundary_before
+                || haystack[..index]
+                    .chars()
+                    .next_back()
+                    .is_none_or(|c| !is_ident(c));
+            let after_ok = !boundary_after
+                || haystack[index + matched.len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !is_ident(c));
+            before_ok && after_ok
+        })
+    }
+
+    #[test]
+    fn legacy_shape_check_ignores_longer_identifiers() {
+        assert!(!contains_standalone("\"selectionChange\"", "onChange"));
+        assert!(contains_standalone("- onChange: BoundValue", "onChange"));
+        assert!(contains_standalone("\"onChange\": []", "onChange"));
+    }
+
     #[test]
     fn pages_document_actions_as_name_context_arrays() {
         // The runtime contract is `component.actions: [{ "name": ..., "context": {...} }]`
@@ -749,10 +778,20 @@ mod tests {
         // the emit_ui validator.
         for component_type in DETAILED_PAGE_TYPES {
             let page = get_component_schema(component_type);
-            for legacy in ["onClick", "onChange", "onClose", "\"emit\"", "\"update\""] {
+            // Legacy event-keyed props. Matched on identifier boundaries so a documented event
+            // name like `selectionChange` is not read as the old `onChange` prop.
+            for legacy in ["onClick", "onChange", "onClose"] {
                 assert!(
-                    !page.contains(legacy),
+                    !contains_standalone(&page, legacy),
                     "{component_type} page still documents the legacy '{legacy}' action shape"
+                );
+            }
+            // Legacy action names. Checked in action-name position only: calendar/gantt
+            // legitimately document "update" as an `_action_context.interaction` value.
+            for legacy in ["emit", "update"] {
+                assert!(
+                    !page.contains(&format!(r#""name": "{legacy}""#)),
+                    "{component_type} page still documents '{legacy}' as an action name"
                 );
             }
             if page.contains("actions:") {

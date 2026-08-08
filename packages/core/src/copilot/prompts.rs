@@ -1969,9 +1969,10 @@ Place a widget on the page as a `widgetInstance` component inside `components`, 
     ]}}
   ]
   ```
-  Trigger a widget action from a component INSIDE the widget with a component-level `actions`
-  list referencing the action by name, e.g.
-  `{{"id": "pc-approve", "component": {{"type": "button", "label": {{"literalString": "Approve"}}, "actions": [{{"name": "approve"}}]}}}}`.
+  Trigger a widget action from a component INSIDE the widget with the `widget_event` action, which
+  carries the declared action id in `context.actionId` — the action `name` is ALWAYS the literal
+  `"widget_event"`, never the action id itself:
+  `{{"id": "pc-approve", "component": {{"type": "button", "label": {{"literalString": "Approve"}}, "actions": [{{"name": "widget_event", "context": {{"actionId": "approve"}}}}]}}}}`.
   The board workflow binds its `eventsWidgetAction` handlers to these declared action ids.
 
 {component_docs}
@@ -3104,6 +3105,21 @@ mod tests {
                 "agent/widget tool target {tool_target} must still be declared as a handler block"
             );
         }
+        // The UI half of the same contract: a component inside a widget must fire the fixed
+        // `widget_event` verb carrying the action id, not an action named after the id. Only
+        // `widget_event` reaches the widget's action bindings in ActionHandler.tsx.
+        let frontend = frontend_system_prompt("{}", "");
+        assert!(
+            frontend.contains(
+                r#""actions": [{"name": "widget_event", "context": {"actionId": "approve"}}]"#
+            ),
+            "the widget prompt must document the widget_event contract"
+        );
+        assert!(
+            !frontend.contains(r#""actions": [{"name": "approve"}]"#),
+            "the widget prompt must not teach an action named after the widget action id"
+        );
+
         // A widget action target is stricter still: `a2ui_instantiate_widget` validates that every
         // `fnRefs` entry is an `events_widget_action` node and errors otherwise, so a plain handler
         // block (which lowers to `events_generic`) is NOT sufficient here.

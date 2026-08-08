@@ -17,6 +17,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type AuthContextProps, useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { currentRelativeUrl } from "../../lib/return-url";
 import { type ProfileActions, ProfilePage } from "./account";
 import ChangeEmailDialog from "./change-email";
 import ChangePasswordDialog from "./change-password";
@@ -221,7 +222,12 @@ const AccountPage: React.FC = () => {
 			<main className="flex flex-row items-center justify-center w-full flex-1 min-h-0 py-12">
 				<div className="text-center p-6 border rounded-lg shadow-lg bg-card">
 					<h3>Please log in to view your profile.</h3>
-					<Button onClick={() => auth.signinRedirect()} className="mt-4">
+					<Button
+						onClick={() =>
+							auth.signinRedirect({ url_state: currentRelativeUrl() })
+						}
+						className="mt-4"
+					>
 						Log In
 					</Button>
 				</div>

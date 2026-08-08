@@ -107,7 +107,7 @@ impl NodeLogic for CachedSqlQueryNode {
         node.add_input_pin(
             "namespace",
             "Namespace",
-            "Optional prefix so cached results from different flows cannot collide",
+            "Group name for the cached results. Invalidating this namespace (Invalidate Cache Namespace node) clears them in one call; it also keeps results from unrelated flows apart.",
             VariableType::String,
         )
         .set_default_value(Some(json!("datafusion")));

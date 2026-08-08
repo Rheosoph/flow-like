@@ -60,6 +60,17 @@ export function isUpgradeRequiredError(
 	return candidate.status === 402 || candidate.code === "PAYMENT_REQUIRED";
 }
 
+/**
+ * The server's own explanation when it sent one, otherwise the caller's generic
+ * copy. Backends that distinguish failure cases (already a member vs. already
+ * invited) are only useful if the UI shows what they said.
+ */
+export function apiErrorMessage(error: unknown, fallback: string): string {
+	return error instanceof ApiResponseError && error.serverMessage.trim()
+		? error.serverMessage
+		: fallback;
+}
+
 function nonEmptyString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }

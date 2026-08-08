@@ -28,6 +28,7 @@ import {
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
+import { ApiResponseError } from "../../lib/api-error";
 import { appsDB, type IShortcut } from "../../lib/apps-db";
 import {
 	type ILocalNotification,
@@ -65,6 +66,30 @@ function sortNotificationsByCreatedAtDesc(
 			new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
 	);
 }
+
+// The hub serializes the sea-orm model directly: JSON key `type` with values
+// "Workflow"/"System". The UI contract is `notification_type` with "WORKFLOW"/
+// "SYSTEM", so map it here at the boundary.
+function normalizeRemoteNotification(raw: INotification): INotification {
+	const rawType =
+		(raw as { notification_type?: string }).notification_type ??
+		(raw as { type?: string }).type;
+	const notification_type =
+		typeof rawType === "string" && rawType.toUpperCase() === "WORKFLOW"
+			? "WORKFLOW"
+			: "SYSTEM";
+	return { ...raw, notification_type };
+}
+
+// A local workflow notification and its hub-persisted copy share a source run +
+// node but never an id, so key duplicate detection on the pair.
+function notificationRunKey(notification: INotification): string | null {
+	return notification.source_run_id && notification.source_node_id
+		? `${notification.source_run_id}::${notification.source_node_id}`
+		: null;
+}
+
+const REMOTE_NOTIFICATION_PAGE_SIZE = 100;
 
 function normalizeProfileShortcut(
 	shortcut: IProfileShortcut,
@@ -260,6 +285,43 @@ export class UserState implements IUserState {
 		};
 	}
 
+	private async fetchRemoteNotifications(
+		unreadOnly: boolean,
+		count: number,
+	): Promise<INotification[]> {
+		const collected: INotification[] = [];
+		let pageOffset = 0;
+
+		// The server clamps `limit` to 100; page through it so the merged list
+		// can extend past the first 100 items instead of dead-ending there.
+		while (collected.length < count) {
+			const params = new URLSearchParams({
+				limit: Math.min(
+					REMOTE_NOTIFICATION_PAGE_SIZE,
+					count - collected.length,
+				).toString(),
+				offset: pageOffset.toString(),
+				unread_only: unreadOnly.toString(),
+			});
+
+			const batch = await fetcher<INotification[]>(
+				// biome-ignore lint/style/noNonNullAssertion: callers guard presence
+				this.backend.profile!,
+				`user/notifications/list?${params}`,
+				{ method: "GET" },
+				// biome-ignore lint/style/noNonNullAssertion: callers guard presence
+				this.backend.auth!,
+			);
+
+			if (!batch.length) break;
+			collected.push(...batch);
+			if (batch.length < REMOTE_NOTIFICATION_PAGE_SIZE) break;
+			pageOffset += REMOTE_NOTIFICATION_PAGE_SIZE;
+		}
+
+		return collected.map(normalizeRemoteNotification);
+	}
+
 	async listNotifications(
 		unreadOnly = false,
 		offset = 0,
@@ -287,28 +349,48 @@ export class UserState implements IUserState {
 			this.hasRemoteAccessToken()
 		) {
 			try {
-				const params = new URLSearchParams({
-					limit: (limit + offset).toString(), // Fetch more for proper merge
-					offset: "0",
-					unread_only: unreadOnly.toString(),
-				});
-
-				remoteResult = await fetcher<INotification[]>(
-					this.backend.profile,
-					`user/notifications/list?${params}`,
-					{ method: "GET" },
-					this.backend.auth,
+				remoteResult = await this.fetchRemoteNotifications(
+					unreadOnly,
+					limit + offset,
 				);
-			} catch {
-				// Fall back to local only on API error
+			} catch (error) {
+				// Offline / network failures fall back to local history silently. A
+				// genuine server error with nothing local to show is surfaced so the
+				// page renders an error state instead of a misleading "you're caught
+				// up".
+				if (
+					error instanceof ApiResponseError &&
+					localNotifications.length === 0
+				) {
+					throw error;
+				}
+				console.warn(
+					"[UserState.listNotifications] remote fetch failed:",
+					error,
+				);
 			}
 		}
 
-		// Merge and sort by createdAt descending
-		const merged = sortNotificationsByCreatedAtDesc([
-			...remoteResult,
-			...localNotifications,
-		]);
+		// The hub owns persistence for signed-in runs, so a workflow notification
+		// can exist both remotely and as a local shadow (different ids, same source
+		// run + node). Prefer the remote copy and drop the local duplicate.
+		const remoteRunKeys = new Set<string>();
+		for (const notification of remoteResult) {
+			const key = notificationRunKey(notification);
+			if (key) remoteRunKeys.add(key);
+		}
+
+		const byId = new Map<string, INotification>();
+		for (const notification of remoteResult) {
+			byId.set(notification.id, notification);
+		}
+		for (const notification of localNotifications) {
+			const key = notificationRunKey(notification);
+			if (key && remoteRunKeys.has(key)) continue;
+			if (!byId.has(notification.id)) byId.set(notification.id, notification);
+		}
+
+		const merged = sortNotificationsByCreatedAtDesc([...byId.values()]);
 
 		// Apply pagination to merged result
 		return merged.slice(offset, offset + limit);

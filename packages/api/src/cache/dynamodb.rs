@@ -995,6 +995,9 @@ impl CacheStore for DynamoDbCacheStore {
         // One contiguous range: the hashed, fixed-width sort-key layout puts every
         // entry of the namespace — and every chunk item, whose sort key extends its
         // manifest's — under this prefix. The query reads exactly what it deletes.
+        // Strongly consistent: this operation's whole contract is "everything is gone
+        // afterwards", so it must see writes acknowledged just before the call — an
+        // entry a lagging replica hides would survive its own invalidation.
         let prefix = CacheKey::namespace_sort_prefix(scope, user_id, namespace);
         let mut deleted = 0i64;
         let mut last_key: Option<HashMap<String, AttributeValue>> = None;
@@ -1004,6 +1007,7 @@ impl CacheStore for DynamoDbCacheStore {
                 .client
                 .query()
                 .table_name(&self.table)
+                .consistent_read(true)
                 .key_condition_expression("#pk = :app_id AND begins_with(#sk, :prefix)")
                 .expression_attribute_names("#pk", PARTITION_KEY)
                 .expression_attribute_names("#sk", SORT_KEY)
@@ -1047,6 +1051,8 @@ impl CacheStore for DynamoDbCacheStore {
 
     async fn delete_app(&self, app_id: &str) -> Result<i64, CacheStoreError> {
         // Chunk items share the app's partition key, so this sweep removes them too.
+        // Strongly consistent for the same reason as delete_namespace: teardown must
+        // see every acknowledged write.
         let mut deleted = 0i64;
         let mut last_key: Option<HashMap<String, AttributeValue>> = None;
 
@@ -1055,6 +1061,7 @@ impl CacheStore for DynamoDbCacheStore {
                 .client
                 .query()
                 .table_name(&self.table)
+                .consistent_read(true)
                 .key_condition_expression("#pk = :app_id")
                 .expression_attribute_names("#pk", PARTITION_KEY)
                 .expression_attribute_values(":app_id", AttributeValue::S(app_id.to_string()))
@@ -1064,20 +1071,21 @@ impl CacheStore for DynamoDbCacheStore {
                 .await
                 .map_err(database_error)?;
 
+            let mut requests = Vec::new();
             for item in output.items() {
                 let (Some(pk), Some(sk)) = (item.get(PARTITION_KEY), item.get(SORT_KEY)) else {
                     continue;
                 };
-                self.client
-                    .delete_item()
-                    .table_name(&self.table)
+                let delete = DeleteRequest::builder()
                     .key(PARTITION_KEY, pk.clone())
                     .key(SORT_KEY, sk.clone())
-                    .send()
-                    .await
+                    .build()
                     .map_err(database_error)?;
+                requests.push(WriteRequest::builder().delete_request(delete).build());
                 deleted += 1;
             }
+
+            self.run_batch_writes(requests).await?;
 
             last_key = output.last_evaluated_key;
             if last_key.is_none() {

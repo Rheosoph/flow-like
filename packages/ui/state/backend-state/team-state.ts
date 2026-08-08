@@ -22,7 +22,12 @@ import type {
 } from "./types";
 
 export interface ITeamState {
-	createInviteLink(appId: string, name: string, maxUses: number): Promise<void>;
+	createInviteLink(
+		appId: string,
+		name: string,
+		maxUses: number,
+		expiresInHours?: number,
+	): Promise<void>;
 	getInviteLinks(appId: string): Promise<IInviteLink[]>;
 	removeInviteLink(appId: string, linkId: string): Promise<void>;
 	joinInviteLink(appId: string, token: string): Promise<void>;
@@ -36,6 +41,13 @@ export interface ITeamState {
 	rejectJoinRequest(appId: string, requestId: string): Promise<void>;
 	getTeam(appId: string, offset?: number, limit?: number): Promise<IMember[]>;
 	getInvites(offset?: number, limit?: number): Promise<IInvite[]>;
+	/** Pending direct invitations for an app — the admin-facing counterpart to `getInvites`. */
+	getAppInvites(
+		appId: string,
+		offset?: number,
+		limit?: number,
+	): Promise<IInvite[]>;
+	revokeAppInvite(appId: string, inviteId: string): Promise<void>;
 	acceptInvite(inviteId: string): Promise<void>;
 	rejectInvite(inviteId: string): Promise<void>;
 	inviteUser(appId: string, user_id: string, message: string): Promise<void>;

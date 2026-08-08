@@ -33,6 +33,7 @@ import {
 } from "@flow-like/flow-like-ui/lib/stable-asset-url";
 import type { IMediaItem } from "@flow-like/flow-like-ui/state/backend-state/app-state";
 import { createId } from "@paralleldrive/cuid2";
+import { currentRelativeUrl } from "../return-url";
 import {
 	type WebBackendRef,
 	apiDelete,
@@ -284,10 +285,7 @@ export class WebAppState implements IAppState {
 		);
 	}
 
-	async changeAppForkPolicy(
-		appId: string,
-		policy: IForkPolicy,
-	): Promise<void> {
+	async changeAppForkPolicy(appId: string, policy: IForkPolicy): Promise<void> {
 		await apiPatch(
 			`apps/${appId}/settings/forking`,
 			{ fork_policy: policy },
@@ -329,7 +327,9 @@ export class WebAppState implements IAppState {
 
 	async requestJoinApp(appId: string, comment?: string): Promise<void> {
 		if (!this.backend.auth?.isAuthenticated) {
-			await this.backend.auth?.signinRedirect();
+			await this.backend.auth?.signinRedirect({
+				url_state: currentRelativeUrl(),
+			});
 			return;
 		}
 		await apiPut(`apps/${appId}/team/queue`, { comment }, this.backend.auth);
@@ -337,7 +337,9 @@ export class WebAppState implements IAppState {
 
 	async purchaseApp(appId: string): Promise<IPurchaseResponse> {
 		if (!this.backend.auth?.isAuthenticated) {
-			await this.backend.auth?.signinRedirect();
+			await this.backend.auth?.signinRedirect({
+				url_state: currentRelativeUrl(),
+			});
 			throw new Error("Sign in required to purchase an app.");
 		}
 		return apiPost<IPurchaseResponse>(

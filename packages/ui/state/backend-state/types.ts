@@ -24,6 +24,7 @@ export interface IInviteLink {
 	count_joined: number;
 	name: string;
 	max_uses: number;
+	expires_at?: string | null;
 	created_at: string;
 	updated_at: string;
 }

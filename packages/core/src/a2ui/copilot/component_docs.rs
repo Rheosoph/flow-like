@@ -101,8 +101,10 @@ pub const COMPONENT_CATALOG: &str = r##"
   at the WIDGET level inside its `inlineWidgetDef` — a widget with an empty `actions` list cannot
   be bound to any workflow. Use the exact action names the request asks for as the action ids:
   `"inlineWidgetDef": { ..., "actions": [{ "id": "approve", "label": "Approve", "contextSchema": [{ "name": "itemId", "label": "Item Id", "fieldType": "string", "defaultPath": "$.item.id" }] }] }`
-  Components INSIDE the widget trigger a declared action by id:
-  `"actions": [{ "name": "approve" }]`
+  Components INSIDE the widget trigger a declared action with `widget_event`, passing the action id
+  in `context.actionId`. The action `name` is ALWAYS the literal `"widget_event"` — an action named
+  after the action id (or after a board node) is not dispatched and the click does nothing:
+  `"actions": [{ "name": "widget_event", "context": { "actionId": "approve" } }]`
   The board binds `eventsWidgetAction` handlers to these declared widget action ids.
 
 ## Choosing the Right Component (intent -> type)
@@ -167,6 +169,24 @@ storage, and AI processing happen in the flow.
 Interactive components carry actions INSIDE the component object:
 `"actions": [{ "name": "workflow_event", "context": { "nodeId": "<board event node id>" } }]`
 (legacy fallback: only actions[0] fires when no named handler exists).
+
+An action `name` is a FIXED verb from this closed set — it is never a board node name, an event
+name, a handler name, or a widget action id. Those identifiers belong in `context`. There is no
+"custom action" escape hatch: an unrecognized name is silently dropped at runtime, so the control
+renders but does nothing, and `emit_ui` now rejects it outright.
+| name | required context | use for |
+| --- | --- | --- |
+| `workflow_event` | `nodeId` (optional `boardId`, `appId`) | run a board event entry node |
+| `widget_event` | `actionId` | run a widget action declared on the enclosing widget |
+| `navigate_page` | `route` (optional `queryParams`) | go to another page in this app |
+| `external_link` | `url` | open an external URL |
+| `navigate_app_config` | optional `appId` | open the app's config screen |
+| `navigate_app_overview` | optional `appId`, `eventId` | open the app's store/overview screen |
+| `submit_feedback` | `rating`, optional `comment` | record feedback on the current event |
+
+Wiring a button to a workflow is TWO artifacts, not one: the board needs an event entry node
+(`eventsSimple`/`eventsGeneric`), and the action needs that node's id in `context.nodeId`. Emitting
+the action alone leaves a dead button.
 - Components with multiple interactions use `eventHandlers`, keyed by the documented event name:
   `"eventHandlers": { "open": [{ "name": "workflow_event", "context": { "nodeId": "<open-event>" } }], "delete": [{ "name": "workflow_event", "context": { "nodeId": "<delete-event>" } }] }`.
   Each list executes in order. An exact named list overrides `actions[0]`; an explicit empty list
@@ -1033,5 +1053,52 @@ pub fn get_documentation_section(section: &str) -> Option<&'static str> {
         "ml" | "vision" | "cv" | "detection" => Some(ML_VISION_DOCUMENTATION),
         "style" | "styling" | "css" | "theme" => Some(STYLE_GUIDE),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::COMPONENT_CATALOG;
+
+    /// Keep in sync with `executeAction` in packages/ui/components/a2ui/ActionHandler.tsx.
+    const BUILTIN_ACTION_NAMES: &[&str] = &[
+        "workflow_event",
+        "widget_event",
+        "navigate_page",
+        "external_link",
+        "navigate_app_config",
+        "navigate_app_overview",
+        "submit_feedback",
+    ];
+
+    #[test]
+    fn widget_actions_are_documented_as_widget_event_with_an_action_id() {
+        // The regression this guards: the catalog used to teach
+        // `"actions": [{ "name": "approve" }]` — an action named after the widget action id.
+        // ActionHandler.tsx has no such case, so those buttons rendered and did nothing.
+        assert!(
+            COMPONENT_CATALOG.contains(
+                r#""actions": [{ "name": "widget_event", "context": { "actionId": "approve" } }]"#
+            ),
+            "the widget section must document the widget_event contract"
+        );
+        assert!(
+            !COMPONENT_CATALOG.contains(r#""actions": [{ "name": "approve" }]"#),
+            "the widget section must not teach an action named after the action id"
+        );
+    }
+
+    #[test]
+    fn the_action_name_allowlist_is_documented() {
+        for name in BUILTIN_ACTION_NAMES {
+            assert!(
+                COMPONENT_CATALOG.contains(name),
+                "built-in action '{name}' is missing from the action documentation"
+            );
+        }
+        assert!(
+            COMPONENT_CATALOG.contains("never a board node name"),
+            "the docs must state that an action name is not an identifier"
+        );
     }
 }

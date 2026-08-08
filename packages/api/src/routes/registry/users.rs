@@ -7,7 +7,10 @@ use crate::state::AppState;
 use axum::extract::{Path, State};
 use axum::{Extension, Json};
 use flow_like_types::create_id;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter,
+    sea_query::OnConflict,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -83,17 +86,28 @@ fn build_invitation_response(inv: wasm_package_invitation::Model) -> InvitationR
     params(("package_id" = String, Path, description = "Package ID")),
     responses(
         (status = 200, description = "List of package users", body = Vec<PackageUserResponse>),
+        (status = 401, description = "Authentication required"),
+        (status = 403, description = "Forbidden"),
         (status = 503, description = "WASM registry not configured")
-    )
+    ),
+    security(("bearer_auth" = []))
 )]
 pub async fn list_users(
     State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
     Path(package_id): Path<String>,
 ) -> Result<Json<Vec<PackageUserResponse>>, ApiError> {
+    let caller_id = user
+        .sub()
+        .map_err(|_| ApiError::unauthorized("Authentication required"))?;
+
     let _registry = state
         .wasm_registry
         .as_ref()
         .ok_or_else(|| ApiError::service_unavailable("WASM registry not configured"))?;
+
+    crate::check_wasm_access!(state, &caller_id, &package_id)
+        .ok_or_else(|| ApiError::forbidden("You are not a member of this package"))?;
 
     let package_users = wasm_package_user::Entity::find()
         .filter(wasm_package_user::Column::PackageId.eq(&package_id))
@@ -167,24 +181,77 @@ pub async fn invite_user(
         ));
     }
 
+    if request.invitee_id == caller_id {
+        return Err(ApiError::bad_request("You cannot invite yourself"));
+    }
+
+    // The invitee is a foreign key to User; surface a clean 404 instead of a
+    // database error when an unknown id is supplied (the dialog accepts free text).
+    let invitee_exists = user::Entity::find_by_id(&request.invitee_id)
+        .one(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
+        .is_some();
+    if !invitee_exists {
+        return Err(ApiError::not_found("User not found"));
+    }
+
+    let already_member = wasm_package_user::Entity::find()
+        .filter(wasm_package_user::Column::PackageId.eq(&package_id))
+        .filter(wasm_package_user::Column::UserId.eq(&request.invitee_id))
+        .one(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
+        .is_some();
+    if already_member {
+        return Err(ApiError::bad_request(
+            "User is already a member of this package",
+        ));
+    }
+
     let now = chrono::Utc::now().naive_utc();
     let expires_at = now + chrono::Duration::days(7);
 
+    // Upsert on the (packageId, inviteeId) unique key: re-inviting a user whose
+    // earlier invitation was rejected or expired refreshes it in place instead
+    // of failing on the unique constraint.
     let invitation = wasm_package_invitation::ActiveModel {
         id: Set(create_id()),
-        package_id: Set(package_id),
+        package_id: Set(package_id.clone()),
         invited_by_id: Set(caller_id),
-        invitee_id: Set(request.invitee_id),
+        invitee_id: Set(request.invitee_id.clone()),
         permission: Set(request.permission),
         status: Set(InvitationStatus::Pending),
         created_at: Set(now),
         expires_at: Set(Some(expires_at)),
     };
 
-    let result = invitation
-        .insert(&state.db)
+    wasm_package_invitation::Entity::insert(invitation)
+        .on_conflict(
+            OnConflict::columns([
+                wasm_package_invitation::Column::PackageId,
+                wasm_package_invitation::Column::InviteeId,
+            ])
+            .update_columns([
+                wasm_package_invitation::Column::InvitedById,
+                wasm_package_invitation::Column::Permission,
+                wasm_package_invitation::Column::Status,
+                wasm_package_invitation::Column::CreatedAt,
+                wasm_package_invitation::Column::ExpiresAt,
+            ])
+            .to_owned(),
+        )
+        .exec(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+
+    let result = wasm_package_invitation::Entity::find()
+        .filter(wasm_package_invitation::Column::PackageId.eq(&package_id))
+        .filter(wasm_package_invitation::Column::InviteeId.eq(&request.invitee_id))
+        .one(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?
+        .ok_or_else(|| ApiError::internal("Invitation missing after upsert".to_string()))?;
 
     Ok(Json(build_invitation_response(result)))
 }
@@ -396,6 +463,11 @@ pub async fn update_user_permission(
             .await
             .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
 
+        // Ownership transfer swaps both roles; drop both cached entries so the
+        // 120 s TTL can't keep answering with the pre-swap permissions.
+        state.invalidate_wasm_permission(&caller_id, &package_id);
+        state.invalidate_wasm_permission(&target_user_id, &package_id);
+
         return Ok(Json(build_user_response(updated, user_record)));
     }
 
@@ -417,6 +489,9 @@ pub async fn update_user_permission(
         .update(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+
+    // A demotion must take effect immediately, not after the cache TTL.
+    state.invalidate_wasm_permission(&target_user_id, &package_id);
 
     let user_record = user::Entity::find_by_id(&target_user_id)
         .one(&state.db)
@@ -488,6 +563,10 @@ pub async fn remove_user(
         .exec(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+
+    // Revoke the cached grant so a removed user can't keep acting for up to the
+    // cache TTL.
+    state.invalidate_wasm_permission(&target_user_id, &package_id);
 
     Ok(Json(()))
 }

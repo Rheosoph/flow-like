@@ -23,6 +23,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { currentRelativeUrl } from "../lib/return-url";
 import { type IShortcut, appsDB } from "../lib/apps-db";
 
 interface SpotlightWrapperProps {
@@ -346,7 +347,7 @@ export function SpotlightWrapper({ children }: SpotlightWrapperProps) {
 				group: "account",
 				keywords: ["login", "sign in", "account", "authenticate"],
 				priority: 40,
-				action: () => auth.signinRedirect(),
+				action: () => auth.signinRedirect({ url_state: currentRelativeUrl() }),
 			});
 		}
 

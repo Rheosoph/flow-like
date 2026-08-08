@@ -8,7 +8,8 @@ model InviteLink {
   app   App    @relation(fields: [appId], references: [id], onDelete: Cascade)
   appId String
 
-  countJoined BigInt @default(0)
+  countJoined BigInt    @default(0)
+  expiresAt   DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

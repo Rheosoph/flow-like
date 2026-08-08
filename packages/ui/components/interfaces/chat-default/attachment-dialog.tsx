@@ -51,17 +51,7 @@ import {
 	isCode,
 	isText,
 } from "../../ui/file-previewer";
-import type { ProcessedAttachment } from "./attachment";
-
-const getDisplayFileName = (name: string) => {
-	try {
-		const decoded = decodeURIComponent(name);
-		const parts = decoded.split(/[/\\]/);
-		return parts[parts.length - 1];
-	} catch {
-		return name;
-	}
-};
+import { type ProcessedAttachment, getDisplayFileName } from "./attachment";
 
 type SortKey = "name" | "type" | "size";
 type FilterKey = ProcessedAttachment["type"] | "all";

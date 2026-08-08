@@ -439,7 +439,10 @@ mod tests {
         assert!(SearchTerm::parse("f").is_none());
         assert!(SearchTerm::parse("   ").is_none());
         assert!(SearchTerm::parse("fe").is_some());
-        assert_eq!(SearchTerm::parse("  Felix  Schultz ").unwrap().raw, "Felix Schultz");
+        assert_eq!(
+            SearchTerm::parse("  Felix  Schultz ").unwrap().raw,
+            "Felix Schultz"
+        );
     }
 
     #[test]
