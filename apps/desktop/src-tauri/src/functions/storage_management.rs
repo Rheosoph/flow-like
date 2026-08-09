@@ -325,9 +325,10 @@ fn build_overview(
         &paths.temporary_dir,
     ] {
         if known.parent() == Some(paths.user_dir.as_path())
-            && let Some(name) = known.file_name() {
-                cache_exclusions.insert(name.to_string_lossy().to_string());
-            }
+            && let Some(name) = known.file_name()
+        {
+            cache_exclusions.insert(name.to_string_lossy().to_string());
+        }
     }
     let cache = direct_items(
         &paths.user_dir,
@@ -551,14 +552,14 @@ pub async fn get_local_storage_overview(
             .categories
             .iter_mut()
             .find(|entry| entry.key == "apps")
-        {
-            for item in &mut apps.items {
-                if let Ok(meta) = App::get_meta(item.id.clone(), state.clone(), None, None).await {
-                    item.name = meta.name;
-                    item.detail = format!("Local app · {} files", item.file_count);
-                }
+    {
+        for item in &mut apps.items {
+            if let Ok(meta) = App::get_meta(item.id.clone(), state.clone(), None, None).await {
+                item.name = meta.name;
+                item.detail = format!("Local app · {} files", item.file_count);
             }
         }
+    }
     Ok(overview)
 }
 

@@ -70,9 +70,10 @@ pub async fn get_page(
     };
 
     if let Some(board_id) = board_hint
-        && let Some(page) = try_board(board_id).await {
-            return Ok(Json(page));
-        }
+        && let Some(page) = try_board(board_id).await
+    {
+        return Ok(Json(page));
+    }
 
     for board_id in app.boards.iter() {
         if let Some(page) = try_board(board_id.clone()).await {

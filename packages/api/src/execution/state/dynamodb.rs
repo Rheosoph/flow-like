@@ -367,7 +367,8 @@ fn item_to_run(
 ) -> Result<ExecutionRunRecord, StateStoreError> {
     let get_s = |k: &str| -> Result<String, StateStoreError> {
         item.get(k)
-            .and_then(|v| v.as_s().ok()).cloned()
+            .and_then(|v| v.as_s().ok())
+            .cloned()
             .ok_or_else(|| StateStoreError::Serialization(format!("Missing {k}")))
     };
     let get_n = |k: &str| -> Result<i64, StateStoreError> {
@@ -477,7 +478,8 @@ fn item_to_event(
 ) -> Result<(ExecutionEventRecord, Option<String>), StateStoreError> {
     let get_s = |k: &str| -> Result<String, StateStoreError> {
         item.get(k)
-            .and_then(|v| v.as_s().ok()).cloned()
+            .and_then(|v| v.as_s().ok())
+            .cloned()
             .ok_or_else(|| StateStoreError::Serialization(format!("Missing {k}")))
     };
     let get_n = |k: &str| -> Result<i64, StateStoreError> {
@@ -662,16 +664,17 @@ impl ExecutionStateStore for DynamoDbStateStore {
             .limit(limit);
 
         if let Some(cursor) = cursor
-            && let Some(record) = self.get_run(cursor).await? {
-                let mut key = HashMap::new();
-                key.insert("id".into(), AttributeValue::S(cursor.to_string()));
-                key.insert("appId".into(), AttributeValue::S(app_id.to_string()));
-                key.insert(
-                    "createdAt".into(),
-                    AttributeValue::N(record.created_at.to_string()),
-                );
-                query = query.set_exclusive_start_key(Some(key));
-            }
+            && let Some(record) = self.get_run(cursor).await?
+        {
+            let mut key = HashMap::new();
+            key.insert("id".into(), AttributeValue::S(cursor.to_string()));
+            key.insert("appId".into(), AttributeValue::S(app_id.to_string()));
+            key.insert(
+                "createdAt".into(),
+                AttributeValue::N(record.created_at.to_string()),
+            );
+            query = query.set_exclusive_start_key(Some(key));
+        }
 
         let result = query
             .send()
@@ -818,10 +821,11 @@ impl ExecutionStateStore for DynamoDbStateStore {
             .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
         if let Some(items) = result.items
-            && let Some(item) = items.first() {
-                let (event, _) = item_to_event(item)?;
-                return Ok(event.sequence);
-            }
+            && let Some(item) = items.first()
+        {
+            let (event, _) = item_to_event(item)?;
+            return Ok(event.sequence);
+        }
 
         Ok(0)
     }

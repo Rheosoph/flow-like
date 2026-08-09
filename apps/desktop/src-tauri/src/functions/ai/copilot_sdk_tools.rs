@@ -1073,23 +1073,24 @@ fn frontend_tool_result_with_timeout(
         block_on_tool(download_platform_tool_images(image_urls))
     };
     if expected_image_count > 0
-        && let Some(object) = result.as_object_mut() {
-            object.insert("screenshot_count".to_string(), json!(images.len()));
-            let was_complete = object
-                .get("screenshot_complete")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
+        && let Some(object) = result.as_object_mut()
+    {
+        object.insert("screenshot_count".to_string(), json!(images.len()));
+        let was_complete = object
+            .get("screenshot_complete")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        object.insert(
+            "screenshot_complete".to_string(),
+            json!(was_complete && images.len() == expected_image_count),
+        );
+        if images.is_empty() {
             object.insert(
-                "screenshot_complete".to_string(),
-                json!(was_complete && images.len() == expected_image_count),
-            );
-            if images.is_empty() {
-                object.insert(
                     "message".to_string(),
                     json!("The page was embedded inline, but its temporary visual captures could not be loaded by this agent. Do not claim to have read the page visually."),
                 );
-            }
         }
+    }
     let mut output = ToolResultObject::text(
         serde_json::to_string_pretty(&result)
             .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string()),
@@ -1794,8 +1795,9 @@ fn create_emit_commands_tool(
         let queued_count = parsed_commands.len();
         if let Some(store) = &side_effect_commands
             && let Ok(mut queued) = store.lock()
-            && !queued.extend(parsed_commands) {
-                return ToolResultObject::text(
+            && !queued.extend(parsed_commands)
+        {
+            return ToolResultObject::text(
                     json!({
                         "status": "error",
                         "code": "COMMAND_DELIVERY_CONFLICT",
@@ -1805,7 +1807,7 @@ fn create_emit_commands_tool(
                     })
                     .to_string(),
                 );
-            }
+        }
 
         // The queued batch travels through the side-effect store (the chat loop drains it into a
         // <commands> frame); echoing it back to the model would only duplicate its own input.
@@ -2972,8 +2974,9 @@ RULES:
         let queued_count = result.commands.len();
         if let Some(store) = &side_effect_commands
             && let Ok(mut commands) = store.lock()
-            && !commands.extend(result.commands) {
-                return ToolResultObject::text(
+            && !commands.extend(result.commands)
+        {
+            return ToolResultObject::text(
                     json!({
                         "status": "error",
                         "code": "COMMAND_DELIVERY_CONFLICT",
@@ -2984,7 +2987,7 @@ RULES:
                     })
                     .to_string(),
                 );
-            }
+        }
         if let Some(store) = &queued_flowscript
             && let Ok(mut workspace) = store.lock()
         {

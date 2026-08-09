@@ -132,10 +132,11 @@ pub async fn board_summaries(
 
         // Fast path: serve from the DB cache.
         if let Some(row) = cached.remove(board_id)
-            && let Some(summary) = summary_from_row(&row, pages.clone()) {
-                summaries.push(summary);
-                continue;
-            }
+            && let Some(summary) = summary_from_row(&row, pages.clone())
+        {
+            summaries.push(summary);
+            continue;
+        }
 
         // Backwards-compatible fallback: load from S3, compute, and patch the DB.
         let board = match app.open_board(board_id.clone(), Some(false), None).await {

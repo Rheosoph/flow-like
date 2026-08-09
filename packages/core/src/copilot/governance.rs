@@ -230,9 +230,10 @@ impl GovernanceCopilot {
 fn parse_suggestion(text: &str) -> GovernanceSuggestion {
     let candidate = extract_json_object(text);
     if let Some(candidate) = candidate
-        && let Ok(parsed) = serde_json::from_str::<GovernanceSuggestion>(&candidate) {
-            return parsed;
-        }
+        && let Ok(parsed) = serde_json::from_str::<GovernanceSuggestion>(&candidate)
+    {
+        return parsed;
+    }
     GovernanceSuggestion {
         purpose: String::new(),
         suggested_answers: Vec::new(),

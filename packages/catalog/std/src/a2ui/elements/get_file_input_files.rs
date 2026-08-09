@@ -206,7 +206,8 @@ fn decode_local_file_url(url: &str) -> Option<String> {
 fn file_name_from_url(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let segment = parsed
-        .path_segments()?.rfind(|segment| !segment.is_empty())?;
+        .path_segments()?
+        .rfind(|segment| !segment.is_empty())?;
     Some(
         urlencoding::decode(segment)
             .map(|decoded| decoded.into_owned())

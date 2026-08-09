@@ -454,8 +454,12 @@ pub fn search_declarations(query: &str) -> Vec<DeclarationMatch> {
                 .max()
                 .unwrap_or_default()
                 + workflow_priority_score(entry, &normalized_query, false);
-            let exact_symbol_score = if exact_function_names
-                .contains(&entry.function_name.to_ascii_lowercase()) { 100_000 } else { Default::default() };
+            let exact_symbol_score =
+                if exact_function_names.contains(&entry.function_name.to_ascii_lowercase()) {
+                    100_000
+                } else {
+                    Default::default()
+                };
             let score = semantic_score.saturating_add(exact_symbol_score);
 
             (score > 0).then(|| DeclarationMatch {

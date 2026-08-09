@@ -1268,9 +1268,10 @@ async fn get_jwks(jwks_url: &str) -> Result<jsonwebtoken::jwk::JwkSet, ApiError>
     {
         let cache = JWKS_CACHE.lock().await;
         if let Some((fetched_at, jwks)) = cache.get(jwks_url)
-            && fetched_at.elapsed() < JWKS_TTL {
-                return Ok(jwks.clone());
-            }
+            && fetched_at.elapsed() < JWKS_TTL
+        {
+            return Ok(jwks.clone());
+        }
     }
     let resp = reqwest::Client::new()
         .get(jwks_url)
@@ -2431,9 +2432,10 @@ async fn mcp_handle_post(
 
         if method_name == "notifications/initialized" {
             if let Some(session_id) = assigned_session_id.as_ref()
-                && let Some(session) = MCP_SESSIONS.lock().await.get_mut(session_id) {
-                    session.initialized = true;
-                }
+                && let Some(session) = MCP_SESSIONS.lock().await.get_mut(session_id)
+            {
+                session.initialized = true;
+            }
             continue;
         }
 
@@ -2452,26 +2454,25 @@ async fn mcp_handle_post(
         ));
     }
 
-    if is_legacy_sse_post
-        && let Some(session_id) = assigned_session_id.as_ref() {
-            let tx = {
-                let sessions = MCP_SESSIONS.lock().await;
-                sessions
-                    .get(session_id)
-                    .map(|session| session.sse_tx.clone())
-            };
-            if let Some(tx) = tx {
-                for response in &responses {
-                    let data = serde_json::to_string(response).unwrap_or_else(|_| "{}".to_string());
-                    let _ = tx.send(data);
-                }
-                return Ok(mcp_empty_response(
-                    StatusCode::ACCEPTED,
-                    assigned_session_id,
-                    headers,
-                ));
+    if is_legacy_sse_post && let Some(session_id) = assigned_session_id.as_ref() {
+        let tx = {
+            let sessions = MCP_SESSIONS.lock().await;
+            sessions
+                .get(session_id)
+                .map(|session| session.sse_tx.clone())
+        };
+        if let Some(tx) = tx {
+            for response in &responses {
+                let data = serde_json::to_string(response).unwrap_or_else(|_| "{}".to_string());
+                let _ = tx.send(data);
             }
+            return Ok(mcp_empty_response(
+                StatusCode::ACCEPTED,
+                assigned_session_id,
+                headers,
+            ));
         }
+    }
 
     let body_value = if is_batch {
         Value::Array(responses)
@@ -3330,9 +3331,10 @@ fn mcp_json_response(
     let mut resp = Json(body).into_response();
     *resp.status_mut() = status;
     if let Some(session_id) = session_id
-        && let Ok(value) = axum::http::HeaderValue::from_str(&session_id) {
-            resp.headers_mut().insert("mcp-session-id", value);
-        }
+        && let Ok(value) = axum::http::HeaderValue::from_str(&session_id)
+    {
+        resp.headers_mut().insert("mcp-session-id", value);
+    }
     apply_mcp_cors(resp.headers_mut(), request_headers);
     resp
 }
@@ -3362,9 +3364,10 @@ fn mcp_sse_response(
         axum::http::HeaderValue::from_static("no-cache, no-transform"),
     );
     if let Some(session_id) = session_id
-        && let Ok(value) = axum::http::HeaderValue::from_str(&session_id) {
-            resp.headers_mut().insert("mcp-session-id", value);
-        }
+        && let Ok(value) = axum::http::HeaderValue::from_str(&session_id)
+    {
+        resp.headers_mut().insert("mcp-session-id", value);
+    }
     apply_mcp_cors(resp.headers_mut(), request_headers);
     resp
 }
@@ -3377,9 +3380,10 @@ fn mcp_empty_response(
     let mut resp = Response::new(axum::body::Body::empty());
     *resp.status_mut() = status;
     if let Some(session_id) = session_id
-        && let Ok(value) = axum::http::HeaderValue::from_str(&session_id) {
-            resp.headers_mut().insert("mcp-session-id", value);
-        }
+        && let Ok(value) = axum::http::HeaderValue::from_str(&session_id)
+    {
+        resp.headers_mut().insert("mcp-session-id", value);
+    }
     apply_mcp_cors(resp.headers_mut(), request_headers);
     resp
 }

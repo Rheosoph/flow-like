@@ -666,12 +666,13 @@ async fn persist_registrations(
                 }
                 let mut config_json = env.config.clone();
                 if let Some(auth) = env.config.get("auth")
-                    && let Some(obj) = config_json.as_object_mut() {
-                        obj.insert(
-                            "auth".to_string(),
-                            protect_auth_config_for_storage(auth, &state.encryption_key),
-                        );
-                    }
+                    && let Some(obj) = config_json.as_object_mut()
+                {
+                    obj.insert(
+                        "auth".to_string(),
+                        protect_auth_config_for_storage(auth, &state.encryption_key),
+                    );
+                }
                 event_remote_registration::ActiveModel {
                     id: Set(flow_like_types::create_id()),
                     app_id: Set(app_id.to_string()),

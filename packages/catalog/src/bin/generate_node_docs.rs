@@ -725,9 +725,10 @@ fn truncate_at_word(value: &str, max_chars: usize) -> String {
 
     let mut out = value.chars().take(max_chars - 3).collect::<String>();
     if let Some(index) = out.rfind(|ch: char| ch.is_whitespace())
-        && index > max_chars / 2 {
-            out.truncate(index);
-        }
+        && index > max_chars / 2
+    {
+        out.truncate(index);
+    }
 
     format!(
         "{}...",

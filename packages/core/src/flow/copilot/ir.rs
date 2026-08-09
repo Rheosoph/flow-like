@@ -1674,32 +1674,32 @@ fn compile_steps_with_offset(
 
                     if has_local_tail
                         && let Some(continuation) = continuation
-                            && exec_outputs
-                                .iter()
-                                .any(|pin| pin.name.eq_ignore_ascii_case(continuation))
-                        {
-                            let continuation_key = normalize_symbol(continuation);
-                            // Data outputs authored inside the selected execution arm are in scope
-                            // for the following tail because that tail is lowered into this arm.
-                            let mut tail_context = compiled_arm_contexts
-                                .remove(&continuation_key)
-                                .unwrap_or_else(|| context.clone());
-                            tail_context.diagnostics.clear();
-                            let tail = compile_steps_with_offset(
-                                &steps[index + 1..],
-                                returns,
-                                path,
-                                &mut tail_context,
-                                outer_continuation,
-                                index + 1 + index_offset,
-                            );
-                            context.diagnostics.append(&mut tail_context.diagnostics);
-                            compiled_arms
-                                .entry(continuation_key)
-                                .or_default()
-                                .stmts
-                                .extend(tail.stmts);
-                        }
+                        && exec_outputs
+                            .iter()
+                            .any(|pin| pin.name.eq_ignore_ascii_case(continuation))
+                    {
+                        let continuation_key = normalize_symbol(continuation);
+                        // Data outputs authored inside the selected execution arm are in scope
+                        // for the following tail because that tail is lowered into this arm.
+                        let mut tail_context = compiled_arm_contexts
+                            .remove(&continuation_key)
+                            .unwrap_or_else(|| context.clone());
+                        tail_context.diagnostics.clear();
+                        let tail = compile_steps_with_offset(
+                            &steps[index + 1..],
+                            returns,
+                            path,
+                            &mut tail_context,
+                            outer_continuation,
+                            index + 1 + index_offset,
+                        );
+                        context.diagnostics.append(&mut tail_context.diagnostics);
+                        compiled_arms
+                            .entry(continuation_key)
+                            .or_default()
+                            .stmts
+                            .extend(tail.stmts);
+                    }
                     let arms = exec_outputs
                         .iter()
                         .map(|pin| BranchArm {
@@ -3729,8 +3729,10 @@ pub fn plan_flow_capabilities(
                 {
                     return None;
                 }
-                let score = if exact_node_type
-                    .is_some() { i32::MAX } else { {
+                let score = if exact_node_type.is_some() {
+                    i32::MAX
+                } else {
+                    {
                         if semantic_anchors.is_empty() {
                             semantic_score
                         } else {
@@ -3739,7 +3741,8 @@ pub fn plan_flow_capabilities(
                             // `digest` intent versus an exact `sha256` catalog name).
                             semantic_score.max(1)
                         }
-                    } };
+                    }
+                };
                 (score > 0 || requirement.intent.trim().is_empty()).then_some((score, metadata))
             })
             .collect::<Vec<_>>();

@@ -1929,9 +1929,10 @@ impl ServerRegistry {
         let has_wasm = wasm_data.is_some();
 
         if let Some(wasm) = &wasm_data
-            && (wasm.len() < 8 || &wasm[0..4] != b"\0asm") {
-                return Err(flow_like_types::anyhow!("Invalid WASM binary"));
-            }
+            && (wasm.len() < 8 || &wasm[0..4] != b"\0asm")
+        {
+            return Err(flow_like_types::anyhow!("Invalid WASM binary"));
+        }
 
         let hash = wasm_data
             .as_ref()

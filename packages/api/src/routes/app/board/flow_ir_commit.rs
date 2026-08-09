@@ -924,14 +924,15 @@ pub async fn apply_flow_ir_commit(
             (board_commands, replacement_mode, payload_digest, false)
         } else {
             if (receipts_pruned || pending_claims_pruned)
-                && let Err(error) = board.save(None).await {
-                    tracing::warn!(
-                        app_id,
-                        board_id,
-                        error = %error,
-                        "FlowScript review was unavailable and durable bookkeeping pruning could not be persisted"
-                    );
-                }
+                && let Err(error) = board.save(None).await
+            {
+                tracing::warn!(
+                    app_id,
+                    board_id,
+                    error = %error,
+                    "FlowScript review was unavailable and durable bookkeeping pruning could not be persisted"
+                );
+            }
             return Ok(Json(ApplyFlowIrCommitResult::empty(
                 "stale",
                 "IR_COMMIT_TOKEN_INVALID",

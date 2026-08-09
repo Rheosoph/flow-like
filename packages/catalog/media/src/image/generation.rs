@@ -566,9 +566,10 @@ fn insert_string_if_some(
     value: Option<String>,
 ) {
     if let Some(value) = value
-        && !value.trim().is_empty() {
-            object.insert(key.to_string(), json!(value));
-        }
+        && !value.trim().is_empty()
+    {
+        object.insert(key.to_string(), json!(value));
+    }
 }
 
 fn insert_u64_if_some(
@@ -890,18 +891,19 @@ async fn generate_openai_like(
     }
 
     if images.is_empty()
-        && let Some(data) = value.get("data").and_then(Value::as_array) {
-            for item in data {
-                if let Some(url) = item.get("url").and_then(Value::as_str) {
-                    let bytes = download_url(client, url).await?;
-                    images.push(GeneratedImage {
-                        bytes,
-                        mime_type: None,
-                        provider_metadata: item.clone(),
-                    });
-                }
+        && let Some(data) = value.get("data").and_then(Value::as_array)
+    {
+        for item in data {
+            if let Some(url) = item.get("url").and_then(Value::as_str) {
+                let bytes = download_url(client, url).await?;
+                images.push(GeneratedImage {
+                    bytes,
+                    mime_type: None,
+                    provider_metadata: item.clone(),
+                });
             }
         }
+    }
 
     if images.is_empty() {
         bail!("OpenAI-compatible image response contained no image data");
@@ -1515,9 +1517,10 @@ async fn generate_aws_bedrock(
 
     let value = read_error_response(response).await?;
     if let Some(error) = value.get("error").and_then(Value::as_str)
-        && !error.is_empty() {
-            bail!("AWS Bedrock image generation failed: {error}");
-        }
+        && !error.is_empty()
+    {
+        bail!("AWS Bedrock image generation failed: {error}");
+    }
 
     let images = value
         .get("images")

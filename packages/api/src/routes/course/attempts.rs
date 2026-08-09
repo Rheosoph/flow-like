@@ -723,17 +723,18 @@ pub async fn submit_attempt(
             .one(&txn)
             .await?;
         if let Some(o) = opt_in
-            && o.is_opted_in {
-                let mut active = o.into_active_model();
-                let current = match active.total_points {
-                    sea_orm::ActiveValue::Set(v) => v,
-                    sea_orm::ActiveValue::Unchanged(v) => v,
-                    _ => 0,
-                };
-                active.total_points = Set(current + points_awarded);
-                active.updated_at = Set(now);
-                active.update(&txn).await?;
-            }
+            && o.is_opted_in
+        {
+            let mut active = o.into_active_model();
+            let current = match active.total_points {
+                sea_orm::ActiveValue::Set(v) => v,
+                sea_orm::ActiveValue::Unchanged(v) => v,
+                _ => 0,
+            };
+            active.total_points = Set(current + points_awarded);
+            active.updated_at = Set(now);
+            active.update(&txn).await?;
+        }
     }
 
     txn.commit().await?;

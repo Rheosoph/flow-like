@@ -1181,9 +1181,10 @@ fn archive_cdx_lookup_json(
             )
         })?;
 
-        if selected.as_ref().is_none_or(|(_, selected_at, _, _)| {
-            capture_date_time > *selected_at
-        }) {
+        if selected
+            .as_ref()
+            .is_none_or(|(_, selected_at, _, _)| capture_date_time > *selected_at)
+        {
             selected = Some((
                 capture_timestamp.to_string(),
                 capture_date_time,

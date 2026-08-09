@@ -154,7 +154,6 @@ pub enum ExecutionEnvironment {
     Server,
 }
 
-
 impl ExecutionEnvironment {
     pub const ENV_VAR: &'static str = "FLOW_LIKE_EXECUTION_ENVIRONMENT";
 
@@ -223,7 +222,6 @@ pub enum ExecutionMode {
     Event,
     Scheduled,
 }
-
 
 impl ExecutionMode {
     pub fn as_str(self) -> &'static str {

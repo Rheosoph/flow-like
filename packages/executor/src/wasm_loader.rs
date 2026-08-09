@@ -301,12 +301,10 @@ async fn deserialize_cwasm(
                     })?;
                     Ok(LoadedWasm::Component(Arc::new(component)))
                 }
-                Err(component_error) => {
-                    Err(ExecutorError::Execution(format!(
-                        "Failed to deserialize cwasm for {} v{} as module ({}) or component ({})",
-                        package_id, pkg_ref.version, module_error, component_error
-                    )))
-                }
+                Err(component_error) => Err(ExecutorError::Execution(format!(
+                    "Failed to deserialize cwasm for {} v{} as module ({}) or component ({})",
+                    package_id, pkg_ref.version, module_error, component_error
+                ))),
             }
         }
     }

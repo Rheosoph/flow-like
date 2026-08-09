@@ -868,9 +868,10 @@ fn decode_barcodes_in_luma(
     }
 
     if barcodes.is_empty()
-        && let Some(error) = first_error {
-            return Err(anyhow!("Decoder Error: {}", error));
-        }
+        && let Some(error) = first_error
+    {
+        return Err(anyhow!("Decoder Error: {}", error));
+    }
 
     Ok(barcodes)
 }

@@ -1486,7 +1486,8 @@ fn function_layer_pins(
     impure: bool,
     interface_schemas: &HashMap<String, String>,
 ) -> Vec<LayerPinMetadata> {
-    let exec_pins = if impure { {
+    let exec_pins = if impure {
+        {
             vec![
                 LayerPinMetadata {
                     name: FUNCTION_EXEC_IN.to_string(),
@@ -1507,7 +1508,10 @@ fn function_layer_pins(
                     enforce_schema: false,
                 },
             ]
-        } } else { Default::default() };
+        }
+    } else {
+        Default::default()
+    };
     exec_pins
         .into_iter()
         .chain(
@@ -2517,9 +2521,11 @@ fn schema_constraints_are_compatible(
     // Preserve that behavior before applying the ordinary two-sided schema equality rule.
     if (matches!(input_name, "struct" | "struct_in" | "struct_out")
         || matches!(output_name, "struct" | "struct_in" | "struct_out"))
-        && input_data_type == "Struct" && output_data_type == "Struct" {
-            return input_value_type == output_value_type;
-        }
+        && input_data_type == "Struct"
+        && output_data_type == "Struct"
+    {
+        return input_value_type == output_value_type;
+    }
 
     // Match the runtime/UI contract: descriptive schemas are permissive unless one endpoint opts
     // into enforcement. Canonical JSON still avoids rejecting whitespace/key-order-only changes.
@@ -7321,9 +7327,10 @@ impl<'a> StructuralPlanner<'a> {
         };
         for node in nodes {
             if let Some((x, y, _)) = node.coordinates
-                && rightmost.is_none_or(|(rx, _)| x > rx) {
-                    rightmost = Some((x, y));
-                }
+                && rightmost.is_none_or(|(rx, _)| x > rx)
+            {
+                rightmost = Some((x, y));
+            }
         }
         rightmost
             .map(|(x, y)| (x as f64, y as f64))
@@ -7912,9 +7919,10 @@ impl<'a> StructuralPlanner<'a> {
                     format!("Read struct field `{field}`"),
                     &format!("struct member access `{field}`"),
                     false,
-                ) {
-                    return None;
-                }
+                )
+            {
+                return None;
+            }
         }
 
         let output = self.resolve_entity_output_pin(&entity, Some("value"))?;
@@ -7954,9 +7962,10 @@ impl<'a> StructuralPlanner<'a> {
                     "Read array length".to_string(),
                     "array length access",
                     false,
-                ) {
-                    return None;
-                }
+                )
+            {
+                return None;
+            }
         }
 
         let output = self

@@ -280,9 +280,10 @@ pub(crate) fn parse_body_value(request: &HttpRequest) -> Value {
         .map(|value| value.to_ascii_lowercase())
         .unwrap_or_default();
     if content_type.contains("application/json")
-        && let Ok(value) = json::from_slice::<Value>(&request.body) {
-            return value;
-        }
+        && let Ok(value) = json::from_slice::<Value>(&request.body)
+    {
+        return value;
+    }
 
     match String::from_utf8(request.body.clone()) {
         Ok(text) => Value::String(text),

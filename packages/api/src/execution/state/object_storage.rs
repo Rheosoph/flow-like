@@ -38,8 +38,6 @@ impl ObjectStorageStateStore {
 
     /// Create from environment configuration (fallback)
     pub async fn from_env() -> Result<Self, StateStoreError> {
-
-
         let bucket = std::env::var("META_BUCKET")
             .or_else(|_| std::env::var("META_BUCKET_NAME"))
             .or_else(|_| std::env::var("S3_STATE_BUCKET"))
@@ -268,9 +266,10 @@ impl ExecutionStateStore for ObjectStorageStateStore {
         let mut records = Vec::new();
         for key in keys.iter().take(limit as usize) {
             if let Some(run_id) = key.rsplit('_').next()
-                && let Some(record) = self.get_run(run_id).await? {
-                    records.push(record);
-                }
+                && let Some(record) = self.get_run(run_id).await?
+            {
+                records.push(record);
+            }
         }
 
         Ok(records)
@@ -291,13 +290,14 @@ impl ExecutionStateStore for ObjectStorageStateStore {
         for obj in list_result {
             if let Some(record) = self.get_json::<ExecutionRunRecord>(&obj.location).await?
                 && let Some(expires_at) = record.expires_at
-                    && expires_at < now {
-                        self.delete(&obj.location).await?;
-                        let index_path =
-                            Self::app_index_path(&record.app_id, record.created_at, &record.id);
-                        let _ = self.delete(&index_path).await;
-                        deleted += 1;
-                    }
+                && expires_at < now
+            {
+                self.delete(&obj.location).await?;
+                let index_path =
+                    Self::app_index_path(&record.app_id, record.created_at, &record.id);
+                let _ = self.delete(&index_path).await;
+                deleted += 1;
+            }
         }
 
         Ok(deleted)
@@ -349,20 +349,23 @@ impl ExecutionStateStore for ObjectStorageStateStore {
                     .location
                     .filename()
                     .and_then(|s| s.strip_suffix(".json"))
-                    && let Ok(seq) = seq_str.parse::<i32>()
-                        && seq <= after_seq {
-                            continue;
-                        }
+                && let Ok(seq) = seq_str.parse::<i32>()
+                && seq <= after_seq
+            {
+                continue;
+            }
 
             if let Some(record) = self.get_json::<ExecutionEventRecord>(&obj.location).await?
-                && (!query.only_undelivered || !record.delivered) {
-                    records.push(record);
-                }
+                && (!query.only_undelivered || !record.delivered)
+            {
+                records.push(record);
+            }
 
             if let Some(limit) = query.limit
-                && records.len() >= limit as usize {
-                    break;
-                }
+                && records.len() >= limit as usize
+            {
+                break;
+            }
         }
 
         records.sort_by_key(|e| e.sequence);
@@ -386,9 +389,10 @@ impl ExecutionStateStore for ObjectStorageStateStore {
                 .location
                 .filename()
                 .and_then(|s| s.strip_suffix(".json"))
-                && let Ok(seq) = seq_str.parse::<i32>() {
-                    max_seq = max_seq.max(seq);
-                }
+                && let Ok(seq) = seq_str.parse::<i32>()
+            {
+                max_seq = max_seq.max(seq);
+            }
         }
 
         Ok(max_seq)
@@ -426,10 +430,11 @@ impl ExecutionStateStore for ObjectStorageStateStore {
 
         for obj in list_result {
             if let Some(record) = self.get_json::<ExecutionEventRecord>(&obj.location).await?
-                && record.expires_at < now {
-                    self.delete(&obj.location).await?;
-                    deleted += 1;
-                }
+                && record.expires_at < now
+            {
+                self.delete(&obj.location).await?;
+                deleted += 1;
+            }
         }
 
         Ok(deleted)

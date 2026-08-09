@@ -3342,9 +3342,10 @@ fn translate_bound_string(
         }
         flow_like_types::Value::Object(obj) => {
             if let Some(flow_like_types::Value::String(s)) = obj.get_mut("literalString")
-                && let Some(new_id) = mapping.get(s.as_str()) {
-                    *s = new_id.clone();
-                }
+                && let Some(new_id) = mapping.get(s.as_str())
+            {
+                *s = new_id.clone();
+            }
         }
         _ => {}
     }
@@ -3369,9 +3370,10 @@ fn translate_app_id(target: Option<&mut flow_like_types::Value>, maps: &ForkIdMa
         }
         flow_like_types::Value::Object(obj) => {
             if let Some(flow_like_types::Value::String(s)) = obj.get_mut("literalString")
-                && s == src {
-                    *s = dst;
-                }
+                && s == src
+            {
+                *s = dst;
+            }
         }
         _ => {}
     }
@@ -3388,9 +3390,10 @@ fn remap_widget_instance(instance: &mut proto::WidgetInstance, maps: &ForkIdMap)
         instance.widget_id = new_id.clone();
     }
     if let Some(widget_ref) = instance.widget_ref.as_mut()
-        && let Some(new_id) = maps.widgets.get(&widget_ref.widget_id) {
-            widget_ref.widget_id = new_id.clone();
-        }
+        && let Some(new_id) = maps.widgets.get(&widget_ref.widget_id)
+    {
+        widget_ref.widget_id = new_id.clone();
+    }
     for binding in instance.action_bindings.values_mut() {
         if let Some(binding_type) = binding.binding_type.as_mut() {
             match binding_type {

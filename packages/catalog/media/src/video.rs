@@ -578,9 +578,10 @@ fn insert_string_if_some(
     value: Option<String>,
 ) {
     if let Some(value) = value
-        && !value.trim().is_empty() {
-            object.insert(key.to_string(), json!(value));
-        }
+        && !value.trim().is_empty()
+    {
+        object.insert(key.to_string(), json!(value));
+    }
 }
 
 fn insert_u32_if_some(

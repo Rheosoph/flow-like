@@ -298,22 +298,24 @@ async fn load_inventory_items(
         .collect();
 
     if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase())
-        && !search.is_empty() {
-            items.retain(|item| {
-                item.app_id.to_lowercase().contains(&search)
-                    || item
-                        .app_name
-                        .as_ref()
-                        .map(|name| name.to_lowercase().contains(&search))
-                        .unwrap_or(false)
-            });
-        }
+        && !search.is_empty()
+    {
+        items.retain(|item| {
+            item.app_id.to_lowercase().contains(&search)
+                || item
+                    .app_name
+                    .as_ref()
+                    .map(|name| name.to_lowercase().contains(&search))
+                    .unwrap_or(false)
+        });
+    }
 
     if let Some(risk) = query.risk.as_deref()
-        && parse_risk(risk).is_some() {
-            let risk = risk.to_uppercase();
-            items.retain(|item| item.risk_category == risk);
-        }
+        && parse_risk(risk).is_some()
+    {
+        let risk = risk.to_uppercase();
+        items.retain(|item| item.risk_category == risk);
+    }
 
     if let Some(status) = query.status.as_deref() {
         let status = status.to_uppercase();
@@ -491,10 +493,10 @@ pub async fn get_inventory_detail(
         && let Ok(scanned) =
             crate::routes::app::ai_act::board_scan::scan_app_signals(&state, &sub, &app_id, &app)
                 .await
-        {
-            let _ = reconcile::reconcile_app_models(&state, &app_id, &scanned).await;
-            signals = scanned;
-        }
+    {
+        let _ = reconcile::reconcile_app_models(&state, &app_id, &scanned).await;
+        signals = scanned;
+    }
 
     let assessment = ai_act_assessment::Entity::find()
         .filter(ai_act_assessment::Column::AppId.eq(&app_id))
@@ -649,9 +651,9 @@ pub async fn put_inventory_assessment(
         && let Ok(scanned) =
             crate::routes::app::ai_act::board_scan::scan_app_signals(&state, &sub, &app_id, &app)
                 .await
-        {
-            signals = scanned;
-        }
+    {
+        signals = scanned;
+    }
 
     let classification =
         crate::routes::app::ai_act::questionnaire::classify(&body.answers, &signals);

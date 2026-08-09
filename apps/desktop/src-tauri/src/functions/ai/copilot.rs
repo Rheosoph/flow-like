@@ -240,11 +240,12 @@ fn register_copilot_run(request_id: Option<&str>) -> (CancellationToken, ActiveC
                 generation,
                 cancellation: cancellation.clone(),
             },
-        ) {
-            // Request ids are expected to be unique. If a caller reuses one, stop the stale run
-            // before replacing it so a late completion cannot keep mutating the same board.
-            previous.cancellation.cancel();
-        }
+        )
+    {
+        // Request ids are expected to be unique. If a caller reuses one, stop the stale run
+        // before replacing it so a late completion cannot keep mutating the same board.
+        previous.cancellation.cancel();
+    }
     (
         cancellation.clone(),
         ActiveCopilotRunGuard {
@@ -10348,10 +10349,9 @@ fn workflow_tool_preflight_with_args(
     }
 
     let typed_operation = is_typed_ir_operation_tool(tool_name);
-    if typed_operation
-        && let Some(module_count) = typed_ir_module_count_hint(tool_name, args) {
-            state.typed_expected_modules = state.typed_expected_modules.max(module_count);
-        }
+    if typed_operation && let Some(module_count) = typed_ir_module_count_hint(tool_name, args) {
+        state.typed_expected_modules = state.typed_expected_modules.max(module_count);
+    }
     let typed_loop_active =
         state.mutation_path == Some(WorkflowMutationPath::TypedIr) || typed_operation;
     if typed_loop_active && is_workflow_loop_tool(tool_name) {
@@ -12393,15 +12393,15 @@ fn workflow_tool_abort(state: &Arc<StdMutex<WorkflowToolLoopState>>, tool_name: 
     }
     if tool_name == "commit_flowscript"
         && let Ok(mut state) = state.lock()
-            && state.edit_in_flight
-            && state.last_status.as_deref() == Some("valid")
-        {
-            // A transport/worker abort does not invalidate the host-checked source revision.
-            // Preserve its status so the bounded idempotent commit retry path remains available.
-            state.edit_in_flight = false;
-            state.in_flight_flowscript = None;
-            return;
-        }
+        && state.edit_in_flight
+        && state.last_status.as_deref() == Some("valid")
+    {
+        // A transport/worker abort does not invalidate the host-checked source revision.
+        // Preserve its status so the bounded idempotent commit retry path remains available.
+        state.edit_in_flight = false;
+        state.in_flight_flowscript = None;
+        return;
+    }
     if !is_order_sensitive_workflow_tool(tool_name) {
         return;
     }
@@ -14144,12 +14144,12 @@ async fn run_external_agent_invocation(
 
     if let Some(path) = &invocation.final_output_path
         && invocation.backend == FlowPilotAgentBackendKind::Codex
-            && let Ok(text) = std::fs::read_to_string(path)
-            && !text.trim().is_empty()
-        {
-            final_text.clear();
-            append_bounded_text(&mut final_text, &text, EXTERNAL_AGENT_TEXT_MAX_BYTES);
-        }
+        && let Ok(text) = std::fs::read_to_string(path)
+        && !text.trim().is_empty()
+    {
+        final_text.clear();
+        append_bounded_text(&mut final_text, &text, EXTERNAL_AGENT_TEXT_MAX_BYTES);
+    }
 
     if final_text.trim().is_empty() {
         final_text = streamed_text;

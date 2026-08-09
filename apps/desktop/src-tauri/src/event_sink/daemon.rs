@@ -39,7 +39,6 @@ pub enum DaemonRestartPolicy {
     Always,
 }
 
-
 fn default_restart_policy() -> DaemonRestartPolicy {
     DaemonRestartPolicy::OnFailure
 }

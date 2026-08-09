@@ -212,9 +212,10 @@ impl Profile {
             }
         } else if let Ok(vlm_params) =
             flow_like_types::json::from_value::<crate::bit::VLMParameters>(bit.parameters.clone())
-            && Self::is_local_provider_name(&vlm_params.provider.provider_name) {
-                return true;
-            }
+            && Self::is_local_provider_name(&vlm_params.provider.provider_name)
+        {
+            return true;
+        }
 
         false
     }

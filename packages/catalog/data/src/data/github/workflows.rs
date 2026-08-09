@@ -326,12 +326,13 @@ impl NodeLogic for TriggerWorkflowNode {
             Ok(resp) if resp.status().is_success() || resp.status() == 204 => {
                 let bytes = resp.bytes().await.unwrap_or_default();
                 if !bytes.is_empty()
-                    && let Ok(value) = flow_like_types::json::from_slice::<Value>(&bytes) {
-                        let run_value = value.get("workflow_run").unwrap_or(&value);
-                        if let Some(run) = parse_workflow_run(run_value) {
-                            context.set_pin_value("run", json!(run)).await?;
-                        }
+                    && let Ok(value) = flow_like_types::json::from_slice::<Value>(&bytes)
+                {
+                    let run_value = value.get("workflow_run").unwrap_or(&value);
+                    if let Some(run) = parse_workflow_run(run_value) {
+                        context.set_pin_value("run", json!(run)).await?;
                     }
+                }
                 context.activate_exec_pin("exec_out").await?;
             }
             Ok(resp) => {

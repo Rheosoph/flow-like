@@ -571,9 +571,10 @@ impl<'a> Lowering<'a> {
 
         for target_pin_id in &source.connected_to {
             if seen.insert(target_pin_id.as_str())
-                && let Some(pin) = self.pins.get(target_pin_id.as_str()).copied() {
-                    pins.push(pin);
-                }
+                && let Some(pin) = self.pins.get(target_pin_id.as_str()).copied()
+            {
+                pins.push(pin);
+            }
         }
 
         for pin in self.pins.values().copied() {
@@ -1450,16 +1451,17 @@ impl<'a> Lowering<'a> {
 
         // `variable_set` sugars to a plain assignment `name = value`.
         if node.name == VARIABLE_SET
-            && let Some(target) = self.var_name_of(node) {
-                let value = self
-                    .input_expr(node, "value_in")
-                    .unwrap_or(Expr::Literal(Literal::Null));
-                return Stmt::Assign {
-                    target,
-                    value,
-                    anchor: Some(node.id.clone()),
-                };
-            }
+            && let Some(target) = self.var_name_of(node)
+        {
+            let value = self
+                .input_expr(node, "value_in")
+                .unwrap_or(Expr::Literal(Literal::Null));
+            return Stmt::Assign {
+                target,
+                value,
+                anchor: Some(node.id.clone()),
+            };
+        }
         // `events_generic_return_result` sugars to a `return <response>` statement. Keep the node
         // id as the anchor so reconcile matches the existing result node instead of duplicating it.
         if node.name == EVENT_RETURN_RESULT {
@@ -1495,13 +1497,14 @@ impl<'a> Lowering<'a> {
         let mut args = Vec::new();
         for pin in data_inputs {
             if let Some(source_pin_id) = pin.depends_on.iter().next()
-                && let Some(expr) = self.resolve_source(source_pin_id) {
-                    args.push(Arg {
-                        name: pin.name.clone(),
-                        value: expr,
-                    });
-                    continue;
-                }
+                && let Some(expr) = self.resolve_source(source_pin_id)
+            {
+                args.push(Arg {
+                    name: pin.name.clone(),
+                    value: expr,
+                });
+                continue;
+            }
             // No connection: include a configured literal default if present.
             if let Some(bytes) = &pin.default_value {
                 // Most JSON `null` defaults mean "unset" and intentionally stay absent from
@@ -1516,14 +1519,16 @@ impl<'a> Lowering<'a> {
                 if let Some(lit) = lit {
                     // `controlCallReference.fnRef` holds an opaque target node id; resolve it to
                     // that node's binding/display name instead of leaking the CUID.
-                    if node.name == CALL_REFERENCE && pin.name == FN_REF_PIN
-                        && let Some(name) = self.node_ref_name(&lit) {
-                            args.push(Arg {
-                                name: pin.name.clone(),
-                                value: Expr::Ref(name),
-                            });
-                            continue;
-                        }
+                    if node.name == CALL_REFERENCE
+                        && pin.name == FN_REF_PIN
+                        && let Some(name) = self.node_ref_name(&lit)
+                    {
+                        args.push(Arg {
+                            name: pin.name.clone(),
+                            value: Expr::Ref(name),
+                        });
+                        continue;
+                    }
                     args.push(Arg {
                         name: pin.name.clone(),
                         value: self.sugar_literal(lit),
@@ -1678,9 +1683,10 @@ impl<'a> Lowering<'a> {
     fn sugar_source(&mut self, owner: &'a Node, source_pin: &'a Pin) -> Option<Expr> {
         // Comparison/arithmetic/logic nodes -> `lhs <op> rhs` (read by pin index).
         if let Some(op) = binary_op(owner)
-            && let Some(expr) = self.binary_expr(owner, op) {
-                return Some(expr);
-            }
+            && let Some(expr) = self.binary_expr(owner, op)
+        {
+            return Some(expr);
+        }
         match owner.name.as_str() {
             // `variableGet` -> bare variable reference.
             VARIABLE_GET => self.var_name_of(owner).map(Expr::Ref),
@@ -1830,9 +1836,10 @@ impl<'a> Lowering<'a> {
     /// Resolve the expression feeding a specific input pin (connection first, else literal).
     fn pin_expr(&mut self, pin: &'a Pin) -> Option<Expr> {
         if let Some(source_pin_id) = pin.depends_on.iter().next()
-            && let Some(expr) = self.resolve_source(source_pin_id) {
-                return Some(expr);
-            }
+            && let Some(expr) = self.resolve_source(source_pin_id)
+        {
+            return Some(expr);
+        }
         let bytes = pin.default_value.as_ref()?;
         util::decode_default(bytes).map(|lit| self.sugar_literal(lit))
     }
@@ -1875,9 +1882,10 @@ impl<'a> Lowering<'a> {
     /// other literals untouched. CUIDs are unique, so a false match is effectively impossible.
     fn sugar_literal(&self, lit: Literal) -> Expr {
         if let Literal::String(ref s) = lit
-            && let Some(name) = self.fn_names.get(s.as_str()) {
-                return Expr::Ref(name.clone());
-            }
+            && let Some(name) = self.fn_names.get(s.as_str())
+        {
+            return Expr::Ref(name.clone());
+        }
         Expr::Literal(lit)
     }
 

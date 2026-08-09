@@ -93,13 +93,14 @@ fn filter_execution_query_by_event(
         Condition::any().add(execution_usage_tracking::Column::NodeId.eq(&event_filter.event_id));
 
     if let Some(board_id) = event_filter.board_id.as_ref()
-        && let Some(node_id) = event_filter.node_id.as_ref() {
-            condition = condition.add(
-                Condition::all()
-                    .add(execution_usage_tracking::Column::BoardId.eq(board_id))
-                    .add(execution_usage_tracking::Column::NodeId.eq(node_id)),
-            );
-        }
+        && let Some(node_id) = event_filter.node_id.as_ref()
+    {
+        condition = condition.add(
+            Condition::all()
+                .add(execution_usage_tracking::Column::BoardId.eq(board_id))
+                .add(execution_usage_tracking::Column::NodeId.eq(node_id)),
+        );
+    }
 
     query.filter(condition)
 }

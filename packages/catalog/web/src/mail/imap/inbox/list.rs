@@ -369,7 +369,9 @@ impl NodeLogic for ListMailsNode {
             .map(|&(_, name, _, _, _)| name)
             .collect();
         let existing: std::collections::HashSet<String> = node
-            .pins.values().filter_map(|pin| {
+            .pins
+            .values()
+            .filter_map(|pin| {
                 dynamic_map.iter().find_map(|&(_, name, _, _, _)| {
                     if pin.name == name {
                         Some(name.to_string())

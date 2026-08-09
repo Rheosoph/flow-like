@@ -275,9 +275,10 @@ fn resolve_synthesis_options(
     }
 
     if request.reference_audio.is_none()
-        && let Some(voice) = request.voice.as_deref() {
-            resolved.voice = Some(resolve_voice_for_model(voice, &model_info)?);
-        }
+        && let Some(voice) = request.voice.as_deref()
+    {
+        resolved.voice = Some(resolve_voice_for_model(voice, &model_info)?);
+    }
 
     Ok(resolved)
 }

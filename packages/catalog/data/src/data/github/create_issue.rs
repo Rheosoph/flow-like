@@ -216,9 +216,9 @@ impl NodeLogic for CreateGitHubIssueNode {
                 .as_array()
                 .map(|values| !values.is_empty())
                 .unwrap_or(false)
-            {
-                request_body["issue_field_values"] = issue_field_values;
-            }
+        {
+            request_body["issue_field_values"] = issue_field_values;
+        }
 
         let client = reqwest::Client::new();
         let response = client

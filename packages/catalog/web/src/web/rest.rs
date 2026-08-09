@@ -140,7 +140,6 @@ pub enum RestAuthConfig {
     },
 }
 
-
 fn default_max_connections() -> u32 {
     128
 }

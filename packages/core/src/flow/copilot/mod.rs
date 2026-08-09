@@ -2613,9 +2613,10 @@ impl Copilot {
     fn parse_commands(response: &str) -> Vec<BoardCommand> {
         // Look for <commands>...</commands> tags
         if let Some(json_str) = Self::extract_tag_content(response, "commands")
-            && let Ok(commands) = serde_json::from_str::<Vec<BoardCommand>>(json_str) {
-                return commands;
-            }
+            && let Ok(commands) = serde_json::from_str::<Vec<BoardCommand>>(json_str)
+        {
+            return commands;
+        }
         vec![]
     }
 
