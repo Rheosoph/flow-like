@@ -451,7 +451,7 @@ pub struct DynamicStreamingResponse {
 
 impl GetTokenUsage for DynamicStreamingResponse {
     fn token_usage(&self) -> Option<RigUsage> {
-        self.usage.clone()
+        self.usage
     }
 }
 

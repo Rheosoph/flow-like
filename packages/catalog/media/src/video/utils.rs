@@ -803,7 +803,7 @@ fn codec_support_info() -> Vec<CodecSupportInfo> {
             codec: support.codec.to_string(),
             media_type: support
                 .media_type
-                .map(|media_type| media_type_name(media_type)),
+                .map(media_type_name),
             implementation: format!("{:?}", support.kind),
             can_decode: support.can_decode,
             can_encode: support.can_encode,

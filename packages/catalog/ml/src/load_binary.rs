@@ -93,7 +93,7 @@ impl NodeLogic for LoadMLModelBinaryNode {
         let bytes = path.get(context, false).await?;
         let ml_model = MLModel::from_fory_slice(&bytes)?;
         context.log_message(
-            &format!("Loaded Machine Learning Model (Binary): {}", &ml_model),
+            &format!("Loaded Machine Learning Model (Binary): {}", ml_model),
             LogLevel::Debug,
         );
 

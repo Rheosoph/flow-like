@@ -70,7 +70,7 @@ async fn process_s3_events(
 ) -> Result<(), Error> {
     let mut failed_records = 0;
     for record in records {
-        if let Err(err) = process_single_record(record, &s3_client, &bucket_name).await {
+        if let Err(err) = process_single_record(record, s3_client, bucket_name).await {
             tracing::error!("Failed to process record: {}", err);
             failed_records += 1;
         }

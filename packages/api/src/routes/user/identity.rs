@@ -154,7 +154,7 @@ pub fn humanize_email_local_part(email: &str) -> Option<String> {
     }
 
     let words = local
-        .split(|c: char| matches!(c, '.' | '_' | '-'))
+        .split(['.', '_', '-'])
         .filter(|part| !part.is_empty())
         .map(title_case_word)
         .collect::<Vec<_>>();

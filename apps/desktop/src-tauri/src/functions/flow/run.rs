@@ -334,7 +334,7 @@ async fn execute_internal(
 
     let cancellation_token = overrides
         .cancellation_token
-        .unwrap_or_else(CancellationToken::new);
+        .unwrap_or_default();
     internal_run.set_cancellation_token(cancellation_token.clone());
     if overrides.cancellation_log_level.is_some() || overrides.cancellation_log_message.is_some() {
         internal_run.set_cancellation_log(

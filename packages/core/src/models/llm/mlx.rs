@@ -702,7 +702,7 @@ mod apple {
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         {
             let _ = model_directory;
-            return Ok(Arc::new(MacMlxTransport::new().await?));
+            Ok(Arc::new(MacMlxTransport::new().await?))
         }
         #[cfg(all(
             target_os = "ios",

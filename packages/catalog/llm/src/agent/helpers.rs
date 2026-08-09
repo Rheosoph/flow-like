@@ -781,7 +781,7 @@ pub async fn generate_tool_from_function(
     let mut has_data_pins = false;
     let mut payload_pin: Option<&Pin> = None;
 
-    for (_pin_id, pin) in node.pins.iter() {
+    for pin in node.pins.values() {
         // Skip execution pins and input pins
         if pin.data_type == VariableType::Execution || pin.pin_type != PinType::Output {
             continue;
@@ -912,7 +912,7 @@ pub async fn execute_tool_call(
     // Also set values on the referenced function's OUTPUT pins (shared storage
     // + override map) so that both override-aware and non-override code paths
     // resolve correctly regardless of old/new layer format.
-    for (_id, pin) in referenced_node.pins.iter() {
+    for pin in referenced_node.pins.values() {
         if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
             continue;
         }

@@ -1672,8 +1672,8 @@ fn compile_steps_with_offset(
                         }
                     }
 
-                    if has_local_tail {
-                        if let Some(continuation) = continuation
+                    if has_local_tail
+                        && let Some(continuation) = continuation
                             && exec_outputs
                                 .iter()
                                 .any(|pin| pin.name.eq_ignore_ascii_case(continuation))
@@ -1700,7 +1700,6 @@ fn compile_steps_with_offset(
                                 .stmts
                                 .extend(tail.stmts);
                         }
-                    }
                     let arms = exec_outputs
                         .iter()
                         .map(|pin| BranchArm {
@@ -2100,7 +2099,7 @@ fn compile_catalog_call(
         args.iter().find_map(|argument| {
             (argument.pin.eq_ignore_ascii_case(config_pin)
                 && matches!(argument.value, FlowIrValue::Literal { .. }))
-            .then(|| match &argument.value {
+            .then_some(match &argument.value {
                 FlowIrValue::Literal {
                     value: FlowIrLiteral::String(template),
                 } => Some(template.as_str()),
@@ -3730,10 +3729,8 @@ pub fn plan_flow_capabilities(
                 {
                     return None;
                 }
-                let score = exact_node_type
-                    .is_some()
-                    .then_some(i32::MAX)
-                    .unwrap_or_else(|| {
+                let score = if exact_node_type
+                    .is_some() { i32::MAX } else { {
                         if semantic_anchors.is_empty() {
                             semantic_score
                         } else {
@@ -3742,7 +3739,7 @@ pub fn plan_flow_capabilities(
                             // `digest` intent versus an exact `sha256` catalog name).
                             semantic_score.max(1)
                         }
-                    });
+                    } };
                 (score > 0 || requirement.intent.trim().is_empty()).then_some((score, metadata))
             })
             .collect::<Vec<_>>();

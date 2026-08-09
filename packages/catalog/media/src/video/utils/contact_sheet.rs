@@ -151,7 +151,7 @@ impl NodeLogic for ContactSheetNode {
                 return Err(flow_like_types::anyhow!("No video frames were decoded"));
             }
 
-            let rows = ((frames.len() as u32) + columns - 1) / columns;
+            let rows = (frames.len() as u32).div_ceil(columns);
             let mut sheet = video_utils_rs::RgbaFrame::solid(
                 columns * cell_width,
                 rows * cell_height,

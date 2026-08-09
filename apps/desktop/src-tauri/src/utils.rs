@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager};
 static LAST_EMIT: OnceLock<Mutex<HashMap<String, Instant>>> = OnceLock::new();
 
 pub fn local_execution_environment() -> ExecutionEnvironment {
-    ExecutionEnvironment::from_env().unwrap_or_else(|| {
+    ExecutionEnvironment::from_env().unwrap_or({
         if cfg!(any(target_os = "android", target_os = "ios")) {
             ExecutionEnvironment::Mobile
         } else {

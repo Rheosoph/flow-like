@@ -94,7 +94,7 @@ impl NodeLogic for LoadMLModelNode {
         let bytes = path.get(context, false).await?;
         let ml_model: MLModel = json::from_slice(&bytes)?;
         context.log_message(
-            &format!("Loaded Machine Learning Model: {}", &ml_model),
+            &format!("Loaded Machine Learning Model: {}", ml_model),
             LogLevel::Debug,
         );
 

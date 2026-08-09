@@ -422,7 +422,7 @@ impl NodeLogic for CallFunctionNode {
             .filter(|p| p.pin_type == PinType::Input)
             .cloned()
             .collect();
-        input_pins.sort_by(|a, b| a.index.cmp(&b.index));
+        input_pins.sort_by_key(|a| a.index);
 
         let mut output_pins: Vec<_> = layer
             .pins
@@ -430,7 +430,7 @@ impl NodeLogic for CallFunctionNode {
             .filter(|p| p.pin_type == PinType::Output)
             .cloned()
             .collect();
-        output_pins.sort_by(|a, b| a.index.cmp(&b.index));
+        output_pins.sort_by_key(|a| a.index);
 
         let mut relevant_input_pin_names = HashSet::new();
         relevant_input_pin_names.insert("function_layer_id".to_string());

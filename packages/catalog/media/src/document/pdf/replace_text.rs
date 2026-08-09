@@ -116,7 +116,7 @@ impl NodeLogic for PdfReplaceTextNode {
 
         let mut replaced_count: i64 = 0;
 
-        for (_id, object) in doc.objects.iter_mut() {
+        for object in doc.objects.values_mut() {
             replaced_count += replace_in_object(object, &placeholder, &replacement);
         }
 

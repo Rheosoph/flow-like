@@ -36,14 +36,14 @@ pub fn can_host_mlx() -> bool {
 
     #[cfg(target_os = "macos")]
     {
-        return std::env::current_exe()
+        std::env::current_exe()
             .ok()
             .and_then(|executable| {
                 executable
                     .parent()
                     .map(|directory| directory.join("flow-like-mlx-service"))
             })
-            .is_some_and(|sidecar| sidecar.is_file());
+            .is_some_and(|sidecar| sidecar.is_file())
     }
 
     #[cfg(target_os = "ios")]

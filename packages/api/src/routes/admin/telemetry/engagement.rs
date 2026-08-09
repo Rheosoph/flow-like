@@ -150,11 +150,11 @@ fn drop_off_window(
     (start < end).then_some((start, end))
 }
 
-fn distinct_between<'a>(
-    pairs: &'a [(String, NaiveDate)],
+fn distinct_between(
+    pairs: &[(String, NaiveDate)],
     start: NaiveDate,
     end: NaiveDate,
-) -> HashSet<&'a str> {
+) -> HashSet<&str> {
     pairs
         .iter()
         .filter(|(_, day)| *day >= start && *day <= end)

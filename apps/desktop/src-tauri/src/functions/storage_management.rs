@@ -324,11 +324,10 @@ fn build_overview(
         &paths.logs_dir,
         &paths.temporary_dir,
     ] {
-        if known.parent() == Some(paths.user_dir.as_path()) {
-            if let Some(name) = known.file_name() {
+        if known.parent() == Some(paths.user_dir.as_path())
+            && let Some(name) = known.file_name() {
                 cache_exclusions.insert(name.to_string_lossy().to_string());
             }
-        }
     }
     let cache = direct_items(
         &paths.user_dir,
@@ -547,8 +546,8 @@ pub async fn get_local_storage_overview(
     .await
     .map_err(|error| TauriFunctionError::new(&error.to_string()))?;
 
-    if let Ok(state) = TauriFlowLikeState::construct(&app_handle).await {
-        if let Some(apps) = overview
+    if let Ok(state) = TauriFlowLikeState::construct(&app_handle).await
+        && let Some(apps) = overview
             .categories
             .iter_mut()
             .find(|entry| entry.key == "apps")
@@ -560,7 +559,6 @@ pub async fn get_local_storage_overview(
                 }
             }
         }
-    }
     Ok(overview)
 }
 

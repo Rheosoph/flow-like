@@ -136,7 +136,7 @@ pub async fn create_group(
                 continue;
             }
             let status =
-                resolve_member_status(&state, &user, &[app_id.clone()], member_app_id).await?;
+                resolve_member_status(&state, &user, std::slice::from_ref(&app_id), member_app_id).await?;
             let approved = if status == AppGroupMemberStatus::Active {
                 actor.clone()
             } else {

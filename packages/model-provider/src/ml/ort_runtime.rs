@@ -90,7 +90,7 @@ pub fn session_execution_providers(
     #[cfg(not(target_os = "windows"))]
     {
         let _ = (info, directml_compatible);
-        return Ok(Vec::new());
+        Ok(Vec::new())
     }
 
     #[cfg(target_os = "windows")]

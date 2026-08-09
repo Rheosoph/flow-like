@@ -168,7 +168,7 @@ impl NodeLogic for CopilotSendAndWaitNode {
         context.log_message(
             &format!(
                 "Sending message: {}...",
-                &full_prompt.chars().take(50).collect::<String>()
+                full_prompt.chars().take(50).collect::<String>()
             ),
             LogLevel::Debug,
         );

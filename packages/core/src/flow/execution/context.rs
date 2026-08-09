@@ -1087,7 +1087,7 @@ impl ExecutionContext {
             }
             self.trace_taken = true;
         }
-        traces.sort_by(|a, b| a.start.cmp(&b.start));
+        traces.sort_by_key(|a| a.start);
         traces
     }
 

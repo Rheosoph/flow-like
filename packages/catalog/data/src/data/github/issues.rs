@@ -456,15 +456,14 @@ impl NodeLogic for UpdateGitHubIssueNode {
         if !issue_type.is_empty() {
             request_body["type"] = json!(issue_type);
         }
-        if let Ok(issue_field_values) = context.evaluate_pin::<Value>("issue_field_values").await {
-            if issue_field_values
+        if let Ok(issue_field_values) = context.evaluate_pin::<Value>("issue_field_values").await
+            && issue_field_values
                 .as_array()
                 .map(|values| !values.is_empty())
                 .unwrap_or(false)
             {
                 request_body["issue_field_values"] = issue_field_values;
             }
-        }
 
         let client = reqwest::Client::new();
         let response = client

@@ -106,23 +106,20 @@ pub async fn get_api_keys(
             let role = tu.role_id.as_ref().and_then(|id| roles.get(id));
             let creator = tu.creator_user_id.as_ref().and_then(|id| creators.get(id));
             let creator_display_name = creator.and_then(|user| {
-                if lookup_config.name {
-                    if let Some(name) = user.name.clone() {
+                if lookup_config.name
+                    && let Some(name) = user.name.clone() {
                         return Some(name);
                     }
-                }
 
-                if lookup_config.preferred_username {
-                    if let Some(preferred_username) = user.preferred_username.clone() {
+                if lookup_config.preferred_username
+                    && let Some(preferred_username) = user.preferred_username.clone() {
                         return Some(preferred_username);
                     }
-                }
 
-                if lookup_config.username {
-                    if let Some(username) = user.username.clone() {
+                if lookup_config.username
+                    && let Some(username) = user.username.clone() {
                         return Some(username);
                     }
-                }
 
                 None
             });

@@ -119,14 +119,13 @@ pub async fn list_patterns(
         })
         .collect();
 
-    if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase()) {
-        if !search.is_empty() {
+    if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase())
+        && !search.is_empty() {
             items.retain(|item| {
                 item.node.to_lowercase().contains(&search)
                     || item.category.to_lowercase().contains(&search)
             });
         }
-    }
 
     items.sort_by(|a, b| {
         a.min_score

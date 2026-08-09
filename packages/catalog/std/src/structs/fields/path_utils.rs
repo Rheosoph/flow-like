@@ -58,17 +58,15 @@ pub fn get_value_by_path(value: &Value, path: &str) -> Option<Value> {
     for segment in segments {
         match segment {
             PathSegment::Field(field_name) => {
-                if let Some(obj) = current.as_object() {
+                {
+                    let obj = current.as_object()?;
                     current = obj.get(&field_name)?.clone();
-                } else {
-                    return None;
                 }
             }
             PathSegment::ArrayIndex(index) => {
-                if let Some(arr) = current.as_array() {
+                {
+                    let arr = current.as_array()?;
                     current = arr.get(index)?.clone();
-                } else {
-                    return None;
                 }
             }
         }

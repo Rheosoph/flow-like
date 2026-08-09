@@ -19,6 +19,7 @@ pub struct TlsCertificate {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
+#[derive(Default)]
 pub struct TlsConfig {
     #[serde(default)]
     pub secure: bool,
@@ -32,17 +33,6 @@ pub struct TlsConfig {
     pub accept_invalid_certificates: bool,
 }
 
-impl Default for TlsConfig {
-    fn default() -> Self {
-        Self {
-            secure: false,
-            certificate: None,
-            ca_certificate_pem: None,
-            server_name: None,
-            accept_invalid_certificates: false,
-        }
-    }
-}
 
 #[cfg(feature = "execute")]
 pub trait AsyncReadWrite: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}

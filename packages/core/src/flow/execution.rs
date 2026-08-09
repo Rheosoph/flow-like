@@ -144,7 +144,9 @@ impl LogLevel {
     Serialize, Deserialize, JsonSchema, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord,
 )]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ExecutionEnvironment {
+    #[default]
     Local,
     Desktop,
     Mobile,
@@ -152,11 +154,6 @@ pub enum ExecutionEnvironment {
     Server,
 }
 
-impl Default for ExecutionEnvironment {
-    fn default() -> Self {
-        Self::Local
-    }
-}
 
 impl ExecutionEnvironment {
     pub const ENV_VAR: &'static str = "FLOW_LIKE_EXECUTION_ENVIRONMENT";
@@ -218,18 +215,15 @@ impl ExecutionEnvironment {
     Serialize, Deserialize, JsonSchema, Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord,
 )]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum ExecutionMode {
+    #[default]
     Sync,
     Async,
     Event,
     Scheduled,
 }
 
-impl Default for ExecutionMode {
-    fn default() -> Self {
-        Self::Sync
-    }
-}
 
 impl ExecutionMode {
     pub fn as_str(self) -> &'static str {

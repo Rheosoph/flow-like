@@ -99,7 +99,9 @@ pub struct RestOpenApiRoute {
 
 #[derive(Serialize, Deserialize, Clone, Debug, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Default)]
 pub enum RestAuthConfig {
+    #[default]
     None,
     ApiKey {
         header: String,
@@ -138,11 +140,6 @@ pub enum RestAuthConfig {
     },
 }
 
-impl Default for RestAuthConfig {
-    fn default() -> Self {
-        Self::None
-    }
-}
 
 fn default_max_connections() -> u32 {
     128

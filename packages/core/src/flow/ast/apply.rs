@@ -1480,11 +1480,10 @@ fn resolve_pin_id_in_pins(
     pin_ref: &str,
     expected: Option<PinType>,
 ) -> flow_like_types::Result<String> {
-    if let Some(pin) = pins.get(pin_ref) {
-        if pin_matches_direction(pin, expected.as_ref()) {
+    if let Some(pin) = pins.get(pin_ref)
+        && pin_matches_direction(pin, expected.as_ref()) {
             return Ok(pin_ref.to_string());
         }
-    }
 
     if let Some((name, occurrence)) = super::reconcile::parse_pin_occurrence_ref(pin_ref) {
         let requested = pin_lookup_keys(name);
@@ -1528,11 +1527,9 @@ fn resolve_pin_id_in_pins(
         && DEFAULT_OUTPUT_PIN_ALIASES
             .iter()
             .any(|alias| alias.eq_ignore_ascii_case(pin_ref))
-    {
-        if let Some(default_pin) = default_data_output_pin(pins) {
+        && let Some(default_pin) = default_data_output_pin(pins) {
             return Ok(default_pin.id.clone());
         }
-    }
 
     Err(flow_like_types::anyhow!(
         "Pin `{pin_ref}` not found on `{entity_name}`"

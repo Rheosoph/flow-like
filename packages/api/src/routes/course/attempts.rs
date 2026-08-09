@@ -722,8 +722,8 @@ pub async fn submit_attempt(
         let opt_in = leaderboard_opt_in::Entity::find_by_id(&sub)
             .one(&txn)
             .await?;
-        if let Some(o) = opt_in {
-            if o.is_opted_in {
+        if let Some(o) = opt_in
+            && o.is_opted_in {
                 let mut active = o.into_active_model();
                 let current = match active.total_points {
                     sea_orm::ActiveValue::Set(v) => v,
@@ -734,7 +734,6 @@ pub async fn submit_attempt(
                 active.updated_at = Set(now);
                 active.update(&txn).await?;
             }
-        }
     }
 
     txn.commit().await?;

@@ -478,7 +478,7 @@ fn decode_hex_signature(signature: &str) -> Option<Vec<u8>> {
         .trim()
         .strip_prefix("sha256=")
         .unwrap_or(signature.trim());
-    if signature.len() % 2 != 0 {
+    if !signature.len().is_multiple_of(2) {
         return None;
     }
     let mut bytes = Vec::with_capacity(signature.len() / 2);

@@ -292,7 +292,7 @@ impl NodeLogic for SmtpConnectNode {
         };
 
         context.log_message(
-            &format!("-- authenticated SMTP as {}", &username),
+            &format!("-- authenticated SMTP as {}", username),
             flow_like::flow::execution::LogLevel::Debug,
         );
 

@@ -665,14 +665,13 @@ async fn persist_registrations(
                     continue;
                 }
                 let mut config_json = env.config.clone();
-                if let Some(auth) = env.config.get("auth") {
-                    if let Some(obj) = config_json.as_object_mut() {
+                if let Some(auth) = env.config.get("auth")
+                    && let Some(obj) = config_json.as_object_mut() {
                         obj.insert(
                             "auth".to_string(),
                             protect_auth_config_for_storage(auth, &state.encryption_key),
                         );
                     }
-                }
                 event_remote_registration::ActiveModel {
                     id: Set(flow_like_types::create_id()),
                     app_id: Set(app_id.to_string()),
@@ -1427,7 +1426,7 @@ fn build_rest_openapi_spec(config: &Value) -> Value {
             .to_string();
         let openapi_path = rest_file_openapi_path(route);
         let mut op = json!({
-            "operationId": format!("get_{}", openapi_path.trim_start_matches('/').replace('/', "_").replace('{', "").replace('}', "")),
+            "operationId": format!("get_{}", openapi_path.trim_start_matches('/').replace('/', "_").replace(['{', '}'], "")),
             "summary": if directory { "Static directory file" } else { "Static file" },
             "responses": {
                 "200": {

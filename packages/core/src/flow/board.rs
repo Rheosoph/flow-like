@@ -1104,15 +1104,13 @@ impl Board {
         let board = published.to_proto();
         if let Err(create_error) =
             compress_to_file_create(store.clone(), board_version_path, &board).await
-        {
-            if !published
+            && !published
                 .snapshot_matches_current(version, Some(store.clone()))
                 .await
                 .unwrap_or(false)
             {
                 return Err(create_error);
             }
-        }
 
         // The board object is the publication marker, so do one final read of
         // the authoritative floating draft (and all current page objects)

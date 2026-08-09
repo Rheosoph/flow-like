@@ -538,14 +538,13 @@ impl Writer<'_> {
     }
 
     fn anchor(&mut self, kind: &str, id: Option<&str>) {
-        if self.opts.anchors {
-            if let Some(id) = id {
+        if self.opts.anchors
+            && let Some(id) = id {
                 self.out.push_str("   //@");
                 self.out.push_str(kind);
                 self.out.push(':');
                 self.out.push_str(id);
             }
-        }
     }
 }
 

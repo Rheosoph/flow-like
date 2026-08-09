@@ -303,7 +303,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
             let tool_call_args_pin = context.get_pin_by_name("tool_call_args").await?;
             for tc in &tool_calls {
                 let args: Value = json::from_str(&tc.arguments)?;
-                context.log_message(&format!("exec tool {}", &tc.name), LogLevel::Debug);
+                context.log_message(&format!("exec tool {}", tc.name), LogLevel::Debug);
 
                 // Deactivate all tool exec pins (best-effort)
                 for t in &tools {
@@ -326,7 +326,7 @@ impl NodeLogic for InvokeLLMWithToolsNode {
                     context.push_sub_context(&mut sub_ctx);
                     if let Err(err) = run {
                         context.log_message(
-                            &format!("Error executing tool {}: {:?}", &tc.name, err),
+                            &format!("Error executing tool {}: {:?}", tc.name, err),
                             LogLevel::Error,
                         );
                     }

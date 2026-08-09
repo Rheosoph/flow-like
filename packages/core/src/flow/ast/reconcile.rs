@@ -1486,8 +1486,7 @@ fn function_layer_pins(
     impure: bool,
     interface_schemas: &HashMap<String, String>,
 ) -> Vec<LayerPinMetadata> {
-    let exec_pins = impure
-        .then(|| {
+    let exec_pins = if impure { {
             vec![
                 LayerPinMetadata {
                     name: FUNCTION_EXEC_IN.to_string(),
@@ -1508,8 +1507,7 @@ fn function_layer_pins(
                     enforce_schema: false,
                 },
             ]
-        })
-        .unwrap_or_default();
+        } } else { Default::default() };
     exec_pins
         .into_iter()
         .chain(
@@ -2517,13 +2515,11 @@ fn schema_constraints_are_compatible(
 
     // struct_make/struct_break/struct_set boundary pins adopt the connected schema dynamically.
     // Preserve that behavior before applying the ordinary two-sided schema equality rule.
-    if matches!(input_name, "struct" | "struct_in" | "struct_out")
-        || matches!(output_name, "struct" | "struct_in" | "struct_out")
-    {
-        if input_data_type == "Struct" && output_data_type == "Struct" {
+    if (matches!(input_name, "struct" | "struct_in" | "struct_out")
+        || matches!(output_name, "struct" | "struct_in" | "struct_out"))
+        && input_data_type == "Struct" && output_data_type == "Struct" {
             return input_value_type == output_value_type;
         }
-    }
 
     // Match the runtime/UI contract: descriptive schemas are permissive unless one endpoint opts
     // into enforcement. Canonical JSON still avoids rejecting whitespace/key-order-only changes.
@@ -7279,11 +7275,11 @@ impl<'a> StructuralPlanner<'a> {
         let current = *index;
         *index += 1;
         let (base_x, base_y) = self.rightmost_existing_position(target_layer);
-        let position = NodePosition {
+
+        NodePosition {
             x: base_x + 260.0 * ((current % COLUMNS) as f64 + 1.0),
             y: base_y + 160.0 * ((current / COLUMNS) as f64),
-        };
-        position
+        }
     }
 
     fn rightmost_existing_position(&self, target_layer: Option<&str>) -> (f64, f64) {
@@ -7324,11 +7320,10 @@ impl<'a> StructuralPlanner<'a> {
             }
         };
         for node in nodes {
-            if let Some((x, y, _)) = node.coordinates {
-                if rightmost.map_or(true, |(rx, _)| x > rx) {
+            if let Some((x, y, _)) = node.coordinates
+                && rightmost.is_none_or(|(rx, _)| x > rx) {
                     rightmost = Some((x, y));
                 }
-            }
         }
         rightmost
             .map(|(x, y)| (x as f64, y as f64))
@@ -7907,8 +7902,8 @@ impl<'a> StructuralPlanner<'a> {
                 .output_pin
                 .clone()
                 .or_else(|| self.resolve_entity_output_pin(&base.node, None));
-            if let Some(from_pin) = from_pin {
-                if !self.queue_validated_data_connection(
+            if let Some(from_pin) = from_pin
+                && !self.queue_validated_data_connection(
                     &base,
                     from_pin,
                     &entity,
@@ -7920,7 +7915,6 @@ impl<'a> StructuralPlanner<'a> {
                 ) {
                     return None;
                 }
-            }
         }
 
         let output = self.resolve_entity_output_pin(&entity, Some("value"))?;
@@ -7950,8 +7944,8 @@ impl<'a> StructuralPlanner<'a> {
                 .output_pin
                 .clone()
                 .or_else(|| self.resolve_entity_output_pin(&base.node, None));
-            if let Some(from_pin) = from_pin {
-                if !self.queue_validated_data_connection(
+            if let Some(from_pin) = from_pin
+                && !self.queue_validated_data_connection(
                     &base,
                     from_pin,
                     &entity,
@@ -7963,7 +7957,6 @@ impl<'a> StructuralPlanner<'a> {
                 ) {
                     return None;
                 }
-            }
         }
 
         let output = self

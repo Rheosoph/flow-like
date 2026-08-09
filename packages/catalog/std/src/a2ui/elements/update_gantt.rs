@@ -18,11 +18,10 @@ use flow_like_types::{Value, async_trait, json::json};
 /// Unwrap a component prop's `BoundValue` wrapper into its underlying value.
 fn unwrap_bound(value: &Value) -> Value {
     if let Some(obj) = value.as_object() {
-        if let Some(json_str) = obj.get("literalJson").and_then(|v| v.as_str()) {
-            if let Ok(parsed) = flow_like_types::json::from_str::<Value>(json_str) {
+        if let Some(json_str) = obj.get("literalJson").and_then(|v| v.as_str())
+            && let Ok(parsed) = flow_like_types::json::from_str::<Value>(json_str) {
                 return parsed;
             }
-        }
         for key in [
             "literalString",
             "literalNumber",
@@ -609,8 +608,8 @@ impl NodeLogic for UpdateGantt {
                     );
                 }
             }
-            "Get Config" => {
-                if count_matching_pins(node, &("config", "Config", false)) == 0 {
+            "Get Config"
+                if count_matching_pins(node, &("config", "Config", false)) == 0 => {
                     node.add_output_pin(
                         "config",
                         "Config",
@@ -619,7 +618,6 @@ impl NodeLogic for UpdateGantt {
                     )
                     .set_options(PinOptions::new().set_enforce_schema(false).build());
                 }
-            }
             _ => {}
         }
 

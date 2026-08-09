@@ -12,9 +12,7 @@ use super::{Attachment, ComplexAttachment};
 fn file_name_from_url(url: &str) -> Option<String> {
     let parsed = reqwest::Url::parse(url).ok()?;
     let segment = parsed
-        .path_segments()?
-        .filter(|segment| !segment.is_empty())
-        .next_back()?;
+        .path_segments()?.rfind(|segment| !segment.is_empty())?;
     let decoded = urlencoding::decode(segment)
         .map(|decoded| decoded.into_owned())
         .unwrap_or_else(|_| segment.to_string());

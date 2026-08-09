@@ -1181,7 +1181,7 @@ fn archive_cdx_lookup_json(
             )
         })?;
 
-        if selected.as_ref().map_or(true, |(_, selected_at, _, _)| {
+        if selected.as_ref().is_none_or(|(_, selected_at, _, _)| {
             capture_date_time > *selected_at
         }) {
             selected = Some((
