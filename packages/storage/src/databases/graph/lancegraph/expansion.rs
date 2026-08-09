@@ -7,8 +7,8 @@
 #[cfg(test)]
 use super::PropertyProjectionMode;
 use super::{
-    GraphOverlayDef, LanceGraphStore, filter_identifier, load_overlay, resolve_object_mapping,
-    resolve_property_names, value_sql_literal, value_to_id_string,
+    GraphOverlayDef, LanceGraphStore, dedupe_and_limit_subgraph, filter_identifier, load_overlay,
+    resolve_object_mapping, resolve_property_names, value_sql_literal, value_to_id_string,
 };
 use crate::arrow_utils::record_batch_to_value;
 use crate::databases::graph::{
@@ -60,6 +60,34 @@ impl LanceGraphStore {
         Ok(table)
     }
 
+    async fn edge_rows(
+        &self,
+        table: &lancedb::Table,
+        columns: &[String],
+        predicate: Option<String>,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        let mut query = table
+            .query()
+            .select(lancedb::query::Select::Columns(columns.to_vec()))
+            .limit(limit);
+        if let Some(predicate) = predicate {
+            query = query.only_if(predicate);
+        }
+        let batches = query
+            .execute()
+            .await
+            .map_err(|e| anyhow!("Failed to scan edge table: {}", e))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| anyhow!("Failed to collect edge rows: {}", e))?;
+        let mut rows = Vec::new();
+        for batch in &batches {
+            rows.extend(record_batch_to_value(batch)?);
+        }
+        Ok(rows)
+    }
+
     async fn edge_rows_for_ids(
         &self,
         table: &lancedb::Table,
@@ -77,22 +105,43 @@ impl LanceGraphStore {
             filter_identifier(filter_column),
             literals.join(", ")
         );
-        let batches = table
-            .query()
-            .only_if(predicate)
-            .select(lancedb::query::Select::Columns(columns.to_vec()))
-            .limit(limit)
-            .execute()
-            .await
-            .map_err(|e| anyhow!("Failed to scan edge table: {}", e))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|e| anyhow!("Failed to collect edge rows: {}", e))?;
-        let mut rows = Vec::new();
-        for batch in &batches {
-            rows.extend(record_batch_to_value(batch)?);
-        }
-        Ok(rows)
+        self.edge_rows(table, columns, Some(predicate), limit).await
+    }
+
+    /// Column projection and property names for one edge mapping.
+    async fn edge_projection(
+        &self,
+        edge: &super::EdgeMappingDef,
+        schema_cache: &mut HashMap<String, Vec<String>>,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let excluded = HashSet::from([edge.src_column.clone(), edge.dst_column.clone()]);
+        let prop_names = resolve_property_names(
+            &self.connection,
+            &edge.table,
+            &edge.property_columns,
+            self.overlay.property_projection_mode,
+            schema_cache,
+            &excluded,
+            &[],
+        )
+        .await?;
+        let mut columns = vec![edge.src_column.clone(), edge.dst_column.clone()];
+        columns.extend(prop_names.iter().cloned());
+        let mut seen_columns = HashSet::new();
+        columns.retain(|column| seen_columns.insert(column.clone()));
+        Ok((columns, prop_names))
+    }
+
+    fn edge_endpoints_mapped(&self, edge: &super::EdgeMappingDef) -> bool {
+        self.overlay
+            .nodes
+            .iter()
+            .any(|node| node.label == edge.src_label)
+            && self
+                .overlay
+                .nodes
+                .iter()
+                .any(|node| node.label == edge.dst_label)
     }
 
     /// Breadth-first expansion from seed objects across all edge mappings,
@@ -184,18 +233,7 @@ impl LanceGraphStore {
                         false,
                     ));
                 }
-                if sides.is_empty()
-                    || !self
-                        .overlay
-                        .nodes
-                        .iter()
-                        .any(|node| node.label == edge.src_label)
-                    || !self
-                        .overlay
-                        .nodes
-                        .iter()
-                        .any(|node| node.label == edge.dst_label)
-                {
+                if sides.is_empty() || !self.edge_endpoints_mapped(edge) {
                     continue;
                 }
 
@@ -208,30 +246,16 @@ impl LanceGraphStore {
                         continue;
                     }
                 };
-                let excluded = HashSet::from([edge.src_column.clone(), edge.dst_column.clone()]);
-                let prop_names = match resolve_property_names(
-                    &self.connection,
-                    &edge.table,
-                    &edge.property_columns,
-                    self.overlay.property_projection_mode,
-                    &mut schema_cache,
-                    &excluded,
-                    &[],
-                )
-                .await
-                {
-                    Ok(names) => names,
-                    Err(error) => {
-                        state
-                            .warnings
-                            .push(format!("Edge mapping '{}': {}", edge.label, error));
-                        continue;
-                    }
-                };
-                let mut columns = vec![edge.src_column.clone(), edge.dst_column.clone()];
-                columns.extend(prop_names.iter().cloned());
-                let mut seen_columns = HashSet::new();
-                columns.retain(|column| seen_columns.insert(column.clone()));
+                let (columns, prop_names) =
+                    match self.edge_projection(edge, &mut schema_cache).await {
+                        Ok(projection) => projection,
+                        Err(error) => {
+                            state
+                                .warnings
+                                .push(format!("Edge mapping '{}': {}", edge.label, error));
+                            continue;
+                        }
+                    };
 
                 for (filter_col, filter_label, neighbor_label, _neighbor_col, filter_is_source) in
                     sides
@@ -321,8 +345,291 @@ impl LanceGraphStore {
             frontier = next_frontier;
         }
 
+        self.close_edges_among_discovered(
+            &mut state,
+            edge_limit,
+            &mut table_cache,
+            &mut schema_cache,
+        )
+        .await;
+
         self.hydrate_expansion(state, &mut table_cache, &mut schema_cache)
             .await
+    }
+
+    /// Adds the edges that run between objects already in the result.
+    ///
+    /// Frontier expansion only records the edges it traversed, so two neighbours
+    /// found on the same hop come back looking unconnected even though the data
+    /// links them. Without this pass the viewer renders a star per expansion and
+    /// the real structure only appears once every node is expanded by hand.
+    async fn close_edges_among_discovered(
+        &self,
+        state: &mut ExpansionState,
+        edge_limit: usize,
+        table_cache: &mut HashMap<String, lancedb::Table>,
+        schema_cache: &mut HashMap<String, Vec<String>>,
+    ) {
+        if state.nodes.len() < 2 || state.edges.len() >= edge_limit {
+            return;
+        }
+
+        let mut ids_by_label: HashMap<&str, Vec<Value>> = HashMap::new();
+        for node in state.nodes.values() {
+            ids_by_label
+                .entry(node.label.as_str())
+                .or_default()
+                .push(node.raw_id.clone());
+        }
+
+        for edge in &self.overlay.edges {
+            if state.edges.len() >= edge_limit {
+                state.truncated = true;
+                break;
+            }
+            if !self.edge_endpoints_mapped(edge) {
+                continue;
+            }
+            let Some(src_ids) = ids_by_label.get(edge.src_label.as_str()) else {
+                continue;
+            };
+            if !ids_by_label.contains_key(edge.dst_label.as_str()) {
+                continue;
+            }
+
+            let table = match self.open_table_cached(&edge.table, table_cache).await {
+                Ok(table) => table,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+            let (columns, prop_names) = match self.edge_projection(edge, schema_cache).await {
+                Ok(projection) => projection,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+
+            for chunk in src_ids.chunks(IN_CHUNK_SIZE) {
+                let remaining = edge_limit.saturating_sub(state.edges.len());
+                if remaining == 0 {
+                    state.truncated = true;
+                    break;
+                }
+                let rows = match self
+                    .edge_rows_for_ids(&table, &edge.src_column, &columns, chunk, remaining)
+                    .await
+                {
+                    Ok(rows) => rows,
+                    Err(error) => {
+                        state
+                            .warnings
+                            .push(format!("Edge mapping '{}': {}", edge.label, error));
+                        continue;
+                    }
+                };
+                // Only edges whose other end is already on screen are kept — this
+                // pass connects the current result, it never grows it.
+                self.absorb_edge_rows(state, edge, &prop_names, rows, edge_limit, false);
+            }
+        }
+    }
+
+    /// Turns raw edge rows into [`SubgraphEdge`]s.
+    ///
+    /// With `discover_nodes` the endpoints are added to the result (bounded by
+    /// `node_budget`); without it, rows are dropped unless both endpoints are
+    /// already known. Returns the number of edges kept.
+    fn absorb_edge_rows(
+        &self,
+        state: &mut ExpansionState,
+        edge: &super::EdgeMappingDef,
+        prop_names: &[String],
+        rows: Vec<Value>,
+        edge_limit: usize,
+        discover_nodes: bool,
+    ) -> usize {
+        let mut kept = 0usize;
+        for row in rows {
+            let Value::Object(map) = row else { continue };
+            let src_raw = map.get(&edge.src_column).cloned();
+            let dst_raw = map.get(&edge.dst_column).cloned();
+            let src_key = value_to_id_string(src_raw.as_ref());
+            let dst_key = value_to_id_string(dst_raw.as_ref());
+            if src_key.is_empty() || dst_key.is_empty() {
+                continue;
+            }
+            let src_full = format!("{}:{}", edge.src_label, src_key);
+            let dst_full = format!("{}:{}", edge.dst_label, dst_key);
+
+            if discover_nodes {
+                let (Some(src_raw), Some(dst_raw)) = (src_raw, dst_raw) else {
+                    continue;
+                };
+                for (full_id, label, raw_id) in [
+                    (&src_full, &edge.src_label, src_raw),
+                    (&dst_full, &edge.dst_label, dst_raw),
+                ] {
+                    if state.nodes.contains_key(full_id) {
+                        continue;
+                    }
+                    state.nodes.insert(
+                        full_id.clone(),
+                        Discovered {
+                            label: label.clone(),
+                            raw_id,
+                        },
+                    );
+                }
+            } else if !state.nodes.contains_key(&src_full) || !state.nodes.contains_key(&dst_full) {
+                continue;
+            }
+
+            let edge_id = format!("{}-{}->{}", src_full, edge.label, dst_full);
+            if !state.seen_edge_ids.insert(edge_id.clone()) {
+                continue;
+            }
+            if state.edges.len() >= edge_limit {
+                state.truncated = true;
+                break;
+            }
+            let mut props = serde_json::Map::new();
+            for name in prop_names {
+                if let Some(value) = map.get(name) {
+                    props.insert(name.clone(), value.clone());
+                }
+            }
+            state.edges.push(SubgraphEdge {
+                id: edge_id,
+                source: src_full,
+                target: dst_full,
+                label: edge.label.clone(),
+                props: Value::Object(props),
+            });
+            kept += 1;
+        }
+        kept
+    }
+
+    /// The seedless view of an overlay: read the mapped edge tables first and
+    /// materialise the objects they connect.
+    ///
+    /// Sampling node tables instead would return an arbitrary slice per label,
+    /// which almost never contains both ends of the same edge — so the first
+    /// render shows a cloud of unlinked nodes and the structure only appears
+    /// after the user expands nodes one by one.
+    pub(super) async fn scan_subgraph(&self, node_limit: usize) -> Result<SubgraphResult> {
+        let node_limit = node_limit.max(1);
+        let edge_limit = node_limit.saturating_mul(3);
+
+        let mut state = ExpansionState {
+            nodes: HashMap::new(),
+            edges: Vec::new(),
+            seen_edge_ids: HashSet::new(),
+            warnings: Vec::new(),
+            truncated: false,
+        };
+        let mut table_cache: HashMap<String, lancedb::Table> = HashMap::new();
+        let mut schema_cache: HashMap<String, Vec<String>> = HashMap::new();
+
+        let mapped_edges = self
+            .overlay
+            .edges
+            .iter()
+            .filter(|edge| self.edge_endpoints_mapped(edge))
+            .collect::<Vec<_>>();
+        // Every mapping gets a share of the budget so one large relationship
+        // table cannot crowd the others out of the first view.
+        let share = edge_limit.div_ceil(mapped_edges.len().max(1)).max(1);
+
+        for edge in mapped_edges {
+            if state.nodes.len() >= node_limit || state.edges.len() >= edge_limit {
+                state.truncated = true;
+                break;
+            }
+
+            let table = match self.open_table_cached(&edge.table, &mut table_cache).await {
+                Ok(table) => table,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+            let (columns, prop_names) = match self.edge_projection(edge, &mut schema_cache).await {
+                Ok(projection) => projection,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+
+            let budget = share
+                .min(edge_limit.saturating_sub(state.edges.len()))
+                // Each row can introduce two objects, so the node budget bounds
+                // the scan as well.
+                .min(node_limit.saturating_sub(state.nodes.len()).max(1));
+            let rows = match self.edge_rows(&table, &columns, None, budget).await {
+                Ok(rows) => rows,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+            let scanned = rows.len();
+            self.absorb_edge_rows(&mut state, edge, &prop_names, rows, edge_limit, true);
+            if scanned >= budget {
+                state.truncated = true;
+            }
+        }
+
+        let covered_labels = state
+            .nodes
+            .values()
+            .map(|node| node.label.clone())
+            .collect::<HashSet<_>>();
+
+        let mut result = self
+            .hydrate_expansion(state, &mut table_cache, &mut schema_cache)
+            .await?;
+        let mut truncated = result.truncated;
+
+        // Labels no edge mapping reached would otherwise be invisible.
+        for node in &self.overlay.nodes {
+            if covered_labels.contains(&node.label) {
+                continue;
+            }
+            let remaining = node_limit.saturating_sub(result.nodes.len());
+            if remaining == 0 {
+                truncated = true;
+                break;
+            }
+            match self.load_nodes_for_label(&node.label, remaining).await {
+                Ok(nodes) => {
+                    truncated = truncated || nodes.len() >= remaining;
+                    result.nodes.extend(nodes);
+                }
+                Err(error) => result
+                    .warnings
+                    .push(format!("Node mapping '{}': {}", node.label, error)),
+            }
+        }
+
+        let mut limited =
+            dedupe_and_limit_subgraph(result.nodes, result.edges, node_limit, result.warnings);
+        limited.truncated = limited.truncated || truncated;
+        Ok(limited)
     }
 
     async fn hydrate_expansion(

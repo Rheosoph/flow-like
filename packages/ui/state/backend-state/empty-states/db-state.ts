@@ -3,6 +3,7 @@ import type {
 	ICreateTableResult,
 	IDatabaseSchemaField,
 	IDatabaseState,
+	IDropTableResult,
 	IIndexConfig,
 	IIndexType,
 	IQueryTablePayload,
@@ -106,6 +107,9 @@ export class EmptyDatabaseState implements IDatabaseState {
 		column: string,
 		nullable: boolean,
 	): Promise<void> {
+		throw new Error("Method not implemented.");
+	}
+	dropTable(appId: string, tableName: string): Promise<IDropTableResult> {
 		throw new Error("Method not implemented.");
 	}
 }

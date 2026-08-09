@@ -20,7 +20,8 @@ pub struct CreateTableFieldPayload {
     /// Column name. Use ASCII letters, numbers, and underscores; do not start with a number.
     pub name: String,
     /// string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64,
-    /// float32/float64, binary, date32, timestamp, or vector.
+    /// float32/float64, binary, date32, timestamp:ms:UTC, or vector. Use
+    /// timestamp:ms:UTC for FlowLike Date/date-time instant fields; date32 is calendar-only.
     #[serde(rename = "type")]
     pub data_type: String,
     /// Whether the column accepts null values. Defaults to true.

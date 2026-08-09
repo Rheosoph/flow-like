@@ -403,6 +403,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::db::drop_columns::drop_columns,
         crate::routes::app::db::build_index::build_index,
         crate::routes::app::db::drop_index::drop_index,
+        crate::routes::app::db::drop_table::drop_table,
         crate::routes::app::db::optimize::optimize_table,
         crate::routes::app::db::presign_db_access::presign_db_access,
         crate::routes::app::db::presign_db_access::presign_project_db_access,

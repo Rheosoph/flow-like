@@ -1219,6 +1219,7 @@ export function safeFlowScriptPlanReasoning(
 
 const DATABASE_MUTATION_OPERATIONS = new Set([
 	"create_table",
+	"delete_table",
 	"insert",
 	"add_items",
 	"delete",

@@ -299,6 +299,7 @@ fn interface_type_from_schema(schema: &Value, defs: &Map<String, Value>) -> Opti
                 }
                 Some(InterfaceType::Named("Struct".to_string()))
             }
+            "string" if is_date_schema(schema) => Some(InterfaceType::Named("Date".to_string())),
             _ => primitive_schema_type(ty),
         };
     }
@@ -330,6 +331,13 @@ fn primitive_schema_type(ty: &str) -> Option<InterfaceType> {
         "null" => InterfaceType::Null,
         _ => return None,
     })
+}
+
+fn is_date_schema(schema: &Value) -> bool {
+    matches!(
+        schema.get("format").and_then(Value::as_str),
+        Some("date") | Some("date-time")
+    )
 }
 
 fn union_type(mut members: Vec<InterfaceType>) -> InterfaceType {
@@ -380,6 +388,7 @@ fn schema_value_from_type(ty: &InterfaceType) -> Option<Value> {
     match ty {
         InterfaceType::Named(name) => match name.as_str() {
             "string" => Some(json!({ "type": "string" })),
+            "Date" => Some(json!({ "type": "string", "format": "date-time" })),
             "int" => Some(json!({ "type": "integer" })),
             "float" | "number" => Some(json!({ "type": "number" })),
             "bool" | "boolean" => Some(json!({ "type": "boolean" })),
@@ -464,7 +473,7 @@ fn collect_type_refs(ty: &InterfaceType, refs: &mut BTreeSet<String>) {
         InterfaceType::Named(name)
             if !matches!(
                 name.as_str(),
-                "string" | "int" | "float" | "number" | "bool" | "boolean" | "Struct"
+                "string" | "int" | "float" | "number" | "bool" | "boolean" | "Date" | "Struct"
             ) =>
         {
             refs.insert(name.clone());

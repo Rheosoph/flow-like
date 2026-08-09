@@ -239,10 +239,12 @@ impl NodeLogic for ExecuteDatabricksSqlNode {
 
                     let status = data["status"]["state"].as_str().unwrap_or("UNKNOWN");
 
-                    if status == "FAILED" {
-                        let error = data["status"]["error"]["message"]
+                    if status != "SUCCEEDED" {
+                        let detail = data["status"]["error"]["message"]
                             .as_str()
-                            .unwrap_or("Unknown error");
+                            .unwrap_or("Statement did not complete successfully");
+                        let error = format!("Databricks SQL statement ended in {status}: {detail}");
+                        context.log_message(&error, LogLevel::Error);
                         context.set_pin_value("error_message", json!(error)).await?;
                         context.activate_exec_pin("error").await?;
                         return Ok(());

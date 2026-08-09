@@ -4,7 +4,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_storage::databases::vector::{
-    VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
+    buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
 };
 use flow_like_types::{Cacheable, Value, async_trait, sync::RwLock};
 use std::sync::Arc;
@@ -16,6 +16,7 @@ pub mod count;
 pub mod delete;
 pub mod drop_column;
 pub mod drop_index;
+pub mod drop_table;
 pub mod filter;
 pub mod flush;
 pub mod fts_search;
@@ -173,18 +174,16 @@ impl NodeLogic for CreateLocalDatabaseNode {
                 db: Arc::new(RwLock::new(buffered)),
             };
 
-            // Register a completion callback to flush remaining buffered writes
-            let db_ref = cached.db.clone();
+            // Register a completion callback to flush remaining buffered writes.
+            // The cached store retains each write's originating node so a
+            // deferred failure is visible on the writer, not just stderr.
+            let completion_db = cached.clone();
+            let fallback_origin = CachedDB::write_origin(context);
             context
-                .hook_completion_event(Arc::new(move |_run| {
-                    let db = db_ref.clone();
-                    Box::pin(async move {
-                        let mut guard = db.write().await;
-                        if guard.is_dirty() {
-                            guard.flush().await?;
-                        }
-                        Ok(())
-                    })
+                .hook_completion_event(Arc::new(move |run| {
+                    let db = completion_db.clone();
+                    let fallback_origin = fallback_origin.clone();
+                    Box::pin(async move { db.flush_on_completion(run, &fallback_origin).await })
                 }))
                 .await;
 

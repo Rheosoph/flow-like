@@ -224,8 +224,10 @@ impl NodeLogic for MLPredictNode {
                             );
                             column_added = true;
                         }
-                        database.upsert(records, records_col.clone()).await?;
                     }
+                    cached_db
+                        .upsert_from(context, records, records_col.clone())
+                        .await?;
                     context.log_message(
                         &format!("Upsert batch: {:?}", t0.elapsed()),
                         LogLevel::Debug,

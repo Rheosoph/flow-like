@@ -8,8 +8,6 @@ use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::arrow_utils::record_batch_to_value;
 #[cfg(feature = "execute")]
-use flow_like_storage::databases::vector::VectorStore;
-#[cfg(feature = "execute")]
 use flow_like_storage::lancedb::query::ExecutableQuery;
 #[cfg(feature = "execute")]
 use flow_like_types::rand::{self, Rng};
@@ -171,10 +169,10 @@ impl NodeLogic for StratifiedSplitNode {
         };
 
         if !all_train_items.is_empty() {
-            train.db.write().await.insert(all_train_items).await?;
+            train.insert_from(context, all_train_items).await?;
         }
         if !all_test_items.is_empty() {
-            test.db.write().await.insert(all_test_items).await?;
+            test.insert_from(context, all_test_items).await?;
         }
 
         context.activate_exec_pin("exec_out").await?;

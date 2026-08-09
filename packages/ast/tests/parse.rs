@@ -477,6 +477,115 @@ fn roundtrip_quoted_interface_field_names() {
 }
 
 #[test]
+fn interface_date_fields_generate_date_time_schema_without_a_date_definition() {
+    let text = "interface AuditRow {\n    checkpoints?: Date[];\n    created_at: Date;\n    updated_at?: Date | null = null;\n}\n\nconst auditRow: AuditRow = {}\n";
+    let ast = parse(text).expect("Date fields should parse in FlowScript interfaces");
+    let schema: serde_json::Value = serde_json::from_str(
+        ast.variables[0]
+            .schema
+            .as_deref()
+            .expect("interface variable should carry generated schema"),
+    )
+    .expect("generated interface schema should be JSON");
+
+    assert_eq!(
+        schema.pointer("/properties/created_at/format"),
+        Some(&serde_json::Value::String("date-time".to_string()))
+    );
+    assert_eq!(
+        schema.pointer("/properties/checkpoints/items/format"),
+        Some(&serde_json::Value::String("date-time".to_string()))
+    );
+    assert!(
+        schema["properties"]["updated_at"]["anyOf"]
+            .as_array()
+            .is_some_and(|variants| variants.iter().any(|variant| {
+                variant.get("format").and_then(serde_json::Value::as_str) == Some("date-time")
+            })),
+        "nullable Date should retain a date-time variant: {schema}"
+    );
+    assert!(
+        schema
+            .get("$defs")
+            .and_then(serde_json::Value::as_object)
+            .is_none_or(|defs| !defs.contains_key("Date")),
+        "the built-in Date type must not become an unresolved schema ref: {schema}"
+    );
+    assert_idempotent(text, &RenderOptions::default());
+}
+
+#[test]
+fn date_formatted_json_schema_fields_render_as_date_and_survive_reparse() {
+    let source_schema = serde_json::json!({
+        "title": "AuditRow",
+        "type": "object",
+        "properties": {
+            "checkpoints": {
+                "type": "array",
+                "items": { "type": "string", "format": "date-time" }
+            },
+            "created_at": { "type": "string", "format": "date" },
+            "observed_at": { "$ref": "#/$defs/UtcInstant" },
+            "updated_at": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "required": ["created_at", "observed_at"],
+        "$defs": {
+            "UtcInstant": { "type": "string", "format": "date-time" }
+        }
+    });
+    let source = format!(
+        "@schema({})\nconst auditRow: Struct = {{}}\n",
+        quote_string(&source_schema.to_string())
+    );
+    let mut ast = parse(&source).expect("legacy schema-decorated variable should parse");
+    ast.interfaces = flow_like_ast::interfaces_for_variables(&ast.variables);
+    let rendered = render(&ast, &RenderOptions::default());
+
+    for expected_field in [
+        "checkpoints?: Date[];",
+        "created_at: Date;",
+        "observed_at: Date;",
+        "updated_at?: Date | null;",
+    ] {
+        assert!(
+            rendered.contains(expected_field),
+            "rendered interface omitted `{expected_field}`:\n{rendered}"
+        );
+    }
+
+    let reparsed = parse(&rendered).expect("rendered Date interface should reparse");
+    let reparsed_schema: serde_json::Value = serde_json::from_str(
+        reparsed.variables[0]
+            .schema
+            .as_deref()
+            .expect("reparsed interface should regenerate its schema"),
+    )
+    .expect("reparsed interface schema should be JSON");
+
+    for pointer in [
+        "/properties/checkpoints/items/format",
+        "/properties/created_at/format",
+        "/properties/observed_at/format",
+    ] {
+        assert_eq!(
+            reparsed_schema
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str),
+            Some("date-time"),
+            "Date schema was not retained at {pointer}: {reparsed_schema}"
+        );
+    }
+    assert!(
+        reparsed_schema["properties"]["updated_at"]["anyOf"]
+            .as_array()
+            .is_some_and(|variants| variants.iter().any(|variant| {
+                variant.get("format").and_then(serde_json::Value::as_str) == Some("date-time")
+            })),
+        "nullable Date should survive schema -> FlowScript -> schema: {reparsed_schema}"
+    );
+}
+
+#[test]
 fn interface_dedup_renames_references_too() {
     use flow_like_ast::{Container, TypeRef, VarDecl, interfaces_for_variables};
 

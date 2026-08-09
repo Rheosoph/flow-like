@@ -41,6 +41,19 @@ import type {
 	SubgraphResult,
 } from "../../../state/backend-state/graph-state";
 import { getParallelEdgeRenderAttributes } from "./edge-rendering";
+import {
+	type ConnectivityPartition,
+	type LayoutPosition as GraphPosition,
+	computeSeedSpread,
+	createAnchoredPosition,
+	createDeterministicPosition,
+	defaultRelaxIterations,
+	getLayoutBounds,
+	packNodesOnGrid,
+	partitionByConnectivity,
+	placeDetachedNodes,
+	relaxOverlaps,
+} from "./graph-layout";
 import { getIconDataUri } from "./icon-svg";
 import { drawNodeHover, drawNodeLabel } from "./label-renderer";
 import { getGraphTheme, invalidateGraphTheme } from "./theme-colors";
@@ -69,12 +82,8 @@ const EDGE_PROGRESS_WEIGHT = 0.3;
 const SIZE_PROGRESS_WEIGHT = 0.1;
 const LAYOUT_PROGRESS_WEIGHT = 0.3;
 const EXPANSION_OVERLAY_DELAY_MS = 400;
+const PRESERVE_RELAX_ITERATIONS = 8;
 const LOADING_BAR_DELAYS_MS = [0, 120, 240] as const;
-
-type GraphPosition = {
-	x: number;
-	y: number;
-};
 
 type ForceAtlas2WorkerInstance = {
 	start: () => void;
@@ -304,6 +313,7 @@ function getFA2Settings(
 	const isHuge = nodeCount >= HUGE_THRESHOLD;
 	const isLarge = nodeCount >= LARGE_THRESHOLD;
 	const isDense = density > 3;
+	const isSparse = density < 1.2;
 
 	if (isHuge) {
 		return {
@@ -333,21 +343,69 @@ function getFA2Settings(
 		};
 	}
 
+	// `strongGravityMode` pulls harder the further out a node sits, so on sparse
+	// graphs it wins against repulsion and collapses everything into one disc.
+	// Plain gravity is a constant inward force: it still keeps components from
+	// drifting off, but lets `scalingRatio` decide the spacing.
 	return {
-		gravity: isDense ? 0.5 : 3,
-		scalingRatio: isDense ? 8 : 2,
-		slowDown: isDense ? 5 : 10,
-		barnesHutOptimize: nodeCount > 50,
+		gravity: isDense ? 0.5 : isSparse ? 0.6 : 1,
+		scalingRatio: isDense ? 8 : isSparse ? 24 : 14,
+		slowDown: isDense ? 5 : 8,
+		barnesHutOptimize: nodeCount > 200,
 		barnesHutTheta: 0.5,
-		strongGravityMode: !isDense,
+		strongGravityMode: false,
 		linLogMode: true,
 		edgeWeightInfluence: isDense ? 0 : 1,
 		adjustSizes: true,
 	};
 }
 
+function getRelaxBatchIterations(nodeCount: number): number {
+	if (nodeCount >= HUGE_THRESHOLD) return 2;
+	if (nodeCount >= LARGE_THRESHOLD) return 4;
+	return 12;
+}
+
+/**
+ * Guarantees the spacing the simulation only approximates, then parks detached
+ * nodes beside the core. Shared by the inline and worker layout paths so both
+ * finish in the same readable state.
+ */
+async function finishLayoutAsync(
+	graph: Graph,
+	partition: ConnectivityPartition,
+	isCancelled: () => boolean,
+	updateProgress?: (progress: number, detail: string) => void,
+) {
+	const { connected, isolated } = partition;
+	const totalIterations = defaultRelaxIterations(connected.length);
+	const batchIterations = getRelaxBatchIterations(connected.length);
+	let completed = 0;
+
+	while (completed < totalIterations) {
+		if (isCancelled()) return;
+
+		const batch = Math.min(batchIterations, totalIterations - completed);
+		const performed = relaxOverlaps(graph, connected, { iterations: batch });
+		completed += batch;
+
+		updateProgress?.(
+			completed / totalIterations,
+			"Separating overlapping nodes.",
+		);
+
+		// A pass that resolved nothing means the set is already clean.
+		if (performed < batch) break;
+		if (completed < totalIterations) await waitForNextFrame();
+	}
+
+	if (isCancelled()) return;
+	placeDetachedNodes(graph, isolated, getLayoutBounds(graph, connected));
+}
+
 async function applyLayoutAsync(
 	graph: Graph,
+	partition: ConnectivityPartition,
 	updateProgress: (progress: number, detail: string) => void,
 	isCancelled: () => boolean,
 ) {
@@ -358,7 +416,9 @@ async function applyLayoutAsync(
 
 	const nodeCount = graph.order;
 	const edgeCount = graph.size;
-	const settings = getFA2Settings(nodeCount, edgeCount);
+	// Detached nodes carry no structure, so density is measured against the part
+	// of the graph the simulation is actually solving.
+	const settings = getFA2Settings(partition.connected.length, edgeCount);
 
 	let totalIterations: number;
 	if (nodeCount >= HUGE_THRESHOLD) totalIterations = 80;
@@ -379,7 +439,7 @@ async function applyLayoutAsync(
 		completedIterations += batch;
 
 		updateProgress(
-			completedIterations / totalIterations,
+			(completedIterations / totalIterations) * 0.85,
 			`${completedIterations.toLocaleString()} / ${totalIterations.toLocaleString()} layout passes complete.`,
 		);
 
@@ -387,6 +447,10 @@ async function applyLayoutAsync(
 			await waitForNextFrame();
 		}
 	}
+
+	await finishLayoutAsync(graph, partition, isCancelled, (progress, detail) => {
+		updateProgress(0.85 + progress * 0.15, detail);
+	});
 }
 
 interface GraphPreparationState {
@@ -425,38 +489,6 @@ const IDLE_PREPARATION_STATE: GraphPreparationState = {
 	nodeCount: 0,
 	edgeCount: 0,
 };
-
-function hashGraphSeed(seed: string): number {
-	let hash = 2166136261;
-	for (let index = 0; index < seed.length; index += 1) {
-		hash ^= seed.charCodeAt(index);
-		hash = Math.imul(hash, 16777619);
-	}
-	return hash >>> 0;
-}
-
-function createDeterministicPosition(seed: string): GraphPosition {
-	const hash = hashGraphSeed(seed);
-	const angle = (((hash >>> 8) % 360) * Math.PI) / 180;
-	const radius = 20 + (hash % 30);
-	return {
-		x: Math.cos(angle) * radius,
-		y: Math.sin(angle) * radius,
-	};
-}
-
-function createAnchoredPosition(
-	anchor: GraphPosition,
-	seed: string,
-): GraphPosition {
-	const hash = hashGraphSeed(seed);
-	const angle = (((hash >>> 8) % 360) * Math.PI) / 180;
-	const radius = 6 + (hash % 14);
-	return {
-		x: anchor.x + Math.cos(angle) * radius,
-		y: anchor.y + Math.sin(angle) * radius,
-	};
-}
 
 function buildNeighborLookup(data: SubgraphResult): Map<string, string[]> {
 	const neighborLookup = new Map<string, string[]>();
@@ -514,12 +546,16 @@ function resolveInitialNodePosition({
 	assignedPositions,
 	neighborLookup,
 	anchorNodeId,
+	seedSpread,
+	anchorSpread,
 }: {
 	nodeId: string;
 	previousPositions: ReadonlyMap<string, GraphPosition>;
 	assignedPositions: ReadonlyMap<string, GraphPosition>;
 	neighborLookup: ReadonlyMap<string, string[]>;
 	anchorNodeId?: string | null;
+	seedSpread: number;
+	anchorSpread: number;
 }): GraphPosition {
 	const existingPosition = previousPositions.get(nodeId);
 	if (existingPosition) return existingPosition;
@@ -533,11 +569,11 @@ function resolveInitialNodePosition({
 		const anchorPosition =
 			assignedPositions.get(candidateId) ?? previousPositions.get(candidateId);
 		if (anchorPosition) {
-			return createAnchoredPosition(anchorPosition, nodeId);
+			return createAnchoredPosition(anchorPosition, nodeId, anchorSpread);
 		}
 	}
 
-	return createDeterministicPosition(nodeId);
+	return createDeterministicPosition(nodeId, seedSpread);
 }
 
 async function buildGraphAsync(
@@ -551,7 +587,6 @@ async function buildGraphAsync(
 	const edgeCount = data.edges.length;
 	const isHuge = nodeCount >= HUGE_THRESHOLD;
 	const isLarge = nodeCount >= LARGE_THRESHOLD;
-	const useWorkerLayout = shouldUseWorkerLayout(nodeCount, edgeCount);
 	const preservedNodeCount = data.nodes.reduce(
 		(count, node) => count + Number(previousPositions.has(node.id)),
 		0,
@@ -565,6 +600,10 @@ async function buildGraphAsync(
 	const assignedPositions = new Map<string, GraphPosition>();
 	const neighborLookup = buildNeighborLookup(data);
 	const columnRanges = computeColumnRanges(data.nodes);
+	const seedSpread = computeSeedSpread(nodeCount);
+	// Newly expanded nodes land in a small ring around the node they came from,
+	// close enough to read as related but clear of it.
+	const anchorSpread = computeSeedSpread(12);
 
 	const publish = (
 		progress: number,
@@ -601,6 +640,8 @@ async function buildGraphAsync(
 				assignedPositions,
 				neighborLookup,
 				anchorNodeId,
+				seedSpread,
+				anchorSpread,
 			});
 			const attrs: Record<string, unknown> = {
 				label: node.caption ?? node.id,
@@ -733,7 +774,14 @@ async function buildGraphAsync(
 
 	if (!sized || isCancelled()) return null;
 
+	const partition = partitionByConnectivity(graph);
+
 	if (preserveLayout) {
+		// Expansions must not reshuffle the view, so only the stacking that the
+		// anchored seeding introduced gets nudged apart.
+		relaxOverlaps(graph, Array.from(nodeIds), {
+			iterations: PRESERVE_RELAX_ITERATIONS,
+		});
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
 			"Keeping layout stable",
@@ -746,7 +794,24 @@ async function buildGraphAsync(
 		};
 	}
 
-	if (useWorkerLayout) {
+	// A force layout has nothing to solve without edges: every node would just
+	// fall into the same gravity well. A grid is exact, instant and readable.
+	if (partition.connected.length <= 1) {
+		publish(
+			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
+			"Arranging nodes",
+			"No connections to lay out — placing nodes on a grid.",
+			"layout",
+		);
+		packNodesOnGrid(graph, [...partition.connected, ...partition.isolated]);
+		publish(1, "Graph ready", "Rendering interactive view.", "ready");
+		return {
+			graph,
+			shouldRunWorkerLayout: false,
+		};
+	}
+
+	if (shouldUseWorkerLayout(partition.connected.length, edgeCount)) {
 		publish(
 			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT,
 			"Preparing worker layout",
@@ -761,6 +826,7 @@ async function buildGraphAsync(
 
 	await applyLayoutAsync(
 		graph,
+		partition,
 		(progress, detail) => {
 			publish(
 				NODE_PROGRESS_WEIGHT +
@@ -1078,6 +1144,17 @@ function SigmaWorkerLayout({
 				// Layout worker may already be disposed
 			}
 			onRunningChange?.(false);
+			// The worker is stopped on a timer, not on convergence, so the graph it
+			// leaves behind still overlaps. Settle it before the final paint.
+			const partition = partitionByConnectivity(currentGraph);
+			relaxOverlaps(currentGraph, partition.connected, {
+				iterations: defaultRelaxIterations(partition.connected.length),
+			});
+			placeDetachedNodes(
+				currentGraph,
+				partition.isolated,
+				getLayoutBounds(currentGraph, partition.connected),
+			);
 			try {
 				sigma.refresh({ skipIndexation: true });
 			} catch {

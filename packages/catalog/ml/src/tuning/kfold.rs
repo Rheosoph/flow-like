@@ -246,22 +246,18 @@ impl NodeLogic for KFoldGeneratorNode {
 
             // Clear and fill train database
             let train_db = train_db_ref.load(context).await?;
-            {
-                let mut train_db_write = train_db.db.write().await;
-                train_db_write.delete("true").await?;
-                if !train_items.is_empty() {
-                    train_db_write.insert(train_items).await?;
-                }
+            train_db.ensure_flushed().await?;
+            train_db.db.read().await.delete("true").await?;
+            if !train_items.is_empty() {
+                train_db.insert_from(context, train_items).await?;
             }
 
             // Clear and fill validation database
             let test_db = test_db_ref.load(context).await?;
-            {
-                let mut test_db_write = test_db.db.write().await;
-                test_db_write.delete("true").await?;
-                if !val_items.is_empty() {
-                    test_db_write.insert(val_items).await?;
-                }
+            test_db.ensure_flushed().await?;
+            test_db.db.read().await.delete("true").await?;
+            if !val_items.is_empty() {
+                test_db.insert_from(context, val_items).await?;
             }
 
             // Output current fold index and trigger fold execution

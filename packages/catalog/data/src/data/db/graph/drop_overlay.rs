@@ -1,5 +1,5 @@
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
     variable::VariableType,
 };
@@ -124,6 +124,10 @@ impl NodeLogic for DropGraphOverlayNode {
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {
+                context.log_message(
+                    &format!("Database graph-overlay delete failed: {e:#}"),
+                    LogLevel::Error,
+                );
                 context
                     .set_pin_value("error_message", json!(e.to_string()))
                     .await?;

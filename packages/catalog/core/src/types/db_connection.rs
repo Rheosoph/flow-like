@@ -1,12 +1,18 @@
-use flow_like::flow::execution::context::ExecutionContext;
+use flow_like::flow::execution::{InternalRun, context::ExecutionContext};
 use flow_like_storage::databases::vector::{
-    VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
+    VectorStore,
+    buffered::{
+        BufferedVectorStore, BufferedWriteError, BufferedWriteFailure, BufferedWriteKind,
+        BufferedWriteOrigin,
+    },
+    lancedb::LanceDBVectorStore,
 };
 use flow_like_types::{
-    Cacheable, JsonSchema, async_trait,
+    Cacheable, JsonSchema, Value, anyhow, async_trait,
     json::{Deserialize, Serialize},
     sync::RwLock,
 };
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 #[derive(Default, Debug, Serialize, Deserialize, JsonSchema, Clone)]
@@ -77,11 +83,145 @@ impl Cacheable for CachedDB {
 }
 
 impl CachedDB {
+    pub fn write_origin(context: &ExecutionContext) -> BufferedWriteOrigin {
+        BufferedWriteOrigin::new(context.id.clone(), Some(context.trace.id.clone()))
+    }
+
+    pub async fn insert_from(
+        &self,
+        context: &ExecutionContext,
+        items: Vec<Value>,
+    ) -> flow_like_types::Result<()> {
+        self.db
+            .write()
+            .await
+            .insert_with_origin(items, Self::write_origin(context))
+            .await
+    }
+
+    pub async fn upsert_from(
+        &self,
+        context: &ExecutionContext,
+        items: Vec<Value>,
+        id_field: String,
+    ) -> flow_like_types::Result<()> {
+        self.db
+            .write()
+            .await
+            .upsert_with_origin(items, id_field, Self::write_origin(context))
+            .await
+    }
+
     pub async fn ensure_flushed(&self) -> flow_like_types::Result<()> {
-        if self.db.read().await.is_dirty() {
-            self.db.write().await.flush().await?;
+        let mut db = self.db.write().await;
+        if db.is_dirty() {
+            db.flush().await?;
+        }
+        if let Some(report) = db.write_failure_report() {
+            return Err(anyhow!(report));
         }
         Ok(())
+    }
+
+    pub async fn has_buffered_writes(&self) -> bool {
+        self.db.read().await.is_dirty()
+    }
+
+    async fn log_write_failures(
+        run: &InternalRun,
+        fallback_origin: &BufferedWriteOrigin,
+        failures: Vec<BufferedWriteFailure>,
+    ) {
+        let mut grouped =
+            BTreeMap::<(BufferedWriteOrigin, BufferedWriteKind, String), usize>::new();
+        for failure in failures {
+            let origin = failure.origin.unwrap_or_else(|| fallback_origin.clone());
+            *grouped
+                .entry((origin, failure.operation, failure.error))
+                .or_default() += 1;
+        }
+
+        for ((origin, operation, error), count) in grouped {
+            run.log_node_error(
+                origin.node_id.as_ref(),
+                origin.operation_id,
+                &format!(
+                    "Database {operation} failed: {count} buffered row(s) were not persisted: {error}"
+                ),
+            )
+            .await;
+        }
+    }
+
+    /// Logs every terminal buffered-write failure against the node invocation
+    /// that queued the row, then returns an error so the run cannot report a
+    /// successful completion.
+    pub async fn flush_on_completion(
+        &self,
+        run: &InternalRun,
+        fallback_origin: &BufferedWriteOrigin,
+    ) -> flow_like_types::Result<()> {
+        let (flush_error, failures) = {
+            let mut db = self.db.write().await;
+            let flush_error = if db.is_dirty() {
+                db.flush().await.err()
+            } else {
+                None
+            };
+            let failures = db.take_write_failures();
+            (flush_error, failures)
+        };
+
+        if failures.is_empty() {
+            if let Some(error) = flush_error {
+                run.log_node_error(
+                    fallback_origin.node_id.as_ref(),
+                    fallback_origin.operation_id.clone(),
+                    &format!("Database completion flush failed: {error:#}"),
+                )
+                .await;
+                return Err(error);
+            }
+            return Ok(());
+        }
+
+        let report = BufferedWriteError::new(failures.clone());
+        Self::log_write_failures(run, fallback_origin, failures).await;
+
+        Err(flush_error.unwrap_or_else(|| anyhow!(report)))
+    }
+
+    /// Logs a prerequisite failure (for example credential refresh) against
+    /// every node invocation that still has buffered rows at risk.
+    pub async fn log_pending_write_error(
+        &self,
+        run: &InternalRun,
+        fallback_origin: &BufferedWriteOrigin,
+        message: &str,
+    ) {
+        let (origins, retained_failures, has_unattributed_writes) = {
+            let mut db = self.db.write().await;
+            let origins = db.pending_write_origins();
+            let has_unattributed_writes = db.has_unattributed_pending_writes();
+            let retained_failures = db.take_write_failures();
+            (origins, retained_failures, has_unattributed_writes)
+        };
+
+        Self::log_write_failures(run, fallback_origin, retained_failures).await;
+
+        if has_unattributed_writes {
+            run.log_node_error(
+                fallback_origin.node_id.as_ref(),
+                fallback_origin.operation_id.clone(),
+                message,
+            )
+            .await;
+        }
+
+        for origin in origins {
+            run.log_node_error(origin.node_id.as_ref(), origin.operation_id, message)
+                .await;
+        }
     }
 }
 

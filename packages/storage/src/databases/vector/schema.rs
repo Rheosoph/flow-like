@@ -63,13 +63,15 @@ fn field_data_type(field: &DatabaseSchemaField) -> Result<DataType> {
         "float64" | "double" => Some(DataType::Float64),
         "binary" | "bytes" => Some(DataType::Binary),
         "date" | "date32" => Some(DataType::Date32),
-        "timestamp" | "datetime" | "timestamp_ms" => {
-            Some(DataType::Timestamp(TimeUnit::Millisecond, None))
-        }
+        // FlowLike Date values represent instants and serialize as RFC3339,
+        // so their physical timestamp column must carry UTC timezone metadata.
+        "timestamp:ms:utc" | "timestamp" | "datetime" | "timestamp_ms" => Some(
+            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+        ),
         "vector" | "vector_float32" => None,
         _ => {
             return Err(anyhow!(
-                "Unsupported type '{}' for column '{}'. Supported types: string, boolean, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64, binary, date32, timestamp, vector",
+                "Unsupported type '{}' for column '{}'. Supported types: string, boolean, int8, int16, int32, int64, uint8, uint16, uint32, uint64, float32, float64, binary, date32, timestamp:ms:UTC, vector",
                 field.data_type,
                 field.name
             ));
@@ -157,7 +159,7 @@ mod tests {
 
         let schema = database_fields_to_arrow_schema(&[
             field("ticket_id", "string"),
-            field("created_at", "timestamp"),
+            field("created_at", "timestamp:ms:UTC"),
             embedding,
         ])
         .unwrap();
@@ -165,13 +167,25 @@ mod tests {
         assert_eq!(schema.fields().len(), 3);
         assert_eq!(
             schema.field_with_name("created_at").unwrap().data_type(),
-            &DataType::Timestamp(TimeUnit::Millisecond, None)
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()))
         );
         assert_eq!(
             schema.field_with_name("embedding").unwrap().data_type(),
             &DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, false)), 384)
         );
         assert!(!schema.field_with_name("embedding").unwrap().is_nullable());
+    }
+
+    #[test]
+    fn legacy_timestamp_aliases_remain_utc_compatible() {
+        for alias in ["timestamp", "datetime", "timestamp_ms"] {
+            let schema = database_fields_to_arrow_schema(&[field("created_at", alias)]).unwrap();
+            assert_eq!(
+                schema.field_with_name("created_at").unwrap().data_type(),
+                &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                "legacy alias {alias} must retain UTC instant semantics"
+            );
+        }
     }
 
     #[test]

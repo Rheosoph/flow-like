@@ -1,11 +1,24 @@
 "use client";
 
 import {
+	AlertDialog,
+	AlertDialogAction,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
 	Badge,
 	Button,
 	Card,
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
 	IIndexType,
 	Input,
+	Label,
 	Tabs,
 	TabsContent,
 	TabsList,
@@ -47,12 +60,15 @@ import {
 	Globe,
 	Layers3,
 	LayoutDashboard,
+	Loader2,
+	MoreVertical,
 	Network,
 	Plus,
 	RefreshCw,
 	Search,
 	Share2,
 	SquareTerminal,
+	Trash2,
 	User,
 	Workflow,
 	X,
@@ -87,6 +103,17 @@ function extractErrorMessage(err: unknown): string {
 		}
 	}
 	return String(err);
+}
+
+// Mirrors the server-side cascade matcher: bare name, case sensitive, one
+// optional trailing `.lance` tolerated on either side.
+function normalizeTableName(name: string): string {
+	const trimmed = name.trim();
+	return trimmed.endsWith(".lance") ? trimmed.slice(0, -6) : trimmed;
+}
+
+function formatList(values: string[]): string {
+	return values.join(", ");
 }
 
 export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
@@ -489,6 +516,10 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	const [sortAsc, setSortAsc] = useState<boolean>(true);
 	const [setupOpen, setSetupOpen] = useState(false);
 	const [designerOpen, setDesignerOpen] = useState(false);
+	const [deleteTarget, setDeleteTarget] = useState<Table | null>(null);
+	const [deleteConfirm, setDeleteConfirm] = useState("");
+	const [deleteError, setDeleteError] = useState<string | null>(null);
+	const [deleting, setDeleting] = useState(false);
 	const processedTables = useMemo(() => {
 		const projectTables = (tables.data ?? []).map((name): Table => ({ name }));
 		const userScopedTables = (userTables.data ?? []).map(
@@ -769,6 +800,120 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 		],
 	);
 
+	// Pre-warn from the overlays we already hold. The server cascade stays
+	// authoritative — this only tells the user what is about to change.
+	const referencingOntologies = useMemo(() => {
+		if (!deleteTarget) return [];
+		const target = normalizeTableName(deleteTarget.name);
+		const seen = new Set<string>();
+		const names: string[] = [];
+		for (const overlay of [
+			...(ontologies.data ?? []),
+			...(userOntologies.data ?? []),
+		]) {
+			if (seen.has(overlay.id)) continue;
+			seen.add(overlay.id);
+			const matches =
+				overlay.nodes.some(
+					(node) => normalizeTableName(node.table) === target,
+				) ||
+				overlay.edges.some((edge) => normalizeTableName(edge.table) === target);
+			if (matches) names.push(overlay.name);
+		}
+		return names;
+	}, [deleteTarget, ontologies.data, userOntologies.data]);
+
+	const closeDeleteDialog = useCallback(() => {
+		setDeleteTarget(null);
+		setDeleteConfirm("");
+		setDeleteError(null);
+	}, []);
+
+	const dropTable = useCallback(async () => {
+		if (!deleteTarget || deleting) return;
+		setDeleting(true);
+		setDeleteError(null);
+		try {
+			const result = await backend.dbState.dropTable(
+				appId,
+				deleteTarget.name,
+				deleteTarget.userScoped,
+			);
+
+			// The catalog exposes tables to boards, and the sources/queries surfaces
+			// read both scopes — a table drop invalidates all of them, not just the
+			// list the card was rendered from.
+			await Promise.allSettled([
+				tables.refetch(),
+				userTables.refetch(),
+				ontologies.refetch(),
+				userOntologies.refetch(),
+				invalidate(backend.boardState.getCatalog, [appId]),
+			]);
+
+			if (searchParams.get("table") === deleteTarget.name) {
+				const params = new URLSearchParams(searchParams.toString());
+				params.delete("table");
+				params.delete("scope");
+				params.delete("page");
+				params.delete("pageSize");
+				router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+			}
+
+			const details: string[] = [];
+			if (result.ontologies.length > 0) {
+				details.push(
+					`${result.ontologies.length} ontolog${
+						result.ontologies.length === 1 ? "y was" : "ies were"
+					} updated: ${formatList(result.ontologies)}`,
+				);
+			}
+			if (result.saved_queries.length > 0) {
+				details.push(
+					`${result.saved_queries.length} saved quer${
+						result.saved_queries.length === 1 ? "y" : "ies"
+					} still reference this table and will now fail: ${formatList(
+						result.saved_queries,
+					)}`,
+				);
+			}
+			if (result.warnings.length > 0) {
+				details.push(formatList(result.warnings));
+			}
+			const description = details.length > 0 ? details.join("\n") : undefined;
+
+			if (result.dropped) {
+				toast.success(`Deleted table "${result.table_name}"`, { description });
+			} else {
+				toast.info(`Table "${result.table_name}" no longer existed`, {
+					description,
+				});
+			}
+			closeDeleteDialog();
+		} catch (err) {
+			const message = extractErrorMessage(err);
+			setDeleteError(message);
+			toast.error(`Delete table failed: ${message}`);
+		} finally {
+			setDeleting(false);
+		}
+	}, [
+		appId,
+		backend.dbState,
+		backend.boardState,
+		closeDeleteDialog,
+		deleteTarget,
+		deleting,
+		invalidate,
+		ontologies,
+		pathname,
+		router,
+		searchParams,
+		tables,
+		userOntologies,
+		userTables,
+	]);
+
 	const clearSearch = useCallback(() => {
 		setQuery("");
 	}, []);
@@ -993,6 +1138,11 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					<TableGrid
 						tables={filteredAndSortedTables}
 						onSelectTable={navigateToTable}
+						onRequestDelete={(target) => {
+							setDeleteConfirm("");
+							setDeleteError(null);
+							setDeleteTarget(target);
+						}}
 						searchQuery={query}
 						onCreate={() => setDesignerOpen(true)}
 					/>
@@ -1059,6 +1209,90 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 					navigateToTable(name, userScoped);
 				}}
 			/>
+			<AlertDialog
+				open={deleteTarget !== null}
+				onOpenChange={(open) => {
+					if (deleting) return;
+					if (!open) closeDeleteDialog();
+				}}
+			>
+				<AlertDialogContent>
+					<AlertDialogHeader>
+						<AlertDialogTitle className="flex items-center gap-2">
+							<AlertTriangle className="h-5 w-5 text-destructive" />
+							Delete {deleteTarget?.name}?
+						</AlertDialogTitle>
+						<AlertDialogDescription>
+							This permanently deletes the table, every row in it, its schema
+							and its indexes. It cannot be undone.
+						</AlertDialogDescription>
+					</AlertDialogHeader>
+					<div className="space-y-3">
+						{referencingOntologies.length > 0 ? (
+							<div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm">
+								<p className="font-medium">
+									{referencingOntologies.length} ontolog
+									{referencingOntologies.length === 1 ? "y" : "ies"} reference
+									{referencingOntologies.length === 1 ? "s" : ""} this table and
+									will be updated:
+								</p>
+								<p className="mt-1 text-muted-foreground">
+									{formatList(referencingOntologies)}
+								</p>
+							</div>
+						) : (
+							<p className="text-sm text-muted-foreground">
+								Any ontology mapping or saved query that points at this table
+								will be pruned or reported after the delete.
+							</p>
+						)}
+						<div className="grid gap-1.5">
+							<Label htmlFor="confirm-drop-table">
+								Type{" "}
+								<span className="font-mono font-semibold text-foreground">
+									{deleteTarget?.name}
+								</span>{" "}
+								to confirm
+							</Label>
+							<Input
+								id="confirm-drop-table"
+								value={deleteConfirm}
+								autoComplete="off"
+								disabled={deleting}
+								placeholder={deleteTarget?.name}
+								onChange={(event) => setDeleteConfirm(event.target.value)}
+							/>
+						</div>
+						{deleteError && (
+							<p role="alert" className="text-sm text-destructive">
+								{deleteError}
+							</p>
+						)}
+					</div>
+					<AlertDialogFooter>
+						<AlertDialogCancel disabled={deleting}>
+							Keep table
+						</AlertDialogCancel>
+						<AlertDialogAction
+							className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+							disabled={
+								deleting || deleteConfirm !== (deleteTarget?.name ?? "")
+							}
+							onClick={(event) => {
+								event.preventDefault();
+								void dropTable();
+							}}
+						>
+							{deleting ? (
+								<Loader2 className="h-3.5 w-3.5 animate-spin" />
+							) : (
+								<Trash2 className="h-3.5 w-3.5" />
+							)}
+							Delete table
+						</AlertDialogAction>
+					</AlertDialogFooter>
+				</AlertDialogContent>
+			</AlertDialog>
 		</div>
 	);
 };
@@ -1099,6 +1333,7 @@ const SearchInput: React.FC<SearchInputProps> = ({
 interface TableGridProps {
 	tables: Table[];
 	onSelectTable: (tableName: string, userScoped?: boolean) => void;
+	onRequestDelete: (table: Table) => void;
 	searchQuery: string;
 	onCreate: () => void;
 }
@@ -1106,6 +1341,7 @@ interface TableGridProps {
 const TableGrid: React.FC<TableGridProps> = ({
 	tables,
 	onSelectTable,
+	onRequestDelete,
 	searchQuery,
 	onCreate,
 }) => {
@@ -1147,6 +1383,7 @@ const TableGrid: React.FC<TableGridProps> = ({
 					key={`${table.userScoped ? "user:" : ""}${table.name}`}
 					table={table}
 					onSelect={() => onSelectTable(table.name, table.userScoped)}
+					onRequestDelete={() => onRequestDelete(table)}
 				/>
 			))}
 		</div>
@@ -1156,11 +1393,16 @@ const TableGrid: React.FC<TableGridProps> = ({
 interface TableCardProps {
 	table: Table;
 	onSelect: () => void;
+	onRequestDelete: () => void;
 }
 
-const TableCard: React.FC<TableCardProps> = ({ table, onSelect }) => {
+const TableCard: React.FC<TableCardProps> = ({
+	table,
+	onSelect,
+	onRequestDelete,
+}) => {
 	return (
-		<Card className="group cursor-pointer transition-all duration-200 hover:shadow-lg hover:bg-accent/50 border overflow-hidden">
+		<Card className="group relative cursor-pointer transition-all duration-200 hover:shadow-lg hover:bg-accent/50 border overflow-hidden">
 			<button
 				type="button"
 				onClick={onSelect}
@@ -1168,7 +1410,7 @@ const TableCard: React.FC<TableCardProps> = ({ table, onSelect }) => {
 				title={`Open table: ${table.name}`}
 			>
 				<div className="p-5 space-y-5">
-					<div className="flex items-start justify-between gap-3">
+					<div className="flex items-start justify-between gap-3 pr-8">
 						<div className="flex items-center gap-3 min-w-0">
 							<div
 								className={cn(
@@ -1216,6 +1458,29 @@ const TableCard: React.FC<TableCardProps> = ({ table, onSelect }) => {
 					</div>
 				</div>
 			</button>
+			<DropdownMenu>
+				<DropdownMenuTrigger asChild>
+					<Button
+						variant="ghost"
+						size="icon"
+						aria-label={`Actions for ${table.name}`}
+						className="absolute right-2 top-2 h-7 w-7 opacity-0 transition-opacity max-sm:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+					>
+						<MoreVertical className="h-4 w-4" />
+					</Button>
+				</DropdownMenuTrigger>
+				<DropdownMenuContent align="end">
+					<DropdownMenuItem
+						className="text-destructive focus:text-destructive"
+						onSelect={(event) => {
+							event.preventDefault();
+							onRequestDelete();
+						}}
+					>
+						<Trash2 className="h-4 w-4" /> Delete table
+					</DropdownMenuItem>
+				</DropdownMenuContent>
+			</DropdownMenu>
 		</Card>
 	);
 };

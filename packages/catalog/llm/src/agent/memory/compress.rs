@@ -251,9 +251,7 @@ impl NodeLogic for CompressMemoryNode {
             "timestamp": now,
         });
 
-        let mut db = cached_db.db.write().await;
-        db.insert(vec![summary_record]).await?;
-        drop(db);
+        cached_db.insert_from(context, vec![summary_record]).await?;
 
         let compressed_count = observations.len();
         context

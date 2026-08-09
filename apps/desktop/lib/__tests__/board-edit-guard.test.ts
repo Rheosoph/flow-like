@@ -748,6 +748,22 @@ eventsSimple() {
 			isCreatedAppBuildTargetMismatch({
 				createdAppId: "new-app",
 				requestedAppId: "older-similar-app",
+				toolName: "database_tool",
+				operation: "delete_table",
+			}),
+		).toBe(true);
+		expect(
+			isCreatedAppBuildTargetMismatch({
+				createdAppId: "new-app",
+				requestedAppId: "older-similar-app",
+				toolName: "database_tool",
+				operation: "describe_table",
+			}),
+		).toBe(false);
+		expect(
+			isCreatedAppBuildTargetMismatch({
+				createdAppId: "new-app",
+				requestedAppId: "older-similar-app",
 				toolName: "upsert_event",
 			}),
 		).toBe(true);

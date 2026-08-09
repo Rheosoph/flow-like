@@ -20,6 +20,7 @@ pub mod db_query;
 pub mod db_update;
 pub mod drop_columns;
 pub mod drop_index;
+pub mod drop_table;
 pub mod get_db_schema;
 pub mod get_indices;
 pub mod list_tables;
@@ -169,6 +170,7 @@ pub fn routes() -> Router<AppState> {
                 .delete(db_delete::delete_from_table)
                 .get(db_list::list_items),
         )
+        .route("/{table}/table", delete(drop_table::drop_table))
         .route("/{table}/update", put(db_update::update_table))
         .route("/{table}/optimize", post(optimize::optimize_table))
         .route(

@@ -18,6 +18,16 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub(crate) fn completed_run_status(status: Option<&str>) -> RunStatus {
+    match status.map(str::to_ascii_lowercase).as_deref() {
+        Some("completed" | "success" | "succeeded") => RunStatus::Completed,
+        Some("cancelled" | "canceled") => RunStatus::Cancelled,
+        Some("timeout" | "timed_out") => RunStatus::Timeout,
+        Some("failed") => RunStatus::Failed,
+        Some(_) | None => RunStatus::Failed,
+    }
+}
+
 /// Create an SSE stream from an executor HTTP response
 ///
 /// Uses `eventsource-stream` for proper SSE protocol handling instead of
@@ -65,15 +75,9 @@ fn create_sse_stream(
                                         .unwrap_or(0) as i32;
                                     let status = parsed.get("payload")
                                         .and_then(|p| p.get("status"))
-                                        .and_then(|s| s.as_str())
-                                        .unwrap_or("Completed");
+                                        .and_then(|s| s.as_str());
 
-                                    let run_status = match status {
-                                        "Failed" => RunStatus::Failed,
-                                        "Cancelled" => RunStatus::Cancelled,
-                                        "Timeout" => RunStatus::Timeout,
-                                        _ => RunStatus::Completed,
-                                    };
+                                    let run_status = completed_run_status(status);
 
                                     if let Err(e) = update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await {
                                         tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");
@@ -162,14 +166,8 @@ pub async fn collect_generic_result(
                     let status = parsed
                         .get("payload")
                         .and_then(|p| p.get("status"))
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("Completed");
-                    let run_status = match status {
-                        "Failed" => RunStatus::Failed,
-                        "Cancelled" => RunStatus::Cancelled,
-                        "Timeout" => RunStatus::Timeout,
-                        _ => RunStatus::Completed,
-                    };
+                        .and_then(|s| s.as_str());
+                    let run_status = completed_run_status(status);
                     if let Err(e) =
                         update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await
                     {
@@ -242,14 +240,8 @@ pub async fn collect_generic_result_bytes(
                     let status = parsed
                         .get("payload")
                         .and_then(|p| p.get("status"))
-                        .and_then(|s| s.as_str())
-                        .unwrap_or("Completed");
-                    let run_status = match status {
-                        "Failed" => RunStatus::Failed,
-                        "Cancelled" => RunStatus::Cancelled,
-                        "Timeout" => RunStatus::Timeout,
-                        _ => RunStatus::Completed,
-                    };
+                        .and_then(|s| s.as_str());
+                    let run_status = completed_run_status(status);
                     if let Err(e) =
                         update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await
                     {
@@ -365,4 +357,34 @@ async fn track_execution_usage_from_run(
     .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn completion_status_parsing_matches_executor_serialization() {
+        assert!(matches!(
+            completed_run_status(Some("completed")),
+            RunStatus::Completed
+        ));
+        assert!(matches!(
+            completed_run_status(Some("failed")),
+            RunStatus::Failed
+        ));
+        assert!(matches!(
+            completed_run_status(Some("Cancelled")),
+            RunStatus::Cancelled
+        ));
+        assert!(matches!(
+            completed_run_status(Some("timeout")),
+            RunStatus::Timeout
+        ));
+        assert!(matches!(
+            completed_run_status(Some("unexpected")),
+            RunStatus::Failed
+        ));
+        assert!(matches!(completed_run_status(None), RunStatus::Failed));
+    }
 }

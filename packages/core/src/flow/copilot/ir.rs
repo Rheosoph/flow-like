@@ -3225,7 +3225,13 @@ fn interface_to_ast(interface: &FlowIrInterface) -> InterfaceDecl {
             .map(|field| {
                 let mut element_type = field.value_type.clone();
                 element_type.container = FlowIrContainer::Normal;
-                let label = type_label(&element_type);
+                // `type_label` is the diagnostic/IR spelling (for example `date`), while
+                // FlowScript's built-in temporal type is case-sensitive and spelled `Date`.
+                let label = if element_type.data_type == FlowIrDataType::Date {
+                    "Date".to_string()
+                } else {
+                    type_label(&element_type)
+                };
                 let element = InterfaceType::Named(if label == "struct" {
                     "Struct".to_string()
                 } else {
@@ -5713,6 +5719,45 @@ mod tests {
                 .iter()
                 .any(|diagnostic| { diagnostic.code == "IR_RETURN_MISSING" })
         );
+    }
+
+    #[test]
+    fn interface_date_fields_render_with_the_flowscript_date_type() {
+        let compiled = compile_flow_ir(
+            &FlowIrProgram {
+                interfaces: vec![FlowIrInterface {
+                    name: "AuditEntry".to_string(),
+                    fields: vec![
+                        FlowIrInterfaceField {
+                            name: "createdAt".to_string(),
+                            value_type: FlowIrType::scalar(FlowIrDataType::Date),
+                            optional: false,
+                            default: None,
+                        },
+                        FlowIrInterfaceField {
+                            name: "previousRuns".to_string(),
+                            value_type: FlowIrType {
+                                data_type: FlowIrDataType::Date,
+                                container: FlowIrContainer::Array,
+                                interface: None,
+                            },
+                            optional: true,
+                            default: None,
+                        },
+                    ],
+                }],
+                ..Default::default()
+            },
+            &[],
+        );
+
+        assert!(
+            compiled.diagnostics.is_empty(),
+            "{:?}",
+            compiled.diagnostics
+        );
+        assert!(compiled.flowscript.contains("createdAt: Date;"));
+        assert!(compiled.flowscript.contains("previousRuns?: Date[];"));
     }
 
     #[test]

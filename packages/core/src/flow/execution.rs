@@ -496,6 +496,21 @@ impl Run {
         }
     }
 
+    fn push_node_log(
+        &mut self,
+        node_id: &str,
+        operation_id: Option<String>,
+        message: &str,
+        log_level: LogLevel,
+    ) {
+        let mut log = LogMessage::new(message, log_level, operation_id);
+        log.node_id = Some(node_id.to_string());
+        let mut trace = Trace::new(node_id);
+        trace.logs.push(log);
+        trace.finish();
+        self.push_trace(trace);
+    }
+
     pub(crate) fn prepare_flush(
         &mut self,
         finalize: bool,
@@ -1846,6 +1861,15 @@ impl InternalRun {
         self.run.lock().await.status.clone()
     }
 
+    /// Records an error discovered after the originating node context has
+    /// finished, such as a deferred database flush failure.
+    pub async fn log_node_error(&self, node_id: &str, operation_id: Option<String>, message: &str) {
+        self.run
+            .lock()
+            .await
+            .push_node_log(node_id, operation_id, message, LogLevel::Error);
+    }
+
     /// Runs every completion callback and reports whether any failed.
     ///
     /// Callbacks are cloned out of the registry before awaiting them so a
@@ -2148,8 +2172,13 @@ pub async fn flush_run_cancelled(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::flow::board::Board;
     use crate::flow::node::{Node, NodeLogic};
-    use flow_like_types::{async_trait, tokio};
+    use crate::profile::Profile;
+    use crate::state::{FlowLikeConfig, FlowLikeState};
+    use crate::utils::http::HTTPClient;
+    use flow_like_storage::Path;
+    use flow_like_types::{async_trait, intercom::BufferedInterComHandler, tokio};
 
     struct NoopLogic;
 
@@ -2182,6 +2211,71 @@ mod tests {
             .expect("flush wait should stop promptly")
             .expect("flush wait task should complete");
         assert!(!ticked);
+    }
+
+    #[tokio::test]
+    async fn deferred_errors_are_recorded_against_the_originating_node() {
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let mut board = Board::new_detached(Some("deferred-error".to_string()), Path::default());
+        // Mandatory deferred-write diagnostics must survive even when the
+        // board's normal log filter is stricter than Error.
+        board.log_level = LogLevel::Fatal;
+        let payload = RunPayload {
+            id: "unused-entry".to_string(),
+            payload: None,
+            runtime_variables: None,
+            filter_secrets: Some(true),
+        };
+        let intercom = BufferedInterComHandler::new(
+            Arc::new(|_events| Box::pin(async { Ok(()) })),
+            Some(100),
+            Some(400),
+            Some(false),
+        );
+        let mut run = InternalRun::new(
+            "test-app",
+            Arc::new(board),
+            None,
+            &state,
+            &Profile::default(),
+            &payload,
+            false,
+            intercom.into_callback(),
+            None,
+            None,
+            std::collections::HashMap::new(),
+        )
+        .await
+        .expect("build run");
+
+        run.completion_callbacks.write().await.push(Arc::new(|run| {
+            Box::pin(async move {
+                run.log_node_error(
+                    "writer-node",
+                    Some("writer-operation".to_string()),
+                    "Database upsert failed: one row was not persisted",
+                )
+                .await;
+                Err(anyhow!("deferred database write failed"))
+            })
+        }));
+
+        run.execute(state).await;
+
+        assert!(matches!(run.get_status().await, RunStatus::Failed));
+        let traces = run.get_traces().await;
+        assert_eq!(traces.len(), 1);
+        assert_eq!(traces[0].node_id.as_ref(), "writer-node");
+        assert_eq!(traces[0].logs.len(), 1);
+        assert_eq!(traces[0].logs[0].node_id.as_deref(), Some("writer-node"));
+        assert_eq!(
+            traces[0].logs[0].operation_id.as_deref(),
+            Some("writer-operation")
+        );
+        assert_eq!(traces[0].logs[0].log_level, LogLevel::Error);
     }
 
     #[test]

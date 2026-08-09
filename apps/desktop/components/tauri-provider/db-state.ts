@@ -4,6 +4,7 @@ import type {
 	ICreateTableResult,
 	IDatabaseSchemaField,
 	IDatabaseState,
+	IDropTableResult,
 	IIndexConfig,
 	IQueryTablePayload,
 } from "@flow-like/flow-like-ui";
@@ -547,6 +548,34 @@ export class DatabaseState implements IDatabaseState {
 			tableName,
 			column,
 			nullable,
+			userScoped: userScoped ?? false,
+		});
+	}
+
+	async dropTable(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<IDropTableResult> {
+		const isOffline = await this.backend.isOffline(appId);
+
+		if (!isOffline) {
+			return await fetcher(
+				this.backend.profile!,
+				appendScope(
+					`apps/${appId}/db/${parseTableName(tableName)}/table`,
+					userScoped,
+				),
+				{
+					method: "DELETE",
+				},
+				this.backend.auth,
+			);
+		}
+
+		return await invoke<IDropTableResult>("db_drop_table", {
+			appId,
+			tableName,
 			userScoped: userScoped ?? false,
 		});
 	}

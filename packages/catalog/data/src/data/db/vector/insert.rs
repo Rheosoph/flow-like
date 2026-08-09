@@ -4,7 +4,7 @@ use flow_like::flow::{
     pin::{PinOptions, ValueType},
     variable::VariableType,
 };
-use flow_like_storage::{databases::vector::VectorStore, object_store::buffered::BufReader};
+use flow_like_storage::object_store::buffered::BufReader;
 use flow_like_types::{Value, async_trait, json::json};
 use futures::StreamExt;
 
@@ -68,16 +68,16 @@ impl NodeLogic for InsertLocalDatabaseNode {
         context.deactivate_exec_pin("error").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
-        let database = database.load(context).await?.db.clone();
-        let mut database = database.write().await;
+        let database = database.load(context).await?;
         let value: Value = context.evaluate_pin("value").await?;
         let value = vec![value];
 
-        match database.insert(value).await {
+        match database.insert_from(context, value).await {
             Ok(()) => {
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {
+                context.log_message(&format!("Database insert failed: {e:#}"), LogLevel::Error);
                 context
                     .set_pin_value("error_message", json!(e.to_string()))
                     .await?;
@@ -146,15 +146,18 @@ impl NodeLogic for BatchInsertLocalDatabaseNode {
         context.deactivate_exec_pin("error").await?;
 
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
-        let database = database.load(context).await?.db.clone();
-        let mut database = database.write().await;
+        let database = database.load(context).await?;
         let value: Vec<Value> = context.evaluate_pin("value").await?;
 
-        match database.insert(value).await {
+        match database.insert_from(context, value).await {
             Ok(()) => {
                 context.activate_exec_pin("exec_out").await?;
             }
             Err(e) => {
+                context.log_message(
+                    &format!("Database batch insert failed: {e:#}"),
+                    LogLevel::Error,
+                );
                 context
                     .set_pin_value("error_message", json!(e.to_string()))
                     .await?;
@@ -240,8 +243,7 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
         context.deactivate_exec_pin("exec_out").await?;
         context.deactivate_exec_pin("error").await?;
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
-        let database = database.load(context).await?.db.clone();
-        let mut database = database.write().await;
+        let database = database.load(context).await?;
         let delimiter: String = context.evaluate_pin("delimiter").await?;
         let delimiter = delimiter.as_bytes()[0];
         let csv_path: FlowPath = context.evaluate_pin("csv").await?;
@@ -275,7 +277,9 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
             let record = match element {
                 Ok(record) => record,
                 Err(e) => {
-                    println!("Error reading record: {:?}", e);
+                    let message = format!("Error reading CSV record: {e:#}");
+                    context.log_message(&message, LogLevel::Error);
+                    errors.push(message);
                     continue;
                 }
             };
@@ -290,7 +294,7 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
                     });
             chunk.push(json_obj);
             if chunk.len() as u64 == chunk_size {
-                let insert = database.insert(chunk.to_owned()).await;
+                let insert = database.insert_from(context, chunk.to_owned()).await;
                 if let Err(e) = insert {
                     context
                         .log_message(&format!("Error inserting chunk: {:?}", e), LogLevel::Error);
@@ -301,7 +305,7 @@ impl NodeLogic for BatchInsertCSVLocalDatabaseNode {
         }
 
         if !chunk.is_empty() {
-            let insert = database.insert(chunk.to_owned()).await;
+            let insert = database.insert_from(context, chunk.to_owned()).await;
             if let Err(e) = insert {
                 context.log_message(&format!("Error inserting chunk: {:?}", e), LogLevel::Error);
                 errors.push(e.to_string());

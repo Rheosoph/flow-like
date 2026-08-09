@@ -402,12 +402,22 @@ async fn execute_inner(
                 }
             }
 
-            emit_event(
-                tx,
-                "log",
-                serde_json::json!({ "message": "Execution completed" }),
-            );
-            Ok((ExecutionStatus::Completed, log_level, None, None))
+            let status = ExecutionStatus::from_final_run_status(&run.get_status().await);
+            let (event_type, message, error) = match &status {
+                ExecutionStatus::Completed => ("log", "Execution completed", None),
+                ExecutionStatus::Cancelled => (
+                    "error",
+                    "Execution cancelled",
+                    Some("Execution cancelled".to_string()),
+                ),
+                ExecutionStatus::Failed | ExecutionStatus::Running => (
+                    "error",
+                    "Execution failed",
+                    Some("Execution failed".to_string()),
+                ),
+            };
+            emit_event(tx, event_type, serde_json::json!({ "message": message }));
+            Ok((status, log_level, None, error))
         }
         Err(_) => {
             emit_event(

@@ -565,16 +565,16 @@ impl GraphStore for LanceGraphStore {
         limit: Option<usize>,
     ) -> Result<SubgraphResult> {
         let limit = self.enforce_limit(limit);
-
-        if seeds.is_empty() {
-            return self.full_subgraph(limit).await;
-        }
-
         let _permit = self
             .semaphore
             .acquire()
             .await
             .map_err(|e| anyhow!("Semaphore acquire failed: {}", e))?;
+
+        if seeds.is_empty() {
+            return self.scan_subgraph(limit).await;
+        }
+
         self.expand_subgraph(seeds, depth.max(1), TraversalDirection::Both, limit)
             .await
     }
@@ -951,158 +951,13 @@ impl LanceGraphStore {
         Ok(nodes)
     }
 
-    async fn load_nodes_for_label(&self, label: &str, limit: usize) -> Result<Vec<SubgraphNode>> {
+    pub(super) async fn load_nodes_for_label(
+        &self,
+        label: &str,
+        limit: usize,
+    ) -> Result<Vec<SubgraphNode>> {
         let rows = self.sample(label, limit).await?;
         self.rows_to_nodes(label, rows)
-    }
-
-    async fn full_subgraph(&self, limit: usize) -> Result<SubgraphResult> {
-        let mut all_nodes = Vec::new();
-        let mut all_edges = Vec::new();
-        let mut connected_labels = HashSet::new();
-        let mut warnings = Vec::new();
-
-        for edge in &self.overlay.edges {
-            let query = format!(
-                "MATCH (n:{src})-[r:{rel}]->(m:{dst}) RETURN n, r, m",
-                src = edge.src_label,
-                rel = edge.label,
-                dst = edge.dst_label,
-            );
-            let batch = match self
-                .execute_cypher_with_safety(&query, HashMap::new(), limit)
-                .await
-            {
-                Ok(batch) => batch,
-                Err(error) => {
-                    tracing::warn!(%error, edge = %edge.label, "Full subgraph edge query failed");
-                    warnings.push(format!("Edge mapping '{}': {}", edge.label, error));
-                    continue;
-                }
-            };
-            let rows = record_batch_to_value(&batch)?;
-            let sub = self.parse_flat_rows(
-                &rows,
-                &edge.src_label,
-                &edge.dst_label,
-                &edge.label,
-                true,
-                limit,
-            )?;
-            all_nodes.extend(sub.nodes);
-            all_edges.extend(sub.edges);
-            connected_labels.insert(edge.src_label.clone());
-            connected_labels.insert(edge.dst_label.clone());
-        }
-
-        for node in &self.overlay.nodes {
-            if connected_labels.contains(&node.label) {
-                continue;
-            }
-
-            let remaining = limit.saturating_sub(all_nodes.len());
-            if remaining == 0 {
-                break;
-            }
-
-            all_nodes.extend(self.load_nodes_for_label(&node.label, remaining).await?);
-        }
-
-        Ok(dedupe_and_limit_subgraph(
-            all_nodes, all_edges, limit, warnings,
-        ))
-    }
-
-    /// Parse flat rows from lance-graph cypher results.
-    ///
-    /// After RETURN projection, lance-graph aliases columns as `{var}.{column}` (e.g. `n.name`, `m.map`).
-    /// `n` is the seed node variable, `m` is the neighbor variable, `r` is the relationship variable.
-    fn parse_flat_rows(
-        &self,
-        rows: &[Value],
-        n_label: &str,
-        m_label: &str,
-        edge_label: &str,
-        n_is_source: bool,
-        limit: usize,
-    ) -> Result<SubgraphResult> {
-        let n_id_col = self.find_id_column_for_label(n_label)?;
-        let m_id_col = self.find_id_column_for_label(m_label)?;
-        let n_display = self.find_display_column_for_label(n_label);
-        let m_display = self.find_display_column_for_label(m_label);
-
-        let mut nodes = Vec::new();
-        let mut edges = Vec::new();
-        let mut seen_node_ids = std::collections::HashSet::new();
-        let mut seen_edge_ids = std::collections::HashSet::new();
-
-        for row in rows {
-            let map = match row {
-                Value::Object(m) => m,
-                _ => continue,
-            };
-
-            let n_id = value_to_id_string(map.get(&format!("n.{n_id_col}")));
-            let m_id = value_to_id_string(map.get(&format!("m.{m_id_col}")));
-
-            let n_full_id = format!("{n_label}:{n_id}");
-            if !n_id.is_empty() && seen_node_ids.insert(n_full_id.clone()) {
-                let caption = n_display
-                    .as_ref()
-                    .and_then(|dc| map.get(&format!("n.{dc}")))
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                    .or_else(|| Some(n_id.clone()));
-                nodes.push(SubgraphNode {
-                    id: n_full_id.clone(),
-                    label: n_label.to_string(),
-                    caption,
-                    props: Value::Object(extract_prefixed_props(map, "n.")),
-                });
-            }
-
-            let m_full_id = format!("{m_label}:{m_id}");
-            if !m_id.is_empty() && seen_node_ids.insert(m_full_id.clone()) {
-                let caption = m_display
-                    .as_ref()
-                    .and_then(|dc| map.get(&format!("m.{dc}")))
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-                    .or_else(|| Some(m_id.clone()));
-                nodes.push(SubgraphNode {
-                    id: m_full_id.clone(),
-                    label: m_label.to_string(),
-                    caption,
-                    props: Value::Object(extract_prefixed_props(map, "m.")),
-                });
-            }
-
-            if !n_id.is_empty() && !m_id.is_empty() {
-                let (source, target) = if n_is_source {
-                    (n_full_id.clone(), m_full_id.clone())
-                } else {
-                    (m_full_id.clone(), n_full_id.clone())
-                };
-                let edge_id = format!("{source}-{edge_label}->{target}");
-                if seen_edge_ids.insert(edge_id.clone()) {
-                    edges.push(SubgraphEdge {
-                        id: edge_id,
-                        source,
-                        target,
-                        label: edge_label.to_string(),
-                        props: Value::Object(extract_prefixed_props(map, "r.")),
-                    });
-                }
-            }
-        }
-
-        let truncated = nodes.len() >= limit;
-        Ok(SubgraphResult {
-            nodes,
-            edges,
-            truncated,
-            warnings: Vec::new(),
-        })
     }
 }
 
@@ -1257,19 +1112,6 @@ fn search_match_rank(node: &SubgraphNode, query: &str) -> (u8, usize, String, St
     };
 
     (rank, caption.len(), caption_lower, id_lower)
-}
-
-fn extract_prefixed_props(
-    map: &serde_json::Map<String, Value>,
-    prefix: &str,
-) -> serde_json::Map<String, Value> {
-    let mut props = serde_json::Map::new();
-    for (k, v) in map {
-        if let Some(stripped) = k.strip_prefix(prefix) {
-            props.insert(stripped.to_string(), v.clone());
-        }
-    }
-    props
 }
 
 fn dedupe_and_limit_subgraph(

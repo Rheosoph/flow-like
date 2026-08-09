@@ -1,5 +1,6 @@
 import {
 	createTableRuntime,
+	dropTableRuntime,
 	executeNodeRuntime,
 	queryExecutionLogsRuntime,
 } from "@flow-like/flow-like-ui/hooks/use-frontend-runtime-tool-executor";
@@ -131,6 +132,76 @@ describe("FlowPilot frontend runtime execution", () => {
 			pending_schema_count: 1,
 			network_request_skipped: false,
 		});
+	});
+
+	test("drops a table and reports the pruned ontology cascade", async () => {
+		const dropTable = vi.fn(async () => ({
+			table_name: "support_requests",
+			dropped: true,
+			ontologies: ["support_overlay"],
+			saved_queries: ["open_tickets"],
+			warnings: ["failed to save overlay 'archive_overlay'"],
+		}));
+
+		const result = await dropTableRuntime({ dropTable } as never, {
+			appId: "app-1",
+			tableName: "support_requests",
+			confirmTableName: "support_requests",
+			userScoped: false,
+		});
+
+		expect(dropTable).toHaveBeenCalledWith("app-1", "support_requests", false);
+		expect(result).toMatchObject({
+			status: "ok",
+			app_id: "app-1",
+			table_name: "support_requests",
+			dropped: true,
+			irreversible: true,
+			ontologies_pruned: ["support_overlay"],
+			saved_queries_referencing: ["open_tickets"],
+			warnings: ["failed to save overlay 'archive_overlay'"],
+		});
+		expect(result.message).toContain("support_overlay");
+		expect(result.message).toContain("open_tickets");
+	});
+
+	test("normalizes a human-facing label before dropping and reports a missing table honestly", async () => {
+		const dropTable = vi.fn(async () => ({
+			table_name: "library_files",
+			dropped: false,
+			ontologies: [],
+			saved_queries: [],
+			warnings: [],
+		}));
+
+		const result = await dropTableRuntime({ dropTable } as never, {
+			appId: "app-1",
+			tableName: "Library Files",
+			confirmTableName: "Library Files",
+			userScoped: true,
+		});
+
+		expect(dropTable).toHaveBeenCalledWith("app-1", "library_files", true);
+		expect(result).toMatchObject({
+			table_name: "library_files",
+			dropped: false,
+			user_scoped: true,
+		});
+		expect(result.message).toContain("did not exist");
+	});
+
+	test("rejects a delete_table confirmation mismatch without calling the backend", async () => {
+		const dropTable = vi.fn();
+
+		await expect(
+			dropTableRuntime({ dropTable } as never, {
+				appId: "app-1",
+				tableName: "support_requests",
+				confirmTableName: "support_requests_archive",
+				userScoped: false,
+			}),
+		).rejects.toThrow("confirmation mismatch");
+		expect(dropTable).not.toHaveBeenCalled();
 	});
 
 	test("executes a real board node and returns bounded live events", async () => {

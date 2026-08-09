@@ -217,10 +217,10 @@ impl NodeLogic for FitPcaNode {
                             LogLevel::Debug,
                         );
                     }
-                    database
-                        .upsert(updated_records, records_col.clone())
-                        .await?;
                 }
+                cached_db
+                    .upsert_from(context, updated_records, records_col.clone())
+                    .await?;
                 context.log_message(
                     &format!("Upsert records: {:?}", t0.elapsed()),
                     LogLevel::Debug,

@@ -243,7 +243,7 @@ connections, variables, function layers, and workflow entry nodes.
   database schemas/rows, storage files, and persisted logs when a registered read-only tool is needed
   to ground the workflow. Never create, update, or delete app data, tables, indices, storage files,
   pages, widgets, or app-level Event records.
-- When present, database_tool (list_tables/describe_table/read-only query only) and storage_tool (list/read only) are the entire cross-domain data/file surface.
+- When present, database_tool (list_tables/describe_table/read-only query only) and storage_tool (list/read only) are the entire cross-domain data/file surface. Never drop a table: `delete_table` is a Data Studio capability and is not available to this specialist.
 - In a build turn, finish and queue the board draft. Do not execute the queued draft in that same
   turn: it is not persisted yet. Post-apply runtime verification belongs to a later orchestrator
   step or an explicit later verification request.
@@ -733,6 +733,29 @@ external vector database to use unless they explicitly request an external servi
 database is LanceDB-backed and is opened with **Open Database** (`open_local_db`, FlowScript
 `openLocalDb`), which returns the database connection `Struct` directly.
 
+### DATE/TIME TYPE CONTRACT
+Treat every value that represents a real instant—such as `created_at`, `updated_at`, `scheduled_at`,
+or an event time—as a FlowLike `Date` throughout the board. In FlowScript, use `Date` for the field
+in interfaces and for function/event parameters, return values, and variables. Produce current
+values with `utilsDatetimeNow`, parse external text with `utilsDatetimeParse`, and pass the resulting
+Date pin directly into `structSet`. Never format or coerce it to `string` or an epoch number before
+a database write merely because its JSON boundary representation is RFC3339.
+
+The matching Lance schema handoff is exactly `type: "timestamp:ms:UTC"`. That is a native
+millisecond UTC timestamp column, not a text column; it accepts the RFC3339 UTC value carried by a
+FlowLike Date. Use `date32` only for a deliberately calendar-only value with no time or timezone.
+When a temporal field is exchanged with a board as FlowLike `Date`, use `timestamp:ms:UTC` even if
+the UI happens to show only its calendar portion; reserve `date32` for standalone calendar data that
+is intentionally not a board Date.
+
+An existing table's described schema remains authoritative. On writes, a legacy Utf8/LargeUtf8
+column can continue receiving the RFC3339 JSON string carried by a Date pin. On reads, treat that
+legacy column as raw text at the storage boundary: use `to_timestamp(column)` for temporal SQL
+sorting/filtering and `utilsDatetimeParse` before passing the value to a Date consumer. Keep the
+workflow's semantic variables, parameters, and returns typed `Date`; only the legacy raw column is
+`string`. For a native `timestamp:ms:UTC` column, sort/filter it directly and pass its Date value
+without reparsing.
+
 Any view, list, dashboard, or lookup over persisted data MUST read the rows back through a real
 read node (`filterLocalDb`, `listLocalDb`, the fts/vector/hybrid search nodes, or a DataFusion
 `dfSqlQuery` over registered tables) in the same workflow. Opening the database alone reads
@@ -753,8 +776,9 @@ place.
 
 Inspect before you design: when `database_tool` is registered for a board specialist, use only its
 read-only operations (`list_tables`, `describe_table`, and read-only `query`) to inspect schemas,
-indices, row counts, and sample rows. Never call its create/insert/update/delete/index/optimize/schema
-operations from a board-specialist run. Those out-of-band data mutations belong to the Data Studio
+indices, row counts, and sample rows. Never call its create/insert/update/delete/delete_table/index/
+optimize/schema operations from a board-specialist run; dropping a table is irreversible and is never
+part of authoring a board. Those out-of-band data mutations belong to the Data Studio
 specialist or outer orchestrator; report the needed schema as a handoff instead of performing it.
 In a CREATE/ADD/BUILD board mutation, out-of-band database setup is
 never a prerequisite for the first complete FlowScript submission. Use at most one table-list/schema
@@ -1426,7 +1450,7 @@ function ingestRows() {
     let rows = []
     let row = structMake()
     row = structSet({ structIn: row, field: "id", value: id.cuid })
-    row = structSet({ structIn: row, field: "created", value: now.date })
+    row = structSet({ structIn: row, field: "created_at", value: now.date })
     row = structSet({ structIn: row, field: "title", value: "Placeholder title" })
     const push = arrayPush({ arrayIn: rows, value: row })
     rows = push.arrayOut
@@ -1479,7 +1503,7 @@ parameter instead of recreating it per helper.
 function loadOverview(session: Struct): (rows: Struct[]) {
     const db = openLocalDb({ name: "report_overview", userScoped: true, batchSize: 1000 })
     dfRegisterLance({ session: session, database: db, tableName: "reports" })
-    const rows = dfSqlQuery({ session: session, query: "SELECT report_id, title, created FROM reports ORDER BY to_timestamp(created) DESC LIMIT 25;" })
+    const rows = dfSqlQuery({ session: session, query: "SELECT report_id, title, created_at FROM reports ORDER BY created_at DESC LIMIT 25;" })
     return rows.rows
 }
 
@@ -1522,7 +1546,7 @@ function briefingPageLoad() {
     const db = openLocalDb({ name: "reports", userScoped: true, batchSize: 1000 })
     const session = dfCreateSession({ sessionName: "default" })
     dfRegisterLance({ session: session.session, database: db, tableName: "reports" })
-    const result = dfSqlQuery({ session: session.session, query: "SELECT report_id, title, summary, created FROM reports ORDER BY to_timestamp(created) DESC LIMIT 25;" })
+    const result = dfSqlQuery({ session: session.session, query: "SELECT report_id, title, summary, created_at FROM reports ORDER BY created_at DESC LIMIT 25;" })
     a2uiSetElementText({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/subline-right", text: stringFormat({ formatString: "{num} Briefing(s)", num: result.rowCount }) })
     fillArticles({ rows: result.rows })
     a2uiShowScreen()
@@ -1531,7 +1555,7 @@ function briefingPageLoad() {
 function fillArticles(rows: Struct[]) {
     a2uiClearChildren({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element })
     for (const row of controlForEach({ array: rows })) {
-        const instance = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: row.value.report_id, dynPathTitle: row.value.title, dynPathSummary: row.value.summary, dynPathDate: utilsDatetimeFormat({ date: row.value.created, format: "%B %-d, %Y" }), fnRefs: [openBriefing] })
+        const instance = a2uiInstantiateWidget({ widgetSelector: "Article", instanceId: row.value.report_id, dynPathTitle: row.value.title, dynPathSummary: row.value.summary, dynPathDate: utilsDatetimeFormat({ date: row.value.created_at, format: "%B %-d, %Y" }), fnRefs: [openBriefing] })
         a2uiPushToContainer({ containerRef: a2uiGetElement({ elementRef: "e6x8wvsr1r6ouilc1qbop8uz/archive-grid" }).element, elementRef: instance.elementRef, position: -1 })
     }
 }
@@ -1827,7 +1851,7 @@ all direct layer commands are unavailable to workflow-authoring models.
 storage_tool (list/read only), ui_inspect
 (read-only pages/widgets/element refs — call before any a2ui* call), query_execution_logs (read one
 persisted run's logs). Never use database_tool or storage_tool mutation operations from this board
-specialist.
+specialist — including `delete_table`, which permanently drops a table and its schema.
 **Post-apply runtime verification**: execute_event and execute_node are only for a separate later
 verification request against an already-persisted board. They are not part of the current board
 build loop and must never run a merely queued draft.
@@ -2004,7 +2028,8 @@ For workflows: write, patch, check, and commit FlowScript source for behavior. `
 accepts only position-only MoveNode and CreateComment/DeleteComment.
 For data workflows: prefer the built-in LanceDB-backed Open Database path. Use Open Database with DataFusion for SQL analytics, and Open Database with embedding/vector/full-text/hybrid-search/index nodes for RAG/search. Do not ask for Pinecone/Weaviate/Milvus/Postgres pgvector unless the user explicitly requests an external backend.
 Use database_tool only to inspect existing tables/schemas/indices while authoring a board. Hand
-missing-table or schema mutations to the Data Studio specialist or outer orchestrator. Runtime
+missing-table, schema, or table-drop mutations to the Data Studio specialist or outer orchestrator;
+never drop a table while authoring a board. Runtime
 verification is a separate post-apply step: only after the board is persisted may execute_node (or
 execute_event for an app Event) and query_execution_logs verify behavior when side effects are safe.
 Never claim runtime correctness from validation or queued board commands alone.
@@ -2018,7 +2043,8 @@ pub const DATA_STUDIO_VOCAB_GUIDANCE: &str = r#"
 You are FlowPilot's **Data Studio specialist** — a data agent for an app's stored data, graphs and
 ontologies. Speak in these exact terms:
 - **Database / tables**: a project's LanceDB store. Plain records live in tables. Managed with
-  `database_tool` (list/create tables, describe schema, query, insert, index, optimize).
+  `database_tool` (list/create tables, describe schema, query, insert, index, optimize, and
+  `delete_table` to permanently drop a table).
 - **Ontology = Graph Overlay**: a metadata document that maps node/edge **labels** onto tables via
   id / display / property columns. This is what "create an ontology" means. Managed with
   `graph_overlay_tool`.
@@ -2039,6 +2065,11 @@ ontologies. Speak in these exact terms:
   enforced server-side — write queries that respect them.
 - Always `get_schema` for an overlay before writing Cypher/SQL against it; never guess labels or
   columns.
+- Dropping a table (`database_tool` `delete_table`) is IRREVERSIBLE — rows and schema are gone, with
+  no undo. Never drop a table to reset, clear, truncate, re-seed or repair it: use `delete` with a
+  filter to remove rows and keep the schema. Only drop a table the user explicitly named, confirm
+  with the user in your reply BEFORE calling it, and afterwards report every ontology overlay that
+  was pruned and every saved query still referencing the table.
 "#;
 
 /// When to reach for which Data Studio tool.
@@ -2051,13 +2082,28 @@ identify the missing external evidence so the orchestrator can research and synt
 
 Your tools (all scoped to the target app/overlay):
 - `database_tool` — table/database setup and updates (list_tables, create_table, describe_table,
-  query, insert, update, delete, build_index, optimize). Mutations ask for approval.
+  query, insert, update, delete, build_index, optimize, delete_table). Mutations ask for approval.
+  `delete_table` PERMANENTLY drops a whole table — every row AND the schema — and cannot be undone.
+  It requires `confirm_table_name` to repeat `table_name` exactly. Ask the user to confirm the exact
+  table before calling it, never drop a table merely to reset/clear/re-seed it (use `delete` with a
+  filter for that), and always relay the returned cascade: `ontologies_pruned` (overlays whose
+  mappings referenced the table), `saved_queries_referencing` (stored queries that will now fail
+  until edited) and `warnings`.
   Database table names are physical identifiers. When a requested human-facing name contains
   spaces or punctuation, `create_table` normalizes it to stable snake_case and returns the
   authoritative `table_name` plus the original `requested_table_name`. Treat that returned mapping
   as preserving the table's semantic name, use the returned physical identifier in every later
   call/workflow handoff, and continue the requested build. Do not stop to search for a separate
   display-name or alias feature.
+  For every new column that represents a real instant or date-time—including `created_at`,
+  `updated_at`, `scheduled_at`, and event times—`create_table` MUST use the exact field type
+  `"timestamp:ms:UTC"`. This is the Lance/Arrow column type paired with a FlowLike board `Date` and
+  its RFC3339 UTC (`...Z`) JSON value. Never create such a column as `string`, `date32`, or a
+  timezone-less `timestamp`; `date32` is only for standalone calendar-only `YYYY-MM-DD` data that
+  is intentionally not exchanged as a FlowLike board Date. Repeat the exact `timestamp:ms:UTC`
+  spelling in pending-schema reports and board handoffs. This rule governs new schema creation, not implicit migrations: when
+  `describe_table` reports an existing Utf8/LargeUtf8 column, preserve that schema unless the user
+  explicitly requests a migration.
   Table and index setup is BEST EFFORT, never a blocker. If `create_table`, `build_index` or
   `optimize` fails, is refused, is unavailable on this deployment (`status: "partial"` with
   `code: "explicit_schema_create_not_deployed"`), or is declined at the approval dialog, do not
@@ -2638,7 +2684,7 @@ get_unconfigured_nodes (nodes missing required inputs)
 storage_tool (list/read only), ui_inspect
 (read-only pages/widgets/element refs — call before any a2ui* call), query_execution_logs (read logs
 for an exact persisted run). Never use database_tool or storage_tool mutation operations from this
-board specialist.
+board specialist — including `delete_table`, which permanently drops a table and its schema.
 **Post-apply runtime verification**: execute_event and execute_node are only for a separate later
 verification request against an already-persisted board. They are not part of the current board
 build loop and must never run a merely queued draft.
@@ -3706,6 +3752,51 @@ mod tests {
         assert!(prompt.contains("authoritative `table_name`"));
         assert!(prompt.contains("continue the requested build"));
         assert!(prompt.contains("Do not stop to search for a separate"));
+    }
+
+    #[test]
+    fn table_drops_are_data_studio_only_and_never_a_reset() {
+        let data_prompt = data_studio_system_prompt("");
+        assert!(data_prompt.contains("delete_table"));
+        assert!(data_prompt.contains("IRREVERSIBLE"));
+        assert!(data_prompt.contains("confirm_table_name"));
+        assert!(data_prompt.contains("ontologies_pruned"));
+        assert!(data_prompt.contains("saved_queries_referencing"));
+
+        for prompt in [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_system_prompt(),
+            board_sdk_flowscript_system_prompt("", 0),
+        ] {
+            assert!(prompt.contains("delete_table"));
+            assert!(!prompt.contains("confirm_table_name"));
+        }
+    }
+
+    #[test]
+    fn temporal_contract_pairs_data_studio_utc_timestamps_with_board_dates() {
+        let data_prompt = data_studio_system_prompt("");
+        assert!(data_prompt.contains("`\"timestamp:ms:UTC\"`"));
+        assert!(data_prompt.contains("FlowLike board `Date`"));
+        assert!(data_prompt.contains("Never create such a column as `string`, `date32`, or a"));
+        assert!(data_prompt.contains("existing Utf8/LargeUtf8 column"));
+
+        for prompt in [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_flowscript_system_prompt("", 0),
+            general_system_prompt(),
+            board_sdk_system_prompt(),
+        ] {
+            assert!(prompt.contains("### DATE/TIME TYPE CONTRACT"));
+            assert!(prompt.contains("use `Date` for the field"));
+            assert!(prompt.contains("`utilsDatetimeNow`"));
+            assert!(prompt.contains("`utilsDatetimeParse`"));
+            assert!(prompt.contains("`type: \"timestamp:ms:UTC\"`"));
+            assert!(prompt.contains("Utf8/LargeUtf8"));
+            assert!(prompt.contains("`to_timestamp(column)`"));
+            assert!(prompt.contains("only the legacy raw column is\n`string`"));
+            assert!(prompt.contains("sort/filter it directly"));
+        }
     }
 
     #[test]

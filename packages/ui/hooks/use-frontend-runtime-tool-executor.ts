@@ -256,6 +256,69 @@ export async function createTableRuntime(
 	}
 }
 
+/**
+ * Permanently drop a table. Irreversible, so the caller must repeat the table name: a truncated or
+ * mis-templated argument must fail instead of destroying a table nobody named. The cascade report
+ * is surfaced to the agent so it can tell the user which ontologies were pruned and which saved
+ * queries now reference a missing table.
+ */
+export async function dropTableRuntime(
+	dbState: Pick<IDatabaseState, "dropTable">,
+	options: {
+		appId: string;
+		tableName: string;
+		confirmTableName: string;
+		userScoped: boolean;
+	},
+) {
+	const tableName = normalizeDatabaseTableIdentifier(options.tableName);
+	const confirmedTableName = normalizeDatabaseTableIdentifier(
+		options.confirmTableName,
+	);
+	if (tableName !== confirmedTableName) {
+		throw new Error(
+			`delete_table confirmation mismatch: confirm_table_name '${options.confirmTableName}' does not match table_name '${options.tableName}'. Nothing was deleted.`,
+		);
+	}
+
+	const result = await dbState.dropTable(
+		options.appId,
+		tableName,
+		options.userScoped,
+	);
+	const ontologies = result.ontologies ?? [];
+	const savedQueries = result.saved_queries ?? [];
+	const warnings = result.warnings ?? [];
+	const message = [
+		result.dropped
+			? `Table '${tableName}' and its schema were permanently deleted.`
+			: `Table '${tableName}' did not exist; nothing was deleted.`,
+		ontologies.length > 0
+			? `Pruned references in ontology overlay(s): ${ontologies.join(", ")}.`
+			: undefined,
+		savedQueries.length > 0
+			? `Saved queries still referencing this table (not deleted, they fail until edited): ${savedQueries.join(", ")}.`
+			: undefined,
+		warnings.length > 0 ? `Warnings: ${warnings.join(" | ")}` : undefined,
+		"Report this cascade to the user.",
+	]
+		.filter((part): part is string => Boolean(part))
+		.join(" ");
+
+	return {
+		status: "ok" as const,
+		app_id: options.appId,
+		table_name: result.table_name || tableName,
+		user_scoped: options.userScoped,
+		dropped: result.dropped,
+		irreversible: true,
+		ontologies_pruned: ontologies,
+		saved_queries_referencing: savedQueries,
+		warnings,
+		message,
+	};
+}
+
 function explicitSchemaCreateUnavailableResult(
 	options: {
 		appId: string;
@@ -1121,6 +1184,26 @@ export function useFrontendRuntimeToolExecutor(
 										name_normalization:
 											"Human-facing table labels are stored as stable physical identifiers; use table_name in all workflow references.",
 									};
+						}
+						case "delete_table": {
+							if (!tableName)
+								throw new Error("delete_table requires table_name.");
+							const confirmTableName = getArgString(
+								args,
+								"confirm_table_name",
+								"confirmTableName",
+							);
+							if (!confirmTableName) {
+								throw new Error(
+									"delete_table requires confirm_table_name repeating table_name exactly.",
+								);
+							}
+							return await dropTableRuntime(backend.dbState, {
+								appId: toolAppId,
+								tableName,
+								confirmTableName,
+								userScoped,
+							});
 						}
 						case "describe_table": {
 							if (!tableName)
