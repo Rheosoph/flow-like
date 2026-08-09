@@ -1,11 +1,11 @@
 "use client";
-import { useQuery } from "@tanstack/react-query";
 import {
 	CertificateCard,
 	EmptyState,
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Award, Compass, ScrollText, Sparkles } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -25,7 +25,13 @@ export default function CertificatesPage() {
 	const profileId = profile?.id ?? "no-profile";
 
 	const certificatesQuery = useQuery({
-		queryKey: ["learn", "certificates", "me", profileId, auth.user?.profile.sub],
+		queryKey: [
+			"learn",
+			"certificates",
+			"me",
+			profileId,
+			auth.user?.profile.sub,
+		],
 		enabled: Boolean(profile && auth.user),
 		queryFn: () => learnApi.myCertificates(profile!, auth),
 	});

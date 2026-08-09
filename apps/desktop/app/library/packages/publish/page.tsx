@@ -1,7 +1,5 @@
 "use client";
 
-import { open } from "@tauri-apps/plugin-dialog";
-import { readFile } from "@tauri-apps/plugin-fs";
 import {
 	MemoryTier,
 	type PackageManifest,
@@ -29,6 +27,8 @@ import {
 	Separator,
 	Textarea,
 } from "@flow-like/flow-like-ui/components";
+import { open } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
 import {
 	AlertTriangle,
 	Check,

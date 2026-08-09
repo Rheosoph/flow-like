@@ -1,6 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
 import {
 	type InstalledPackage,
 	PackageStatusBadge,
@@ -28,6 +27,7 @@ import {
 	AvatarImage,
 } from "@flow-like/flow-like-ui/components/ui/avatar";
 import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
+import { invoke } from "@tauri-apps/api/core";
 import { formatDistanceToNow } from "date-fns";
 import {
 	AlertCircle,

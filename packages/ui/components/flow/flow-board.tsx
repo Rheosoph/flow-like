@@ -133,9 +133,9 @@ import {
 } from "../../lib";
 import { getErrorMessage } from "../../lib/error-message";
 import {
-	computeFlowLayoutDetailed,
 	type LayoutBox,
 	type LayoutComment,
+	computeFlowLayoutDetailed,
 } from "../../lib/flow-auto-layout";
 import {
 	getFunctionReferenceNodeIdsFromEdge,

@@ -1,5 +1,4 @@
 "use client";
-import { useQuery } from "@tanstack/react-query";
 import {
 	Button,
 	CertificateCard,
@@ -7,6 +6,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
 	Award,
@@ -33,7 +33,13 @@ export default function CertificatesPage() {
 	const profileId = profile?.id ?? "no-profile";
 
 	const certificatesQuery = useQuery({
-		queryKey: ["learn", "certificates", "me", profileId, auth.user?.profile.sub],
+		queryKey: [
+			"learn",
+			"certificates",
+			"me",
+			profileId,
+			auth.user?.profile.sub,
+		],
 		enabled: Boolean(profile && auth.user),
 		queryFn: () => learnApi.myCertificates(profile!, auth),
 	});
@@ -91,7 +97,7 @@ export default function CertificatesPage() {
 								certificate={c}
 								verifyUrl={(id) => `/verify?id=${id}`}
 								index={i}
-								/>
+							/>
 						))}
 					</div>
 				)}

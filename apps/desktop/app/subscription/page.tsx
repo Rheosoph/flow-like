@@ -1,5 +1,4 @@
 "use client";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	Button,
 	SubscriptionPage,
@@ -7,6 +6,7 @@ import {
 	useHub,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Loader2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useAuth } from "react-oidc-context";

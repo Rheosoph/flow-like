@@ -1,9 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
 import {
 	type IAppRouteState,
 	type IRouteMapping,
 	injectDataFunction,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 

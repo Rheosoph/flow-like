@@ -87,7 +87,10 @@ describe("userHandle", () => {
 describe("userSecondaryLabel", () => {
 	test("renders the handle with an @ beneath a real name", () => {
 		expect(
-			userSecondaryLabel({ name: "Felix Schultz", preferred_username: "felix" }),
+			userSecondaryLabel({
+				name: "Felix Schultz",
+				preferred_username: "felix",
+			}),
 		).toBe("@felix");
 	});
 

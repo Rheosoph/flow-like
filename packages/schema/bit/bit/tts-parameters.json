@@ -1,158 +1,127 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "TtsModelParameters",
-  "type": "object",
-  "properties": {
-    "model_type": {
-      "$ref": "#/$defs/TtsModelType",
-      "default": "Kokoro"
-    },
-    "provider": {
-      "$ref": "#/$defs/ModelProvider",
-      "default": {
-        "provider_name": "local:any-tts",
-        "model_id": null,
-        "version": null,
-        "params": null
-      }
-    },
-    "default_language": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "default": null
-    },
-    "languages": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
-    },
-    "default_voice": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "default": null
-    },
-    "voices": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
-    },
-    "runtime": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/TtsRuntimePreference"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": "Auto"
-    },
-    "dtype": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/TtsDTypePreference"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": "Auto"
-    },
-    "assets": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/TtsAssetRef"
-      },
-      "default": []
-    }
-  },
-  "$defs": {
-    "TtsModelType": {
-      "type": "string",
-      "enum": [
-        "Kokoro",
-        "OmniVoice",
-        "Qwen3Tts",
-        "VibeVoice",
-        "VibeVoiceRealtime",
-        "Voxtral"
-      ]
-    },
-    "ModelProvider": {
-      "type": "object",
-      "properties": {
-        "provider_name": {
-          "type": "string"
-        },
-        "model_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "version": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "params": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        }
-      },
-      "required": [
-        "provider_name"
-      ]
-    },
-    "TtsRuntimePreference": {
-      "type": "string",
-      "enum": [
-        "Auto",
-        "Cpu",
-        "Metal",
-        "Cuda",
-        "Accelerate"
-      ]
-    },
-    "TtsDTypePreference": {
-      "type": "string",
-      "enum": [
-        "Auto",
-        "F32",
-        "F16",
-        "BF16"
-      ]
-    },
-    "TtsAssetRef": {
-      "type": "object",
-      "properties": {
-        "bit": {
-          "type": "string"
-        },
-        "relative_path": {
-          "type": "string"
-        },
-        "required": {
-          "type": "boolean",
-          "default": true
-        }
-      },
-      "required": [
-        "bit",
-        "relative_path"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "TtsModelParameters",
+	"type": "object",
+	"properties": {
+		"model_type": {
+			"$ref": "#/$defs/TtsModelType",
+			"default": "Kokoro"
+		},
+		"provider": {
+			"$ref": "#/$defs/ModelProvider",
+			"default": {
+				"provider_name": "local:any-tts",
+				"model_id": null,
+				"version": null,
+				"params": null
+			}
+		},
+		"default_language": {
+			"type": ["string", "null"],
+			"default": null
+		},
+		"languages": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"default": []
+		},
+		"default_voice": {
+			"type": ["string", "null"],
+			"default": null
+		},
+		"voices": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"default": []
+		},
+		"runtime": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/TtsRuntimePreference"
+				},
+				{
+					"type": "null"
+				}
+			],
+			"default": "Auto"
+		},
+		"dtype": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/TtsDTypePreference"
+				},
+				{
+					"type": "null"
+				}
+			],
+			"default": "Auto"
+		},
+		"assets": {
+			"type": "array",
+			"items": {
+				"$ref": "#/$defs/TtsAssetRef"
+			},
+			"default": []
+		}
+	},
+	"$defs": {
+		"TtsModelType": {
+			"type": "string",
+			"enum": [
+				"Kokoro",
+				"OmniVoice",
+				"Qwen3Tts",
+				"VibeVoice",
+				"VibeVoiceRealtime",
+				"Voxtral"
+			]
+		},
+		"ModelProvider": {
+			"type": "object",
+			"properties": {
+				"provider_name": {
+					"type": "string"
+				},
+				"model_id": {
+					"type": ["string", "null"]
+				},
+				"version": {
+					"type": ["string", "null"]
+				},
+				"params": {
+					"type": ["object", "null"],
+					"additionalProperties": true
+				}
+			},
+			"required": ["provider_name"]
+		},
+		"TtsRuntimePreference": {
+			"type": "string",
+			"enum": ["Auto", "Cpu", "Metal", "Cuda", "Accelerate"]
+		},
+		"TtsDTypePreference": {
+			"type": "string",
+			"enum": ["Auto", "F32", "F16", "BF16"]
+		},
+		"TtsAssetRef": {
+			"type": "object",
+			"properties": {
+				"bit": {
+					"type": "string"
+				},
+				"relative_path": {
+					"type": "string"
+				},
+				"required": {
+					"type": "boolean",
+					"default": true
+				}
+			},
+			"required": ["bit", "relative_path"]
+		}
+	}
 }

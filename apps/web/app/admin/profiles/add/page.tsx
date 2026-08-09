@@ -1,6 +1,5 @@
 "use client";
 
-import { createId } from "@paralleldrive/cuid2";
 import {
 	type IBit,
 	IBitTypes,
@@ -29,6 +28,7 @@ import {
 import { Badge } from "@flow-like/flow-like-ui";
 import { Avatar, AvatarFallback, AvatarImage } from "@flow-like/flow-like-ui";
 import { Separator } from "@flow-like/flow-like-ui";
+import { createId } from "@paralleldrive/cuid2";
 import { Image, Monitor, Plus, Save, Upload, User, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { useApi } from "../../../../lib/useApi";

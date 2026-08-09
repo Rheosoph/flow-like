@@ -1,5 +1,4 @@
 "use client";
-import { invoke } from "@tauri-apps/api/core";
 import {
 	type IHub,
 	type UseQueryResult,
@@ -23,6 +22,7 @@ import {
 import type { IBit } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
 import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { invoke } from "@tauri-apps/api/core";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CartesianGrid, Line, LineChart, XAxis } from "recharts";

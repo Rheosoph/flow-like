@@ -23,8 +23,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import { currentRelativeUrl } from "../lib/return-url";
 import { type IShortcut, appsDB } from "../lib/apps-db";
+import { currentRelativeUrl } from "../lib/return-url";
 
 interface SpotlightWrapperProps {
 	children: React.ReactNode;

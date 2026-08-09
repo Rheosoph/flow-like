@@ -1,7 +1,5 @@
 "use client";
 
-import { createId } from "@paralleldrive/cuid2";
-import { fetch } from "@tauri-apps/plugin-http";
 import {
 	type IBit,
 	IBitTypes,
@@ -31,6 +29,8 @@ import {
 import { Badge } from "@flow-like/flow-like-ui";
 import { Avatar, AvatarFallback, AvatarImage } from "@flow-like/flow-like-ui";
 import { Separator } from "@flow-like/flow-like-ui";
+import { createId } from "@paralleldrive/cuid2";
+import { fetch } from "@tauri-apps/plugin-http";
 import { Image, Monitor, Plus, Save, Upload, User, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";

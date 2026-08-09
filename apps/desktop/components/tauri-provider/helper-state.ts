@@ -57,12 +57,7 @@ export class HelperState implements IHelperState {
 		executionTarget?: ITemporaryUploadExecutionTarget,
 	): Promise<string> {
 		return (
-			await this.fileToTemporaryFile(
-				file,
-				offline,
-				appId,
-				executionTarget,
-			)
+			await this.fileToTemporaryFile(file, offline, appId, executionTarget)
 		).url;
 	}
 

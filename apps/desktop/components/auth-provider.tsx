@@ -1,7 +1,4 @@
 "use client";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrent } from "@tauri-apps/plugin-deep-link";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import {
 	useBackend,
 	useInvalidateInfiniteInvoke,
@@ -9,6 +6,9 @@ import {
 	useInvoke,
 } from "@flow-like/flow-like-ui";
 import type { IProfile } from "@flow-like/flow-like-ui";
+import { listen } from "@tauri-apps/api/event";
+import { getCurrent } from "@tauri-apps/plugin-deep-link";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Amplify } from "aws-amplify";
 import {
 	type AuthTokens,

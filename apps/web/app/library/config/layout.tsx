@@ -1,6 +1,5 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import {
 	Breadcrumb,
 	BreadcrumbItem,
@@ -46,6 +45,7 @@ import {
 	type RawAppPublicationRequestItem,
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
+import { useQuery } from "@tanstack/react-query";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	ChartAreaIcon,

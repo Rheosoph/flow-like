@@ -1,11 +1,11 @@
 "use client";
 
-import { listen } from "@tauri-apps/api/event";
 import type {
 	IOAuthCallbackData,
 	IOAuthPendingAuth,
 	IOAuthProvider,
 } from "@flow-like/flow-like-ui";
+import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect } from "react";
 import { toast } from "sonner";
 import { oauthTokenStore } from "../lib/oauth-db";

@@ -78,19 +78,26 @@ export const enPitch: Record<string, string> = {
 	"pitch.roi.act1.bi_analytics.category": "BI & Analytics",
 	"pitch.roi.act1.bi_analytics.names": "Tableau, Power BI, Looker",
 	"pitch.roi.act1.bi_analytics.price": "€100k–500k/yr",
-	"pitch.roi.act1.bi_analytics.replacement": "Operational analytics on live workflows",
+	"pitch.roi.act1.bi_analytics.replacement":
+		"Operational analytics on live workflows",
 	"pitch.roi.act1.orchestration.category": "Data & Workflow Orchestration",
 	"pitch.roi.act1.orchestration.names": "Airflow, Temporal",
 	"pitch.roi.act1.orchestration.price": "€150k–500k/yr",
-	"pitch.roi.act1.orchestration.replacement": "Visual orchestration for every team",
+	"pitch.roi.act1.orchestration.replacement":
+		"Visual orchestration for every team",
 	"pitch.roi.act1.enterprise_data.category": "Enterprise Data Platforms",
-	"pitch.roi.act1.enterprise_data.names": "Ontology platforms, ERP process suites",
+	"pitch.roi.act1.enterprise_data.names":
+		"Ontology platforms, ERP process suites",
 	"pitch.roi.act1.enterprise_data.price": "€500k–2M+/yr",
-	"pitch.roi.act1.enterprise_data.replacement": "Portable data layer, no lock-in",
-	"pitch.roi.act1.enterprise_automation.category": "Enterprise Automation Suites",
-	"pitch.roi.act1.enterprise_automation.names": "Salesforce, ServiceNow, Regrello",
+	"pitch.roi.act1.enterprise_data.replacement":
+		"Portable data layer, no lock-in",
+	"pitch.roi.act1.enterprise_automation.category":
+		"Enterprise Automation Suites",
+	"pitch.roi.act1.enterprise_automation.names":
+		"Salesforce, ServiceNow, Regrello",
 	"pitch.roi.act1.enterprise_automation.price": "€200k–800k/yr",
-	"pitch.roi.act1.enterprise_automation.replacement": "Governed automation that runs anywhere",
+	"pitch.roi.act1.enterprise_automation.replacement":
+		"Governed automation that runs anywhere",
 	"pitch.roi.act1.rpa.category": "Robotic Process Automation",
 	"pitch.roi.act1.rpa.names": "UiPath, Automation Anywhere, Blue Prism",
 	"pitch.roi.act1.rpa.price": "€200k–800k/yr",
@@ -98,15 +105,18 @@ export const enPitch: Record<string, string> = {
 	"pitch.roi.act1.compliance_grc.category": "Compliance & GRC",
 	"pitch.roi.act1.compliance_grc.names": "ServiceNow GRC, Archer, OneTrust",
 	"pitch.roi.act1.compliance_grc.price": "€100k–400k/yr",
-	"pitch.roi.act1.compliance_grc.replacement": "Audit trails built into every run",
+	"pitch.roi.act1.compliance_grc.replacement":
+		"Audit trails built into every run",
 	"pitch.roi.act1.agent_runtimes.category": "Agent Runtimes",
 	"pitch.roi.act1.agent_runtimes.names": "CrewAI, AutoGen, LangGraph",
 	"pitch.roi.act1.agent_runtimes.price": "€50k–250k/yr",
-	"pitch.roi.act1.agent_runtimes.replacement": "Stateful agents with real controls",
+	"pitch.roi.act1.agent_runtimes.replacement":
+		"Stateful agents with real controls",
 	"pitch.roi.act1.llm_frameworks.category": "LLM App Frameworks",
 	"pitch.roi.act1.llm_frameworks.names": "LangChain, LlamaIndex, Haystack",
 	"pitch.roi.act1.llm_frameworks.price": "€50k–300k/yr",
-	"pitch.roi.act1.llm_frameworks.replacement": "AI apps without fragile glue code",
+	"pitch.roi.act1.llm_frameworks.replacement":
+		"AI apps without fragile glue code",
 	"pitch.roi.act1.ai_ipaas.category": "AI-Augmented iPaaS",
 	"pitch.roi.act1.ai_ipaas.names": "Make, Workato, Pipedream",
 	"pitch.roi.act1.ai_ipaas.price": "€100k–500k/yr",
@@ -114,11 +124,14 @@ export const enPitch: Record<string, string> = {
 	"pitch.roi.act1.personal_agents.category": "Autonomous Personal Agents",
 	"pitch.roi.act1.personal_agents.names": "OpenClaw, OpenHands, Hermes Agent",
 	"pitch.roi.act1.personal_agents.price": "€50k–200k/yr",
-	"pitch.roi.act1.personal_agents.replacement": "Sandboxed agents for operations",
+	"pitch.roi.act1.personal_agents.replacement":
+		"Sandboxed agents for operations",
 	"pitch.roi.act1.custom_development.category": "Custom Development",
-	"pitch.roi.act1.custom_development.names": "Internal dev teams, agencies, contractors",
+	"pitch.roi.act1.custom_development.names":
+		"Internal dev teams, agencies, contractors",
 	"pitch.roi.act1.custom_development.price": "€300k–1.2M/yr",
-	"pitch.roi.act1.custom_development.replacement": "Reusable building blocks instead of one-offs",
+	"pitch.roi.act1.custom_development.replacement":
+		"Reusable building blocks instead of one-offs",
 	"pitch.roi.act1.total.label": "Total enterprise spend",
 	"pitch.roi.act1.total.old": "€2M–8M+/yr",
 	"pitch.roi.act1.total.new": "One platform. A fraction of the cost.",

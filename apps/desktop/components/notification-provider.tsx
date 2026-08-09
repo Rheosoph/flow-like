@@ -1,15 +1,15 @@
 "use client";
 
-import { useQueryClient } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
-import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
 import { useBackend, useHub } from "@flow-like/flow-like-ui";
 import type {
 	IIntercomEvent,
 	INotificationEvent,
 } from "@flow-like/flow-like-ui";
-import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
+import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
 import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../lib/api";
@@ -19,16 +19,16 @@ import {
 } from "../lib/flow-notification-events";
 import { addLocalNotification } from "../lib/notifications-db";
 import {
+	type PushTargetPlatform,
 	REMOTE_PUSH_PREFERENCE_EVENT,
+	type RemotePushApi,
+	type RemotePushListener,
+	type RemotePushPayload,
 	canUseRemotePushForPlatform,
 	detectPushPlatform,
 	getPushDeviceId,
 	isRemotePushPreferenceEnabled,
 	loadRemotePushPlugin,
-	type PushTargetPlatform,
-	type RemotePushApi,
-	type RemotePushListener,
-	type RemotePushPayload,
 } from "../lib/remote-push";
 import type { TauriBackend } from "./tauri-provider";
 

@@ -87,11 +87,11 @@ import {
 import { useTheme } from "next-themes";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { currentRelativeUrl } from "../lib/return-url";
 import { type ComponentType, useCallback, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../lib/api";
+import { currentRelativeUrl } from "../lib/return-url";
 import { Shortcuts } from "./shortcuts";
 
 const data = {

@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import { IIndexType } from "@flow-like/flow-like-ui";
 import type {
 	IAddColumnPayload,
@@ -8,6 +7,7 @@ import type {
 	IIndexConfig,
 	IQueryTablePayload,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
 

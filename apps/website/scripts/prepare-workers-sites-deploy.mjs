@@ -1,7 +1,7 @@
 import { copyFile, readFile, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const appDir = join(scriptDir, "..");

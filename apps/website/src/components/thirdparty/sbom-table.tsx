@@ -49,7 +49,9 @@ interface FeaturedLibrary {
 
 function parseNpmLicenses(npmLicenses: NpmLicenses): License[] {
 	return Object.entries(npmLicenses)
-		.filter(([key]) => !key.includes("flow-like") && !key.includes("@flow-like"))
+		.filter(
+			([key]) => !key.includes("flow-like") && !key.includes("@flow-like"),
+		)
 		.map(([key, value]) => {
 			const match = key.match(/^(.+)@(\d+\.\d+\.\d+.*)$/);
 			const name = match ? match[1] : key;

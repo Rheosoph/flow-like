@@ -1,8 +1,5 @@
-import {
-	ApiResponseError,
-	apiResponseError,
-} from "../api-error";
 import { describe, expect, test } from "vitest";
+import { ApiResponseError, apiResponseError } from "../api-error";
 
 function response(status: number, statusText: string, headers = new Headers()) {
 	return { status, statusText, headers };
@@ -44,7 +41,10 @@ describe("apiResponseError", () => {
 	});
 
 	test("keeps a non-JSON server response useful", () => {
-		const error = apiResponseError(response(502, "Bad Gateway"), "upstream reset");
+		const error = apiResponseError(
+			response(502, "Bad Gateway"),
+			"upstream reset",
+		);
 
 		expect(error.status).toBe(502);
 		expect(error.message).toContain("upstream reset");

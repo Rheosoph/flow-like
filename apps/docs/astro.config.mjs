@@ -2,8 +2,8 @@ import react from "@astrojs/react";
 import starlight from "@astrojs/starlight";
 import tailwindcss from "@tailwindcss/vite";
 
-import { generatedNodeSidebar } from "./src/generated/node-sidebar.mjs";
 import { defineConfig, passthroughImageService } from "astro/config";
+import { generatedNodeSidebar } from "./src/generated/node-sidebar.mjs";
 // https://astro.build/config
 export default defineConfig({
 	site: "https://docs.flow-like.com",

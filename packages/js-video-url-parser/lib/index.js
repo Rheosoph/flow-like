@@ -1,4 +1,3 @@
-"use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.parse = parse;
 const MAX_URL_LENGTH = 2048;

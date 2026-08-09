@@ -1,108 +1,79 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "LogMessage",
-  "type": "object",
-  "properties": {
-    "message": {
-      "type": "string"
-    },
-    "operation_id": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "node_id": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "log_level": {
-      "$ref": "#/$defs/LogLevel"
-    },
-    "stats": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/LogStat"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
-    "start": {
-      "$ref": "#/$defs/SystemTime"
-    },
-    "end": {
-      "$ref": "#/$defs/SystemTime"
-    }
-  },
-  "required": [
-    "message",
-    "log_level",
-    "start",
-    "end"
-  ],
-  "$defs": {
-    "LogLevel": {
-      "type": "string",
-      "enum": [
-        "Debug",
-        "Info",
-        "Warn",
-        "Error",
-        "Fatal"
-      ]
-    },
-    "LogStat": {
-      "type": "object",
-      "properties": {
-        "token_in": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "token_out": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "bit_ids": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "SystemTime": {
-      "type": "object",
-      "properties": {
-        "secs_since_epoch": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "nanos_since_epoch": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "secs_since_epoch",
-        "nanos_since_epoch"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "LogMessage",
+	"type": "object",
+	"properties": {
+		"message": {
+			"type": "string"
+		},
+		"operation_id": {
+			"type": ["string", "null"]
+		},
+		"node_id": {
+			"type": ["string", "null"]
+		},
+		"log_level": {
+			"$ref": "#/$defs/LogLevel"
+		},
+		"stats": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/LogStat"
+				},
+				{
+					"type": "null"
+				}
+			]
+		},
+		"start": {
+			"$ref": "#/$defs/SystemTime"
+		},
+		"end": {
+			"$ref": "#/$defs/SystemTime"
+		}
+	},
+	"required": ["message", "log_level", "start", "end"],
+	"$defs": {
+		"LogLevel": {
+			"type": "string",
+			"enum": ["Debug", "Info", "Warn", "Error", "Fatal"]
+		},
+		"LogStat": {
+			"type": "object",
+			"properties": {
+				"token_in": {
+					"type": ["integer", "null"],
+					"format": "uint64",
+					"minimum": 0
+				},
+				"token_out": {
+					"type": ["integer", "null"],
+					"format": "uint64",
+					"minimum": 0
+				},
+				"bit_ids": {
+					"type": ["array", "null"],
+					"items": {
+						"type": "string"
+					}
+				}
+			}
+		},
+		"SystemTime": {
+			"type": "object",
+			"properties": {
+				"secs_since_epoch": {
+					"type": "integer",
+					"format": "uint64",
+					"minimum": 0
+				},
+				"nanos_since_epoch": {
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				}
+			},
+			"required": ["secs_since_epoch", "nanos_since_epoch"]
+		}
+	}
 }

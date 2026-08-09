@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
-import { createId } from "@paralleldrive/cuid2";
 import {
 	type IApiKeyState,
 	type IApiState,
@@ -44,9 +43,10 @@ import {
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
 import type { ICommandSync } from "@flow-like/flow-like-ui/lib";
-import Dexie, { type EntityTable } from "dexie";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
+import { createId } from "@paralleldrive/cuid2";
+import Dexie, { type EntityTable } from "dexie";
 import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { appsDB } from "../lib/apps-db";
@@ -62,11 +62,11 @@ import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
 import type { CommandSyncRemoteIdentity } from "./tauri-provider/command-sync";
 import { DatabaseState } from "./tauri-provider/db-state";
-import { QueryState } from "./tauri-provider/query-state";
 import { EventState } from "./tauri-provider/event-state";
 import { GraphState } from "./tauri-provider/graph-state";
 import { HelperState } from "./tauri-provider/helper-state";
 import { PageState } from "./tauri-provider/page-state";
+import { QueryState } from "./tauri-provider/query-state";
 import { RegistryState } from "./tauri-provider/registry-state";
 import { RoleState } from "./tauri-provider/role-state";
 import { RouteState } from "./tauri-provider/route-state";

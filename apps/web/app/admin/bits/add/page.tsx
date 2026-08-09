@@ -60,10 +60,7 @@ import { DependencyConfiguration } from "./dependency";
 import { EmbeddingConfiguration } from "./embedding";
 import { LLMConfiguration } from "./llm";
 import { MetaConfiguration } from "./meta";
-import {
-	HuggingFaceModelImporter,
-	MlxAssetsConfiguration,
-} from "./mlx-assets";
+import { HuggingFaceModelImporter, MlxAssetsConfiguration } from "./mlx-assets";
 import {
 	STTConfiguration,
 	type SttAssetDraft,
@@ -304,9 +301,7 @@ export default function Page() {
 				setType(targetType);
 			}
 			importedGgufDownloadRef.current = null;
-			setBit((current) =>
-				applyHuggingFaceMlxImportToBit(current, imported),
-			);
+			setBit((current) => applyHuggingFaceMlxImportToBit(current, imported));
 			setMlxAssets(
 				createHuggingFaceMlxAssetBits(imported, getDefaultMlxAssetBit),
 			);
@@ -1042,9 +1037,7 @@ export default function Page() {
 									dependencies.push(registered);
 									setMlxAssets((current) =>
 										current.map((currentAsset) =>
-											currentAsset.id === asset.id
-												? registered
-												: currentAsset,
+											currentAsset.id === asset.id ? registered : currentAsset,
 										),
 									);
 								}
@@ -1331,8 +1324,10 @@ export default function Page() {
 				>
 					{loading ? (
 						<Loader2Icon className="w-4 h-4 animate-spin" rotate={2} />
+					) : isMlxModel ? (
+						"Upload MLX model"
 					) : (
-						isMlxModel ? "Upload MLX model" : "Add Bit"
+						"Add Bit"
 					)}
 				</Button>
 			</div>

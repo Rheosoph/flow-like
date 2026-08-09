@@ -2233,7 +2233,10 @@ export class BoardState implements IBoardState {
 				// Only a batch the server has provably never seen may be rewritten: the durable
 				// receipt is keyed on the payload digest, so repairing a partially delivered batch
 				// would turn every later retry into an idempotency conflict.
-				if ((commandSync.chunkOffset ?? 0) === 0 && !commandSync.pendingReceiptAck) {
+				if (
+					(commandSync.chunkOffset ?? 0) === 0 &&
+					!commandSync.pendingReceiptAck
+				) {
 					const repaired = await this.repairUnreplayableChunks(
 						appId,
 						boardId,

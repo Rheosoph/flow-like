@@ -1,73 +1,43 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "EmailEventParameters",
-  "type": "object",
-  "properties": {
-    "mail": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "sender_name": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "smtp_server": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "smtp_port": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint16",
-      "minimum": 0,
-      "maximum": 65535
-    },
-    "smtp_username": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "secret_smtp_password": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "imap_server": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "imap_port": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint16",
-      "minimum": 0,
-      "maximum": 65535
-    },
-    "imap_username": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "secret_imap_password": {
-      "type": [
-        "string",
-        "null"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "EmailEventParameters",
+	"type": "object",
+	"properties": {
+		"mail": {
+			"type": ["string", "null"]
+		},
+		"sender_name": {
+			"type": ["string", "null"]
+		},
+		"smtp_server": {
+			"type": ["string", "null"]
+		},
+		"smtp_port": {
+			"type": ["integer", "null"],
+			"format": "uint16",
+			"minimum": 0,
+			"maximum": 65535
+		},
+		"smtp_username": {
+			"type": ["string", "null"]
+		},
+		"secret_smtp_password": {
+			"type": ["string", "null"]
+		},
+		"imap_server": {
+			"type": ["string", "null"]
+		},
+		"imap_port": {
+			"type": ["integer", "null"],
+			"format": "uint16",
+			"minimum": 0,
+			"maximum": 65535
+		},
+		"imap_username": {
+			"type": ["string", "null"]
+		},
+		"secret_imap_password": {
+			"type": ["string", "null"]
+		}
+	}
 }

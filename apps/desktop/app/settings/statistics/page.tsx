@@ -1,9 +1,5 @@
 "use client";
 
-import { ResponsiveBar } from "@nivo/bar";
-import { ResponsivePie } from "@nivo/pie";
-import { ResponsiveTreeMap } from "@nivo/treemap";
-import { Channel, invoke } from "@tauri-apps/api/core";
 import {
 	Badge,
 	Button,
@@ -23,6 +19,10 @@ import {
 	TooltipTrigger,
 } from "@flow-like/flow-like-ui";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { ResponsiveBar } from "@nivo/bar";
+import { ResponsivePie } from "@nivo/pie";
+import { ResponsiveTreeMap } from "@nivo/treemap";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import {
 	BarChart3,
 	Boxes,

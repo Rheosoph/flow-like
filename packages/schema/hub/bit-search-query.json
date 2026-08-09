@@ -1,67 +1,55 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "BitSearchQuery",
-  "type": "object",
-  "properties": {
-    "search": {
-      "type": [
-        "string",
-        "null"
-      ]
-    },
-    "limit": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint64",
-      "minimum": 0
-    },
-    "offset": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint64",
-      "minimum": 0
-    },
-    "bit_types": {
-      "type": [
-        "array",
-        "null"
-      ],
-      "items": {
-        "$ref": "#/$defs/BitTypes"
-      }
-    }
-  },
-  "$defs": {
-    "BitTypes": {
-      "type": "string",
-      "enum": [
-        "Llm",
-        "Vlm",
-        "Tts",
-        "Stt",
-        "Embedding",
-        "ImageEmbedding",
-        "File",
-        "Media",
-        "ImageGeneration",
-        "VideoGeneration",
-        "Template",
-        "Tokenizer",
-        "TokenizerConfig",
-        "SpecialTokensMap",
-        "Config",
-        "Course",
-        "PreprocessorConfig",
-        "Projection",
-        "Project",
-        "Board",
-        "Other",
-        "ObjectDetection"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "BitSearchQuery",
+	"type": "object",
+	"properties": {
+		"search": {
+			"type": ["string", "null"]
+		},
+		"limit": {
+			"type": ["integer", "null"],
+			"format": "uint64",
+			"minimum": 0
+		},
+		"offset": {
+			"type": ["integer", "null"],
+			"format": "uint64",
+			"minimum": 0
+		},
+		"bit_types": {
+			"type": ["array", "null"],
+			"items": {
+				"$ref": "#/$defs/BitTypes"
+			}
+		}
+	},
+	"$defs": {
+		"BitTypes": {
+			"type": "string",
+			"enum": [
+				"Llm",
+				"Vlm",
+				"Tts",
+				"Stt",
+				"Embedding",
+				"ImageEmbedding",
+				"File",
+				"Media",
+				"ImageGeneration",
+				"VideoGeneration",
+				"Template",
+				"Tokenizer",
+				"TokenizerConfig",
+				"SpecialTokensMap",
+				"Config",
+				"Course",
+				"PreprocessorConfig",
+				"Projection",
+				"Project",
+				"Board",
+				"Other",
+				"ObjectDetection"
+			]
+		}
+	}
 }

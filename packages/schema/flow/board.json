@@ -1,1035 +1,862 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Board",
-  "type": "object",
-  "properties": {
-    "id": {
-      "type": "string"
-    },
-    "name": {
-      "type": "string"
-    },
-    "description": {
-      "type": "string"
-    },
-    "nodes": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/Node"
-      }
-    },
-    "variables": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/Variable"
-      }
-    },
-    "comments": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/Comment"
-      }
-    },
-    "viewport": {
-      "type": "array",
-      "prefixItems": [
-        {
-          "type": "number",
-          "format": "float"
-        },
-        {
-          "type": "number",
-          "format": "float"
-        },
-        {
-          "type": "number",
-          "format": "float"
-        }
-      ],
-      "minItems": 3,
-      "maxItems": 3
-    },
-    "version": {
-      "type": "array",
-      "prefixItems": [
-        {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        },
-        {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      ],
-      "minItems": 3,
-      "maxItems": 3
-    },
-    "stage": {
-      "$ref": "#/$defs/ExecutionStage"
-    },
-    "log_level": {
-      "$ref": "#/$defs/LogLevel"
-    },
-    "execution_mode": {
-      "$ref": "#/$defs/ExecutionMode"
-    },
-    "refs": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "string"
-      }
-    },
-    "layers": {
-      "type": "object",
-      "additionalProperties": {
-        "$ref": "#/$defs/Layer"
-      }
-    },
-    "page_ids": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
-    },
-    "hash": {
-      "type": [
-        "integer",
-        "null"
-      ],
-      "format": "uint64",
-      "minimum": 0
-    },
-    "created_at": {
-      "$ref": "#/$defs/SystemTime"
-    },
-    "updated_at": {
-      "$ref": "#/$defs/SystemTime"
-    }
-  },
-  "required": [
-    "id",
-    "name",
-    "description",
-    "nodes",
-    "variables",
-    "comments",
-    "viewport",
-    "version",
-    "stage",
-    "log_level",
-    "execution_mode",
-    "refs",
-    "layers",
-    "page_ids",
-    "created_at",
-    "updated_at"
-  ],
-  "$defs": {
-    "Node": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "friendly_name": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "coordinates": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "prefixItems": [
-            {
-              "type": "number",
-              "format": "float"
-            },
-            {
-              "type": "number",
-              "format": "float"
-            },
-            {
-              "type": "number",
-              "format": "float"
-            }
-          ],
-          "minItems": 3,
-          "maxItems": 3
-        },
-        "category": {
-          "type": "string"
-        },
-        "scores": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NodeScores"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "pins": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Pin"
-          }
-        },
-        "start": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "icon": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "comment": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "long_running": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "error": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "docs": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "event_callback": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "layer": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "hash": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "fn_refs": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/FnRefs"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "oauth_providers": {
-          "description": "OAuth provider IDs this node requires (references Hub's oauth_providers config)",
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "required_oauth_scopes": {
-          "description": "OAuth scopes required by this node (provider_id -> scopes)",
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        },
-        "only_offline": {
-          "description": "If true, this node can only run locally (compute-intensive, RPA, browser automation)",
-          "type": "boolean",
-          "default": false
-        },
-        "version": {
-          "description": "Schema version for node migration. When catalog version > placed version, pins are synced.\nNone means unversioned (legacy). Bump this when changing pins in get_node().",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint32",
-          "minimum": 0
-        },
-        "wasm": {
-          "description": "WASM metadata for external nodes. None for built-in catalog nodes.\nPopulated automatically when placing or pasting nodes; never trust frontend-supplied values.",
-          "anyOf": [
-            {
-              "$ref": "#/$defs/NodeWasm"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "name",
-        "friendly_name",
-        "description",
-        "category",
-        "pins"
-      ]
-    },
-    "NodeScores": {
-      "description": "Represents quality metrics for a node, with scores ranging from 0 to 10 (low - high).\nHigher values indicate higher risk/impact in the given category. Use 0 for \"none/low\"\nand 10 for \"very high\".\n\n# Score Categories\n* `privacy` - Measures data protection and confidentiality (0 low - 10 high).\n* `security` - Assesses resistance against potential attacks and exposure (0 low - 10 high).\n* `performance` - Evaluates computational efficiency and speed. Higher means worse performance.\n* `governance` - Indicates compliance and auditability with policies and regulations.\n* `reliability` - Measures stability, error rates and recoverability.\n* `cost` - Represents resource/cost impact for running this node.",
-      "type": "object",
-      "properties": {
-        "privacy": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0,
-          "maximum": 255
-        },
-        "security": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0,
-          "maximum": 255
-        },
-        "performance": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0,
-          "maximum": 255
-        },
-        "governance": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0,
-          "maximum": 255
-        },
-        "reliability": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0,
-          "maximum": 255
-        },
-        "cost": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0,
-          "maximum": 255
-        }
-      },
-      "required": [
-        "privacy",
-        "security",
-        "performance",
-        "governance",
-        "reliability",
-        "cost"
-      ]
-    },
-    "Pin": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "friendly_name": {
-          "type": "string"
-        },
-        "description": {
-          "type": "string"
-        },
-        "pin_type": {
-          "$ref": "#/$defs/PinType"
-        },
-        "data_type": {
-          "$ref": "#/$defs/VariableType"
-        },
-        "schema": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "value_type": {
-          "$ref": "#/$defs/ValueType"
-        },
-        "depends_on": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "string"
-          }
-        },
-        "connected_to": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "string"
-          }
-        },
-        "default_value": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0,
-            "maximum": 255
-          }
-        },
-        "index": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0,
-          "maximum": 65535
-        },
-        "options": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PinOptions"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "name",
-        "friendly_name",
-        "description",
-        "pin_type",
-        "data_type",
-        "value_type",
-        "depends_on",
-        "connected_to",
-        "index"
-      ]
-    },
-    "PinType": {
-      "type": "string",
-      "enum": [
-        "Input",
-        "Output"
-      ]
-    },
-    "VariableType": {
-      "type": "string",
-      "enum": [
-        "Execution",
-        "String",
-        "Integer",
-        "Float",
-        "Boolean",
-        "Date",
-        "PathBuf",
-        "Generic",
-        "Struct",
-        "Byte"
-      ]
-    },
-    "ValueType": {
-      "type": "string",
-      "enum": [
-        "Array",
-        "Normal",
-        "HashMap",
-        "HashSet"
-      ]
-    },
-    "PinOptions": {
-      "type": "object",
-      "properties": {
-        "sensitive": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "valid_values": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "string"
-          }
-        },
-        "range": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "prefixItems": [
-            {
-              "type": "number",
-              "format": "double"
-            },
-            {
-              "type": "number",
-              "format": "double"
-            }
-          ],
-          "minItems": 2,
-          "maxItems": 2
-        },
-        "step": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "enforce_schema": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
-        "enforce_generic_value_type": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      }
-    },
-    "FnRefs": {
-      "type": "object",
-      "properties": {
-        "fn_refs": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "can_reference_fns": {
-          "type": "boolean"
-        },
-        "can_be_referenced_by_fns": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "fn_refs",
-        "can_reference_fns",
-        "can_be_referenced_by_fns"
-      ]
-    },
-    "NodeWasm": {
-      "type": "object",
-      "properties": {
-        "package_id": {
-          "type": "string"
-        },
-        "permissions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/NodePermission"
-          },
-          "default": []
-        }
-      },
-      "required": [
-        "package_id"
-      ]
-    },
-    "NodePermission": {
-      "description": "Permissions a WASM node can request.\nEach node declares exactly which capabilities it needs so the sandbox\nand UI can enforce/display them precisely.",
-      "oneOf": [
-        {
-          "description": "Outbound HTTP requests",
-          "type": "string",
-          "const": "network:http"
-        },
-        {
-          "description": "WebSocket connections",
-          "type": "string",
-          "const": "network:websocket"
-        },
-        {
-          "description": "TCP socket access",
-          "type": "string",
-          "const": "network:tcp"
-        },
-        {
-          "description": "UDP socket access",
-          "type": "string",
-          "const": "network:udp"
-        },
-        {
-          "description": "DNS lookups",
-          "type": "string",
-          "const": "network:dns"
-        },
-        {
-          "description": "Read from node/user storage",
-          "type": "string",
-          "const": "storage:read"
-        },
-        {
-          "description": "Write to node/user storage",
-          "type": "string",
-          "const": "storage:write"
-        },
-        {
-          "description": "Access flow variables",
-          "type": "string",
-          "const": "variables"
-        },
-        {
-          "description": "Access execution cache",
-          "type": "string",
-          "const": "cache"
-        },
-        {
-          "description": "Stream responses to the client",
-          "type": "string",
-          "const": "streaming"
-        },
-        {
-          "description": "Access LLM / model providers",
-          "type": "string",
-          "const": "models"
-        },
-        {
-          "description": "Dynamic UI (Agent-to-UI)",
-          "type": "string",
-          "const": "a2ui"
-        },
-        {
-          "description": "OAuth authentication",
-          "type": "string",
-          "const": "oauth"
-        },
-        {
-          "description": "Call other functions/sub-flows",
-          "type": "string",
-          "const": "functions"
-        }
-      ]
-    },
-    "Variable": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "name": {
-          "type": "string"
-        },
-        "category": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "description": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "default_value": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "items": {
-            "type": "integer",
-            "format": "uint8",
-            "minimum": 0,
-            "maximum": 255
-          }
-        },
-        "data_type": {
-          "$ref": "#/$defs/VariableType"
-        },
-        "value_type": {
-          "$ref": "#/$defs/ValueType"
-        },
-        "exposed": {
-          "type": "boolean"
-        },
-        "secret": {
-          "type": "boolean"
-        },
-        "editable": {
-          "type": "boolean"
-        },
-        "hash": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "schema": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "runtime_configured": {
-          "description": "If true, this variable is configured per-user at runtime (stored locally, not in flow)",
-          "type": "boolean",
-          "default": false
-        }
-      },
-      "required": [
-        "id",
-        "name",
-        "data_type",
-        "value_type",
-        "exposed",
-        "secret",
-        "editable"
-      ]
-    },
-    "Comment": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "author": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "content": {
-          "type": "string"
-        },
-        "comment_type": {
-          "$ref": "#/$defs/CommentType"
-        },
-        "timestamp": {
-          "$ref": "#/$defs/SystemTime"
-        },
-        "coordinates": {
-          "type": "array",
-          "prefixItems": [
-            {
-              "type": "number",
-              "format": "float"
-            },
-            {
-              "type": "number",
-              "format": "float"
-            },
-            {
-              "type": "number",
-              "format": "float"
-            }
-          ],
-          "minItems": 3,
-          "maxItems": 3
-        },
-        "width": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "float"
-        },
-        "height": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "float"
-        },
-        "layer": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "color": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "z_index": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "int32"
-        },
-        "hash": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        },
-        "is_locked": {
-          "type": [
-            "boolean",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "id",
-        "content",
-        "comment_type",
-        "timestamp",
-        "coordinates"
-      ]
-    },
-    "CommentType": {
-      "type": "string",
-      "enum": [
-        "Text",
-        "Image",
-        "Video"
-      ]
-    },
-    "SystemTime": {
-      "type": "object",
-      "properties": {
-        "secs_since_epoch": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "nanos_since_epoch": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "secs_since_epoch",
-        "nanos_since_epoch"
-      ]
-    },
-    "ExecutionStage": {
-      "type": "string",
-      "enum": [
-        "Dev",
-        "Int",
-        "QA",
-        "PreProd",
-        "Prod"
-      ]
-    },
-    "LogLevel": {
-      "type": "string",
-      "enum": [
-        "Debug",
-        "Info",
-        "Warn",
-        "Error",
-        "Fatal"
-      ]
-    },
-    "ExecutionMode": {
-      "type": "string",
-      "enum": [
-        "Hybrid",
-        "Remote",
-        "Local"
-      ]
-    },
-    "Layer": {
-      "type": "object",
-      "properties": {
-        "id": {
-          "type": "string"
-        },
-        "parent_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "name": {
-          "type": "string"
-        },
-        "type": {
-          "$ref": "#/$defs/LayerType"
-        },
-        "nodes": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Node"
-          }
-        },
-        "variables": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Variable"
-          }
-        },
-        "comments": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Comment"
-          }
-        },
-        "coordinates": {
-          "type": "array",
-          "prefixItems": [
-            {
-              "type": "number",
-              "format": "float"
-            },
-            {
-              "type": "number",
-              "format": "float"
-            },
-            {
-              "type": "number",
-              "format": "float"
-            }
-          ],
-          "minItems": 3,
-          "maxItems": 3
-        },
-        "in_coordinates": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "prefixItems": [
-            {
-              "type": "number",
-              "format": "float"
-            },
-            {
-              "type": "number",
-              "format": "float"
-            },
-            {
-              "type": "number",
-              "format": "float"
-            }
-          ],
-          "minItems": 3,
-          "maxItems": 3
-        },
-        "out_coordinates": {
-          "type": [
-            "array",
-            "null"
-          ],
-          "prefixItems": [
-            {
-              "type": "number",
-              "format": "float"
-            },
-            {
-              "type": "number",
-              "format": "float"
-            },
-            {
-              "type": "number",
-              "format": "float"
-            }
-          ],
-          "minItems": 3,
-          "maxItems": 3
-        },
-        "pins": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/$defs/Pin"
-          }
-        },
-        "comment": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "error": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "color": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "hash": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "id",
-        "name",
-        "type",
-        "nodes",
-        "variables",
-        "comments",
-        "coordinates",
-        "pins"
-      ]
-    },
-    "LayerType": {
-      "type": "string",
-      "enum": [
-        "Function",
-        "Macro",
-        "Collapsed"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "Board",
+	"type": "object",
+	"properties": {
+		"id": {
+			"type": "string"
+		},
+		"name": {
+			"type": "string"
+		},
+		"description": {
+			"type": "string"
+		},
+		"nodes": {
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/Node"
+			}
+		},
+		"variables": {
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/Variable"
+			}
+		},
+		"comments": {
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/Comment"
+			}
+		},
+		"viewport": {
+			"type": "array",
+			"prefixItems": [
+				{
+					"type": "number",
+					"format": "float"
+				},
+				{
+					"type": "number",
+					"format": "float"
+				},
+				{
+					"type": "number",
+					"format": "float"
+				}
+			],
+			"minItems": 3,
+			"maxItems": 3
+		},
+		"version": {
+			"type": "array",
+			"prefixItems": [
+				{
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				},
+				{
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				},
+				{
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				}
+			],
+			"minItems": 3,
+			"maxItems": 3
+		},
+		"stage": {
+			"$ref": "#/$defs/ExecutionStage"
+		},
+		"log_level": {
+			"$ref": "#/$defs/LogLevel"
+		},
+		"execution_mode": {
+			"$ref": "#/$defs/ExecutionMode"
+		},
+		"refs": {
+			"type": "object",
+			"additionalProperties": {
+				"type": "string"
+			}
+		},
+		"layers": {
+			"type": "object",
+			"additionalProperties": {
+				"$ref": "#/$defs/Layer"
+			}
+		},
+		"page_ids": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			}
+		},
+		"hash": {
+			"type": ["integer", "null"],
+			"format": "uint64",
+			"minimum": 0
+		},
+		"created_at": {
+			"$ref": "#/$defs/SystemTime"
+		},
+		"updated_at": {
+			"$ref": "#/$defs/SystemTime"
+		}
+	},
+	"required": [
+		"id",
+		"name",
+		"description",
+		"nodes",
+		"variables",
+		"comments",
+		"viewport",
+		"version",
+		"stage",
+		"log_level",
+		"execution_mode",
+		"refs",
+		"layers",
+		"page_ids",
+		"created_at",
+		"updated_at"
+	],
+	"$defs": {
+		"Node": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"name": {
+					"type": "string"
+				},
+				"friendly_name": {
+					"type": "string"
+				},
+				"description": {
+					"type": "string"
+				},
+				"coordinates": {
+					"type": ["array", "null"],
+					"prefixItems": [
+						{
+							"type": "number",
+							"format": "float"
+						},
+						{
+							"type": "number",
+							"format": "float"
+						},
+						{
+							"type": "number",
+							"format": "float"
+						}
+					],
+					"minItems": 3,
+					"maxItems": 3
+				},
+				"category": {
+					"type": "string"
+				},
+				"scores": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/NodeScores"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"pins": {
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Pin"
+					}
+				},
+				"start": {
+					"type": ["boolean", "null"]
+				},
+				"icon": {
+					"type": ["string", "null"]
+				},
+				"comment": {
+					"type": ["string", "null"]
+				},
+				"long_running": {
+					"type": ["boolean", "null"]
+				},
+				"error": {
+					"type": ["string", "null"]
+				},
+				"docs": {
+					"type": ["string", "null"]
+				},
+				"event_callback": {
+					"type": ["boolean", "null"]
+				},
+				"layer": {
+					"type": ["string", "null"]
+				},
+				"hash": {
+					"type": ["integer", "null"],
+					"format": "uint64",
+					"minimum": 0
+				},
+				"fn_refs": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/FnRefs"
+						},
+						{
+							"type": "null"
+						}
+					]
+				},
+				"oauth_providers": {
+					"description": "OAuth provider IDs this node requires (references Hub's oauth_providers config)",
+					"type": ["array", "null"],
+					"items": {
+						"type": "string"
+					}
+				},
+				"required_oauth_scopes": {
+					"description": "OAuth scopes required by this node (provider_id -> scopes)",
+					"type": ["object", "null"],
+					"additionalProperties": {
+						"type": "array",
+						"items": {
+							"type": "string"
+						}
+					}
+				},
+				"only_offline": {
+					"description": "If true, this node can only run locally (compute-intensive, RPA, browser automation)",
+					"type": "boolean",
+					"default": false
+				},
+				"version": {
+					"description": "Schema version for node migration. When catalog version > placed version, pins are synced.\nNone means unversioned (legacy). Bump this when changing pins in get_node().",
+					"type": ["integer", "null"],
+					"format": "uint32",
+					"minimum": 0
+				},
+				"wasm": {
+					"description": "WASM metadata for external nodes. None for built-in catalog nodes.\nPopulated automatically when placing or pasting nodes; never trust frontend-supplied values.",
+					"anyOf": [
+						{
+							"$ref": "#/$defs/NodeWasm"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"id",
+				"name",
+				"friendly_name",
+				"description",
+				"category",
+				"pins"
+			]
+		},
+		"NodeScores": {
+			"description": "Represents quality metrics for a node, with scores ranging from 0 to 10 (low - high).\nHigher values indicate higher risk/impact in the given category. Use 0 for \"none/low\"\nand 10 for \"very high\".\n\n# Score Categories\n* `privacy` - Measures data protection and confidentiality (0 low - 10 high).\n* `security` - Assesses resistance against potential attacks and exposure (0 low - 10 high).\n* `performance` - Evaluates computational efficiency and speed. Higher means worse performance.\n* `governance` - Indicates compliance and auditability with policies and regulations.\n* `reliability` - Measures stability, error rates and recoverability.\n* `cost` - Represents resource/cost impact for running this node.",
+			"type": "object",
+			"properties": {
+				"privacy": {
+					"type": "integer",
+					"format": "uint8",
+					"minimum": 0,
+					"maximum": 255
+				},
+				"security": {
+					"type": "integer",
+					"format": "uint8",
+					"minimum": 0,
+					"maximum": 255
+				},
+				"performance": {
+					"type": "integer",
+					"format": "uint8",
+					"minimum": 0,
+					"maximum": 255
+				},
+				"governance": {
+					"type": "integer",
+					"format": "uint8",
+					"minimum": 0,
+					"maximum": 255
+				},
+				"reliability": {
+					"type": "integer",
+					"format": "uint8",
+					"minimum": 0,
+					"maximum": 255
+				},
+				"cost": {
+					"type": "integer",
+					"format": "uint8",
+					"minimum": 0,
+					"maximum": 255
+				}
+			},
+			"required": [
+				"privacy",
+				"security",
+				"performance",
+				"governance",
+				"reliability",
+				"cost"
+			]
+		},
+		"Pin": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"name": {
+					"type": "string"
+				},
+				"friendly_name": {
+					"type": "string"
+				},
+				"description": {
+					"type": "string"
+				},
+				"pin_type": {
+					"$ref": "#/$defs/PinType"
+				},
+				"data_type": {
+					"$ref": "#/$defs/VariableType"
+				},
+				"schema": {
+					"type": ["string", "null"]
+				},
+				"value_type": {
+					"$ref": "#/$defs/ValueType"
+				},
+				"depends_on": {
+					"type": "array",
+					"uniqueItems": true,
+					"items": {
+						"type": "string"
+					}
+				},
+				"connected_to": {
+					"type": "array",
+					"uniqueItems": true,
+					"items": {
+						"type": "string"
+					}
+				},
+				"default_value": {
+					"type": ["array", "null"],
+					"items": {
+						"type": "integer",
+						"format": "uint8",
+						"minimum": 0,
+						"maximum": 255
+					}
+				},
+				"index": {
+					"type": "integer",
+					"format": "uint16",
+					"minimum": 0,
+					"maximum": 65535
+				},
+				"options": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/PinOptions"
+						},
+						{
+							"type": "null"
+						}
+					]
+				}
+			},
+			"required": [
+				"id",
+				"name",
+				"friendly_name",
+				"description",
+				"pin_type",
+				"data_type",
+				"value_type",
+				"depends_on",
+				"connected_to",
+				"index"
+			]
+		},
+		"PinType": {
+			"type": "string",
+			"enum": ["Input", "Output"]
+		},
+		"VariableType": {
+			"type": "string",
+			"enum": [
+				"Execution",
+				"String",
+				"Integer",
+				"Float",
+				"Boolean",
+				"Date",
+				"PathBuf",
+				"Generic",
+				"Struct",
+				"Byte"
+			]
+		},
+		"ValueType": {
+			"type": "string",
+			"enum": ["Array", "Normal", "HashMap", "HashSet"]
+		},
+		"PinOptions": {
+			"type": "object",
+			"properties": {
+				"sensitive": {
+					"type": ["boolean", "null"]
+				},
+				"valid_values": {
+					"type": ["array", "null"],
+					"items": {
+						"type": "string"
+					}
+				},
+				"range": {
+					"type": ["array", "null"],
+					"prefixItems": [
+						{
+							"type": "number",
+							"format": "double"
+						},
+						{
+							"type": "number",
+							"format": "double"
+						}
+					],
+					"minItems": 2,
+					"maxItems": 2
+				},
+				"step": {
+					"type": ["number", "null"],
+					"format": "double"
+				},
+				"enforce_schema": {
+					"type": ["boolean", "null"]
+				},
+				"enforce_generic_value_type": {
+					"type": ["boolean", "null"]
+				}
+			}
+		},
+		"FnRefs": {
+			"type": "object",
+			"properties": {
+				"fn_refs": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					}
+				},
+				"can_reference_fns": {
+					"type": "boolean"
+				},
+				"can_be_referenced_by_fns": {
+					"type": "boolean"
+				}
+			},
+			"required": ["fn_refs", "can_reference_fns", "can_be_referenced_by_fns"]
+		},
+		"NodeWasm": {
+			"type": "object",
+			"properties": {
+				"package_id": {
+					"type": "string"
+				},
+				"permissions": {
+					"type": "array",
+					"items": {
+						"$ref": "#/$defs/NodePermission"
+					},
+					"default": []
+				}
+			},
+			"required": ["package_id"]
+		},
+		"NodePermission": {
+			"description": "Permissions a WASM node can request.\nEach node declares exactly which capabilities it needs so the sandbox\nand UI can enforce/display them precisely.",
+			"oneOf": [
+				{
+					"description": "Outbound HTTP requests",
+					"type": "string",
+					"const": "network:http"
+				},
+				{
+					"description": "WebSocket connections",
+					"type": "string",
+					"const": "network:websocket"
+				},
+				{
+					"description": "TCP socket access",
+					"type": "string",
+					"const": "network:tcp"
+				},
+				{
+					"description": "UDP socket access",
+					"type": "string",
+					"const": "network:udp"
+				},
+				{
+					"description": "DNS lookups",
+					"type": "string",
+					"const": "network:dns"
+				},
+				{
+					"description": "Read from node/user storage",
+					"type": "string",
+					"const": "storage:read"
+				},
+				{
+					"description": "Write to node/user storage",
+					"type": "string",
+					"const": "storage:write"
+				},
+				{
+					"description": "Access flow variables",
+					"type": "string",
+					"const": "variables"
+				},
+				{
+					"description": "Access execution cache",
+					"type": "string",
+					"const": "cache"
+				},
+				{
+					"description": "Stream responses to the client",
+					"type": "string",
+					"const": "streaming"
+				},
+				{
+					"description": "Access LLM / model providers",
+					"type": "string",
+					"const": "models"
+				},
+				{
+					"description": "Dynamic UI (Agent-to-UI)",
+					"type": "string",
+					"const": "a2ui"
+				},
+				{
+					"description": "OAuth authentication",
+					"type": "string",
+					"const": "oauth"
+				},
+				{
+					"description": "Call other functions/sub-flows",
+					"type": "string",
+					"const": "functions"
+				}
+			]
+		},
+		"Variable": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"name": {
+					"type": "string"
+				},
+				"category": {
+					"type": ["string", "null"]
+				},
+				"description": {
+					"type": ["string", "null"]
+				},
+				"default_value": {
+					"type": ["array", "null"],
+					"items": {
+						"type": "integer",
+						"format": "uint8",
+						"minimum": 0,
+						"maximum": 255
+					}
+				},
+				"data_type": {
+					"$ref": "#/$defs/VariableType"
+				},
+				"value_type": {
+					"$ref": "#/$defs/ValueType"
+				},
+				"exposed": {
+					"type": "boolean"
+				},
+				"secret": {
+					"type": "boolean"
+				},
+				"editable": {
+					"type": "boolean"
+				},
+				"hash": {
+					"type": ["integer", "null"],
+					"format": "uint64",
+					"minimum": 0
+				},
+				"schema": {
+					"type": ["string", "null"]
+				},
+				"runtime_configured": {
+					"description": "If true, this variable is configured per-user at runtime (stored locally, not in flow)",
+					"type": "boolean",
+					"default": false
+				}
+			},
+			"required": [
+				"id",
+				"name",
+				"data_type",
+				"value_type",
+				"exposed",
+				"secret",
+				"editable"
+			]
+		},
+		"Comment": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"author": {
+					"type": ["string", "null"]
+				},
+				"content": {
+					"type": "string"
+				},
+				"comment_type": {
+					"$ref": "#/$defs/CommentType"
+				},
+				"timestamp": {
+					"$ref": "#/$defs/SystemTime"
+				},
+				"coordinates": {
+					"type": "array",
+					"prefixItems": [
+						{
+							"type": "number",
+							"format": "float"
+						},
+						{
+							"type": "number",
+							"format": "float"
+						},
+						{
+							"type": "number",
+							"format": "float"
+						}
+					],
+					"minItems": 3,
+					"maxItems": 3
+				},
+				"width": {
+					"type": ["number", "null"],
+					"format": "float"
+				},
+				"height": {
+					"type": ["number", "null"],
+					"format": "float"
+				},
+				"layer": {
+					"type": ["string", "null"]
+				},
+				"color": {
+					"type": ["string", "null"]
+				},
+				"z_index": {
+					"type": ["integer", "null"],
+					"format": "int32"
+				},
+				"hash": {
+					"type": ["integer", "null"],
+					"format": "uint64",
+					"minimum": 0
+				},
+				"is_locked": {
+					"type": ["boolean", "null"]
+				}
+			},
+			"required": ["id", "content", "comment_type", "timestamp", "coordinates"]
+		},
+		"CommentType": {
+			"type": "string",
+			"enum": ["Text", "Image", "Video"]
+		},
+		"SystemTime": {
+			"type": "object",
+			"properties": {
+				"secs_since_epoch": {
+					"type": "integer",
+					"format": "uint64",
+					"minimum": 0
+				},
+				"nanos_since_epoch": {
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				}
+			},
+			"required": ["secs_since_epoch", "nanos_since_epoch"]
+		},
+		"ExecutionStage": {
+			"type": "string",
+			"enum": ["Dev", "Int", "QA", "PreProd", "Prod"]
+		},
+		"LogLevel": {
+			"type": "string",
+			"enum": ["Debug", "Info", "Warn", "Error", "Fatal"]
+		},
+		"ExecutionMode": {
+			"type": "string",
+			"enum": ["Hybrid", "Remote", "Local"]
+		},
+		"Layer": {
+			"type": "object",
+			"properties": {
+				"id": {
+					"type": "string"
+				},
+				"parent_id": {
+					"type": ["string", "null"]
+				},
+				"name": {
+					"type": "string"
+				},
+				"type": {
+					"$ref": "#/$defs/LayerType"
+				},
+				"nodes": {
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Node"
+					}
+				},
+				"variables": {
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Variable"
+					}
+				},
+				"comments": {
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Comment"
+					}
+				},
+				"coordinates": {
+					"type": "array",
+					"prefixItems": [
+						{
+							"type": "number",
+							"format": "float"
+						},
+						{
+							"type": "number",
+							"format": "float"
+						},
+						{
+							"type": "number",
+							"format": "float"
+						}
+					],
+					"minItems": 3,
+					"maxItems": 3
+				},
+				"in_coordinates": {
+					"type": ["array", "null"],
+					"prefixItems": [
+						{
+							"type": "number",
+							"format": "float"
+						},
+						{
+							"type": "number",
+							"format": "float"
+						},
+						{
+							"type": "number",
+							"format": "float"
+						}
+					],
+					"minItems": 3,
+					"maxItems": 3
+				},
+				"out_coordinates": {
+					"type": ["array", "null"],
+					"prefixItems": [
+						{
+							"type": "number",
+							"format": "float"
+						},
+						{
+							"type": "number",
+							"format": "float"
+						},
+						{
+							"type": "number",
+							"format": "float"
+						}
+					],
+					"minItems": 3,
+					"maxItems": 3
+				},
+				"pins": {
+					"type": "object",
+					"additionalProperties": {
+						"$ref": "#/$defs/Pin"
+					}
+				},
+				"comment": {
+					"type": ["string", "null"]
+				},
+				"error": {
+					"type": ["string", "null"]
+				},
+				"color": {
+					"type": ["string", "null"]
+				},
+				"hash": {
+					"type": ["integer", "null"],
+					"format": "uint64",
+					"minimum": 0
+				}
+			},
+			"required": [
+				"id",
+				"name",
+				"type",
+				"nodes",
+				"variables",
+				"comments",
+				"coordinates",
+				"pins"
+			]
+		},
+		"LayerType": {
+			"type": "string",
+			"enum": ["Function", "Macro", "Collapsed"]
+		}
+	}
 }

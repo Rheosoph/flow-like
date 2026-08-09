@@ -1,4 +1,3 @@
-import { invoke } from "@tauri-apps/api/core";
 import {
 	type IBoard,
 	type IMetadata,
@@ -9,6 +8,7 @@ import {
 	type IVersionType,
 	injectDataFunction,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
 import { isEqual } from "lodash-es";
 import { fetcher } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";

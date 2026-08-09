@@ -13,8 +13,8 @@ import type {
 } from "@flow-like/flow-like-ui/state/backend-state/types";
 import {
 	type IBillingSession,
-	type IPushTargetStatus,
 	type IPricingResponse,
+	type IPushTargetStatus,
 	type IRegisterPushTargetRequest,
 	type IRegisterPushTargetResponse,
 	type ISubscribeRequest,
@@ -29,7 +29,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { fetcher } from "../../lib/api";
 import { ApiResponseError } from "../../lib/api-error";
-import { appsDB, type IShortcut } from "../../lib/apps-db";
+import { type IShortcut, appsDB } from "../../lib/apps-db";
 import {
 	type ILocalNotification,
 	deleteLocalNotification,

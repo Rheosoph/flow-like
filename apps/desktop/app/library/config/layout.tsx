@@ -1,7 +1,5 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
 import {
 	Breadcrumb,
 	BreadcrumbItem,
@@ -52,6 +50,9 @@ import {
 	type RawAppPublicationRequestItem,
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
+import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
+import { useQuery } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import { useLiveQuery } from "dexie-react-hooks";
 import {
 	ChartAreaIcon,
@@ -97,7 +98,6 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { appsDB } from "../../../lib/apps-db";
-import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { isIosTauriRuntime } from "../../../lib/platform";
 
 const navigationItems: {

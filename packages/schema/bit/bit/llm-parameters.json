@@ -1,112 +1,97 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "LLMParameters",
-  "type": "object",
-  "properties": {
-    "context_length": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0
-    },
-    "provider": {
-      "$ref": "#/$defs/ModelProvider"
-    },
-    "model_classification": {
-      "$ref": "#/$defs/BitModelClassification"
-    }
-  },
-  "required": [
-    "context_length",
-    "provider",
-    "model_classification"
-  ],
-  "$defs": {
-    "ModelProvider": {
-      "type": "object",
-      "properties": {
-        "provider_name": {
-          "type": "string"
-        },
-        "model_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "version": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "params": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        }
-      },
-      "required": [
-        "provider_name"
-      ]
-    },
-    "BitModelClassification": {
-      "type": "object",
-      "properties": {
-        "cost": {
-          "type": "number",
-          "format": "float"
-        },
-        "speed": {
-          "type": "number",
-          "format": "float"
-        },
-        "reasoning": {
-          "type": "number",
-          "format": "float"
-        },
-        "creativity": {
-          "type": "number",
-          "format": "float"
-        },
-        "factuality": {
-          "type": "number",
-          "format": "float"
-        },
-        "function_calling": {
-          "type": "number",
-          "format": "float"
-        },
-        "safety": {
-          "type": "number",
-          "format": "float"
-        },
-        "openness": {
-          "type": "number",
-          "format": "float"
-        },
-        "multilinguality": {
-          "type": "number",
-          "format": "float"
-        },
-        "coding": {
-          "type": "number",
-          "format": "float"
-        }
-      },
-      "required": [
-        "cost",
-        "speed",
-        "reasoning",
-        "creativity",
-        "factuality",
-        "function_calling",
-        "safety",
-        "openness",
-        "multilinguality",
-        "coding"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "LLMParameters",
+	"type": "object",
+	"properties": {
+		"context_length": {
+			"type": "integer",
+			"format": "uint32",
+			"minimum": 0
+		},
+		"provider": {
+			"$ref": "#/$defs/ModelProvider"
+		},
+		"model_classification": {
+			"$ref": "#/$defs/BitModelClassification"
+		}
+	},
+	"required": ["context_length", "provider", "model_classification"],
+	"$defs": {
+		"ModelProvider": {
+			"type": "object",
+			"properties": {
+				"provider_name": {
+					"type": "string"
+				},
+				"model_id": {
+					"type": ["string", "null"]
+				},
+				"version": {
+					"type": ["string", "null"]
+				},
+				"params": {
+					"type": ["object", "null"],
+					"additionalProperties": true
+				}
+			},
+			"required": ["provider_name"]
+		},
+		"BitModelClassification": {
+			"type": "object",
+			"properties": {
+				"cost": {
+					"type": "number",
+					"format": "float"
+				},
+				"speed": {
+					"type": "number",
+					"format": "float"
+				},
+				"reasoning": {
+					"type": "number",
+					"format": "float"
+				},
+				"creativity": {
+					"type": "number",
+					"format": "float"
+				},
+				"factuality": {
+					"type": "number",
+					"format": "float"
+				},
+				"function_calling": {
+					"type": "number",
+					"format": "float"
+				},
+				"safety": {
+					"type": "number",
+					"format": "float"
+				},
+				"openness": {
+					"type": "number",
+					"format": "float"
+				},
+				"multilinguality": {
+					"type": "number",
+					"format": "float"
+				},
+				"coding": {
+					"type": "number",
+					"format": "float"
+				}
+			},
+			"required": [
+				"cost",
+				"speed",
+				"reasoning",
+				"creativity",
+				"factuality",
+				"function_calling",
+				"safety",
+				"openness",
+				"multilinguality",
+				"coding"
+			]
+		}
+	}
 }

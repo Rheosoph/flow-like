@@ -29,7 +29,7 @@ import {
 } from "@flow-like/flow-like-ui/state/backend-state/user-state";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { createId } from "@paralleldrive/cuid2";
-import { appsDB, type IShortcut } from "../apps-db";
+import { type IShortcut, appsDB } from "../apps-db";
 import {
 	type WebBackendRef,
 	apiDelete,

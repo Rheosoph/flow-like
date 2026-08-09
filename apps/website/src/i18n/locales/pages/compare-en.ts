@@ -1,6 +1,7 @@
 export const enCompare = {
 	// Meta
-	"compare.meta.title": "Flow-Like vs Alternatives | Data, AI, Automation & Apps",
+	"compare.meta.title":
+		"Flow-Like vs Alternatives | Data, AI, Automation & Apps",
 	"compare.meta.description":
 		"See how Flow-Like compares across workflow automation, enterprise data layers, AI agents, BI, and app building. One governed platform for company-wide solutions.",
 
@@ -143,8 +144,10 @@ export const enCompare = {
 	"compare.matrix.plot.axis.production_scale.low": "Breaks at scale",
 	"compare.matrix.plot.axis.production_scale.high": "Replayable & high-volume",
 	"compare.matrix.plot.axis.customer_distribution": "Customer Distribution",
-	"compare.matrix.plot.axis.customer_distribution.low": "Browser-only internal tools",
-	"compare.matrix.plot.axis.customer_distribution.high": "Desktop, mobile, offline",
+	"compare.matrix.plot.axis.customer_distribution.low":
+		"Browser-only internal tools",
+	"compare.matrix.plot.axis.customer_distribution.high":
+		"Desktop, mobile, offline",
 	"compare.matrix.plot.axis.ai_native": "AI-Native Depth",
 	"compare.matrix.plot.axis.ai_native.low": "Bolted-on AI",
 	"compare.matrix.plot.axis.ai_native.high": "Agents + data-native",
