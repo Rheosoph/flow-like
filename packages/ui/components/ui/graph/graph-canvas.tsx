@@ -1144,22 +1144,24 @@ function SigmaWorkerLayout({
 				// Layout worker may already be disposed
 			}
 			onRunningChange?.(false);
-			// The worker is stopped on a timer, not on convergence, so the graph it
-			// leaves behind still overlaps. Settle it before the final paint.
-			const partition = partitionByConnectivity(currentGraph);
-			relaxOverlaps(currentGraph, partition.connected, {
-				iterations: defaultRelaxIterations(partition.connected.length),
-			});
-			placeDetachedNodes(
+			// The worker stops on a timer, not on convergence, so the graph it
+			// leaves behind still overlaps. Settle it in rAF-sized batches — a
+			// synchronous pass over a large graph would drop frames.
+			const refresh = () => {
+				try {
+					sigma.refresh({ skipIndexation: true });
+				} catch {
+					// WebGL context may be lost during layout updates
+				}
+			};
+			void finishLayoutAsync(
 				currentGraph,
-				partition.isolated,
-				getLayoutBounds(currentGraph, partition.connected),
-			);
-			try {
-				sigma.refresh({ skipIndexation: true });
-			} catch {
-				// WebGL context may be lost during final refresh
-			}
+				partitionByConnectivity(currentGraph),
+				() => disposed,
+				refresh,
+			).then(() => {
+				if (!disposed) refresh();
+			});
 		}, duration);
 
 		return () => {

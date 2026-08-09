@@ -156,6 +156,26 @@ describe("placeDetachedNodes", () => {
 		expect(worstOverlap(graph, partition.isolated)).toBeLessThanOrEqual(0);
 	});
 
+	test("keeps the band from dwarfing a small core", () => {
+		const graph = new Graph({ multi: true, type: "directed" });
+		graph.addNode("core-a", { x: -20, y: 0, size: 10 });
+		graph.addNode("core-b", { x: 20, y: 0, size: 10 });
+		graph.addEdge("core-a", "core-b");
+		for (let index = 0; index < 4000; index += 1) {
+			graph.addNode(`free-${index}`, { x: 0, y: 0, size: 10 });
+		}
+
+		const partition = partitionByConnectivity(graph);
+		const band = placeDetachedNodes(
+			graph,
+			partition.isolated,
+			getLayoutBounds(graph, partition.connected),
+		);
+
+		expect(band).not.toBeNull();
+		expect((band?.width ?? 0) / (band?.height ?? 1)).toBeLessThanOrEqual(3);
+	});
+
 	test("falls back to a centered grid when nothing is connected", () => {
 		const graph = buildGraph(12, () => ({ x: 0, y: 0 }));
 		const ids = graph.nodes();

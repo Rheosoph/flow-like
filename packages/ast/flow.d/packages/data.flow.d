@@ -829,9 +829,38 @@ declare function dataAtlassianJiraUpdateSprint({ provider: Struct, sprintId: int
 declare function cacheDelete({ cache: Struct, key: string }): bool;
 
 /**
+ * Returns the cached value, or stores the fallback and returns that. Exactly one caller gets Written = true, even when several runs reach this node at the same moment. The cache is for small, hot values (about 1 MB max) — persist large data to the app's storage instead.
+ * @param cache — Cache handle from the Open Cache node
+ * @param key — The key to read or claim
+ * @param fallback — Value to store when the key holds nothing live — any type
+ * @param ttlSeconds (optional) — Seconds until a newly written entry expires. 0 keeps it until it is deleted.
+ * @returns value — The value now held under the key — whatever type was stored
+ * @returns written — True when this run is the one that stored the fallback. Branch on this to do expensive work only once.
+ * @impure has side effects / drives control flow
+ */
+declare function cacheGetOrWrite({ cache: Struct, key: string, fallback: any, ttlSeconds?: int }): { value: any, written: bool };
+
+/**
+ * Checks whether a key holds a live value, without downloading the value. To decide whether to compute something, prefer Get or Write Cache — it has no gap between the check and the write.
+ * @param cache — Cache handle from the Open Cache node
+ * @param key — The key to check
+ * @returns found — True when a live entry exists for this key
+ * @impure has side effects / drives control flow
+ */
+declare function cacheHas({ cache: Struct, key: string }): bool;
+
+/**
+ * Removes every entry in the cache handle's namespace in one call — including entries with no lifetime. The handle must carry a namespace; per-key removal is the Delete Cache node's job.
+ * @param cache — Cache handle from the Open Cache node. Its namespace decides what is removed.
+ * @returns deleted — How many entries were removed
+ * @impure has side effects / drives control flow
+ */
+declare function cacheInvalidateNamespace({ cache: Struct }): int;
+
+/**
  * Opens the app's key/value cache. Connect the result to Read, Write and Delete Cache nodes.
  * @param scope (optional) — App shares entries with everyone who can run this app. User keeps them private to whoever triggered the run.
- * @param namespace (optional) — Optional prefix so short keys from different flows cannot collide
+ * @param namespace (optional) — Optional group name. Entries sharing a namespace can be removed together with the Invalidate Cache Namespace node, and short keys from different flows cannot collide.
  * @returns cache — Cache handle for the Read, Write and Delete Cache nodes
  */
 declare function cacheOpen({ scope?: string, namespace?: string }): Struct;
@@ -841,21 +870,21 @@ declare function cacheOpen({ scope?: string, namespace?: string }): Struct;
  * @param cache — Cache handle from the Open Cache node
  * @param key — The key to read
  * @returns found — True when a live entry existed for this key
- * @returns value — The cached value, or null on a miss
+ * @returns value — The cached value — whatever type was stored — or null on a miss
  * @impure has side effects / drives control flow
  */
-declare function cacheRead({ cache: Struct, key: string }): { found: bool, value: Struct };
+declare function cacheRead({ cache: Struct, key: string }): { found: bool, value: any };
 
 /**
- * Stores a value in the app's cache, optionally with a lifetime after which it disappears on its own.
+ * Stores a value in the app's cache, optionally with a lifetime after which it disappears on its own. The cache is for small, hot values (about 1 MB max) — persist large data to the app's storage instead.
  * @param cache — Cache handle from the Open Cache node
  * @param key — The key to write
- * @param value — The value to store
+ * @param value — The value to store — a struct, array, string, number or boolean
  * @param ttlSeconds (optional) — Seconds until the entry expires. 0 keeps it until it is deleted.
  * @returns expiresAt — Unix timestamp in milliseconds when the entry expires, or 0 when it never does
  * @impure has side effects / drives control flow
  */
-declare function cacheWrite({ cache: Struct, key: string, value: Struct, ttlSeconds?: int }): int;
+declare function cacheWrite({ cache: Struct, key: string, value: any, ttlSeconds?: int }): int;
 
 
 // === Data/DataFusion ===
@@ -877,7 +906,7 @@ declare function cacheWrite({ cache: Struct, key: string, value: Struct, ttlSeco
 declare function dfCreateSession({ sessionName?: string, targetPartitions?: int, batchSize?: int, repartitionJoins?: bool, repartitionAggregations?: bool, repartitionSorts?: bool, coalesceBatches?: bool, parquetPruning?: bool, collectStatistics?: bool }): Struct;
 
 /**
- * Mount CSV files from a FlowPath into a DataFusion session as a queryable table
+ * Mount CSV files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.
  * @param session — DataFusion session to mount the table into
  * @param path — FlowPath to CSV files (can be a directory prefix or single file)
  * @param tableName — Name to register the table as in the DataFusion catalog
@@ -889,7 +918,7 @@ declare function dfCreateSession({ sessionName?: string, targetPartitions?: int,
 declare function dfMountCsv({ session: Struct, path: Struct, tableName: string, hasHeader?: bool, delimiter?: string, fileExtension?: string }): void;
 
 /**
- * Mount JSON (newline-delimited) files from a FlowPath into a DataFusion session as a queryable table
+ * Mount JSON (newline-delimited) files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.
  * @param session — DataFusion session to mount the table into
  * @param path — FlowPath to JSON files (can be a directory prefix or single file)
  * @param tableName — Name to register the table as in the DataFusion catalog
@@ -899,7 +928,7 @@ declare function dfMountCsv({ session: Struct, path: Struct, tableName: string, 
 declare function dfMountJson({ session: Struct, path: Struct, tableName: string, fileExtension?: string }): void;
 
 /**
- * Mount Parquet files from a FlowPath prefix into a DataFusion session as a queryable table
+ * Mount Parquet files from a FlowPath prefix into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.
  * @param session — DataFusion session to mount the table into
  * @param path — FlowPath to Parquet files (can be a directory prefix or single file)
  * @param tableName — Name to register the table as in the DataFusion catalog
@@ -916,6 +945,18 @@ declare function dfMountParquet({ session: Struct, path: Struct, tableName: stri
  * @impure has side effects / drives control flow
  */
 declare function dfRegisterCsvTable({ session: Struct, table: Struct, tableName?: string }): void;
+
+/**
+ * Registers an Excel workbook's sheets as SQL tables in a DataFusion session. Tables are named after their normalized sheet names (e.g. 'Sales Data (2024)' becomes 'sales_data_2024'); additional tables on the same sheet get numeric suffixes. The download and parse are deferred until a query actually uses the session — unless the Table Names output is connected, which requires parsing here.
+ * @param session — DataFusion session to register the tables into
+ * @param file — Excel file
+ * @param sheet (optional) — Worksheet name (optional - if empty, registers all sheets)
+ * @param mode (optional) — 'Sheet as table' registers each sheet's used range as one table; 'Detect tables' finds and registers every table on each sheet
+ * @param prefix (optional) — Optional prefix for the registered table names
+ * @returns tableNames — Names the tables were registered under. Connecting this pin makes the workbook parse eagerly at this node instead of at the first query.
+ * @impure has side effects / drives control flow
+ */
+declare function dfRegisterExcel({ session: Struct, file: Struct, sheet?: string, mode?: string, prefix?: string }): string[];
 
 /**
  * Register a LanceDB table into a DataFusion session for SQL queries. Uses the existing to_datafusion() implementation from the vector store.
@@ -936,6 +977,21 @@ declare function dfRegisterLance({ session: Struct, database: Struct, tableName?
  * @impure has side effects / drives control flow
  */
 declare function dfSqlQuery({ session: Struct, query?: string }): { table: Struct, rows: Struct[], rowCount: int };
+
+/**
+ * Execute a SQL query against a DataFusion session, remembering the result in the app's cache. While a live cached result exists for this node's session and query, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be.
+ * @param session — DataFusion session with registered tables
+ * @param query (optional) — SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10)
+ * @param scope (optional) — App shares cached results with everyone who can run this app. User keeps them private to whoever triggered the run.
+ * @param namespace (optional) — Group name for the cached results. Invalidating this namespace (Invalidate Cache Namespace node) clears them in one call; it also keeps results from unrelated flows apart.
+ * @param ttlSeconds (optional) — Seconds until a cached result expires and the query runs again. 0 keeps it until it is deleted.
+ * @returns table — Query results as a CSVTable (columnar format, good for analytics)
+ * @returns rows — Query results as array of row structs with Flow-Like-compatible values. Rows derive from the Table representation so cached and fresh runs are identical: date-like strings are normalized to ISO form and unsigned values beyond the signed 64-bit range become strings.
+ * @returns rowCount — Number of rows in the result
+ * @returns fromCache — True when the result was served from the cache and the query never ran
+ * @impure has side effects / drives control flow
+ */
+declare function dfSqlQueryCached({ session: Struct, query?: string, scope?: string, namespace?: string, ttlSeconds?: int }): { table: Struct, rows: Struct[], rowCount: int, fromCache: bool };
 
 
 // === Data/DataFusion/Aggregation ===
@@ -1381,6 +1437,15 @@ declare function openRemoteDb({ flowRemoteAppId?: string, flowRemoteDatabase?: s
 
 
 // === Data/Database/Delete ===
+
+/**
+ * Permanently deletes the entire table, both its rows and its schema, so it can be recreated later with a different schema. This is irreversible and cannot be undone. Buffered writes that have not been flushed yet are discarded instead of written back. Graph overlays referencing the table are pruned and reported on References; saved queries are never modified. Known limitation: a DataFusion table provider registered from this table earlier in the same run keeps pointing at the deleted dataset, because mounts are only refreshed when the credential generation changes.
+ * @param database — Database Connection Reference
+ * @returns dropped — True when the table existed and was removed
+ * @returns references — Names of the graph overlays that referenced the table and were pruned
+ * @impure has side effects / drives control flow
+ */
+declare function dropTableLocalDb({ database: Struct }): { dropped: bool, references: string[] };
 
 /**
  * Delete rows from a database table and return the removed rows
@@ -2050,21 +2115,21 @@ declare function dataDatabricksListTables({ provider: Struct, catalogName: strin
 // === Data/Excel ===
 
 /**
- * Extracts tables from an Excel worksheet
+ * Detects and extracts all tables from Excel worksheets, handling titles, multi-row headers, merged cells, footnotes and multiple tables per sheet
  * @param file — Excel file
  * @param sheet (optional) — Worksheet name (optional - if empty, extracts from all sheets)
- * @param extractConfig (optional) — Extract Config
- * @returns tables — Extracted Vec<Table>
+ * @param extractConfig (optional) — Table detection configuration
+ * @returns tables — Extracted tables (name, title, A1 range and typed rows)
  * @impure has side effects / drives control flow
  */
 declare function dataExcelExtractTables({ file: Struct, sheet?: string, extractConfig?: Struct }): Struct[];
 
 /**
- * Uses AI to intelligently extract tables from complex Excel worksheets with unusual layouts
+ * Uses AI to locate tables in complex Excel worksheets (unusual layouts, multiple tables, multi-row headers, styling-based hints); extraction itself stays deterministic
  * @param model — AI model for analysis
  * @param file — Excel file
  * @param sheet (optional) — Worksheet name (optional - if empty, extracts from all sheets)
- * @param userHint (optional) — Optional guidance for the AI (e.g., 'The table starts at row 5', 'Skip rows with TOTAL')
+ * @param userHint (optional) — Optional guidance for the AI (e.g., 'The table starts at row 5', 'Only rows highlighted green matter')
  * @param config (optional) — AI extraction configuration
  * @returns tables — Extracted tables
  * @returns reasoning — AI's explanation of extraction strategy

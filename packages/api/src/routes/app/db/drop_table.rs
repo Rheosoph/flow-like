@@ -45,7 +45,10 @@ pub struct DropTableResponse {
         ("pat" = [])
     )
 )]
-#[tracing::instrument(name = "DELETE /apps/{app_id}/db/{table}/table", skip(state, user, scope))]
+#[tracing::instrument(
+    name = "DELETE /apps/{app_id}/db/{table}/table",
+    skip(state, user, scope)
+)]
 pub async fn drop_table(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

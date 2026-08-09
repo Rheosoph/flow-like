@@ -10,6 +10,8 @@ const RELAX_STRENGTH = 0.55;
 const MAX_PAIR_CHECKS = 1_200_000;
 /** Target area utilisation when seeding nodes on a disc. */
 const SEED_PACKING_FRACTION = 0.55;
+/** Widest the detached-node band may get relative to its height. */
+const MAX_BAND_ASPECT = 2;
 const TAU = Math.PI * 2;
 
 export interface LayoutPosition {
@@ -334,8 +336,10 @@ export function placeDetachedNodes(
 		return packNodesOnGrid(graph, isolated, { gap });
 	}
 
+	// The band tracks the core's height so the two read as one composition, but
+	// never gets so wide that auto-fit shrinks the core to a dot.
 	const rows = Math.max(
-		1,
+		Math.ceil(Math.sqrt(isolated.length / MAX_BAND_ASPECT)),
 		Math.min(isolated.length, Math.round(coreBounds.height / spacing) || 1),
 	);
 	const columns = Math.ceil(isolated.length / rows);

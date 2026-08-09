@@ -1,0 +1,24 @@
+---
+title: "Drop Table Node"
+description: "Drop Table Flow-Like node: Permanently deletes the entire table, both its rows and its schema, so it can be recreated later with a different schema."
+sidebar:
+  label: "Drop Table"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Drop Table, Drop Table node, Flow-Like node, Flow-Like node catalog, workflow automation node, Data/Database/Delete, data, drop_table_local_db, Database, Delete, pins, schemas, security rating"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "Data/Database/Delete"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Drop Table Node\",\"name\":\"Drop Table\",\"description\":\"Drop Table Flow-Like node: Permanently deletes the entire table, both its rows and its schema, so it can be recreated later with a different schema.\",\"url\":\"https://docs.flow-like.com/nodes/data/database/delete/drop-table-local-db/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"Data/Database/Delete\",\"keywords\":\"Drop Table, Drop Table node, Flow-Like node, Flow-Like node catalog, workflow automation node, Data/Database/Delete, data, drop_table_local_db, Database, Delete, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Drop Table\",\"description\":\"Permanently deletes the entire table, both its rows and its schema, so it can be recreated later with a different schema. This is irreversible and cannot be undone. Buffered writes that have not been flushed yet are discarded instead of written back. Graph overlays referencing the table are pruned and reported on References; saved queries are never modified. Known limitation: a DataFusion table provider registered from this table earlier in the same run keeps pointing at the deleted dataset, because mounts are only refreshed when the credential generation changes.\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
+---
+
+import { NodeReference } from "../../../../../../components/node-docs/NodeReference";
+import { nodesBySlug } from "../../../../../../generated/catalog-nodes";
+
+<NodeReference node={nodesBySlug["nodes/data/database/delete/drop-table-local-db"]} />

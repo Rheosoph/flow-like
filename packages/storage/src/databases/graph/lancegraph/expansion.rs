@@ -359,7 +359,7 @@ impl LanceGraphStore {
 
     /// Adds the edges that run between objects already in the result.
     ///
-    /// Frontier expansion only records the edges it traversed, so two neighbours
+    /// Frontier expansion only records the edges it traversed, so two neighbors
     /// found on the same hop come back looking unconnected even though the data
     /// links them. Without this pass the viewer renders a star per expansion and
     /// the real structure only appears once every node is expanded by hand.
@@ -374,10 +374,10 @@ impl LanceGraphStore {
             return;
         }
 
-        let mut ids_by_label: HashMap<&str, Vec<Value>> = HashMap::new();
+        let mut ids_by_label: HashMap<String, Vec<Value>> = HashMap::new();
         for node in state.nodes.values() {
             ids_by_label
-                .entry(node.label.as_str())
+                .entry(node.label.clone())
                 .or_default()
                 .push(node.raw_id.clone());
         }
@@ -390,10 +390,10 @@ impl LanceGraphStore {
             if !self.edge_endpoints_mapped(edge) {
                 continue;
             }
-            let Some(src_ids) = ids_by_label.get(edge.src_label.as_str()) else {
+            let Some(src_ids) = ids_by_label.get(&edge.src_label) else {
                 continue;
             };
-            if !ids_by_label.contains_key(edge.dst_label.as_str()) {
+            if !ids_by_label.contains_key(&edge.dst_label) {
                 continue;
             }
 
@@ -436,16 +436,17 @@ impl LanceGraphStore {
                 };
                 // Only edges whose other end is already on screen are kept — this
                 // pass connects the current result, it never grows it.
-                self.absorb_edge_rows(state, edge, &prop_names, rows, edge_limit, false);
+                self.absorb_edge_rows(state, edge, &prop_names, rows, edge_limit, None);
             }
         }
     }
 
     /// Turns raw edge rows into [`SubgraphEdge`]s.
     ///
-    /// With `discover_nodes` the endpoints are added to the result (bounded by
-    /// `node_budget`); without it, rows are dropped unless both endpoints are
-    /// already known. Returns the number of edges kept.
+    /// With `node_limit` set, the endpoints are added to the result until that
+    /// budget is spent; with `None`, rows whose endpoints are not already in the
+    /// result are dropped. Either way no edge is kept unless both of its
+    /// endpoints are, so the result never carries a dangling edge.
     fn absorb_edge_rows(
         &self,
         state: &mut ExpansionState,
@@ -453,9 +454,8 @@ impl LanceGraphStore {
         prop_names: &[String],
         rows: Vec<Value>,
         edge_limit: usize,
-        discover_nodes: bool,
-    ) -> usize {
-        let mut kept = 0usize;
+        node_limit: Option<usize>,
+    ) {
         for row in rows {
             let Value::Object(map) = row else { continue };
             let src_raw = map.get(&edge.src_column).cloned();
@@ -468,27 +468,39 @@ impl LanceGraphStore {
             let src_full = format!("{}:{}", edge.src_label, src_key);
             let dst_full = format!("{}:{}", edge.dst_label, dst_key);
 
-            if discover_nodes {
-                let (Some(src_raw), Some(dst_raw)) = (src_raw, dst_raw) else {
-                    continue;
-                };
-                for (full_id, label, raw_id) in [
-                    (&src_full, &edge.src_label, src_raw),
-                    (&dst_full, &edge.dst_label, dst_raw),
-                ] {
-                    if state.nodes.contains_key(full_id) {
+            match node_limit {
+                Some(node_limit) => {
+                    let (Some(src_raw), Some(dst_raw)) = (src_raw, dst_raw) else {
+                        continue;
+                    };
+                    let admitted = usize::from(!state.nodes.contains_key(&src_full))
+                        + usize::from(src_full != dst_full && !state.nodes.contains_key(&dst_full));
+                    if state.nodes.len() + admitted > node_limit {
+                        state.truncated = true;
+                        break;
+                    }
+                    for (full_id, label, raw_id) in [
+                        (&src_full, &edge.src_label, src_raw),
+                        (&dst_full, &edge.dst_label, dst_raw),
+                    ] {
+                        if state.nodes.contains_key(full_id) {
+                            continue;
+                        }
+                        state.nodes.insert(
+                            full_id.clone(),
+                            Discovered {
+                                label: label.clone(),
+                                raw_id,
+                            },
+                        );
+                    }
+                }
+                None => {
+                    if !state.nodes.contains_key(&src_full) || !state.nodes.contains_key(&dst_full)
+                    {
                         continue;
                     }
-                    state.nodes.insert(
-                        full_id.clone(),
-                        Discovered {
-                            label: label.clone(),
-                            raw_id,
-                        },
-                    );
                 }
-            } else if !state.nodes.contains_key(&src_full) || !state.nodes.contains_key(&dst_full) {
-                continue;
             }
 
             let edge_id = format!("{}-{}->{}", src_full, edge.label, dst_full);
@@ -512,9 +524,7 @@ impl LanceGraphStore {
                 label: edge.label.clone(),
                 props: Value::Object(props),
             });
-            kept += 1;
         }
-        kept
     }
 
     /// The seedless view of an overlay: read the mapped edge tables first and
@@ -577,7 +587,8 @@ impl LanceGraphStore {
                 .min(edge_limit.saturating_sub(state.edges.len()))
                 // Each row can introduce two objects, so the node budget bounds
                 // the scan as well.
-                .min(node_limit.saturating_sub(state.nodes.len()).max(1));
+                .min(node_limit.saturating_sub(state.nodes.len()))
+                .max(1);
             let rows = match self.edge_rows(&table, &columns, None, budget).await {
                 Ok(rows) => rows,
                 Err(error) => {
@@ -588,7 +599,14 @@ impl LanceGraphStore {
                 }
             };
             let scanned = rows.len();
-            self.absorb_edge_rows(&mut state, edge, &prop_names, rows, edge_limit, true);
+            self.absorb_edge_rows(
+                &mut state,
+                edge,
+                &prop_names,
+                rows,
+                edge_limit,
+                Some(node_limit),
+            );
             if scanned >= budget {
                 state.truncated = true;
             }
@@ -1771,6 +1789,91 @@ mod tests {
             "the budget is global, not per mapping"
         );
         assert!(analytics.truncated);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seedless_subgraph_returns_the_edges_between_its_nodes() -> Result<()> {
+        let (store, test_path) =
+            graph_fixture(5, &[("1", "2"), ("2", "3"), ("3", "4"), ("4", "5")]).await?;
+
+        let result = store.subgraph(Vec::new(), 1, Some(100)).await?;
+
+        assert_eq!(result.nodes.len(), 5);
+        assert_eq!(
+            result.edges.len(),
+            4,
+            "the first view must arrive connected, not as unlinked nodes"
+        );
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seedless_subgraph_still_lists_labels_no_edge_reaches() -> Result<()> {
+        let (store, test_path) = graph_fixture(4, &[]).await?;
+
+        let result = store.subgraph(Vec::new(), 1, Some(100)).await?;
+
+        assert_eq!(result.nodes.len(), 4);
+        assert!(result.edges.is_empty());
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seedless_subgraph_keeps_edges_within_the_node_budget() -> Result<()> {
+        let (store, test_path) =
+            graph_fixture(6, &[("1", "2"), ("2", "3"), ("3", "4"), ("5", "6")]).await?;
+
+        let result = store.subgraph(Vec::new(), 1, Some(3)).await?;
+
+        assert!(result.nodes.len() <= 3);
+        assert!(result.truncated);
+        let node_ids = result
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<HashSet<_>>();
+        for edge in &result.edges {
+            assert!(
+                node_ids.contains(edge.source.as_str()) && node_ids.contains(edge.target.as_str()),
+                "truncation must not leave dangling edges"
+            );
+        }
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn expansion_links_neighbors_discovered_on_the_same_hop() -> Result<()> {
+        // 2 and 3 are both neighbors of 1, and are linked to each other.
+        let (store, test_path) = graph_fixture(3, &[("1", "2"), ("1", "3"), ("2", "3")]).await?;
+
+        let result = store
+            .neighbors(
+                "Person",
+                Value::String("1".to_string()),
+                1,
+                TraversalDirection::Both,
+                Some(100),
+            )
+            .await?;
+
+        assert_eq!(result.nodes.len(), 3);
+        assert!(
+            result
+                .edges
+                .iter()
+                .any(|edge| edge.source == "Person:2" && edge.target == "Person:3"),
+            "an expansion must show how its neighbors connect to each other"
+        );
 
         std::fs::remove_dir_all(&test_path).ok();
         Ok(())
