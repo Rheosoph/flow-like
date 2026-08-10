@@ -1,7 +1,12 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
+import {
+	boardReadinessKey,
+	resetBoardReadiness,
+	whenBoardReady,
+} from "../../lib/board-readiness";
 import {
 	type IStoreRedirectState,
-	loadPageAfterBoardSync,
+	loadPageWithBoardSync,
 	pageLoadErrorMessage,
 	resolveStoreRedirect,
 } from "./use-page-content";
@@ -146,7 +151,11 @@ describe("store redirect", () => {
 });
 
 describe("page board synchronization", () => {
-	test("waits for board synchronization before reading the page", async () => {
+	beforeEach(() => {
+		resetBoardReadiness();
+	});
+
+	test("reads the page without waiting for board synchronization", async () => {
 		const calls: string[] = [];
 		let finishBoardSync: (() => void) | undefined;
 		const boardReady = new Promise<void>((resolve) => {
@@ -168,20 +177,91 @@ describe("page board synchronization", () => {
 			},
 		};
 
-		const loading = loadPageAfterBoardSync(
-			boardState as never,
-			pageState as never,
-			"app-1",
-			"page-1",
-			"board-1",
-			[1, 2, 3],
-		);
+		// The page resolves while the board refresh is still in flight.
+		expect(
+			await loadPageWithBoardSync(
+				boardState as never,
+				pageState as never,
+				"app-1",
+				"page-1",
+				"board-1",
+				[1, 2, 3],
+			),
+		).toBe(page);
+		expect(calls).toEqual(["board:start", "page"]);
 
+		// Execution still has something to wait on until the refresh finishes.
+		const key = boardReadinessKey("app-1", "board-1", [1, 2, 3]);
+		let ready = false;
+		void whenBoardReady(key).then(() => {
+			ready = true;
+		});
 		await Promise.resolve();
-		expect(calls).toEqual(["board:start"]);
+		expect(ready).toBe(false);
+
 		finishBoardSync?.();
-		expect(await loading).toBe(page);
-		expect(calls).toEqual(["board:start", "board:ready", "page"]);
+		await whenBoardReady(key);
+		expect(calls).toEqual(["board:start", "page", "board:ready"]);
+	});
+
+	test("retries after board synchronization when the page cannot be read yet", async () => {
+		const calls: string[] = [];
+		const page = { id: "page-1", boardId: "board-1" };
+		let attempts = 0;
+		let markFirstAttemptFailed: (() => void) | undefined;
+		const firstAttemptFailed = new Promise<void>((resolve) => {
+			markFirstAttemptFailed = resolve;
+		});
+		// The refresh only lands after the first read has already failed, which is the ordering
+		// a device that has not downloaded the board yet actually sees.
+		const boardState = {
+			async getBoard() {
+				calls.push("board");
+				await firstAttemptFailed;
+				return {};
+			},
+		};
+		const pageState = {
+			async getPage() {
+				calls.push("page");
+				attempts += 1;
+				if (attempts === 1) {
+					markFirstAttemptFailed?.();
+					throw new Error("board not on this device yet");
+				}
+				return page;
+			},
+		};
+
+		expect(
+			await loadPageWithBoardSync(
+				boardState as never,
+				pageState as never,
+				"app-1",
+				"page-1",
+				"board-1",
+			),
+		).toBe(page);
+		expect(calls).toEqual(["board", "page", "page"]);
+	});
+
+	test("reports the original failure when the retry fails too", async () => {
+		const boardState = { async getBoard() {} };
+		const pageState = {
+			async getPage() {
+				throw new Error("Page not found: page-1");
+			},
+		};
+
+		await expect(
+			loadPageWithBoardSync(
+				boardState as never,
+				pageState as never,
+				"app-1",
+				"page-1",
+				"board-1",
+			),
+		).rejects.toThrow("Page not found: page-1");
 	});
 
 	test("reads the pinned version's page, not the draft board's", async () => {
@@ -195,7 +275,7 @@ describe("page board synchronization", () => {
 			},
 		};
 
-		await loadPageAfterBoardSync(
+		await loadPageWithBoardSync(
 			boardState as never,
 			pageState as never,
 			"app-1",
@@ -204,7 +284,9 @@ describe("page board synchronization", () => {
 			[2, 1, 0],
 		);
 
-		expect(seen).toEqual([["app-1", "page-1", "board-1", [2, 1, 0]]]);
+		expect(seen).toEqual([
+			["app-1", "page-1", "board-1", [2, 1, 0], undefined],
+		]);
 	});
 
 	test("still lets page state fall back when board synchronization fails", async () => {
@@ -224,7 +306,7 @@ describe("page board synchronization", () => {
 		};
 
 		await expect(
-			loadPageAfterBoardSync(
+			loadPageWithBoardSync(
 				boardState as never,
 				pageState as never,
 				"app-1",
@@ -233,6 +315,8 @@ describe("page board synchronization", () => {
 			),
 		).resolves.toBe(page);
 		expect(calls).toEqual(["board", "page"]);
+		// A failed refresh must not leave execution waiting forever.
+		await whenBoardReady(boardReadinessKey("app-1", "board-1"));
 	});
 });
 

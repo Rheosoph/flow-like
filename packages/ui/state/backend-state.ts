@@ -114,6 +114,7 @@ export type {
 export type { SinkType } from "./backend-state/sink-state";
 
 export type {
+	IGetPageOptions,
 	IPage,
 	IWidgetRef,
 	PageContent,

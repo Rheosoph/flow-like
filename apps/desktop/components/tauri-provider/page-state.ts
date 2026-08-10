@@ -1,12 +1,14 @@
 import {
+	type IGetPageOptions,
 	type IPage,
 	type IPageState,
 	type PageListItem,
 	normalizePageForPersistence,
 } from "@flow-like/flow-like-ui";
 import { invoke } from "@tauri-apps/api/core";
-import { fetcher } from "../../lib/api";
+import { fetcher, fetcherConditional } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
+import { pageEtagKey, readPageEtag, writePageEtag } from "./page-etag-cache";
 
 function nativeErrorMessage(error: unknown): string | undefined {
 	if (error instanceof Error) return error.message;
@@ -152,25 +154,107 @@ export class PageState implements IPageState {
 		);
 	}
 
+	private async fetchRemotePageConditional(
+		appId: string,
+		pageId: string,
+		boardId?: string,
+		version?: [number, number, number],
+		ifNoneMatch?: string,
+	): Promise<{ page: IPage | null; notModified: boolean; etag?: string }> {
+		const isOffline = await this.backend.isOffline(appId);
+		if (isOffline || !this.backend.profile || !this.backend.auth) {
+			return { page: null, notModified: false };
+		}
+
+		const query = new URLSearchParams();
+		if (boardId) query.set("board_id", boardId);
+		if (version) query.set("version", version.join("_"));
+		const params = query.size > 0 ? `?${query.toString()}` : "";
+		const response = await fetcherConditional<IPage>(
+			this.backend.profile,
+			`apps/${appId}/pages/${pageId}${params}`,
+			{ method: "GET" },
+			this.backend.auth,
+			ifNoneMatch,
+		);
+		return {
+			page: response.data ?? null,
+			notModified: response.notModified,
+			etag: response.etag,
+		};
+	}
+
 	private async fetchRemotePage(
 		appId: string,
 		pageId: string,
 		boardId?: string,
 		version?: [number, number, number],
 	): Promise<IPage | null> {
-		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline || !this.backend.profile || !this.backend.auth) return null;
-
-		const query = new URLSearchParams();
-		if (boardId) query.set("board_id", boardId);
-		if (version) query.set("version", version.join("_"));
-		const params = query.size > 0 ? `?${query.toString()}` : "";
-		return await fetcher<IPage>(
-			this.backend.profile,
-			`apps/${appId}/pages/${pageId}${params}`,
-			{ method: "GET" },
-			this.backend.auth,
+		const { page } = await this.fetchRemotePageConditional(
+			appId,
+			pageId,
+			boardId,
+			version,
 		);
+		return page;
+	}
+
+	/**
+	 * Confirms the local page against the server and adopts a newer payload.
+	 *
+	 * Returns null whenever the local copy stays authoritative — unreachable server, an
+	 * unchanged document (answered by a 304, which also spares the transfer), or local edits
+	 * that are ahead of the server. A failure here is never fatal: the caller already holds a
+	 * readable page.
+	 */
+	private async revalidateLocalPage(
+		appId: string,
+		pageId: string,
+		localPage: IPage,
+		boardId?: string,
+	): Promise<IPage | null> {
+		const etagKey = pageEtagKey(appId, pageId, boardId);
+		const knownEtag = readPageEtag(etagKey, localPage.updatedAt);
+
+		let result: Awaited<ReturnType<typeof this.fetchRemotePageConditional>>;
+		try {
+			result = await this.fetchRemotePageConditional(
+				appId,
+				pageId,
+				boardId,
+				undefined,
+				knownEtag,
+			);
+		} catch {
+			// A valid local page remains usable when remote synchronization is temporarily
+			// unavailable. By contrast, the local-miss path in `getPage` propagates the remote
+			// error so callers doing overwrite-safety checks can distinguish 404 from a
+			// transport/auth failure.
+			return null;
+		}
+
+		if (result.notModified) return null;
+
+		const remotePage = result.page;
+		if (!remotePage) return null;
+
+		writePageEtag(etagKey, remotePage.updatedAt, result.etag);
+
+		const remoteUpdated = new Date(remotePage.updatedAt ?? 0).getTime();
+		const localUpdated = new Date(localPage.updatedAt ?? 0).getTime();
+		const shouldUseRemote =
+			Number.isNaN(localUpdated) ||
+			Number.isNaN(remoteUpdated) ||
+			remoteUpdated >= localUpdated;
+
+		if (!shouldUseRemote) return null;
+
+		const merged = {
+			...remotePage,
+			boardId: remotePage.boardId || localPage.boardId,
+		};
+		await invoke("update_page", { appId, page: merged }).catch(() => {});
+		return merged;
 	}
 
 	async getPages(appId: string, boardId?: string): Promise<PageListItem[]> {
@@ -307,6 +391,7 @@ export class PageState implements IPageState {
 		pageId: string,
 		boardId?: string,
 		version?: [number, number, number],
+		options?: IGetPageOptions,
 	): Promise<IPage> {
 		if (version) {
 			return this.getVersionedPage(appId, pageId, version, boardId);
@@ -342,34 +427,28 @@ export class PageState implements IPageState {
 			throw localError;
 		}
 
-		let remotePage: IPage | null;
-		try {
-			remotePage = await this.fetchRemotePage(appId, pageId, boardId);
-		} catch {
-			// A valid local page remains usable when remote synchronization is temporarily
-			// unavailable. By contrast, the local-miss path above propagates the remote error so
-			// callers doing overwrite-safety checks can distinguish 404 from transport/auth failure.
-			return localPage;
-		}
-		if (!remotePage) return localPage;
-
-		const remoteUpdated = new Date(remotePage.updatedAt ?? 0).getTime();
-		const localUpdated = new Date(localPage.updatedAt ?? 0).getTime();
-		const shouldUseRemote =
-			Number.isNaN(localUpdated) ||
-			Number.isNaN(remoteUpdated) ||
-			remoteUpdated >= localUpdated;
-
-		if (shouldUseRemote) {
-			const merged = {
-				...remotePage,
-				boardId: remotePage.boardId || localPage.boardId,
-			};
-			await invoke("update_page", { appId, page: merged }).catch(() => {});
-			return merged;
+		// Rendering only needs a page that is readable now; a revision that lands a moment
+		// later arrives as a re-render. Read-modify-write callers keep the default and wait,
+		// so they can never persist on top of a payload the server has already moved past.
+		if (options?.revalidate === "background") {
+			const readyPage = localPage;
+			this.backend.backgroundTaskHandler(
+				this.revalidateLocalPage(appId, pageId, readyPage, boardId)
+					.then((fresh) => {
+						if (fresh) options.onRevalidated?.(fresh);
+					})
+					.catch(() => {}),
+			);
+			return readyPage;
 		}
 
-		return localPage;
+		const refreshed = await this.revalidateLocalPage(
+			appId,
+			pageId,
+			localPage,
+			boardId,
+		);
+		return refreshed ?? localPage;
 	}
 
 	async createPage(

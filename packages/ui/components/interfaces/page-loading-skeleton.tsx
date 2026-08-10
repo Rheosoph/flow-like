@@ -1,23 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { cn } from "../../lib";
 
-/* ── Animated node graph ──────────────────────────────────────────── */
-
-interface GraphNode {
-	id: number;
-	cx: number;
-	cy: number;
-	r: number;
-	delay: number;
-}
-
-interface GraphEdge {
-	from: number;
-	to: number;
-	delay: number;
-}
+/* ── Theme sampling ───────────────────────────────────────────────── */
 
 type RGB = readonly [number, number, number];
 
@@ -36,104 +22,6 @@ const DEFAULT_SHADER_THEME: ShaderTheme = {
 	accent: [0.94, 0.42, 0.3],
 	tertiary: [0.92, 0.55, 0.18],
 };
-
-const VERTEX_SHADER_SOURCE = `
-attribute vec2 aPosition;
-
-void main() {
-	gl_Position = vec4(aPosition, 0.0, 1.0);
-}
-`;
-
-const FRAGMENT_SHADER_SOURCE = `
-precision mediump float;
-
-uniform vec2 uResolution;
-uniform float uTime;
-uniform vec3 uBackground;
-uniform vec3 uForeground;
-uniform vec3 uPrimary;
-uniform vec3 uAccent;
-uniform vec3 uTertiary;
-
-float hash(vec2 p) {
-	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-}
-
-float noise(vec2 p) {
-	vec2 i = floor(p);
-	vec2 f = fract(p);
-	vec2 u = f * f * (3.0 - 2.0 * f);
-	return mix(
-		mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
-		mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
-		u.y
-	);
-}
-
-float fbm(vec2 p) {
-	float value = 0.0;
-	float amplitude = 0.5;
-	for (int i = 0; i < 3; i++) {
-		value += noise(p) * amplitude;
-		p = p * 2.04 + 9.17;
-		amplitude *= 0.5;
-	}
-	return value;
-}
-
-float lane(vec2 uv, float offset, float phase) {
-	float wave = sin(uv.x * 3.1 + phase + uTime * 0.28) * 0.12;
-	wave += sin(uv.x * 7.0 - phase + uTime * 0.11) * 0.035;
-	return smoothstep(0.055, 0.0, abs(uv.y - offset - wave));
-}
-
-void main() {
-	vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution.xy) / max(uResolution.y, 1.0);
-	float drift = fbm(uv * 1.8 + vec2(uTime * 0.035, -uTime * 0.025));
-	vec2 flow = uv + vec2(drift * 0.12, fbm(uv * 1.25 - uTime * 0.03) * 0.08);
-
-	float laneA = lane(flow, -0.16, 0.0);
-	float laneB = lane(flow, 0.08, 2.0);
-	float laneC = lane(flow, 0.28, 4.0);
-
-	vec2 grid = fract((uv + vec2(uTime * 0.018, -uTime * 0.012)) * vec2(6.5, 4.0)) - 0.5;
-	float nodes = 1.0 - smoothstep(0.01, 0.035, dot(grid, grid));
-	float vignette = smoothstep(1.35, 0.15, length(uv * vec2(0.65, 0.95)));
-
-	vec3 color = uBackground;
-	color += uPrimary * laneA * 0.28 * vignette;
-	color += uAccent * laneB * 0.22 * vignette;
-	color += uTertiary * laneC * 0.16 * vignette;
-	color += mix(uPrimary, uForeground, 0.18) * nodes * 0.045 * vignette;
-	color = mix(color, uBackground, smoothstep(0.2, 1.28, length(uv)));
-
-	gl_FragColor = vec4(color, 1.0);
-}
-`;
-
-function buildGraph(): { nodes: GraphNode[]; edges: GraphEdge[] } {
-	const nodes: GraphNode[] = [
-		{ id: 0, cx: 50, cy: 60, r: 6, delay: 0 },
-		{ id: 1, cx: 130, cy: 35, r: 5, delay: 0.3 },
-		{ id: 2, cx: 130, cy: 85, r: 5, delay: 0.5 },
-		{ id: 3, cx: 210, cy: 60, r: 7, delay: 0.8 },
-		{ id: 4, cx: 290, cy: 35, r: 5, delay: 1.1 },
-		{ id: 5, cx: 290, cy: 85, r: 5, delay: 1.3 },
-		{ id: 6, cx: 370, cy: 60, r: 6, delay: 1.6 },
-	];
-	const edges: GraphEdge[] = [
-		{ from: 0, to: 1, delay: 0.15 },
-		{ from: 0, to: 2, delay: 0.25 },
-		{ from: 1, to: 3, delay: 0.55 },
-		{ from: 2, to: 3, delay: 0.65 },
-		{ from: 3, to: 4, delay: 0.95 },
-		{ from: 3, to: 5, delay: 1.05 },
-		{ from: 4, to: 6, delay: 1.35 },
-		{ from: 5, to: 6, delay: 1.45 },
-	];
-	return { nodes, edges };
-}
 
 function clamp01(value: number): number {
 	return Math.min(Math.max(value, 0), 1);
@@ -326,6 +214,205 @@ function readShaderTheme(): ShaderTheme {
 	return { background, foreground, primary, accent, tertiary };
 }
 
+/* ── Shader ───────────────────────────────────────────────────────── */
+
+const VERTEX_SHADER_SOURCE = `
+attribute vec2 aPosition;
+
+void main() {
+	gl_Position = vec4(aPosition, 0.0, 1.0);
+}
+`;
+
+const GLSL_PRELUDE = `
+precision mediump float;
+
+uniform vec2 uResolution;
+uniform float uTime;
+uniform vec3 uBackground;
+uniform vec3 uForeground;
+uniform vec3 uPrimary;
+uniform vec3 uAccent;
+uniform vec3 uTertiary;
+
+vec2 fl_uv() {
+	return (gl_FragCoord.xy - 0.5 * uResolution.xy) / max(uResolution.y, 1.0);
+}
+
+float fl_hash(vec2 p) {
+	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+}
+
+float fl_noise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	return mix(
+		mix(fl_hash(i), fl_hash(i + vec2(1.0, 0.0)), u.x),
+		mix(fl_hash(i + vec2(0.0, 1.0)), fl_hash(i + vec2(1.0, 1.0)), u.x),
+		u.y
+	);
+}
+
+float fl_ease(float t) {
+	return t * t * (3.0 - 2.0 * t);
+}
+`;
+
+/**
+ * Flux Lattice: a field of junctions wired by hashed filaments, crossed by
+ * wavefronts that ignite whatever they pass. Junctions sample the wave at their
+ * own centre so ignition snaps to the graph; filaments sample it continuously so
+ * the flow stays smooth.
+ */
+const FLUX_LATTICE_FRAGMENT = `
+const float FXL_PITCH_PX = 40.0;
+
+float fxl_extent(vec2 dir) {
+	float halfAspect = 0.5 * uResolution.x / max(uResolution.y, 1.0);
+	return abs(dir.x) * halfAspect + abs(dir.y) * 0.5;
+}
+
+float fxl_front(vec2 p, float ang, float speed, float width, float phase) {
+	vec2 dir = vec2(cos(ang), sin(ang));
+	vec2 perp = vec2(-dir.y, dir.x);
+	float span = 2.0 * (fxl_extent(dir) + width * 2.4);
+	float u = fract(uTime * speed / span + phase);
+	float pos = (u - 0.5) * span;
+	float bend = width * 0.34 * sin(dot(p, perp) * 2.2 + phase * 21.7 + uTime * 0.21);
+	float s = dot(p, dir) - pos + bend;
+
+	float crest = exp(-min(s * s / (width * width), 24.0));
+	float behind = 1.0 - smoothstep(-width * 0.2, width * 0.5, s);
+	float tail = behind * exp(min(s, 0.0) / (width * 1.5));
+	float life = smoothstep(0.0, 0.1, u) * (1.0 - smoothstep(0.9, 1.0, u));
+
+	return (crest + tail * 0.22) * life;
+}
+
+float fxl_field(vec2 p) {
+	float w = fxl_front(p, 0.10, 0.40, 0.105, 0.50);
+	w += fxl_front(p, -0.62, 0.25, 0.150, 0.13) * 0.48;
+	w += fxl_front(p, 2.75, 0.32, 0.080, 0.78) * 0.52;
+	w += fxl_front(p, 1.42, 0.22, 0.145, 0.31) * 0.40;
+	return w / (1.0 + 0.45 * w);
+}
+
+vec3 fxl_ember(float e) {
+	vec3 warm = mix(uAccent, uPrimary, smoothstep(0.05, 0.45, e));
+	return mix(warm, uTertiary, smoothstep(0.55, 1.05, e));
+}
+
+float fxl_link(vec2 cell, vec2 seed, float lo, float hi) {
+	return smoothstep(lo, hi, fl_hash(cell * 0.1373 + seed));
+}
+
+float fxl_seg(float d, float presence, float halfWidth, float soft) {
+	return presence * (1.0 - smoothstep(halfWidth, halfWidth + soft, d));
+}
+
+void main() {
+	vec2 uv = fl_uv();
+	float px = 1.0 / max(uResolution.y, 1.0);
+	float halfAspect = max(0.5 * uResolution.x / max(uResolution.y, 1.0), 0.001);
+	vec2 frame = uv / vec2(halfAspect, 0.5);
+
+	float cells = clamp(uResolution.y / FXL_PITCH_PX, 7.5, 20.0);
+	float pitch = 1.0 / cells;
+	vec2 drift = vec2(sin(uTime * 0.017), sin(uTime * 0.0113 + 1.7)) * 0.07;
+	vec2 grid = (uv + drift) * cells;
+	vec2 id = floor(grid);
+	vec2 local = (fract(grid) - 0.5) * pitch;
+	vec2 junction = (id + vec2(0.5)) * pitch - drift;
+
+	float wSnap = fxl_field(junction);
+	float wFlow = fxl_field(uv);
+	float igniteJ = fl_ease(clamp((wSnap - 0.09) * 1.55, 0.0, 1.0));
+	float igniteF = fl_ease(clamp((wFlow - 0.09) * 1.35, 0.0, 1.0));
+
+	float filWidth = max(pitch * 0.014, px * 0.62);
+	float soft = px * 1.3;
+	vec2 seedH = vec2(11.3, 4.7);
+	vec2 seedV = vec2(2.9, 27.1);
+
+	/* min(local.x, 0.0) measures distance to the ray leaving this junction to the
+	   RIGHT (and max to the one arriving from the left), so the outgoing halves
+	   hash this cell and the incoming halves hash the neighbour behind them. Both
+	   halves of an edge then resolve to one hash and meet without a seam. */
+	float mFil = fxl_seg(
+		length(vec2(min(local.x, 0.0), local.y)),
+		fxl_link(id, seedH, 0.34, 0.52),
+		filWidth,
+		soft
+	);
+	mFil = max(mFil, fxl_seg(
+		length(vec2(max(local.x, 0.0), local.y)),
+		fxl_link(id - vec2(1.0, 0.0), seedH, 0.34, 0.52),
+		filWidth,
+		soft
+	));
+	mFil = max(mFil, fxl_seg(
+		length(vec2(local.x, min(local.y, 0.0))),
+		fxl_link(id, seedV, 0.44, 0.62),
+		filWidth,
+		soft
+	));
+	mFil = max(mFil, fxl_seg(
+		length(vec2(local.x, max(local.y, 0.0))),
+		fxl_link(id - vec2(0.0, 1.0), seedV, 0.44, 0.62),
+		filWidth,
+		soft
+	));
+
+	float hub = step(0.93, fl_hash(id * 0.2113 + vec2(3.7, 8.2)));
+	float radius = max(pitch * 0.070, px * 1.3) * (1.0 + hub * 0.6);
+	float d = length(local);
+	float mJunction = 1.0 - smoothstep(radius, radius + px * 1.6, d);
+	float ringWidth = px * 0.75;
+	float mRing = hub * (1.0 - smoothstep(ringWidth, ringWidth + px * 1.5, abs(d - radius * 2.6)));
+	float haloRadius = pitch * 0.26;
+	float mHalo = exp(-min(dot(local, local) / (haloRadius * haloRadius), 16.0));
+	float ringGate = smoothstep(0.4, 0.85, igniteJ);
+
+	float breath = 0.6 + 0.8 * fl_noise(uv * 1.35 + vec2(uTime * 0.009, uTime * -0.006));
+
+	vec3 emberJ = fxl_ember(wSnap);
+	vec3 emberF = fxl_ember(wFlow);
+	vec3 inkFil = mix(uBackground, uForeground, 0.50);
+	vec3 inkJ = mix(uBackground, uForeground, 0.62);
+
+	vec3 color = uBackground;
+	color = mix(color, emberF, max(wFlow - 0.12, 0.0) * 0.055);
+	color = mix(color, emberJ, mHalo * igniteJ * 0.15);
+	color = mix(
+		color,
+		mix(inkFil, emberF, igniteF),
+		clamp(mFil * (0.125 * breath + 0.55 * igniteF), 0.0, 1.0)
+	);
+	color = mix(
+		color,
+		mix(inkJ, emberJ, igniteJ),
+		clamp(mJunction * (0.21 * breath + 0.74 * igniteJ), 0.0, 1.0)
+	);
+	color = mix(color, emberJ, mRing * ringGate * 0.62);
+
+	/* Additive bloom only where the theme is dark enough to carry it, so the
+	   light theme reads the wavefront as warm ink instead of blowing out. */
+	float darkness = clamp(1.0 - dot(uBackground, vec3(0.299, 0.587, 0.114)), 0.0, 1.0);
+	vec3 bloom =
+		emberJ * (mJunction * 0.42 + mHalo * 0.14 + mRing * ringGate * 0.30) * igniteJ +
+		emberF * mFil * igniteF * 0.16;
+	color += bloom * darkness * 0.75;
+
+	float vignette = 1.0 - smoothstep(0.46, 1.14, length(frame * vec2(0.86, 0.78)));
+	float calm = mix(0.44, 1.0, smoothstep(0.14, 0.58, length(frame * vec2(0.62, 1.25))));
+	color = mix(uBackground, color, vignette * calm);
+	color += (fl_hash(fract(gl_FragCoord.xy * vec2(0.0173, 0.0219))) - 0.5) * 0.0045;
+
+	gl_FragColor = vec4(color, 1.0);
+}
+`;
+
 function compileShader(
 	gl: WebGLRenderingContext,
 	type: number,
@@ -356,9 +443,13 @@ function createShaderProgram(gl: WebGLRenderingContext): WebGLProgram | null {
 	const fragmentShader = compileShader(
 		gl,
 		gl.FRAGMENT_SHADER,
-		FRAGMENT_SHADER_SOURCE,
+		`${GLSL_PRELUDE}\n${FLUX_LATTICE_FRAGMENT}`,
 	);
-	if (!vertexShader || !fragmentShader) return null;
+	if (!vertexShader || !fragmentShader) {
+		if (vertexShader) gl.deleteShader(vertexShader);
+		if (fragmentShader) gl.deleteShader(fragmentShader);
+		return null;
+	}
 
 	const program = gl.createProgram();
 	if (!program) return null;
@@ -380,106 +471,7 @@ function createShaderProgram(gl: WebGLRenderingContext): WebGLProgram | null {
 	return program;
 }
 
-function NodeGraph() {
-	const { nodes, edges } = useMemo(() => buildGraph(), []);
-
-	return (
-		<svg
-			viewBox="0 0 420 120"
-			className="w-full max-w-xs h-auto"
-			fill="none"
-			role="img"
-			aria-label="Workflow progress"
-		>
-			{/* edges with traveling-dot animation */}
-			{edges.map((e) => {
-				const a = nodes[e.from];
-				const b = nodes[e.to];
-				const pathId = `e-${e.from}-${e.to}`;
-				return (
-					<g key={pathId}>
-						<path
-							id={pathId}
-							d={`M${a.cx},${a.cy} C${(a.cx + b.cx) / 2},${a.cy} ${(a.cx + b.cx) / 2},${b.cy} ${b.cx},${b.cy}`}
-							className="pls-edge"
-							style={{ animationDelay: `${e.delay}s` }}
-						/>
-						<circle r="2.5" className="pls-particle">
-							<animateMotion
-								dur="2s"
-								repeatCount="indefinite"
-								begin={`${e.delay}s`}
-							>
-								<mpath href={`#${pathId}`} />
-							</animateMotion>
-						</circle>
-					</g>
-				);
-			})}
-
-			{/* nodes */}
-			{nodes.map((n) => (
-				<g key={n.id}>
-					<circle
-						cx={n.cx}
-						cy={n.cy}
-						r={n.r + 4}
-						className="pls-ring"
-						style={{ animationDelay: `${n.delay}s` }}
-					/>
-					<circle
-						cx={n.cx}
-						cy={n.cy}
-						r={n.r}
-						className="pls-node"
-						style={{ animationDelay: `${n.delay}s` }}
-					/>
-				</g>
-			))}
-		</svg>
-	);
-}
-
-/* ── Step labels ──────────────────────────────────────────────────── */
-
-const STEPS = [
-	"Initializing workflow",
-	"Loading resources",
-	"Processing data",
-	"Preparing interface",
-];
-
-function StepIndicator() {
-	const [step, setStep] = useState(0);
-
-	useEffect(() => {
-		const id = setInterval(() => {
-			setStep((s) => (s + 1) % STEPS.length);
-		}, 2200);
-		return () => clearInterval(id);
-	}, []);
-
-	return (
-		<div className="flex items-center gap-2">
-			<div className="flex gap-1">
-				{STEPS.map((stepLabel, i) => (
-					<div
-						key={stepLabel}
-						className={cn(
-							"h-1 rounded-full transition-all duration-500",
-							i <= step ? "w-5 bg-primary/60" : "w-1.5 bg-muted-foreground/15",
-						)}
-					/>
-				))}
-			</div>
-			<span className="text-xs text-muted-foreground/50 min-w-32.5 transition-all duration-300">
-				{STEPS[step]}…
-			</span>
-		</div>
-	);
-}
-
-function WorkflowLoadingShader() {
+function LatticeCanvas() {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const themeRef = useRef<ShaderTheme>(DEFAULT_SHADER_THEME);
 
@@ -630,25 +622,96 @@ function WorkflowLoadingShader() {
 	}, []);
 
 	return (
-		<div
-			className="pointer-events-none absolute inset-0 overflow-hidden"
+		<canvas
+			ref={canvasRef}
+			className="absolute inset-0 h-full w-full"
 			aria-hidden
-		>
-			<div
-				className="absolute inset-0 opacity-70"
-				style={{
-					background:
-						"linear-gradient(135deg, color-mix(in oklch, var(--primary) 14%, var(--background)) 0%, var(--background) 54%, color-mix(in oklch, var(--tertiary) 12%, var(--background)) 100%)",
-				}}
-			/>
-			<canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
-			<div
-				className="absolute inset-0"
-				style={{
-					background:
-						"radial-gradient(ellipse at center, transparent 0%, color-mix(in oklch, var(--background) 30%, transparent) 58%, var(--background) 100%)",
-				}}
-			/>
+		/>
+	);
+}
+
+/* ── Readout ──────────────────────────────────────────────────────── */
+
+const PHASES = [
+	"Initializing workflow",
+	"Loading resources",
+	"Processing data",
+	"Preparing interface",
+] as const;
+
+const PHASE_MS = 2200;
+
+/**
+ * The phase is the only thing on screen that changes, so it is the only thing
+ * set large. The run title drops to a tracked eyebrow carrying four ticks.
+ */
+function PhaseReadout({ title }: Readonly<{ title: string }>) {
+	const [index, setIndex] = useState(0);
+	const [outgoing, setOutgoing] = useState<number | null>(null);
+	const indexRef = useRef(0);
+
+	useEffect(() => {
+		if (
+			typeof window !== "undefined" &&
+			window.matchMedia("(prefers-reduced-motion: reduce)").matches
+		) {
+			return;
+		}
+
+		const id = setInterval(() => {
+			const previous = indexRef.current;
+			const next = (previous + 1) % PHASES.length;
+			indexRef.current = next;
+			setOutgoing(previous);
+			setIndex(next);
+		}, PHASE_MS);
+
+		return () => clearInterval(id);
+	}, []);
+
+	useEffect(() => {
+		if (outgoing === null) return;
+		const id = setTimeout(() => setOutgoing(null), 1000);
+		return () => clearTimeout(id);
+	}, [outgoing]);
+
+	return (
+		<div className="fxl-readout">
+			<div className="fxl-eyebrow">
+				<span className="fxl-kicker">{title}</span>
+				<span
+					className="fxl-ticks"
+					role="img"
+					aria-label={`Step ${index + 1} of ${PHASES.length}`}
+				>
+					{PHASES.map((phase, position) => (
+						<i
+							key={phase}
+							className={cn(
+								"fxl-tick",
+								position < index && "is-done",
+								position === index && "is-cur",
+							)}
+						>
+							<i className="fxl-tick-fill" />
+						</i>
+					))}
+				</span>
+			</div>
+
+			<output className="fxl-stack" aria-live="polite">
+				{outgoing !== null && (
+					<p key={`out-${outgoing}`} className="fxl-phase is-out" aria-hidden>
+						{PHASES[outgoing]}
+					</p>
+				)}
+				<p
+					key={`in-${index}`}
+					className={cn("fxl-phase", outgoing !== null && "is-in")}
+				>
+					{PHASES[index]}
+				</p>
+			</output>
 		</div>
 	);
 }
@@ -662,83 +725,235 @@ export function PageLoadingSkeleton({
 	return (
 		<div
 			className={cn(
-				"relative flex flex-col items-center justify-center h-full w-full gap-8 overflow-hidden bg-background p-8",
+				"fxl-root relative flex h-full w-full items-center justify-center overflow-hidden bg-background",
 				className,
 			)}
 		>
-			<WorkflowLoadingShader />
-
-			{/* animated node graph */}
-			<div className="relative z-10 pls-enter">
-				<NodeGraph />
-			</div>
-
-			{/* status area */}
-			<div
-				className="relative z-10 flex flex-col items-center gap-3 rounded-lg border border-border/45 bg-background/60 px-5 py-4 shadow-sm backdrop-blur-md pls-enter"
-				style={{ animationDelay: "0.2s" }}
-			>
-				<p className="text-sm font-medium text-foreground/70">{title}</p>
-				<StepIndicator />
-			</div>
+			<LatticeCanvas />
+			<PhaseReadout title={title} />
 
 			<style>{`
-				/* entry */
-				.pls-enter {
-					animation: pls-enter 0.7s ease-out both;
-				}
-				@keyframes pls-enter {
-					from { opacity: 0; transform: translateY(12px) scale(0.97); }
-					to   { opacity: 1; transform: translateY(0) scale(1); }
+				.fxl-root {
+					container-type: inline-size;
+					container-name: loading;
+					padding: 1.5rem;
 				}
 
-				/* graph edges */
-				.pls-edge {
-					stroke: color-mix(in oklch, var(--primary) 18%, transparent);
-					stroke-width: 1.5;
-					stroke-dasharray: 200;
-					stroke-dashoffset: 200;
-					animation: pls-draw 1.2s ease-out forwards;
-				}
-				@keyframes pls-draw {
-					to { stroke-dashoffset: 0; }
+				/* Two bands, nothing else: a quiet tracked eyebrow carrying the run
+				   title and its four progress ticks, and the live phase set at display
+				   scale beneath it. */
+				.fxl-root .fxl-readout {
+					position: relative;
+					z-index: 10;
+					max-width: 100%;
+					display: flex;
+					flex-direction: column;
+					align-items: center;
+					gap: clamp(0.5rem, 1.1cqi, 0.95rem);
+					text-align: center;
+					animation: fxl-rise 0.9s cubic-bezier(0.22, 1, 0.36, 1) both;
+
+					/* Knockout halo painted in the page's own ground colour. It follows
+					   the glyph outlines exactly, so an ignited filament crossing behind
+					   the type is pushed off the letterforms without a card or a pane. */
+					--fxl-halo:
+						0 0 0.09em color-mix(in oklab, var(--background) 96%, transparent),
+						0 0 0.2em color-mix(in oklab, var(--background) 92%, transparent),
+						0 0 0.42em color-mix(in oklab, var(--background) 82%, transparent),
+						0 0 0.85em color-mix(in oklab, var(--background) 64%, transparent),
+						0 0 1.7em color-mix(in oklab, var(--background) 42%, transparent);
 				}
 
-				/* traveling particle */
-				.pls-particle {
-					fill: color-mix(in oklch, var(--primary) 62%, var(--foreground));
+				/* Broad feathered wash that deepens the shader's own centre calm rather
+				   than covering it — it never reaches an edge, so it reads as sky. */
+				.fxl-root .fxl-readout::before {
+					content: "";
+					position: absolute;
+					left: 50%;
+					top: 50%;
+					width: calc(100% + clamp(4rem, 14cqi, 15rem));
+					height: calc(100% + clamp(3rem, 9cqi, 9rem));
+					transform: translate(-50%, -50%);
+					background: radial-gradient(
+						52% 56% at 50% 50%,
+						color-mix(in oklab, var(--background) 80%, transparent) 0%,
+						color-mix(in oklab, var(--background) 60%, transparent) 44%,
+						color-mix(in oklab, var(--background) 24%, transparent) 70%,
+						transparent 89%
+					);
+					pointer-events: none;
 				}
 
-				/* graph nodes */
-				.pls-node {
-					fill: color-mix(in oklch, var(--primary) 16%, var(--background));
-					stroke: color-mix(in oklch, var(--primary) 42%, var(--foreground));
-					stroke-width: 1.5;
-					animation: pls-pop 0.5s ease-out both;
-				}
-				@keyframes pls-pop {
-					from { r: 0; opacity: 0; }
-					to   { opacity: 1; }
+				.fxl-root .fxl-eyebrow {
+					position: relative;
+					z-index: 1;
+					display: flex;
+					align-items: center;
+					gap: clamp(0.65rem, 1.5cqi, 1.1rem);
 				}
 
-				/* outer ring pulse on nodes */
-				.pls-ring {
-					fill: none;
-					stroke: color-mix(in oklch, var(--primary) 12%, transparent);
-					stroke-width: 1;
-					animation: pls-ring-pulse 2.5s ease-in-out infinite;
+				.fxl-root .fxl-kicker {
+					margin-right: -0.34em;
+					font-size: clamp(0.5625rem, 0.82cqi, 0.75rem);
+					font-weight: 500;
+					line-height: 1;
+					letter-spacing: 0.34em;
+					text-transform: uppercase;
+					white-space: nowrap;
+					color: color-mix(in oklab, var(--foreground) 58%, var(--muted-foreground));
+					text-shadow:
+						0 0 0.45em color-mix(in oklab, var(--background) 97%, transparent),
+						0 0 0.9em color-mix(in oklab, var(--background) 90%, transparent),
+						0 0 2em color-mix(in oklab, var(--background) 66%, transparent);
 				}
-				@keyframes pls-ring-pulse {
-					0%, 100% { opacity: 0.4; r: inherit; }
-					50%      { opacity: 0;   }
+
+				/* Four ticks, not four junctions: a flat measure that cannot be mistaken
+				   for the lattice behind it. The live one charges across its own dwell. */
+				.fxl-root .fxl-ticks {
+					display: flex;
+					align-items: center;
+					gap: clamp(4px, 0.55cqi, 7px);
+				}
+
+				.fxl-root .fxl-tick {
+					position: relative;
+					flex: 0 0 auto;
+					width: clamp(13px, 1.5cqi, 20px);
+					height: 3px;
+					border-radius: 999px;
+					overflow: hidden;
+					background: color-mix(in oklab, var(--foreground) 24%, transparent);
+					box-shadow: 0 0 0 1.5px color-mix(in oklab, var(--background) 74%, transparent);
+					transition: background 320ms ease;
+				}
+
+				.fxl-root .fxl-tick.is-done {
+					background: color-mix(in oklab, var(--foreground) 46%, transparent);
+				}
+
+				/* Tinted before it charges, so the live tick is never mistaken for a
+				   pending one in the first moments after an advance. */
+				.fxl-root .fxl-tick.is-cur {
+					background: color-mix(in oklab, var(--primary) 30%, transparent);
+					box-shadow:
+						0 0 0 1.5px color-mix(in oklab, var(--background) 74%, transparent),
+						0 0 9px color-mix(in oklab, var(--primary) 45%, transparent);
+				}
+
+				.fxl-root .fxl-tick-fill {
+					position: absolute;
+					inset: 0;
+					transform: scaleX(0);
+					transform-origin: left center;
+					background: var(--primary);
+				}
+
+				.fxl-root .fxl-tick.is-cur .fxl-tick-fill {
+					animation: fxl-charge 2.2s linear both;
+				}
+
+				/* One cell, two layers: the outgoing phase and the incoming one overlap
+				   here so the change is a dissolve in place rather than a reflow. */
+				.fxl-root .fxl-stack {
+					position: relative;
+					z-index: 1;
+					display: grid;
+					max-width: 100%;
+					font-size: clamp(1.5rem, 5.5cqi, 3.75rem);
+				}
+
+				.fxl-root .fxl-stack::before {
+					content: "";
+					position: absolute;
+					inset: -0.46em -1.7em;
+					background: radial-gradient(
+						50% 50% at 50% 50%,
+						color-mix(in oklab, var(--background) 76%, transparent) 0%,
+						color-mix(in oklab, var(--background) 54%, transparent) 50%,
+						transparent 100%
+					);
+					pointer-events: none;
+				}
+
+				.fxl-root .fxl-phase {
+					grid-area: 1 / 1;
+					position: relative;
+					z-index: 1;
+					justify-self: center;
+					margin: 0 -0.06em 0 0;
+					font-size: 1em;
+					font-weight: 300;
+					line-height: 1.12;
+					letter-spacing: 0.06em;
+					white-space: nowrap;
+					color: var(--foreground);
+					text-shadow: var(--fxl-halo);
+				}
+
+				/* Staggered so the two phrases never share the line at full strength:
+				   the old one is gone by the time the new one comes into focus. */
+				.fxl-root .fxl-phase.is-in {
+					animation: fxl-phase-in 0.72s cubic-bezier(0.16, 1, 0.3, 1) 0.15s both;
+				}
+
+				.fxl-root .fxl-phase.is-out {
+					animation: fxl-phase-out 0.34s cubic-bezier(0.4, 0, 0.25, 1) both;
+				}
+
+				/* Above the fold the pair can breathe and the eyebrow opens up; below it
+				   the two bands close ranks so the phase keeps the space. */
+				@container loading (min-width: 30rem) {
+					.fxl-root .fxl-readout {
+						gap: clamp(0.85rem, 1.5cqi, 1.4rem);
+					}
+
+					.fxl-root .fxl-eyebrow {
+						gap: clamp(0.85rem, 1.6cqi, 1.25rem);
+					}
+
+					.fxl-root .fxl-kicker {
+						margin-right: -0.38em;
+						letter-spacing: 0.38em;
+					}
+				}
+
+				@keyframes fxl-rise {
+					from { opacity: 0; transform: translateY(12px) scale(0.985); }
+					to   { opacity: 1; transform: none; }
+				}
+
+				@keyframes fxl-charge {
+					from { transform: scaleX(0); }
+					to   { transform: scaleX(1); }
+				}
+
+				/* Tracking-in: the phrase resolves out of the field instead of appearing. */
+				@keyframes fxl-phase-in {
+					from { opacity: 0; transform: translateY(0.22em); filter: blur(10px); letter-spacing: 0.2em; }
+					55%  { opacity: 1; }
+					to   { opacity: 1; transform: none; filter: blur(0); letter-spacing: 0.06em; }
+				}
+
+				@keyframes fxl-phase-out {
+					from { opacity: 1; transform: none; filter: blur(0); letter-spacing: 0.06em; }
+					to   { opacity: 0; transform: translateY(-0.16em); filter: blur(8px); letter-spacing: 0.11em; }
 				}
 
 				@media (prefers-reduced-motion: reduce) {
-					.pls-enter,
-					.pls-edge,
-					.pls-node,
-					.pls-ring {
-						animation: none !important;
+					.fxl-root .fxl-readout { animation: none; }
+
+					.fxl-root .fxl-phase.is-in,
+					.fxl-root .fxl-phase.is-out {
+						animation: none;
+					}
+
+					.fxl-root .fxl-tick {
+						transition: none;
+					}
+
+					.fxl-root .fxl-tick.is-cur .fxl-tick-fill {
+						animation: none;
+						transform: none;
 					}
 				}
 			`}</style>

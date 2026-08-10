@@ -62,6 +62,25 @@ export interface ISinkConfig {
 	description?: string;
 }
 
+/**
+ * The slice of the event mapping a running interface needs.
+ *
+ * Everything else in `IEventMapping` — the configuration panels, the default payloads, the
+ * sink availability table — belongs to the builder. Keeping the runtime contract narrow is
+ * what lets `/use` load the interfaces it renders without also pulling in every editor
+ * surface behind them.
+ */
+export type IUseEventMapping = Record<
+	string,
+	{
+		eventTypes: string[];
+		useInterfaces: Record<
+			string,
+			(props: IUseInterfaceProps) => JSX.Element | null
+		>;
+	}
+>;
+
 export type IEventMapping = Record<
 	string,
 	{

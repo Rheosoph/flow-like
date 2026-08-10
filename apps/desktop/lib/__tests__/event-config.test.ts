@@ -2,7 +2,37 @@ import {
 	EVENT_CONFIG,
 	isChatEventType,
 } from "@flow-like/flow-like-ui/lib/event-config";
+import { USE_EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config-use";
 import { describe, expect, test } from "vitest";
+
+describe("runtime event config", () => {
+	// `/use` loads USE_EVENT_CONFIG instead of EVENT_CONFIG so a running app never pulls the
+	// builder's configuration panels into its bundle. The two are written by hand, so drift
+	// would silently make an event type unrenderable at runtime while it still looks
+	// configurable in the editor.
+	test("covers exactly the event groups and types the full config declares", () => {
+		expect(Object.keys(USE_EVENT_CONFIG).toSorted()).toEqual(
+			Object.keys(EVENT_CONFIG).toSorted(),
+		);
+
+		for (const [group, full] of Object.entries(EVENT_CONFIG)) {
+			expect(USE_EVENT_CONFIG[group].eventTypes).toEqual(full.eventTypes);
+			expect(
+				Object.keys(USE_EVENT_CONFIG[group].useInterfaces).toSorted(),
+			).toEqual(Object.keys(full.useInterfaces).toSorted());
+		}
+	});
+
+	test("resolves the same interface component for every renderable event type", () => {
+		for (const [group, full] of Object.entries(EVENT_CONFIG)) {
+			for (const [eventType, component] of Object.entries(full.useInterfaces)) {
+				expect(USE_EVENT_CONFIG[group].useInterfaces[eventType]).toBe(
+					component,
+				);
+			}
+		}
+	});
+});
 
 describe("daemon event config", () => {
 	test("is available as a local-only simple event sink", () => {

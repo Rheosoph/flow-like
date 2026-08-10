@@ -120,6 +120,18 @@ export interface PageListItem {
 	unavailable?: boolean;
 }
 
+export interface IGetPageOptions {
+	/**
+	 * `"await"` (the default) resolves only once the server has been consulted, so the result
+	 * is safe to read-modify-write. `"background"` resolves from the local copy as soon as it
+	 * is readable and refreshes it afterwards — for rendering, where a page that is one
+	 * revision old beats a blank screen, and where a later revision arrives as a re-render.
+	 */
+	readonly revalidate?: "await" | "background";
+	/** Invoked when background revalidation produced a newer payload than the one returned. */
+	readonly onRevalidated?: (page: IPage) => void;
+}
+
 export interface IPageState {
 	getPages(appId: string, boardId?: string): Promise<PageListItem[]>;
 	/**
@@ -131,6 +143,7 @@ export interface IPageState {
 		pageId: string,
 		boardId?: string,
 		version?: [number, number, number],
+		options?: IGetPageOptions,
 	): Promise<IPage>;
 	createPage(
 		appId: string,

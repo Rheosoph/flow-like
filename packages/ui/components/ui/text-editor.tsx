@@ -2,16 +2,14 @@
 
 import { remarkMdx, remarkMention } from "@platejs/markdown";
 import { PlateStatic, type Value, createSlateEditor } from "platejs";
-import { Plate, usePlateEditor } from "platejs/react";
 import {
 	type KeyboardEvent,
 	type MouseEvent,
+	Suspense,
+	lazy,
 	memo,
 	useContext,
-	useEffect,
 	useMemo,
-	useRef,
-	useState,
 } from "react";
 import remarkBreaks from "remark-breaks";
 import remarkEmoji from "remark-emoji";
@@ -19,7 +17,6 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { AIUsageAppContext } from "../editor/ai-usage-context";
 import { BaseEditorKit } from "../editor/editor-base-kit";
-import { createEditorKit } from "../editor/editor-kit";
 import {
 	type MentionItem,
 	MentionItemsProvider,
@@ -28,12 +25,20 @@ import { preprocessDirectiveBlocks } from "../editor/plugins/remark-directives";
 import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
 import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
 import { remarkUserMention } from "../editor/plugins/remark-user-mention";
-import { Editor, EditorContainer } from "../editor/ui/editor";
 import {
 	LazyPlateStatic,
 	WINDOWING_BLOCK_THRESHOLD,
 	indexEditorPaths,
 } from "./lazy-plate-static";
+
+// Read-only rendering is by far the common case — a2ui pages, chat transcripts, database
+// previews — and it needs none of the editing machinery. Reaching the editable editor through
+// a dynamic import keeps `createEditorKit` and its three dozen plugin kits out of their bundles.
+const TextEditorEditable = lazy(() =>
+	import("./text-editor-editable").then((module) => ({
+		default: module.TextEditorEditable,
+	})),
+);
 
 const EMPTY_MENTION_ITEMS: ReadonlyArray<MentionItem> = [];
 
@@ -41,7 +46,7 @@ const EMPTY_MENTION_ITEMS: ReadonlyArray<MentionItem> = [];
  * A prefix to identify content that is serialized as Plate's native JSON.
  * This allows switching from initial Markdown to JSON after the first edit.
  */
-const PLATE_JSON_PREFIX = "plate_json::";
+export const PLATE_JSON_PREFIX = "plate_json::";
 
 type PlateLikeNode = {
 	children?: PlateLikeNode[];
@@ -349,78 +354,6 @@ export const safeDeserialize = (
 	}
 };
 
-function TextEditorInner({
-	initialContent,
-	onChange,
-	isMarkdown,
-	onFocusNode,
-}: Readonly<{
-	initialContent: string;
-	onChange: (content: string) => void;
-	isMarkdown?: boolean;
-	onFocusNode?: (nodeId: string) => void;
-}>) {
-	const appId = useContext(AIUsageAppContext);
-	const editorPlugins = useMemo(() => createEditorKit(appId), [appId]);
-	const remarkPlugins = useMemo(
-		() => [
-			[remarkMath, { singleDollarTextMath: false }],
-			remarkGfm,
-			remarkBreaks,
-			remarkMdx,
-			remarkMention,
-			remarkEmoji as unknown,
-			remarkFocusNodes,
-			remarkUserMention,
-			remarkInlineSpoiler,
-		],
-		[],
-	);
-	const lastEmittedContentRef = useRef(initialContent);
-	const [editorSeed, setEditorSeed] = useState(initialContent);
-
-	useEffect(() => {
-		if (initialContent === lastEmittedContentRef.current) {
-			return;
-		}
-
-		lastEmittedContentRef.current = initialContent;
-		setEditorSeed(initialContent);
-	}, [initialContent]);
-
-	const editor = usePlateEditor(
-		{
-			id: "rendered-editor",
-			plugins: editorPlugins,
-			value: (self) =>
-				safeDeserialize(self, editorSeed, isMarkdown ?? false, remarkPlugins),
-		},
-		[editorSeed, isMarkdown, remarkPlugins, editorPlugins],
-	);
-
-	return (
-		<Plate
-			editor={editor}
-			onChange={({ editor }) => {
-				const serializedNodes = editor.children;
-				const newContent = `${PLATE_JSON_PREFIX}${JSON.stringify(
-					serializedNodes,
-				)}`;
-
-				if (newContent === lastEmittedContentRef.current) {
-					return;
-				}
-				lastEmittedContentRef.current = newContent;
-				onChange(newContent);
-			}}
-		>
-			<EditorContainer>
-				<Editor variant="none" className="px-4 py-2" />
-			</EditorContainer>
-		</Plate>
-	);
-}
-
 function TextEditorStatic({
 	initialContent,
 	isMarkdown,
@@ -542,14 +475,16 @@ export const TextEditor = memo(function TextEditor({
 		return (
 			<AIUsageAppContext.Provider value={appId ?? inheritedAppId}>
 				<MentionItemsProvider value={items}>
-					<TextEditorInner
-						initialContent={initialContent}
-						onChange={(content: string) => {
-							onChange(content);
-						}}
-						isMarkdown={isMarkdown}
-						onFocusNode={onFocusNode}
-					/>
+					<Suspense fallback={<div className="px-4 py-2" />}>
+						<TextEditorEditable
+							initialContent={initialContent}
+							onChange={(content: string) => {
+								onChange(content);
+							}}
+							isMarkdown={isMarkdown}
+							onFocusNode={onFocusNode}
+						/>
+					</Suspense>
 				</MentionItemsProvider>
 			</AIUsageAppContext.Provider>
 		);

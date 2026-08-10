@@ -65,13 +65,23 @@ export class RouteState implements IAppRouteState {
 				this.backend.auth,
 			);
 			const mapped = remote.map(toRouteMapping);
-			for (const r of mapped) {
-				await invoke("set_app_route", {
-					appId,
-					path: r.path,
-					eventId: r.eventId,
-				}).catch(() => {});
-			}
+
+			// Mirroring the routes locally is one IPC round trip each, and nothing in the
+			// returned mapping depends on those writes having landed — they only serve the next
+			// offline read. Running them ahead of the caller charged the first paint of every
+			// app for a list it already had in hand.
+			this.backend.backgroundTaskHandler(
+				Promise.allSettled(
+					mapped.map((r) =>
+						invoke("set_app_route", {
+							appId,
+							path: r.path,
+							eventId: r.eventId,
+						}),
+					),
+				).then(() => undefined),
+			);
+
 			return mergeLocalAndRemoteRoutes(local, mapped);
 		};
 

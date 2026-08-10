@@ -1,6 +1,6 @@
 "use client";
 
-import type { ComponentType } from "react";
+import { type ComponentType, Suspense, lazy } from "react";
 import type {
 	A2UIClientMessage,
 	A2UIComponent,
@@ -8,99 +8,64 @@ import type {
 	Style,
 } from "./types";
 
-// Layout components
-import {
-	A2UIAbsolute,
-	A2UIAspectRatio,
-	A2UIBox,
-	A2UICenter,
-	A2UIColumn,
-	A2UIGrid,
-	A2UIMicroWidget,
-	A2UIOverlay,
-	A2UIRow,
-	A2UIScrollArea,
-	A2UISpacer,
-	A2UIStack,
-	A2UIWidgetInstance,
-} from "./layout";
+import { A2UIMicroWidget } from "./layout/A2UIMicroWidget";
+import { A2UIWidgetInstance } from "./layout/A2UIWidgetInstance";
+// Imported by module path rather than through the folder barrels: a barrel re-export makes
+// every component in the folder reachable from one specifier, which is exactly what put the
+// 3D renderer and the mapping stack into the first load of pages that use neither.
+import { A2UIAbsolute } from "./layout/Absolute";
+import { A2UIAspectRatio } from "./layout/AspectRatio";
+import { A2UIBox } from "./layout/Box";
+import { A2UICenter } from "./layout/Center";
+import { A2UIColumn } from "./layout/Column";
+import { A2UIGrid } from "./layout/Grid";
+import { A2UIOverlay } from "./layout/Overlay";
+import { A2UIRow } from "./layout/Row";
+import { A2UIScrollArea } from "./layout/ScrollArea";
+import { A2UISpacer } from "./layout/Spacer";
+import { A2UIStack } from "./layout/Stack";
 
-// Display components
-import {
-	A2UIAvatar,
-	A2UIBadge,
-	A2UIBoundingBoxOverlay,
-	A2UICalendar,
-	A2UIDiffView,
-	A2UIDivider,
-	A2UIFilePreview,
-	A2UIGantt,
-	A2UIGeoMap,
-	A2UIGraph,
-	A2UIIcon,
-	A2UIIframe,
-	A2UIImage,
-	A2UILottie,
-	A2UIMarkdown,
-	A2UINivoChart,
-	A2UIOntologyGraph,
-	A2UIPlotlyChart,
-	A2UIProgress,
-	A2UISkeleton,
-	A2UISpinner,
-	A2UITable,
-	A2UITableCell,
-	A2UITableRow,
-	A2UIText,
-	A2UIUserProfile,
-	A2UIVideo,
-} from "./display";
+import { A2UIAvatar } from "./display/Avatar";
+import { A2UIBadge } from "./display/Badge";
+import { A2UIBoundingBoxOverlay } from "./display/BoundingBoxOverlay";
+import { A2UIDivider } from "./display/Divider";
+import { A2UIFilePreview } from "./display/FilePreview";
+import { A2UIIcon } from "./display/Icon";
+import { A2UIIframe } from "./display/Iframe";
+import { A2UIImage } from "./display/Image";
+import { A2UIMarkdown } from "./display/Markdown";
+import { A2UIProgress } from "./display/Progress";
+import { A2UISkeleton } from "./display/Skeleton";
+import { A2UISpinner } from "./display/Spinner";
+import { A2UITable, A2UITableCell, A2UITableRow } from "./display/Table";
+import { A2UIText } from "./display/Text";
+import { A2UIUserProfile } from "./display/UserProfile";
+import { A2UIVideo } from "./display/Video";
 
-// Interactive components
-import {
-	A2UIAppLink,
-	A2UIButton,
-	A2UICheckbox,
-	A2UIDateTimeInput,
-	A2UIFeedback,
-	A2UIFileInput,
-	A2UIImageHotspot,
-	A2UIImageInput,
-	A2UIImageLabeler,
-	A2UILink,
-	A2UIRadioGroup,
-	A2UISelect,
-	A2UISlider,
-	A2UISwitch,
-	A2UITextField,
-	A2UIVoiceInput,
-} from "./interactive";
+import { A2UIAppLink } from "./interactive/AppLink";
+import { A2UIButton } from "./interactive/Button";
+import { A2UICheckbox } from "./interactive/Checkbox";
+import { A2UIDateTimeInput } from "./interactive/DateTimeInput";
+import { A2UIFeedback } from "./interactive/Feedback";
+import { A2UIFileInput } from "./interactive/FileInput";
+import { A2UIImageHotspot } from "./interactive/ImageHotspot";
+import { A2UIImageInput } from "./interactive/ImageInput";
+import { A2UIImageLabeler } from "./interactive/ImageLabeler";
+import { A2UILink } from "./interactive/Link";
+import { A2UIRadioGroup } from "./interactive/RadioGroup";
+import { A2UISelect } from "./interactive/Select";
+import { A2UISlider } from "./interactive/Slider";
+import { A2UISwitch } from "./interactive/Switch";
+import { A2UITextField } from "./interactive/TextField";
+import { A2UIVoiceInput } from "./interactive/VoiceInput";
 
-// Container components
-import {
-	A2UIAccordion,
-	A2UICard,
-	A2UIDrawer,
-	A2UIModal,
-	A2UIPopover,
-	A2UITabs,
-	A2UITooltip,
-} from "./container";
-
-// Game components
-import {
-	A2UICanvas2D,
-	A2UICharacterPortrait,
-	A2UIChoiceMenu,
-	A2UIDialogue,
-	A2UIHealthBar,
-	A2UIInventoryGrid,
-	A2UIMiniMap,
-	A2UIModel3D,
-	A2UIScene3D,
-	A2UIShape,
-	A2UISprite,
-} from "./game";
+import { A2UIAccordion } from "./container/Accordion";
+import { A2UICard } from "./container/Card";
+import { A2UIDrawer } from "./container/Drawer";
+import { A2UIModal } from "./container/Modal";
+import { A2UIPopover } from "./container/Popover";
+import { A2UITabs } from "./container/Tabs";
+import { A2UITooltip } from "./container/Tooltip";
 
 export type RenderChildFn = (
 	childId: string,
@@ -119,6 +84,37 @@ export interface ComponentProps<T extends A2UIComponent = A2UIComponent> {
 }
 
 type ComponentRenderer = ComponentType<ComponentProps>;
+
+/**
+ * Registers a component that is fetched the first time a surface actually contains one.
+ *
+ * The heavy renderers — charts, maps, graphs, the 3D scene — are rare on any given page but
+ * expensive in every bundle that can reach them. Each already renders nothing until its own
+ * library finishes loading, so an empty frame while the module arrives is the behaviour they
+ * had anyway; the Suspense boundary lives here so `A2UIRenderer` stays unaware of the split.
+ */
+function lazyRenderer(
+	loader: () => Promise<{ default: ComponentRenderer }>,
+): ComponentRenderer {
+	const Loaded = lazy(loader);
+	return function LazyRenderer(props: ComponentProps) {
+		return (
+			<Suspense fallback={null}>
+				<Loaded {...props} />
+			</Suspense>
+		);
+	};
+}
+
+/**
+ * Each component declares its own narrower prop type, exactly as the eagerly registered ones
+ * do, so the cast that the registry applies to them is applied here too.
+ */
+function named(name: string) {
+	return (module: Record<string, unknown>) => ({
+		default: module[name] as ComponentRenderer,
+	});
+}
 
 const registry: Record<string, ComponentRenderer> = {
 	// Layout
@@ -149,21 +145,37 @@ const registry: Record<string, ComponentRenderer> = {
 	progress: A2UIProgress as ComponentRenderer,
 	spinner: A2UISpinner as ComponentRenderer,
 	skeleton: A2UISkeleton as ComponentRenderer,
-	lottie: A2UILottie as ComponentRenderer,
+	lottie: lazyRenderer(() =>
+		import("./display/Lottie").then(named("A2UILottie")),
+	),
 	iframe: A2UIIframe as ComponentRenderer,
-	plotlyChart: A2UIPlotlyChart as ComponentRenderer,
+	plotlyChart: lazyRenderer(() =>
+		import("./display/PlotlyChart").then(named("A2UIPlotlyChart")),
+	),
 	table: A2UITable as ComponentRenderer,
 	tableRow: A2UITableRow as ComponentRenderer,
 	tableCell: A2UITableCell as ComponentRenderer,
 	filePreview: A2UIFilePreview as ComponentRenderer,
-	diffView: A2UIDiffView as ComponentRenderer,
-	nivoChart: A2UINivoChart as ComponentRenderer,
+	diffView: lazyRenderer(() =>
+		import("./display/DiffView").then(named("A2UIDiffView")),
+	),
+	nivoChart: lazyRenderer(() =>
+		import("./display/NivoChart").then(named("A2UINivoChart")),
+	),
 	boundingBoxOverlay: A2UIBoundingBoxOverlay as ComponentRenderer,
-	geoMap: A2UIGeoMap as ComponentRenderer,
-	graph: A2UIGraph as ComponentRenderer,
-	ontologyGraph: A2UIOntologyGraph as ComponentRenderer,
-	calendar: A2UICalendar as ComponentRenderer,
-	gantt: A2UIGantt as ComponentRenderer,
+	geoMap: lazyRenderer(() =>
+		import("./display/GeoMap").then(named("A2UIGeoMap")),
+	),
+	graph: lazyRenderer(() => import("./display/Graph").then(named("A2UIGraph"))),
+	ontologyGraph: lazyRenderer(() =>
+		import("./display/OntologyGraph").then(named("A2UIOntologyGraph")),
+	),
+	calendar: lazyRenderer(() =>
+		import("./display/Calendar").then(named("A2UICalendar")),
+	),
+	gantt: lazyRenderer(() =>
+		import("./display/GanttChart").then(named("A2UIGantt")),
+	),
 
 	// Interactive
 	button: A2UIButton as ComponentRenderer,
@@ -192,18 +204,37 @@ const registry: Record<string, ComponentRenderer> = {
 	tooltip: A2UITooltip as ComponentRenderer,
 	popover: A2UIPopover as ComponentRenderer,
 
-	// Game
-	canvas2d: A2UICanvas2D as ComponentRenderer,
-	sprite: A2UISprite as ComponentRenderer,
-	shape: A2UIShape as ComponentRenderer,
-	scene3d: A2UIScene3D as ComponentRenderer,
-	model3d: A2UIModel3D as ComponentRenderer,
-	dialogue: A2UIDialogue as ComponentRenderer,
-	characterPortrait: A2UICharacterPortrait as ComponentRenderer,
-	choiceMenu: A2UIChoiceMenu as ComponentRenderer,
-	inventoryGrid: A2UIInventoryGrid as ComponentRenderer,
-	healthBar: A2UIHealthBar as ComponentRenderer,
-	miniMap: A2UIMiniMap as ComponentRenderer,
+	// Game — a niche group that reaches three.js through the 3D scene, so the whole set loads
+	// on demand rather than riding along in every page's bundle.
+	canvas2d: lazyRenderer(() =>
+		import("./game/Canvas2D").then(named("A2UICanvas2D")),
+	),
+	sprite: lazyRenderer(() => import("./game/Sprite").then(named("A2UISprite"))),
+	shape: lazyRenderer(() => import("./game/Shape").then(named("A2UIShape"))),
+	scene3d: lazyRenderer(() =>
+		import("./game/Scene3D").then(named("A2UIScene3D")),
+	),
+	model3d: lazyRenderer(() =>
+		import("./game/Model3D").then(named("A2UIModel3D")),
+	),
+	dialogue: lazyRenderer(() =>
+		import("./game/Dialogue").then(named("A2UIDialogue")),
+	),
+	characterPortrait: lazyRenderer(() =>
+		import("./game/CharacterPortrait").then(named("A2UICharacterPortrait")),
+	),
+	choiceMenu: lazyRenderer(() =>
+		import("./game/ChoiceMenu").then(named("A2UIChoiceMenu")),
+	),
+	inventoryGrid: lazyRenderer(() =>
+		import("./game/InventoryGrid").then(named("A2UIInventoryGrid")),
+	),
+	healthBar: lazyRenderer(() =>
+		import("./game/HealthBar").then(named("A2UIHealthBar")),
+	),
+	miniMap: lazyRenderer(() =>
+		import("./game/MiniMap").then(named("A2UIMiniMap")),
+	),
 };
 
 export function getComponentRenderer(type: string): ComponentRenderer | null {

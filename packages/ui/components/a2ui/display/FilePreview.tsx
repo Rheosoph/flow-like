@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { AudioPreview } from "../../ui/audio-preview";
+import { PdfFrame } from "../../ui/file-previewer";
 import { AudioPlayback, type VoiceVariant } from "../../voice";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
@@ -165,19 +166,11 @@ export function A2UIFilePreview({
 				className={cn("w-full h-full flex flex-col", resolveStyle(style))}
 				style={resolveInlineStyle(style)}
 			>
-				<iframe
-					src={`${src}#toolbar=1&#view=FitH`}
-					className="w-full h-full border-0"
-					title={`PDF Preview: ${rawFileName(src, filename)}`}
+				<PdfFrame
+					url={src}
+					filename={filename ?? rawFileName(src)}
 					loading={loading ?? "lazy"}
-				>
-					<p>
-						Your browser cannot display the PDF.{" "}
-						<a href={src} target="_blank" rel="noopener noreferrer">
-							Download
-						</a>
-					</p>
-				</iframe>
+				/>
 			</div>
 		);
 	}

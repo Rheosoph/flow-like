@@ -23,6 +23,7 @@ export type {
 	ISidebarActions,
 	ISinkConfig,
 	IToolBarActions,
+	IUseEventMapping,
 	IUseInterfaceProps,
 	SinkAvailability,
 } from "./interfaces";

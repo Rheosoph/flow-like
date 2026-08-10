@@ -114,6 +114,25 @@ export const uiElementValues = {
 	},
 };
 
+/**
+ * Drops element values older than `maxAgeMs`.
+ *
+ * Nothing ever deleted these, so a long-lived install accumulated a record for every input any
+ * page ever had. They are only useful while they still describe what the user was doing, which
+ * makes age the natural bound.
+ */
+export async function pruneElementValues(
+	appId: string,
+	maxAgeMs: number,
+): Promise<void> {
+	const cutoff = Date.now() - maxAgeMs;
+	await uiStateDb.elementValues
+		.where("appId")
+		.equals(appId)
+		.filter((record) => record.updatedAt < cutoff)
+		.delete();
+}
+
 export const uiPageState = {
 	async get<T>(
 		appId: string,

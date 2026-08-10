@@ -503,7 +503,11 @@ export const MessageComponent = memo(
 		}, [message.inner, isUser]);
 
 		const handleFileClick = useCallback((file: ProcessedAttachment) => {
-			if (canPreviewFile(file)) {
+			// A cited page is a destination, not a file — downloading its markup is
+			// never what the external-link affordance promised.
+			if (file.type === "website") {
+				window.open(file.url, "_blank", "noopener,noreferrer");
+			} else if (canPreviewFile(file)) {
 				// Open file dialog with this file selected
 				setDialogSelectedFile(file);
 				setShowFileDialog(true);

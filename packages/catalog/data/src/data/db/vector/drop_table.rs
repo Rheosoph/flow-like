@@ -96,12 +96,18 @@ impl NodeLogic for DropTableLocalDatabaseNode {
         let cached_db = database.load(context).await?;
 
         let mut db = cached_db.db.write().await;
+        let table_name = db.inner().table_name().to_string();
+        if flow_like_catalog_core::is_reserved_table(&table_name) {
+            return Err(flow_like_types::anyhow!(
+                "Table '{table_name}' is reserved for internal use and cannot be dropped"
+            ));
+        }
+
         let discarded_writes = db.is_dirty();
         if discarded_writes {
             db.discard_buffer();
         }
 
-        let table_name = db.inner().table_name().to_string();
         let existed = db
             .inner()
             .list_tables()
