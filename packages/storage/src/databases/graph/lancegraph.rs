@@ -460,6 +460,9 @@ impl LanceGraphStore {
         } else {
             append_limit_clause(query, limit)
         };
+        let limited_query =
+            expand_relationship_return_items(&limited_query, parsed.ast(), &self.graph_config)
+                .unwrap_or(limited_query);
         let cypher = CypherQuery::new(&limited_query)
             .map_err(|e| anyhow!("Failed to parse Cypher query: {}", e))?
             .with_config(self.graph_config.clone())
@@ -975,6 +978,243 @@ fn append_limit_clause(query: &str, limit: usize) -> String {
     let trimmed = query.trim();
     let trimmed = trimmed.strip_suffix(';').unwrap_or(trimmed).trim_end();
     format!("{trimmed} LIMIT {limit}")
+}
+
+/// Trailing clauses that end the RETURN item list.
+const RETURN_TRAILING_KEYWORDS: [&str; 3] = ["order", "skip", "limit"];
+
+fn is_word_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'$'
+}
+
+/// Index just past the closing quote of the literal starting at `cursor`.
+fn skip_quoted(bytes: &[u8], cursor: usize) -> usize {
+    let quote = bytes[cursor];
+    let mut index = cursor + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            byte if byte == quote => return index + 1,
+            _ => index += 1,
+        }
+    }
+    bytes.len()
+}
+
+/// Byte range of the RETURN item list, skipping keywords that only look like
+/// clause boundaries because they sit inside a string literal or a nested
+/// expression.
+fn return_item_span(query: &str) -> Option<(usize, usize)> {
+    let bytes = query.as_bytes();
+    let mut items_start: Option<usize> = None;
+    let mut items_end = query.len();
+    let mut depth = 0usize;
+    let mut cursor = 0usize;
+
+    while cursor < bytes.len() {
+        let byte = bytes[cursor];
+        match byte {
+            b'\'' | b'"' | b'`' => {
+                cursor = skip_quoted(bytes, cursor);
+                continue;
+            }
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                cursor += 1;
+                continue;
+            }
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                cursor += 1;
+                continue;
+            }
+            _ if !is_word_byte(byte) => {
+                cursor += 1;
+                continue;
+            }
+            _ => {}
+        }
+
+        let word_start = cursor;
+        while cursor < bytes.len() && is_word_byte(bytes[cursor]) {
+            cursor += 1;
+        }
+        if depth > 0 {
+            continue;
+        }
+
+        let word = &query[word_start..cursor];
+        match items_start {
+            None if word.eq_ignore_ascii_case("return") => items_start = Some(cursor),
+            // DISTINCT belongs to the clause, not to the first item.
+            Some(start)
+                if word.eq_ignore_ascii_case("distinct")
+                    && query[start..word_start].trim().is_empty() =>
+            {
+                items_start = Some(cursor)
+            }
+            Some(_)
+                if RETURN_TRAILING_KEYWORDS
+                    .iter()
+                    .any(|keyword| word.eq_ignore_ascii_case(keyword)) =>
+            {
+                items_end = word_start;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    items_start.map(|start| (start, items_end))
+}
+
+fn split_top_level_items(items: &str) -> Vec<&str> {
+    let bytes = items.as_bytes();
+    let mut spans = Vec::new();
+    let mut item_start = 0usize;
+    let mut depth = 0usize;
+    let mut cursor = 0usize;
+
+    while cursor < bytes.len() {
+        match bytes[cursor] {
+            b'\'' | b'"' | b'`' => cursor = skip_quoted(bytes, cursor),
+            b'(' | b'[' | b'{' => {
+                depth += 1;
+                cursor += 1;
+            }
+            b')' | b']' | b'}' => {
+                depth = depth.saturating_sub(1);
+                cursor += 1;
+            }
+            b',' if depth == 0 => {
+                spans.push(&items[item_start..cursor]);
+                cursor += 1;
+                item_start = cursor;
+            }
+            _ => cursor += 1,
+        }
+    }
+    spans.push(&items[item_start..]);
+    spans
+}
+
+/// Columns each relationship variable stands for: its endpoints followed by its
+/// mapped properties. Variables that cannot be resolved to exactly one
+/// single-hop mapping are left out — a variable-length segment is aliased per
+/// hop (`r_1`, `r_2`), so no single column prefix stands for it.
+fn expandable_relationship_variables(
+    ast: &lance_graph::ast::CypherQuery,
+    config: &GraphConfig,
+) -> HashMap<String, Vec<String>> {
+    use lance_graph::ast::{GraphPattern, ReadingClause};
+
+    let mut columns_by_variable: HashMap<String, Vec<String>> = HashMap::new();
+    let mut ambiguous: HashSet<String> = HashSet::new();
+
+    let clauses = ast
+        .reading_clauses
+        .iter()
+        .chain(ast.post_with_reading_clauses.iter());
+    for clause in clauses {
+        let ReadingClause::Match(match_clause) = clause else {
+            continue;
+        };
+        for pattern in &match_clause.patterns {
+            let GraphPattern::Path(path) = pattern else {
+                continue;
+            };
+            for segment in &path.segments {
+                let relationship = &segment.relationship;
+                let Some(variable) = relationship
+                    .variable
+                    .as_ref()
+                    .map(|variable| variable.to_lowercase())
+                else {
+                    continue;
+                };
+                if columns_by_variable.remove(&variable).is_some() || ambiguous.contains(&variable)
+                {
+                    ambiguous.insert(variable);
+                    continue;
+                }
+
+                let single_hop = match &relationship.length {
+                    None => true,
+                    Some(range) => range.min == Some(1) && range.max == Some(1),
+                };
+                if !single_hop {
+                    ambiguous.insert(variable);
+                    continue;
+                }
+                let [relationship_type] = relationship.types.as_slice() else {
+                    ambiguous.insert(variable);
+                    continue;
+                };
+                let Some(mapping) = config.get_relationship_mapping(relationship_type) else {
+                    continue;
+                };
+
+                let mut columns = vec![
+                    mapping.source_id_field.clone(),
+                    mapping.target_id_field.clone(),
+                ];
+                columns.extend(mapping.property_fields.iter().cloned());
+                let mut seen = HashSet::new();
+                columns.retain(|column| seen.insert(column.clone()));
+                columns_by_variable.insert(variable, columns);
+            }
+        }
+    }
+
+    columns_by_variable
+}
+
+/// Rewrites bare relationship variables in RETURN into their mapped columns.
+///
+/// lance-graph expands a bare node variable into the columns of its mapping but
+/// leaves a relationship variable as a plain `r` column reference, which the
+/// joined schema never carries — it prefixes relationship columns with the
+/// variable (`r__since`). Without this rewrite the canonical
+/// `MATCH (n)-[r:REL]->(m) RETURN n, r, m` fails to plan with
+/// "No field named r". Returns `None` when there is nothing to rewrite.
+fn expand_relationship_return_items(
+    query: &str,
+    ast: &lance_graph::ast::CypherQuery,
+    config: &GraphConfig,
+) -> Option<String> {
+    let columns_by_variable = expandable_relationship_variables(ast, config);
+    if columns_by_variable.is_empty() {
+        return None;
+    }
+    let (start, end) = return_item_span(query)?;
+
+    let mut rewritten = String::with_capacity(query.len());
+    let mut changed = false;
+    for (index, item) in split_top_level_items(&query[start..end])
+        .into_iter()
+        .enumerate()
+    {
+        if index > 0 {
+            rewritten.push(',');
+        }
+        let variable = item.trim();
+        match columns_by_variable.get(&variable.to_lowercase()) {
+            Some(columns) => {
+                changed = true;
+                rewritten.push(' ');
+                rewritten.push_str(
+                    &columns
+                        .iter()
+                        .map(|column| format!("{variable}.{column}"))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                );
+            }
+            None => rewritten.push_str(item),
+        }
+    }
+
+    changed.then(|| format!("{}{}{}", &query[..start], rewritten, &query[end..]))
 }
 
 /// Rejects queries the engine cannot bound: variable-length path segments with
@@ -3138,5 +3378,200 @@ mod tests {
 
         std::fs::remove_dir_all(&test_path).ok();
         Ok(())
+    }
+
+    async fn relationship_fixture() -> Result<(LanceGraphStore, String)> {
+        use arrow::array::{RecordBatch, StringArray};
+        use arrow::datatypes::{DataType, Field, Schema};
+        use lancedb::connect;
+
+        let test_path = format!("./tmp/{}", flow_like_types::create_id());
+        std::fs::create_dir_all(&test_path).unwrap();
+        let connection = connect(&test_path).execute().await?;
+
+        let node_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, false),
+            Field::new("name", DataType::Utf8, true),
+        ]));
+        connection
+            .create_table(
+                "people",
+                vec![RecordBatch::try_new(
+                    node_schema,
+                    vec![
+                        Arc::new(StringArray::from(vec!["1", "2"])),
+                        Arc::new(StringArray::from(vec!["Ada", "Grace"])),
+                    ],
+                )?],
+            )
+            .execute()
+            .await?;
+
+        let edge_schema = Arc::new(Schema::new(vec![
+            Field::new("source", DataType::Utf8, false),
+            Field::new("target", DataType::Utf8, false),
+            Field::new("since", DataType::Utf8, true),
+        ]));
+        connection
+            .create_table(
+                "links",
+                vec![RecordBatch::try_new(
+                    edge_schema,
+                    vec![
+                        Arc::new(StringArray::from(vec!["1"])),
+                        Arc::new(StringArray::from(vec!["2"])),
+                        Arc::new(StringArray::from(vec!["2020"])),
+                    ],
+                )?],
+            )
+            .execute()
+            .await?;
+
+        let overlay = overlay_with(
+            vec![node_mapping("Person", "people", "id")],
+            vec![EdgeMappingDef {
+                id: Some("knows".to_string()),
+                api_name: Some("knows".to_string()),
+                label: "KNOWS".to_string(),
+                table: "links".to_string(),
+                src_column: "source".to_string(),
+                dst_column: "target".to_string(),
+                src_label: "Person".to_string(),
+                dst_label: "Person".to_string(),
+                src_node_column: None,
+                dst_node_column: None,
+                containment: false,
+                dst_ontology: None,
+                dst_binding_id: None,
+                property_columns: Vec::new(),
+                style: Value::Null,
+            }],
+        );
+
+        let store = LanceGraphStore::new(connection, overlay, Some(safety())).await?;
+        Ok((store, test_path))
+    }
+
+    // The canonical Cypher shape, and the one the query panel suggests. Without
+    // the RETURN rewrite lance-graph plans `r` as a plain column and fails with
+    // "No field named r".
+    #[tokio::test]
+    async fn returns_relationship_variables_as_their_columns() -> Result<()> {
+        let (store, test_path) = relationship_fixture().await?;
+
+        let rows = store
+            .cypher(
+                "MATCH (n:Person)-[r:KNOWS]->(m:Person) RETURN n, r, m",
+                Value::Null,
+                Some(10),
+            )
+            .await;
+
+        std::fs::remove_dir_all(&test_path).ok();
+
+        let rows = rows?;
+        assert_eq!(rows.len(), 1);
+        let Value::Object(row) = &rows[0] else {
+            panic!("expected an object row");
+        };
+        assert_eq!(row.get("r.source"), Some(&Value::String("1".to_string())));
+        assert_eq!(row.get("r.target"), Some(&Value::String("2".to_string())));
+        assert_eq!(row.get("r.since"), Some(&Value::String("2020".to_string())));
+        assert_eq!(row.get("n.name"), Some(&Value::String("Ada".to_string())));
+        assert_eq!(row.get("m.name"), Some(&Value::String("Grace".to_string())));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn relationship_expansion_leaves_property_and_aggregate_returns_alone() -> Result<()> {
+        let (store, test_path) = relationship_fixture().await?;
+
+        let properties = store
+            .cypher(
+                "MATCH (n:Person)-[r:KNOWS]->(m:Person) RETURN r.since, count(r.since)",
+                Value::Null,
+                Some(10),
+            )
+            .await;
+
+        std::fs::remove_dir_all(&test_path).ok();
+
+        let properties = properties?;
+        assert_eq!(properties.len(), 1);
+        let Value::Object(row) = &properties[0] else {
+            panic!("expected an object row");
+        };
+        assert_eq!(row.len(), 2, "aggregate query must keep its own shape");
+        assert_eq!(
+            row.get("r.since"),
+            Some(&Value::String("2020".to_string())),
+            "property projections must survive untouched"
+        );
+        Ok(())
+    }
+
+    fn knows_config() -> GraphConfig {
+        GraphConfig::builder()
+            .with_node_mapping(lance_graph::NodeMapping::new("Person", "id"))
+            .with_relationship_mapping(
+                lance_graph::RelationshipMapping::new("KNOWS", "source", "target")
+                    .with_properties(vec!["since".to_string()]),
+            )
+            .build()
+            .expect("config should build")
+    }
+
+    fn expand(query: &str) -> Option<String> {
+        let parsed = parse(query);
+        expand_relationship_return_items(query, parsed.ast(), &knows_config())
+    }
+
+    #[test]
+    fn rewrite_expands_only_bare_relationship_variables() {
+        assert_eq!(
+            expand("MATCH (n:Person)-[r:KNOWS]->(m:Person) RETURN n, r, m LIMIT 10").as_deref(),
+            Some(
+                "MATCH (n:Person)-[r:KNOWS]->(m:Person) RETURN n, r.source, r.target, r.since, m LIMIT 10"
+            )
+        );
+        assert_eq!(
+            expand("MATCH (n:Person)-[r:KNOWS]->(m:Person) RETURN DISTINCT r").as_deref(),
+            Some(
+                "MATCH (n:Person)-[r:KNOWS]->(m:Person) RETURN DISTINCT r.source, r.target, r.since"
+            )
+        );
+        assert_eq!(
+            expand("MATCH (n:Person)-[r:KNOWS]->(m:Person) RETURN n, r.since ORDER BY r.since"),
+            None,
+            "property projections need no rewrite"
+        );
+        assert_eq!(
+            expand("MATCH (n:Person)-[:KNOWS]->(m:Person) RETURN n, m"),
+            None
+        );
+    }
+
+    // A variable-length segment is aliased per hop, so no single prefix stands
+    // for the variable — rewriting it would invent columns that do not exist.
+    #[test]
+    fn rewrite_skips_variable_length_and_ambiguous_variables() {
+        assert_eq!(
+            expand("MATCH (n:Person)-[r:KNOWS*1..3]->(m:Person) RETURN n, r, m"),
+            None
+        );
+        assert_eq!(
+            expand(
+                "MATCH (n:Person)-[r:KNOWS]->(m:Person) MATCH (m)-[r:KNOWS]->(o:Person) RETURN r"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn return_span_ignores_keywords_inside_literals_and_calls() {
+        let query =
+            "MATCH (n:Person) WHERE n.name = 'return limit' RETURN n.name, count(n.id) LIMIT 5";
+        let (start, end) = return_item_span(query).expect("span");
+        assert_eq!(query[start..end].trim(), "n.name, count(n.id)");
     }
 }
