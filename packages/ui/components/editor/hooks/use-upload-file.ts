@@ -36,7 +36,11 @@ const EXTENSION_FALLBACKS: Record<string, string> = {
 
 function extensionFor(file: File): string {
 	const fromName = file.name.split(".").pop();
-	if (fromName && fromName !== file.name && /^[A-Za-z0-9]{1,8}$/.test(fromName)) {
+	if (
+		fromName &&
+		fromName !== file.name &&
+		/^[A-Za-z0-9]{1,8}$/.test(fromName)
+	) {
 		return fromName.toLowerCase();
 	}
 	return EXTENSION_FALLBACKS[file.type] ?? file.type.split("/").pop() ?? "bin";

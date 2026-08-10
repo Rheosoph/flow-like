@@ -1155,7 +1155,9 @@ mod tests {
         let html = to_html(&nodes, ImageHandling::Keep);
         assert!(html.contains("<ul style=\"list-style-type:disc\">"));
         assert!(html.contains("<ol style=\"list-style-type:decimal\">"));
-        assert_eq!(html.matches("</ul>").count(), 2);
+        // disc(1) + nested disc(2) + todo(1); the decimal run closes the first disc list.
+        assert_eq!(html.matches("</ul>").count(), 3);
+        assert_eq!(html.matches("</ol>").count(), 1);
         assert!(html.contains("type=\"checkbox\" disabled checked"));
     }
 

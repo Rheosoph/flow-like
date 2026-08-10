@@ -35,9 +35,9 @@ export interface EditorUploadConfig {
 
 export const DEFAULT_UPLOAD_PREFIX = "editor";
 
-export const EditorUploadContext = createContext<EditorUploadConfig | undefined>(
-	undefined,
-);
+export const EditorUploadContext = createContext<
+	EditorUploadConfig | undefined
+>(undefined);
 
 /**
  * Resolve the active upload target, inheriting `appId` from the surrounding editor when the

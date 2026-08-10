@@ -86,8 +86,29 @@ impl NodeLogic for PdfCreateFromMarkdownNode {
         )
         .set_default_value(Some(json!(true)));
 
-        node.add_input_pin("title", "Title", "Document title metadata", VariableType::String)
-            .set_default_value(Some(json!("")));
+        node.add_input_pin(
+            "title",
+            "Title",
+            "Document title. Also sets the running header and the cover block.",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "subtitle",
+            "Subtitle",
+            "Secondary line under the title on the cover block",
+            VariableType::String,
+        )
+        .set_default_value(Some(json!("")));
+
+        node.add_input_pin(
+            "cover",
+            "Cover Block",
+            "Open the document with the accent title block",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(true)));
 
         node.add_input_pin(
             "author",
@@ -113,7 +134,7 @@ impl NodeLogic for PdfCreateFromMarkdownNode {
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         use super::render::{
-            Block, PdfLayout, PdfMetadata, build_pdf, parse_markdown, render_blocks,
+            Block, PdfLayout, PdfMetadata, build_pdf, parse_markdown, render_document,
         };
         use std::collections::HashMap;
 
@@ -125,6 +146,8 @@ impl NodeLogic for PdfCreateFromMarkdownNode {
         let embed_images: bool = context.evaluate_pin("embed_images").await?;
         let page_numbers: bool = context.evaluate_pin("page_numbers").await?;
         let title: String = context.evaluate_pin("title").await?;
+        let subtitle: String = context.evaluate_pin("subtitle").await?;
+        let cover: bool = context.evaluate_pin("cover").await?;
         let author: String = context.evaluate_pin("author").await?;
 
         let layout = PdfLayout::for_page_size(&page_size);
@@ -142,21 +165,18 @@ impl NodeLogic for PdfCreateFromMarkdownNode {
             images = resolve_images(context, &urls).await;
         }
 
-        let (pages, image_keys) = render_blocks(&blocks, &layout, &images);
+        let metadata = PdfMetadata {
+            title: (!title.is_empty()).then_some(title),
+            author: (!author.is_empty()).then_some(author),
+            subject: (!subtitle.is_empty()).then_some(subtitle),
+            page_numbers,
+            cover,
+        };
+
+        let (pages, image_keys) = render_document(&blocks, &layout, &images, &metadata);
         let page_count = pages.len() as i64;
 
-        let bytes = build_pdf(
-            pages,
-            &image_keys,
-            &images,
-            &layout,
-            &PdfMetadata {
-                title: (!title.is_empty()).then_some(title),
-                author: (!author.is_empty()).then_some(author),
-                subject: None,
-                page_numbers,
-            },
-        )?;
+        let bytes = build_pdf(pages, &image_keys, &images, &layout, &metadata)?;
 
         output.put(context, bytes, false).await?;
         context.set_pin_value("result", json!(output)).await?;

@@ -58,3 +58,4 @@ export * from "./package-widgets";
 export * from "./user-display";
 export * from "./widget-schema-form";
 export * from "./widget-contract-form";
+export * from "./layer-cache";

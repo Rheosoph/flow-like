@@ -3,12 +3,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import {
-	EditorUploadContext,
 	type EditorUploadConfig,
+	EditorUploadContext,
 } from "../../editor/upload-context";
 import { Label } from "../../ui/label";
 import { TextEditor } from "../../ui/text-editor";
-import { useActionContext, useComponentEventTrigger, useOnAction } from "../ActionHandler";
+import {
+	useActionContext,
+	useComponentEventTrigger,
+	useOnAction,
+} from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -101,7 +105,9 @@ export function A2UIRichText({
 	const uploadScope = useResolved<string>(component.uploadScope);
 	const minHeight = useResolved<string | number>(component.minHeight);
 	const maxHeight = useResolved<string | number>(component.maxHeight);
-	const debounceMs = resolveDebounceMs(useResolved<number>(component.debounceMs));
+	const debounceMs = resolveDebounceMs(
+		useResolved<number>(component.debounceMs),
+	);
 
 	const label = resolveStringOrBound(
 		component.label as string | BoundValue | undefined,

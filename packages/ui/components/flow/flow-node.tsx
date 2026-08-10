@@ -16,6 +16,7 @@ import {
 	CircleXIcon,
 	ClockIcon,
 	CloudCog,
+	DatabaseIcon,
 	MonitorIcon,
 	PlayCircleIcon,
 	ScrollTextIcon,
@@ -47,6 +48,8 @@ import {
 	ILogLevel,
 	IPinType,
 	IValueType,
+	cacheIndicatorLabel,
+	formatCacheTtl,
 	moveNodeCommand,
 	removeNodeCommand,
 	updateNodeCommand,
@@ -56,7 +59,12 @@ import {
 import type { INode } from "../../lib";
 import { logLevelFromNumber } from "../../lib/log-level";
 import { isWebkitLite } from "../../lib/platform";
-import type { IBoard, IComment, ILayer } from "../../lib/schema/flow/board";
+import type {
+	IBoard,
+	IComment,
+	ILayer,
+	ILayerCache,
+} from "../../lib/schema/flow/board";
 import { ILayerType } from "../../lib/schema/flow/board/commands/upsert-layer";
 import { type IPin, IVariableType } from "../../lib/schema/flow/pin";
 import { convertJsonToUint8Array } from "../../lib/uint8";
@@ -120,6 +128,8 @@ export type FlowNode = Node<
 		executionMode?: IExecutionMode;
 		isUnavailable?: boolean;
 		functionLayerId?: string;
+		/** Set only when the referenced function caches its results. */
+		functionCache?: ILayerCache;
 		currentLayerId?: string;
 		remoteExecuting?: boolean;
 		selectorDataRef?: FlowSelectorDataRef;
@@ -1016,6 +1026,19 @@ const FlowNodeInner = memo(
 							</small>
 						</div>
 						<div className="flex flex-row items-center gap-1">
+							{props.data.functionCache && (
+								<span
+									className="flex flex-row items-center gap-0.5 shrink-0 text-violet-100"
+									title={cacheIndicatorLabel(props.data.functionCache)}
+								>
+									<DatabaseIcon className="w-2 h-2" />
+									{props.data.functionCache.ttl_seconds ? (
+										<span className="text-[7px] leading-none">
+											{formatCacheTtl(props.data.functionCache.ttl_seconds)}
+										</span>
+									) : null}
+								</span>
+							)}
 							{executed && (
 								<ScrollTextIcon
 									onClick={(e) => {
@@ -1053,6 +1076,16 @@ const FlowNodeInner = memo(
 		prev.props.data.hash === next.props.data.hash &&
 		prev.props.selected === next.props.selected &&
 		prev.props.data.fnRefsHash === next.props.data.fnRefsHash &&
+		// The node's own hash does not move when the function it calls changes its
+		// caching, so the indicator needs its own comparison.
+		prev.props.data.functionCache?.enabled ===
+			next.props.data.functionCache?.enabled &&
+		prev.props.data.functionCache?.ttl_seconds ===
+			next.props.data.functionCache?.ttl_seconds &&
+		prev.props.data.functionCache?.scope ===
+			next.props.data.functionCache?.scope &&
+		prev.props.data.functionCache?.prefix ===
+			next.props.data.functionCache?.prefix &&
 		prev.props.data.isUnavailable === next.props.data.isUnavailable &&
 		prev.props.data.remoteExecuting === next.props.data.remoteExecuting &&
 		prev.props.data.remoteSelections === next.props.data.remoteSelections &&

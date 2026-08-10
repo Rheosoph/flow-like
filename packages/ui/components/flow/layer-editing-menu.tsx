@@ -42,6 +42,7 @@ import {
 	type IPinOptions,
 	IValueType,
 	IVariableType,
+	describeCacheLifetime,
 } from "../../lib";
 import {
 	type IBoard,
@@ -230,6 +231,9 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 	const isNodeMode =
 		mode === "node" || (node !== undefined && layer === undefined);
 	const isGenericEvent = isNodeMode && node?.name === "events_generic";
+	// Only function layers have a call boundary to cache at — a collapsed layer runs
+	// inline with the rest of the graph.
+	const isFunctionLayer = !isNodeMode && layer?.type === ILayerType.Function;
 
 	const [edits, setEdits] = useState<Record<string, PinEdit>>(() =>
 		entity ? buildInitialEdits(entity, boardRef) : {},
@@ -427,10 +431,11 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 			const updated: ILayer = {
 				...layer,
 				pins: nextPins as unknown as ILayer["pins"],
-				cache: {
-					...cache,
-					prefix: (cache.prefix ?? "").trim(),
-				},
+				// Collapsed layers never reach a call boundary, so they must not carry a
+				// setting that silently does nothing.
+				cache: isFunctionLayer
+					? { ...cache, prefix: (cache.prefix ?? "").trim() }
+					: null,
 			};
 			await onApply(updated);
 		}
@@ -444,6 +449,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 		nodeName,
 		nodeDescription,
 		cache,
+		isFunctionLayer,
 	]);
 
 	return (
@@ -469,14 +475,14 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 					className="mt-2"
 				>
 					<TabsList
-						className={`grid w-full ${isGenericEvent ? "grid-cols-2" : isNodeMode ? "grid-cols-1" : "grid-cols-3"}`}
+						className={`grid w-full ${isGenericEvent ? "grid-cols-2" : isNodeMode ? "grid-cols-1" : isFunctionLayer ? "grid-cols-3" : "grid-cols-2"}`}
 					>
 						{isGenericEvent && (
 							<TabsTrigger value="metadata">Node Info</TabsTrigger>
 						)}
 						{!isNodeMode && <TabsTrigger value="inputs">Inputs</TabsTrigger>}
 						<TabsTrigger value="outputs">Outputs</TabsTrigger>
-						{!isNodeMode && (
+						{isFunctionLayer && (
 							<TabsTrigger value="caching" className="gap-1.5">
 								<DatabaseIcon className="h-3.5 w-3.5" />
 								Caching
@@ -546,13 +552,9 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 							isGenericEvent={isGenericEvent}
 						/>
 					</TabsContent>
-					{!isNodeMode && (
+					{isFunctionLayer && (
 						<TabsContent value="caching" className="mt-3">
-							<CacheSettings
-								cache={cache}
-								onChange={setCache}
-								isFunction={layer?.type === ILayerType.Function}
-							/>
+							<CacheSettings cache={cache} onChange={setCache} />
 						</TabsContent>
 					)}
 				</Tabs>{" "}
@@ -571,28 +573,10 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 	);
 };
 
-const formatTtl = (seconds?: number | null) => {
-	if (!seconds || seconds <= 0)
-		return "Never expires — entries live until invalidated.";
-	const units: readonly [number, string][] = [
-		[86400, "day"],
-		[3600, "hour"],
-		[60, "minute"],
-	];
-	for (const [size, label] of units) {
-		if (seconds >= size) {
-			const amount = Math.round((seconds / size) * 10) / 10;
-			return `Expires after ~${amount} ${label}${amount === 1 ? "" : "s"}.`;
-		}
-	}
-	return `Expires after ${seconds} second${seconds === 1 ? "" : "s"}.`;
-};
-
 const CacheSettings: React.FC<{
 	cache: ILayerCache;
 	onChange: (next: ILayerCache) => void;
-	isFunction: boolean;
-}> = ({ cache, onChange, isFunction }) => {
+}> = ({ cache, onChange }) => {
 	const enabled = Boolean(cache.enabled);
 	const patch = useCallback(
 		(next: Partial<ILayerCache>) => onChange({ ...cache, ...next }),
@@ -601,17 +585,6 @@ const CacheSettings: React.FC<{
 
 	return (
 		<div className="space-y-4">
-			{!isFunction && (
-				<div className="flex gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
-					<InfoIcon className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-					<span className="text-muted-foreground">
-						Results are cached at the function-call boundary. A collapsed layer
-						runs inline with the rest of the graph, so these settings only take
-						effect once it is converted to a function.
-					</span>
-				</div>
-			)}
-
 			<div className="flex items-start justify-between gap-4 rounded-md border p-3">
 				<div className="space-y-1">
 					<Label htmlFor="layer-cache-enabled" className="text-sm">
@@ -669,7 +642,7 @@ const CacheSettings: React.FC<{
 							disabled={!enabled}
 						/>
 						<p className="text-xs text-muted-foreground">
-							{formatTtl(cache.ttl_seconds)}
+							{describeCacheLifetime(cache.ttl_seconds)}
 						</p>
 					</div>
 
