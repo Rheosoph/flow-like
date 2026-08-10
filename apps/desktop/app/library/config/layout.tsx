@@ -50,6 +50,7 @@ import {
 	type RawAppPublicationRequestItem,
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
+import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
 import { EVENT_CONFIG } from "@flow-like/flow-like-ui/lib/event-config";
 import { useQuery } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
@@ -87,7 +88,7 @@ import {
 	ZapIcon,
 } from "lucide-react";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
 	Suspense,
 	useCallback,
@@ -100,7 +101,7 @@ import { toast } from "sonner";
 import { appsDB } from "../../../lib/apps-db";
 import { isIosTauriRuntime } from "../../../lib/platform";
 
-const navigationItems: {
+interface INavigationItem {
 	href: string;
 	label: string;
 	icon: React.ForwardRefExoticComponent<
@@ -113,7 +114,19 @@ const navigationItems: {
 	requiresPaid?: boolean;
 	disabled?: boolean;
 	devOnly?: boolean;
-}[] = [
+	/**
+	 * Visibilities where the section stays in the nav but is locked: hiding it
+	 * outright reads as "this feature does not exist". Clicking a locked row
+	 * offers the visibility change that unlocks it.
+	 */
+	lockedVisibilities?: IAppVisibility[];
+	/** Copy for the unlock dialog. */
+	lockedReason?: string;
+	/** Visibility the unlock dialog switches to. */
+	unlockVisibility?: IAppVisibility;
+}
+
+const navigationItems: INavigationItem[] = [
 	{
 		href: "/library/config",
 		label: "Dashboard",
@@ -208,6 +221,10 @@ const navigationItems: {
 			IAppVisibility.Prototype,
 			IAppVisibility.PublicRequestAccess,
 		],
+		lockedVisibilities: [IAppVisibility.Private],
+		lockedReason:
+			"A private project is synced to your account only. Switch to Prototype to invite collaborators, assign roles and share a link.",
+		unlockVisibility: IAppVisibility.Prototype,
 		group: "Collaborate",
 	},
 	{
@@ -297,6 +314,7 @@ export default function Id({
 		[id ?? ""],
 	) ?? { visibility: IAppVisibility.Offline };
 	const currentRoute = usePathname();
+	const router = useRouter();
 	const metadata = useInvoke(
 		backend.appState.getAppMeta,
 		backend.appState,
@@ -319,6 +337,7 @@ export default function Id({
 	const [exporting, setExporting] = useState(false);
 	const [mobileNavOpen, setMobileNavOpen] = useState(false);
 	const [mobileNavFilter, setMobileNavFilter] = useState("");
+	const [lockedItem, setLockedItem] = useState<INavigationItem | null>(null);
 	const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
 	const settingsProfile = useInvoke(
@@ -354,27 +373,53 @@ export default function Id({
 
 	const { developerMode } = useDeveloperMode();
 
+	const visibility = online?.visibility ?? IAppVisibility.Offline;
+
 	// Nav items visible for this app's visibility + paywall state — shared by the
 	// desktop sidebar and the mobile bottom-sheet switcher (no double filtering).
+	// Items whose visibility gate can be lifted stay in the list as `locked`.
 	const visibleNavItems = useMemo(
 		() =>
-			navigationItems.filter(
-				(item) =>
-					(!item.devOnly || developerMode) &&
-					(!item.visibilities ||
-						item.visibilities.includes(
-							online?.visibility ?? IAppVisibility.Offline,
-						)) &&
-					(!item.requiresPaid ||
-						(app.data?.price != null && app.data.price > 0)),
-			),
-		[online?.visibility, app.data?.price, developerMode],
+			navigationItems
+				.filter(
+					(item) =>
+						(!item.devOnly || developerMode) &&
+						(!item.visibilities ||
+							item.visibilities.includes(visibility) ||
+							item.lockedVisibilities?.includes(visibility)) &&
+						(!item.requiresPaid ||
+							(app.data?.price != null && app.data.price > 0)),
+				)
+				.map((item) => ({
+					...item,
+					locked:
+						!!item.visibilities && !item.visibilities.includes(visibility),
+				})),
+		[visibility, app.data?.price, developerMode],
 	);
 
 	const activeItem = useMemo(
 		() =>
 			visibleNavItems.find((item) => isRouteActive(item.href, currentRoute)),
 		[visibleNavItems, currentRoute],
+	);
+
+	const openLockedItem = useCallback((item: INavigationItem) => {
+		setMobileNavOpen(false);
+		setMobileNavFilter("");
+		setLockedItem(item);
+	}, []);
+
+	// The nav reads the locally cached visibility, so mirror the new value right
+	// away instead of waiting for the background app refetch to land, then take
+	// the user to the section they originally clicked.
+	const unlockSection = useCallback(
+		async (item: INavigationItem, next: IAppVisibility) => {
+			if (!id) return;
+			await appsDB.visibility.put({ appId: id, visibility: next });
+			router.push(`${item.href}?id=${id}`);
+		},
+		[id, router],
 	);
 
 	const [isIosTauri, setIsIosTauri] = useState(false);
@@ -798,6 +843,16 @@ export default function Id({
 															{item.label} (soon)
 														</span>
 													</div>
+												) : item.locked ? (
+													<button
+														type="button"
+														className="w-full flex items-center gap-3 px-3 min-h-11 rounded-lg text-sm text-muted-foreground/60 bg-muted/40 transition-colors"
+														onClick={() => openLockedItem(item)}
+													>
+														<Icon className="w-4 h-4 shrink-0" />
+														<span className="truncate">{item.label}</span>
+														<LockIcon className="ml-auto w-3.5 h-3.5 shrink-0" />
+													</button>
 												) : (
 													<Link
 														href={`${item.href}?id=${id}`}
@@ -843,6 +898,22 @@ export default function Id({
 						</div>
 					</SheetContent>
 				</Sheet>
+
+				{/* Unlock dialog for nav sections gated behind a visibility change */}
+				{id && lockedItem && (
+					<VisibilityUpgradeDialog
+						appId={id}
+						open
+						onOpenChange={(open) => {
+							if (!open) setLockedItem(null);
+						}}
+						feature={lockedItem.label}
+						reason={lockedItem.lockedReason ?? lockedItem.description}
+						current={visibility}
+						target={lockedItem.unlockVisibility ?? IAppVisibility.Prototype}
+						onChanged={(next) => unlockSection(lockedItem, next)}
+					/>
+				)}
 
 				{/* Global Export Dialog */}
 				<Dialog open={exportOpen} onOpenChange={setExportOpen}>
@@ -1025,6 +1096,33 @@ export default function Id({
 																	</p>
 																	<p className="text-xs mt-1">
 																		{item.description}
+																	</p>
+																</TooltipContent>
+															</Tooltip>
+														) : item.locked ? (
+															<Tooltip delayDuration={300}>
+																<TooltipTrigger asChild>
+																	<button
+																		type="button"
+																		className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-muted-foreground/60 bg-muted/40 hover:bg-muted hover:text-muted-foreground transition-all"
+																		onClick={() => openLockedItem(item)}
+																	>
+																		<Icon className="w-4 h-4 shrink-0" />
+																		<span className="truncate">
+																			{item.label}
+																		</span>
+																		<LockIcon className="ml-auto w-3.5 h-3.5 shrink-0" />
+																	</button>
+																</TooltipTrigger>
+																<TooltipContent
+																	side="right"
+																	className="max-w-xs"
+																>
+																	<p className="font-bold">
+																		{item.label} (locked)
+																	</p>
+																	<p className="text-xs mt-1">
+																		{item.lockedReason ?? item.description}
 																	</p>
 																</TooltipContent>
 															</Tooltip>

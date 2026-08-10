@@ -100,7 +100,7 @@ function QueueEntryRow({ entry }: Readonly<{ entry: IBoardSyncQueueEntry }>) {
 		entry.lastFailureMessage ??
 		"Not yet accepted by the server.";
 	return (
-		<li className="rounded-md border border-border/60 bg-muted/30 px-3 py-2">
+		<li className="min-w-0 rounded-md border border-border/60 bg-muted/30 px-3 py-2">
 			<div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
 				<span className="text-xs font-medium">
 					{entry.commandCount} command{entry.commandCount === 1 ? "" : "s"}
@@ -109,7 +109,8 @@ function QueueEntryRow({ entry }: Readonly<{ entry: IBoardSyncQueueEntry }>) {
 					{new Date(entry.createdAt).toLocaleString()}
 				</span>
 			</div>
-			<p className="mt-1 text-[11px] leading-snug text-muted-foreground">
+			{/* Server errors carry unbreakable ids; without this they widen the grid track. */}
+			<p className="mt-1 text-[11px] leading-snug text-muted-foreground wrap-anywhere">
 				{reason}
 			</p>
 			{entry.partiallyDelivered ? (
@@ -219,8 +220,10 @@ export function BoardSyncRecoveryDialog({
 
 	return (
 		<AlertDialog open={open} onOpenChange={onOpenChange}>
-			<AlertDialogContent className="max-w-lg">
-				<AlertDialogHeader>
+			{/* The content is a grid: every child needs min-w-0, or one long server error or a
+			    row of nowrap buttons widens the single track and pushes all of them past the border. */}
+			<AlertDialogContent className="grid-cols-[minmax(0,1fr)] sm:max-w-xl">
+				<AlertDialogHeader className="min-w-0">
 					<AlertDialogTitle>Fetch this board from the server</AlertDialogTitle>
 					<AlertDialogDescription>
 						{destructive
@@ -230,15 +233,15 @@ export function BoardSyncRecoveryDialog({
 				</AlertDialogHeader>
 
 				{status?.ownershipMismatch ? (
-					<p className="rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs leading-snug text-muted-foreground">
+					<p className="min-w-0 rounded-md border border-border/60 bg-muted/40 px-3 py-2 text-xs leading-snug text-muted-foreground wrap-anywhere">
 						{status.ownershipMismatch}. Signing back into the original account
 						and Hub would let these edits sync instead of being discarded.
 					</p>
 				) : null}
 
 				{destructive ? (
-					<div className="flex flex-col gap-2">
-						<ul className="flex max-h-48 flex-col gap-1.5 overflow-y-auto">
+					<div className="flex min-w-0 flex-col gap-2">
+						<ul className="flex max-h-48 min-w-0 flex-col gap-1.5 overflow-y-auto">
 							{entries.map((entry) => (
 								<QueueEntryRow key={entry.commandId} entry={entry} />
 							))}
@@ -259,8 +262,8 @@ export function BoardSyncRecoveryDialog({
 					</div>
 				) : null}
 
-				<AlertDialogFooter className="sm:justify-between">
-					<div className="flex gap-2">
+				<AlertDialogFooter className="min-w-0 flex-wrap sm:flex-wrap sm:justify-between">
+					<div className="flex min-w-0 flex-wrap gap-2">
 						<Button
 							variant="ghost"
 							size="sm"
@@ -281,10 +284,10 @@ export function BoardSyncRecoveryDialog({
 							onClick={() => void handleExport()}
 						>
 							<DownloadIcon className="size-3.5" />
-							Export discarded
+							Export
 						</Button>
 					</div>
-					<div className="flex gap-2">
+					<div className="flex min-w-0 flex-wrap gap-2">
 						<Button
 							variant="outline"
 							size="sm"
@@ -299,9 +302,7 @@ export function BoardSyncRecoveryDialog({
 							disabled={busy !== null || (destructive && !acknowledged)}
 							onClick={() => void handleReset()}
 						>
-							{destructive
-								? "Discard local edits & fetch"
-								: "Fetch from server"}
+							{destructive ? "Discard edits & fetch" : "Fetch from server"}
 						</Button>
 					</div>
 				</AlertDialogFooter>

@@ -184,6 +184,11 @@ const registry: Record<string, ComponentRenderer> = {
 	feedback: A2UIFeedback as ComponentRenderer,
 	appLink: A2UIAppLink as ComponentRenderer,
 	textField: A2UITextField as ComponentRenderer,
+	richText: lazyRenderer(() =>
+		import("./interactive/RichText").then((m) => ({
+			default: m.A2UIRichText as ComponentRenderer,
+		})),
+	),
 	select: A2UISelect as ComponentRenderer,
 	slider: A2UISlider as ComponentRenderer,
 	checkbox: A2UICheckbox as ComponentRenderer,

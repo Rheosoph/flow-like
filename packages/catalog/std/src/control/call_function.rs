@@ -1,14 +1,50 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::Arc;
 
 use flow_like::flow::{
-    board::{Board, Layer, LayerType},
-    execution::{LogLevel, context::ExecutionContext, internal_node::InternalNode},
+    board::{Board, Layer, LayerCache, LayerCacheScope, LayerType},
+    execution::{
+        LogLevel, context::ExecutionContext, internal_node::InternalNode,
+        internal_pin::InternalPin,
+    },
     node::{Node, NodeLogic},
     pin::{Pin, PinType},
     utils::evaluate_pin_value,
     variable::VariableType,
 };
+use flow_like_catalog_data::data::cache::{CacheScope, FlowCache, cache_get, cache_set};
 use flow_like_types::{Value, async_trait, json::from_slice};
+
+/// Fold a value into the hasher in a shape that does not depend on how its maps happen to
+/// be ordered in memory, so the same inputs always produce the same cache key.
+fn hash_canonical_value(hasher: &mut blake3::Hasher, value: &Value) {
+    match value {
+        Value::Object(map) => {
+            hasher.update(b"{");
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            for key in keys {
+                hasher.update(&(key.len() as u64).to_le_bytes());
+                hasher.update(key.as_bytes());
+                hash_canonical_value(hasher, &map[key]);
+            }
+            hasher.update(b"}");
+        }
+        Value::Array(items) => {
+            hasher.update(b"[");
+            hasher.update(&(items.len() as u64).to_le_bytes());
+            for item in items {
+                hash_canonical_value(hasher, item);
+            }
+            hasher.update(b"]");
+        }
+        other => {
+            let encoded = flow_like_types::json::to_string(other).unwrap_or_default();
+            hasher.update(&(encoded.len() as u64).to_le_bytes());
+            hasher.update(encoded.as_bytes());
+        }
+    }
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -71,6 +107,98 @@ impl CallFunctionNode {
                 }
             }
         }
+    }
+
+    /// The cache handle a layer's settings describe. The prefix travels as the namespace,
+    /// which is what the backends group entries by — so one function's results can be
+    /// invalidated without touching the rest of the app's cache.
+    fn cache_handle(settings: &LayerCache) -> FlowCache {
+        FlowCache {
+            scope: match settings.scope {
+                LayerCacheScope::App => CacheScope::App,
+                LayerCacheScope::User => CacheScope::User,
+            },
+            namespace: settings.prefix.trim().to_string(),
+        }
+    }
+
+    /// The layer id is part of the key so two functions sharing a prefix cannot read each
+    /// other's results.
+    fn cache_key(layer_id: &str, inputs: &HashMap<String, Value>) -> String {
+        let mut sorted: Vec<(&String, &Value)> = inputs.iter().collect();
+        sorted.sort_by(|(left, _), (right, _)| left.cmp(right));
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(layer_id.as_bytes());
+        hasher.update(b"\n");
+        for (name, value) in sorted {
+            hasher.update(&(name.len() as u64).to_le_bytes());
+            hasher.update(name.as_bytes());
+            hash_canonical_value(&mut hasher, value);
+        }
+
+        format!("layer_{}", hasher.finalize().to_hex())
+    }
+
+    fn output_data_pins(context: &ExecutionContext) -> Vec<Arc<InternalPin>> {
+        context
+            .node
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Output && pin.data_type != VariableType::Execution
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn output_exec_pin_names(context: &ExecutionContext) -> Vec<String> {
+        context
+            .node
+            .pins
+            .values()
+            .filter(|pin| {
+                pin.pin_type == PinType::Output && pin.data_type == VariableType::Execution
+            })
+            .map(|pin| pin.name.clone())
+            .collect()
+    }
+
+    /// Snapshot the values the call produced, so a later call with the same inputs can be
+    /// answered without running the function.
+    async fn collect_cacheable_outputs(&self, context: &mut ExecutionContext) -> Value {
+        let mut outputs = flow_like_types::json::Map::new();
+        for pin in Self::output_data_pins(context) {
+            let value = context
+                .evaluate_pin_ref::<Value>(pin.clone())
+                .await
+                .unwrap_or(Value::Null);
+            outputs.insert(pin.name.clone(), value);
+        }
+        Value::Object(outputs)
+    }
+
+    /// Replay a cached call: fill the mirrored outputs and let execution continue as if the
+    /// function had run.
+    async fn apply_cached_outputs(
+        &self,
+        context: &mut ExecutionContext,
+        cached: &Value,
+    ) -> flow_like_types::Result<()> {
+        let outputs = cached.as_object().ok_or_else(|| {
+            flow_like_types::anyhow!("Cached function result is not an object, ignoring it")
+        })?;
+
+        for pin in Self::output_data_pins(context) {
+            let value = outputs.get(&pin.name).cloned().unwrap_or(Value::Null);
+            context.set_pin_ref_value(&pin, value).await?;
+        }
+
+        for name in Self::output_exec_pin_names(context) {
+            context.activate_exec_pin(&name).await?;
+        }
+
+        Ok(())
     }
 
     fn find_node_id_by_pin(
@@ -230,16 +358,62 @@ impl NodeLogic for CallFunctionNode {
 
         // Clear mirrored data outputs before each call to avoid leaking
         // previous invocation values when a function output is not produced.
-        let output_data_pins: Vec<_> = context
-            .node
-            .pins
-            .values()
-            .filter(|p| p.pin_type == PinType::Output && p.data_type != VariableType::Execution)
-            .cloned()
-            .collect();
+        let output_data_pins: Vec<_> = Self::output_data_pins(context);
         for pin in &output_data_pins {
             let _ = context.set_pin_ref_value(pin, Value::Null).await;
         }
+
+        // A hit replaces the entire call, side effects included — which is why caching is
+        // opt-in per layer.
+        let cache_settings = layer.cache.clone().filter(LayerCache::is_active);
+        let cache_lookup = match &cache_settings {
+            Some(settings) => {
+                let handle = Self::cache_handle(settings);
+                let key = Self::cache_key(&function_layer_id, &input_values);
+
+                match cache_get(context, &handle, &key).await {
+                    Ok(Some(hit)) => {
+                        match self.apply_cached_outputs(context, &hit.value).await {
+                            Ok(()) => {
+                                context.log_message(
+                                    &format!("Cache hit for function '{}'", layer.name),
+                                    LogLevel::Debug,
+                                );
+                                return Ok(());
+                            }
+                            // A malformed entry must not take the call down with it.
+                            Err(error) => {
+                                context.log_message(
+                                    &format!(
+                                        "Ignoring unusable cache entry for function '{}': {:?}",
+                                        layer.name, error
+                                    ),
+                                    LogLevel::Warn,
+                                );
+                                for pin in &output_data_pins {
+                                    let _ = context.set_pin_ref_value(pin, Value::Null).await;
+                                }
+                            }
+                        }
+                        Some((handle, key))
+                    }
+                    Ok(None) => Some((handle, key)),
+                    // The cache is an optimization; an unreachable backend degrades to a
+                    // normal call rather than failing the flow.
+                    Err(error) => {
+                        context.log_message(
+                            &format!(
+                                "Cache read failed for function '{}', executing it instead: {:?}",
+                                layer.name, error
+                            ),
+                            LogLevel::Warn,
+                        );
+                        None
+                    }
+                }
+            }
+            None => None,
+        };
 
         // Check if the function is impure (has an input execution layer pin)
         let exec_in_layer_pin = layer
@@ -250,13 +424,7 @@ impl NodeLogic for CallFunctionNode {
         if let Some(exec_pin) = exec_in_layer_pin {
             // --- IMPURE function: exec chain inside the function ---
             // Deactivate all mirrored output exec pins
-            let output_exec_names: Vec<String> = context
-                .node
-                .pins
-                .values()
-                .filter(|p| p.pin_type == PinType::Output && p.data_type == VariableType::Execution)
-                .map(|p| p.name().to_string())
-                .collect();
+            let output_exec_names: Vec<String> = Self::output_exec_pin_names(context);
             for name in &output_exec_names {
                 let _ = context.deactivate_exec_pin(name).await;
             }
@@ -375,6 +543,21 @@ impl NodeLogic for CallFunctionNode {
             // --- PURE function: evaluate outputs by triggering feeding nodes ---
             self.run_pure_function(context, &board, layer, &function_layer_id, &input_values)
                 .await?;
+        }
+
+        if let (Some(settings), Some((handle, key))) = (&cache_settings, &cache_lookup) {
+            let outputs = self.collect_cacheable_outputs(context).await;
+            // A value the backend rejects (too large, backend unreachable) costs this call
+            // nothing — it already produced its outputs.
+            if let Err(error) = cache_set(context, handle, key, outputs, settings.ttl()).await {
+                context.log_message(
+                    &format!(
+                        "Could not cache the result of function '{}': {:?}",
+                        layer.name, error
+                    ),
+                    LogLevel::Warn,
+                );
+            }
         }
 
         Ok(())
@@ -598,5 +781,94 @@ mod tests {
             ordered_pin_names(&node, PinType::Output),
             vec!["out_second", "out_first"]
         );
+    }
+
+    fn inputs(pairs: &[(&str, Value)]) -> HashMap<String, Value> {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn cache_keys_ignore_the_order_inputs_happen_to_be_stored_in() {
+        let forwards = inputs(&[("alpha", json!(1)), ("beta", json!("two"))]);
+        let backwards = inputs(&[("beta", json!("two")), ("alpha", json!(1))]);
+
+        assert_eq!(
+            CallFunctionNode::cache_key("layer", &forwards),
+            CallFunctionNode::cache_key("layer", &backwards)
+        );
+    }
+
+    #[test]
+    fn cache_keys_ignore_key_order_inside_nested_objects() {
+        let forwards = inputs(&[("payload", json!({ "a": 1, "b": [ { "x": 1, "y": 2 } ] }))]);
+        let backwards = inputs(&[("payload", json!({ "b": [ { "y": 2, "x": 1 } ], "a": 1 }))]);
+
+        assert_eq!(
+            CallFunctionNode::cache_key("layer", &forwards),
+            CallFunctionNode::cache_key("layer", &backwards)
+        );
+    }
+
+    #[test]
+    fn cache_keys_separate_layers_inputs_and_input_names() {
+        let base = inputs(&[("alpha", json!(1))]);
+
+        assert_ne!(
+            CallFunctionNode::cache_key("layer-a", &base),
+            CallFunctionNode::cache_key("layer-b", &base)
+        );
+        assert_ne!(
+            CallFunctionNode::cache_key("layer", &base),
+            CallFunctionNode::cache_key("layer", &inputs(&[("alpha", json!(2))]))
+        );
+        // Length-prefixing the name keeps ("ab", 1) distinct from ("a", "b1")-style shifts.
+        assert_ne!(
+            CallFunctionNode::cache_key("layer", &inputs(&[("ab", json!(1))])),
+            CallFunctionNode::cache_key("layer", &inputs(&[("a", json!(1))]))
+        );
+        // An array and the same items as separate arguments must not collide.
+        assert_ne!(
+            CallFunctionNode::cache_key("layer", &inputs(&[("a", json!([1, 2]))])),
+            CallFunctionNode::cache_key("layer", &inputs(&[("a", json!([1])), ("b", json!([2]))]))
+        );
+    }
+
+    #[test]
+    fn cache_handle_carries_the_prefix_as_the_namespace() {
+        let settings = LayerCache {
+            enabled: true,
+            prefix: "  pricing  ".to_string(),
+            ttl_seconds: Some(60),
+            scope: LayerCacheScope::User,
+        };
+
+        let handle = CallFunctionNode::cache_handle(&settings);
+        assert_eq!(handle.namespace, "pricing");
+        assert!(matches!(handle.scope, CacheScope::User));
+        assert_eq!(settings.ttl(), Some(60));
+    }
+
+    #[test]
+    fn a_zero_lifetime_means_the_entry_never_expires() {
+        let mut settings = LayerCache {
+            enabled: true,
+            prefix: String::new(),
+            ttl_seconds: Some(0),
+            scope: LayerCacheScope::App,
+        };
+        assert_eq!(settings.ttl(), None);
+
+        settings.ttl_seconds = None;
+        assert_eq!(settings.ttl(), None);
+    }
+
+    #[test]
+    fn caching_is_off_until_it_is_switched_on() {
+        let settings = LayerCache::default();
+        assert!(!settings.is_active());
+        assert!(Layer::new("l".into(), "L".into(), LayerType::Function).cache.is_none());
     }
 }

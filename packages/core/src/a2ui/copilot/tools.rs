@@ -116,7 +116,7 @@ Action wiring (same contract for every interactive component):
 - Other built-in names: "navigate_page" (context.route, optional context.queryParams), "external_link" (context.url) and "widget_event" (context.actionId, inside a widget only)
 - The action "name" is one of those FIXED verbs - never a board node name, event name or widget action id; those go in the context. An unrecognized name is dropped at runtime (the control renders and does nothing) and emit_ui rejects it
 - Exact eventHandlers entries override the legacy default; an explicit [] disables that event
-- Events added after a component shipped (textField "input"/"submit"/"focus"/"blur", slider "input", select "open"/"close", table "rowClick"/"cellClick"/"selectionChange"/"sortChange", chart "pointClick") need an EXACT entry - they ignore both actions[0] and "*"
+- Events added after a component shipped (textField "input"/"submit"/"focus"/"blur", slider "input", select "open"/"close", table "rowClick"/"cellClick"/"selectionChange"/"sortChange", chart "pointClick", richText "change"/"blur"/"imageUploaded"/"imageUploadError") need an EXACT entry - they ignore both actions[0] and "*"
 - A board can set or re-point the legacy default or a named event later with Set Element Action (a2uiSetElementAction; optional event_name)
 
 Example:
@@ -252,6 +252,35 @@ Example:
     "placeholder": { "literalString": "Enter email" },
     "inputType": { "literalString": "email" },
     "label": { "literalString": "Email Address" }
+  }
+}"#
+        .to_string(),
+
+        "richtext" | "rich_text" => r#"RichText - Formatted document editor
+Properties:
+- type: "richText" (required)
+- value: BoundValue - The document, a "plate_json::"-prefixed string. NOT markdown: convert with the Rich Text to Markdown (utils_md_plate_to_md) or Rich Text to HTML (utils_md_plate_to_html) node
+- label / helperText / placeholder: BoundValue string
+- readOnly / disabled: BoundValue boolean
+- error: BoundValue boolean
+- uploadPrefix: BoundValue string - storage folder for pasted or dropped images (default "a2ui/<surface>/<component>")
+- uploadScope: BoundValue string - "app" (shared, default) or "user" (the viewer's private area)
+- minHeight / maxHeight: BoundValue string - CSS lengths
+- debounceMs: BoundValue number - pause before "change" fires (default 600, min 100)
+- Images are uploaded into app storage and stored in the document as durable "storage://..." paths, so the document keeps working after signed URLs expire
+- Events: "change", "blur", "imageUploaded", "imageUploadError" - all need EXACT eventHandlers entries
+
+Example:
+{
+  "id": "article-body",
+  "component": {
+    "type": "richText",
+    "value": { "path": "$.article.body" },
+    "label": { "literalString": "Article" },
+    "uploadPrefix": { "literalString": "articles/images" },
+    "eventHandlers": {
+      "change": [{ "name": "workflow_event", "context": { "event": "save_draft" } }]
+    }
   }
 }"#
         .to_string(),

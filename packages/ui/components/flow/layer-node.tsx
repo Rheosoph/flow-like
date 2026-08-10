@@ -426,6 +426,7 @@ export function LayerNode(props: NodeProps<LayerNode>) {
 					const newLayer = {
 						...props.data.layer,
 						pins: updated.pins,
+						cache: (updated as ILayer).cache,
 					};
 					try {
 						await props.data.onLayerUpdate(newLayer);

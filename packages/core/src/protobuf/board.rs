@@ -1,5 +1,8 @@
 use crate::flow::{
-    board::{Board, Comment, ExecutionMode, ExecutionStage, Layer, LayerType},
+    board::{
+        Board, Comment, ExecutionMode, ExecutionStage, Layer, LayerCache, LayerCacheScope,
+        LayerType,
+    },
     execution::LogLevel,
     node::Node,
     pin::Pin,
@@ -66,6 +69,44 @@ impl LayerType {
             1 => LayerType::Macro,
             2 => LayerType::Collapsed,
             _ => LayerType::Function,
+        }
+    }
+}
+
+impl LayerCacheScope {
+    fn to_proto(&self) -> i32 {
+        match self {
+            LayerCacheScope::App => 0,
+            LayerCacheScope::User => 1,
+        }
+    }
+
+    fn from_proto(value: i32) -> Self {
+        match value {
+            1 => LayerCacheScope::User,
+            _ => LayerCacheScope::App,
+        }
+    }
+}
+
+impl ToProto<flow_like_types::proto::LayerCache> for LayerCache {
+    fn to_proto(&self) -> flow_like_types::proto::LayerCache {
+        flow_like_types::proto::LayerCache {
+            enabled: self.enabled,
+            prefix: self.prefix.clone(),
+            ttl_seconds: self.ttl_seconds,
+            scope: self.scope.to_proto(),
+        }
+    }
+}
+
+impl FromProto<flow_like_types::proto::LayerCache> for LayerCache {
+    fn from_proto(proto: flow_like_types::proto::LayerCache) -> Self {
+        LayerCache {
+            enabled: proto.enabled,
+            prefix: proto.prefix,
+            ttl_seconds: proto.ttl_seconds,
+            scope: LayerCacheScope::from_proto(proto.scope),
         }
     }
 }
@@ -215,6 +256,7 @@ impl ToProto<flow_like_types::proto::Layer> for Layer {
         flow_like_types::proto::Layer {
             id: self.id.clone(),
             name: self.name.clone(),
+            category: self.category.clone(),
             comments: self
                 .comments
                 .iter()
@@ -249,6 +291,7 @@ impl ToProto<flow_like_types::proto::Layer> for Layer {
             comment: self.comment.clone(),
             error: self.error.clone(),
             color: self.color.clone(),
+            cache: self.cache.as_ref().map(|cache| cache.to_proto()),
             hash: self.hash,
         }
     }
@@ -294,6 +337,7 @@ impl FromProto<flow_like_types::proto::Layer> for Layer {
         Layer {
             id: proto.id,
             name: proto.name,
+            category: proto.category,
             comments: proto
                 .comments
                 .into_iter()
@@ -330,7 +374,93 @@ impl FromProto<flow_like_types::proto::Layer> for Layer {
             comment: proto.comment,
             error: proto.error,
             color: proto.color,
+            cache: proto.cache.map(LayerCache::from_proto),
             hash: proto.hash,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn function_layer(category: Option<&str>) -> Layer {
+        let mut layer = Layer::new(
+            "layer-1".to_string(),
+            "Parse Invoice".to_string(),
+            LayerType::Function,
+        );
+        layer.category = category.map(str::to_string);
+        layer
+    }
+
+    #[test]
+    fn layer_category_survives_proto_roundtrip() {
+        for category in [Some("Utils/Math"), None] {
+            let layer = function_layer(category);
+            let restored = Layer::from_proto(layer.to_proto());
+
+            assert_eq!(restored.category.as_deref(), category);
+            assert_eq!(restored.id, layer.id);
+            assert_eq!(restored.name, layer.name);
+        }
+    }
+
+    #[test]
+    fn layer_category_changes_the_hash() {
+        let mut root = function_layer(None);
+        let mut filed = function_layer(Some("Utils"));
+        root.hash();
+        filed.hash();
+
+        assert_ne!(root.hash, filed.hash);
+    }
+
+    #[test]
+    fn layer_cache_settings_survive_proto_roundtrip() {
+        let settings = [
+            None,
+            Some(LayerCache::default()),
+            Some(LayerCache {
+                enabled: true,
+                prefix: "pricing".to_string(),
+                ttl_seconds: Some(900),
+                scope: LayerCacheScope::User,
+            }),
+        ];
+
+        for cache in settings {
+            let mut layer = function_layer(None);
+            layer.cache = cache.clone();
+            let restored = Layer::from_proto(layer.to_proto());
+
+            assert_eq!(restored.cache, cache);
+        }
+    }
+
+    #[test]
+    fn changing_layer_cache_settings_changes_the_hash() {
+        let mut off = function_layer(None);
+        off.cache = Some(LayerCache::default());
+
+        let mut on = function_layer(None);
+        on.cache = Some(LayerCache {
+            enabled: true,
+            ..Default::default()
+        });
+
+        let mut relabelled = function_layer(None);
+        relabelled.cache = Some(LayerCache {
+            enabled: true,
+            prefix: "pricing".to_string(),
+            ..Default::default()
+        });
+
+        for layer in [&mut off, &mut on, &mut relabelled] {
+            layer.hash();
+        }
+
+        assert_ne!(off.hash, on.hash);
+        assert_ne!(on.hash, relabelled.hash);
     }
 }

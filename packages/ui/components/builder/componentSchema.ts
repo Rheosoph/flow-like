@@ -496,6 +496,30 @@ export const COMPONENT_SCHEMAS: Record<string, ComponentSchema> = {
 		},
 		actions: { type: "actions" },
 	},
+	richText: {
+		type: { type: "string", required: true },
+		value: { type: "boundValue", required: true },
+		label: { type: "boundValue" },
+		helperText: { type: "boundValue" },
+		placeholder: { type: "boundValue" },
+		error: { type: "boundValue" },
+		disabled: { type: "boundValue" },
+		readOnly: { type: "boundValue" },
+		uploadPrefix: {
+			type: "boundValue",
+			description:
+				"Storage folder for pasted or dropped images (default a2ui/<surface>/<component>)",
+		},
+		uploadScope: { type: "boundValue", enum: ["app", "user"] },
+		minHeight: { type: "boundValue" },
+		maxHeight: { type: "boundValue" },
+		debounceMs: {
+			type: "boundValue",
+			description:
+				"Pause in ms before the 'change' event fires (default 600, min 100)",
+		},
+		actions: { type: "actions" },
+	},
 	select: {
 		type: { type: "string", required: true },
 		value: { type: "boundValue", required: true },

@@ -32,6 +32,7 @@ import { Checkbox } from "../ui/checkbox";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { Separator } from "../ui/separator";
+import { compareByNameThenId } from "./category-tree";
 import { FlowContextMenuNodes } from "./flow-context-menu-nodes";
 
 type SearchableNode = INode & {
@@ -195,32 +196,38 @@ export function FlowContextMenu({
 				}) ?? [];
 
 		if (board && callRefNode) {
-			Object.values(board.nodes).forEach((node) => {
-				if (!node.start) return;
-				const pins = Object.values(callRefNode?.pins ?? {}).map((pin) =>
-					pin.name === "fn_ref"
-						? { ...pin, default_value: convertJsonToUint8Array(node.id) }
-						: pin,
-				);
-				const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
+			Object.values(board.nodes)
+				.filter((node) => node.start)
+				.sort(
+					(a, b) =>
+						a.friendly_name.localeCompare(b.friendly_name) ||
+						a.id.localeCompare(b.id),
+				)
+				.forEach((node) => {
+					const pins = Object.values(callRefNode?.pins ?? {}).map((pin) =>
+						pin.name === "fn_ref"
+							? { ...pin, default_value: convertJsonToUint8Array(node.id) }
+							: pin,
+					);
+					const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
 
-				normalNodes.push({
-					...(callRefNode as INode),
-					pin_in_names: Object.values(newPins)
-						.filter((pin) => pin.pin_type === "Input")
-						.map((pin) => pin.friendly_name),
-					pin_out_names: Object.values(newPins)
-						.filter((pin) => pin.pin_type === "Output")
-						.map((pin) => pin.friendly_name),
-					friendly_name: `Call ${node.friendly_name}`,
-					category: "Events/Call",
-					pins: newPins,
+					normalNodes.push({
+						...(callRefNode as INode),
+						pin_in_names: Object.values(newPins)
+							.filter((pin) => pin.pin_type === "Input")
+							.map((pin) => pin.friendly_name),
+						pin_out_names: Object.values(newPins)
+							.filter((pin) => pin.pin_type === "Output")
+							.map((pin) => pin.friendly_name),
+						friendly_name: `Call ${node.friendly_name}`,
+						category: "Events/Call",
+						pins: newPins,
+					});
 				});
-			});
 		}
 
 		if (board && variableGetNode && variableSetNode) {
-			allVariables.forEach((variable) => {
+			[...allVariables].sort(compareByNameThenId).forEach((variable) => {
 				const getPins = Object.values(variableGetNode?.pins ?? {}).map(
 					(pin) => {
 						if (pin.name === "var_ref") {
@@ -297,29 +304,31 @@ export function FlowContextMenu({
 		}
 
 		if (board && callFunctionNode) {
-			Object.values(board.layers).forEach((layer) => {
-				if (layer.type !== ILayerType.Function) return;
-				const pins = Object.values(callFunctionNode?.pins ?? {}).map((pin) =>
-					pin.name === "function_layer_id"
-						? { ...pin, default_value: convertJsonToUint8Array(layer.id) }
-						: pin,
-				);
-				const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
+			Object.values(board.layers)
+				.filter((layer) => layer.type === ILayerType.Function)
+				.sort(compareByNameThenId)
+				.forEach((layer) => {
+					const pins = Object.values(callFunctionNode?.pins ?? {}).map((pin) =>
+						pin.name === "function_layer_id"
+							? { ...pin, default_value: convertJsonToUint8Array(layer.id) }
+							: pin,
+					);
+					const newPins = Object.fromEntries(pins.map((pin) => [pin.id, pin]));
 
-				normalNodes.push({
-					...(callFunctionNode as INode),
-					id: `fn-call-${layer.id}`,
-					pin_in_names: Object.values(newPins)
-						.filter((pin) => pin.pin_type === "Input")
-						.map((pin) => pin.friendly_name),
-					pin_out_names: Object.values(newPins)
-						.filter((pin) => pin.pin_type === "Output")
-						.map((pin) => pin.friendly_name),
-					friendly_name: `Call ${layer.name}`,
-					category: "Functions/Call",
-					pins: newPins,
+					normalNodes.push({
+						...(callFunctionNode as INode),
+						id: `fn-call-${layer.id}`,
+						pin_in_names: Object.values(newPins)
+							.filter((pin) => pin.pin_type === "Input")
+							.map((pin) => pin.friendly_name),
+						pin_out_names: Object.values(newPins)
+							.filter((pin) => pin.pin_type === "Output")
+							.map((pin) => pin.friendly_name),
+						friendly_name: `Call ${layer.name}`,
+						category: "Functions/Call",
+						pins: newPins,
+					});
 				});
-			});
 		}
 
 		return normalNodes;

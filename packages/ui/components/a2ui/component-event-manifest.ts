@@ -69,6 +69,28 @@ export const COMPONENT_EVENT_MANIFEST = {
 			"The field lost focus, whether or not the value changed.",
 		),
 	],
+	richText: [
+		exactEvent(
+			"change",
+			"Document changed",
+			"The document was edited and the user paused for `debounceMs` (600 ms by default). Carries the `plate_json::` value.",
+		),
+		exactEvent(
+			"blur",
+			"Blurred",
+			"The editor lost focus, whether or not the document changed.",
+		),
+		exactEvent(
+			"imageUploaded",
+			"Image uploaded",
+			"An image finished uploading into storage. Carries `path`, `name`, `size` and `type`.",
+		),
+		exactEvent(
+			"imageUploadError",
+			"Image upload failed",
+			"An image could not be uploaded. Carries `name` and `message`.",
+		),
+	],
 	select: [
 		event("change", "Value changed", "The selected value changed."),
 		exactEvent("open", "Opened", "The option list was opened."),

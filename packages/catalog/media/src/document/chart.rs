@@ -116,6 +116,7 @@ pub struct ChartInput {
 }
 
 /// Flattened chart data ready for Office XML / PDF rendering.
+#[derive(Debug, Clone)]
 pub struct OfficeChartData {
     pub chart_type: ChartType,
     pub title: Option<String>,
@@ -126,6 +127,7 @@ pub struct OfficeChartData {
     pub layout: ChartLayout,
 }
 
+#[derive(Debug, Clone)]
 pub struct ChartSeries {
     pub name: String,
     pub values: Vec<f64>,

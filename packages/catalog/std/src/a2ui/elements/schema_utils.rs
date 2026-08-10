@@ -372,6 +372,7 @@ pub fn valid_component_types() -> &'static [&'static str] {
         "feedback",
         "appLink",
         "textField",
+        "richText",
         "select",
         "slider",
         "checkbox",

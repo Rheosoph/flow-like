@@ -741,6 +741,10 @@
 				"name": {
 					"type": "string"
 				},
+				"category": {
+					"description": "Folder the layer is filed under in the sidebar, nested with forward slashes.\nEmpty means the top level. Purely organizational, it does not affect execution.",
+					"type": ["string", "null"]
+				},
 				"type": {
 					"$ref": "#/$defs/LayerType"
 				},
@@ -833,6 +837,17 @@
 				},
 				"color": {
 					"type": ["string", "null"]
+				},
+				"cache": {
+					"anyOf": [
+						{
+							"$ref": "#/$defs/LayerCache"
+						},
+						{
+							"type": "null"
+						}
+					],
+					"default": null
 				},
 				"hash": {
 					"type": ["integer", "null"],
@@ -1288,6 +1303,47 @@
 				"layers",
 				"nodes",
 				"preserve_nodes"
+			]
+		},
+		"LayerCache": {
+			"description": "Result caching for a layer invoked as a function.\n\nA hit replaces the whole call: the function body never runs, so its side effects do\nnot happen either. Only turn this on for layers whose outputs are a function of their\ninputs.",
+			"type": "object",
+			"properties": {
+				"enabled": {
+					"type": "boolean",
+					"default": false
+				},
+				"prefix": {
+					"description": "Namespace every entry for this layer is written under, so one layer's cache can be\ninvalidated without touching the rest of the app's.",
+					"type": "string",
+					"default": ""
+				},
+				"ttl_seconds": {
+					"description": "Lifetime of an entry in seconds. `None` or `0` keeps it until it is invalidated.",
+					"type": ["integer", "null"],
+					"format": "uint64",
+					"minimum": 0,
+					"default": null
+				},
+				"scope": {
+					"$ref": "#/$defs/LayerCacheScope",
+					"default": "app"
+				}
+			}
+		},
+		"LayerCacheScope": {
+			"description": "Who a layer's cached results belong to. Mirrors the scopes the flow cache backends\nunderstand; kept here so the layer settings do not have to depend on the catalog.",
+			"oneOf": [
+				{
+					"description": "Shared by everyone who can execute in the app.",
+					"type": "string",
+					"const": "app"
+				},
+				{
+					"description": "Private to the user who triggered the run.",
+					"type": "string",
+					"const": "user"
+				}
 			]
 		}
 	}

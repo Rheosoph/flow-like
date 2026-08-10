@@ -26,6 +26,10 @@ import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
 import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
 import { remarkUserMention } from "../editor/plugins/remark-user-mention";
 import {
+	DEFAULT_UPLOAD_PREFIX,
+	EditorUploadContext,
+} from "../editor/upload-context";
+import {
 	LazyPlateStatic,
 	WINDOWING_BLOCK_THRESHOLD,
 	indexEditorPaths,
@@ -446,7 +450,7 @@ function TextEditorStatic({
 }
 
 type TextEditorProps = {
-	/** App owning this editable content; used for hosted-model usage attribution. */
+	/** App owning this editable content; used for hosted-model usage attribution and media uploads. */
 	appId?: string;
 	initialContent: string;
 	onChange?: (content: string) => void;
@@ -456,6 +460,10 @@ type TextEditorProps = {
 	onFocusNode?: (nodeId: string) => void;
 	onUserMention?: (sub: string) => void;
 	mentionItems?: ReadonlyArray<MentionItem>;
+	/** Storage folder that pasted, dropped and picked media is uploaded into. */
+	uploadPrefix?: string;
+	/** `user` uploads into the caller's private area instead of the shared app area. */
+	uploadScope?: "app" | "user";
 };
 
 export const TextEditor = memo(function TextEditor({
@@ -468,36 +476,52 @@ export const TextEditor = memo(function TextEditor({
 	onFocusNode,
 	onUserMention,
 	mentionItems,
+	uploadPrefix,
+	uploadScope,
 }: Readonly<TextEditorProps>) {
 	const items = mentionItems ?? EMPTY_MENTION_ITEMS;
 	const inheritedAppId = useContext(AIUsageAppContext);
+	const resolvedAppId = appId ?? inheritedAppId;
+	const uploadConfig = useMemo(
+		() => ({
+			appId: resolvedAppId,
+			prefix: uploadPrefix ?? DEFAULT_UPLOAD_PREFIX,
+			scope: uploadScope ?? ("app" as const),
+		}),
+		[resolvedAppId, uploadPrefix, uploadScope],
+	);
+
 	if (editable && onChange) {
 		return (
-			<AIUsageAppContext.Provider value={appId ?? inheritedAppId}>
-				<MentionItemsProvider value={items}>
-					<Suspense fallback={<div className="px-4 py-2" />}>
-						<TextEditorEditable
-							initialContent={initialContent}
-							onChange={(content: string) => {
-								onChange(content);
-							}}
-							isMarkdown={isMarkdown}
-							onFocusNode={onFocusNode}
-						/>
-					</Suspense>
-				</MentionItemsProvider>
+			<AIUsageAppContext.Provider value={resolvedAppId}>
+				<EditorUploadContext.Provider value={uploadConfig}>
+					<MentionItemsProvider value={items}>
+						<Suspense fallback={<div className="px-4 py-2" />}>
+							<TextEditorEditable
+								initialContent={initialContent}
+								onChange={(content: string) => {
+									onChange(content);
+								}}
+								isMarkdown={isMarkdown}
+								onFocusNode={onFocusNode}
+							/>
+						</Suspense>
+					</MentionItemsProvider>
+				</EditorUploadContext.Provider>
 			</AIUsageAppContext.Provider>
 		);
 	}
 	return (
-		<MentionItemsProvider value={items}>
-			<TextEditorStatic
-				initialContent={initialContent}
-				isMarkdown={isMarkdown}
-				minimal={minimal}
-				onFocusNode={onFocusNode}
-				onUserMention={onUserMention}
-			/>
-		</MentionItemsProvider>
+		<AIUsageAppContext.Provider value={resolvedAppId}>
+			<MentionItemsProvider value={items}>
+				<TextEditorStatic
+					initialContent={initialContent}
+					isMarkdown={isMarkdown}
+					minimal={minimal}
+					onFocusNode={onFocusNode}
+					onUserMention={onUserMention}
+				/>
+			</MentionItemsProvider>
+		</AIUsageAppContext.Provider>
 	);
 });

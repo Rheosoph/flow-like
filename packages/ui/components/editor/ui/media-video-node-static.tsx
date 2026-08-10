@@ -12,6 +12,7 @@ import { NodeApi, SlateElement } from "platejs";
 import LiteYouTubeEmbed from "react-lite-youtube-embed";
 import ReactPlayer from "react-player";
 import { cn } from "../../../lib";
+import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
 
 function getVideoType(url?: string) {
 	if (!url) return { isYoutube: false, isUpload: false, embed: null };
@@ -27,6 +28,7 @@ export function VideoElementStatic(
 	props: SlateElementProps<TVideoElement & TCaptionElement & TResizableProps>,
 ) {
 	const { align = "center", caption, url, width } = props.element;
+	const resolvedUrl = useEditorAssetUrl(url);
 
 	const { isYoutube, isUpload, embed } = getVideoType(url);
 
@@ -59,7 +61,7 @@ export function VideoElementStatic(
 							)}
 						/>
 					) : (
-						<ReactPlayer src={url} width="100%" height="100%" controls />
+						<ReactPlayer src={resolvedUrl} width="100%" height="100%" controls />
 					)}
 					{caption && <figcaption>{NodeApi.string(caption[0])}</figcaption>}
 				</figure>

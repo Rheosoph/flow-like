@@ -56,6 +56,7 @@ pub enum A2UIComponentType {
     Feedback(FeedbackProps),
     AppLink(AppLinkProps),
     TextField(TextFieldProps),
+    RichText(RichTextProps),
     Select(SelectProps),
     Slider(SliderProps),
     Checkbox(CheckboxProps),
@@ -742,6 +743,39 @@ pub struct DateTimeInputProps {
     pub disabled: Option<BoundValue>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<BoundValue>,
+}
+
+/// Rich text authoring surface. `value` carries the editor's `plate_json::` document, which the
+/// `utils_md_plate_to_md` / `utils_md_plate_to_html` nodes convert for downstream use.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RichTextProps {
+    pub value: BoundValue,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub helper_text: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub placeholder: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disabled: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<BoundValue>,
+    /// Storage folder that pasted or dropped images are uploaded into.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_prefix: Option<BoundValue>,
+    /// "app" (shared storage, default) or "user" (the viewer's private area).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upload_scope: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_height: Option<BoundValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_height: Option<BoundValue>,
+    /// Pause before the "change" event fires, in milliseconds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debounce_ms: Option<BoundValue>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

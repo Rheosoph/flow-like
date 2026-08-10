@@ -38,7 +38,8 @@ pub const COMPONENT_CATALOG: &str = r##"
 
 ### Interactive Components
 - `button` - Clickable button (variants, sizes, loading state, icon)
-- `textField` - Text input; set `multiline` (+ `rows`) for textarea-style long text - there is NO separate textarea/richtext component; `debounceMs` tunes the pause before the "input" event fires
+- `textField` - Plain text input; set `multiline` (+ `rows`) for textarea-style long text; `debounceMs` tunes the pause before the "input" event fires
+- `richText` - Formatted document editor (headings, lists, tables, code, images). `value` is the editor's `plate_json::` string, NOT markdown - convert it with the Rich Text to Markdown (`utils_md_plate_to_md`) or Rich Text to HTML (`utils_md_plate_to_html`) node before using it elsewhere. Pasted and dropped images upload into app storage under `uploadPrefix`
 - `select` - Dropdown selection (single value from `options`)
 - `slider` - Numeric range slider (min/max/step)
 - `checkbox` - Boolean checkbox
@@ -113,7 +114,8 @@ parts (a button + fileInput standing in for voiceInput, a hand-made tab bar, a d
 is a defect:
 - record audio / voice memo / dictation / push-to-talk / talk to the app -> `voiceInput`
 - play a workflow's audio response (conversational voice loop) -> `voiceInput` with `resultMode: "autoplay"`
-- long or multi-line text -> `textField` with `multiline: true` (no textarea/richtext type exists)
+- short or multi-line plain text -> `textField` with `multiline: true`
+- a formatted document, article, note or anything needing headings/lists/images -> `richText`
 - thumbs, like/dislike, "was this helpful", 0-5 score -> `feedback` (thumbs or numeric scale mode + comment; no star-rating component exists)
 - choose one of few visible options -> `radioGroup`; one of many -> `select`; on/off setting -> `switch`; form consent/multi-pick -> `checkbox`
 - upload images -> `imageInput`; other files -> `fileInput` (no camera-capture component exists - say so rather than faking one)
@@ -206,6 +208,9 @@ the action alone leaves a dead button.
     search boxes, "change" for form fields that should settle before running.
   - `slider`: "change" (committed at the end of the drag), "input" (paused mid-drag, debounced).
   - `select`: "change", "open", "close".
+  - `richText`: "change" (the author paused for `debounceMs`, 600 ms default; context carries the
+    `plate_json::` value), "blur", "imageUploaded" (context carries `path`, `url`, `name`, `size`,
+    `type`), "imageUploadError" (context carries `name`, `message`).
   - `table`: "rowClick", "cellClick" (both carry the source row and its index in the unsorted
     data), "selectionChange" (needs `selectable`), "sortChange".
   - `nivoChart` / `plotlyChart`: "pointClick".

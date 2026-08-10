@@ -58,6 +58,7 @@ import { createId } from "@paralleldrive/cuid2";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { isObject } from "lodash-es";
+import type { CSSProperties } from "react";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
 import {
@@ -135,14 +136,24 @@ export class BoardSyncDiscardRequiredError extends Error {
 }
 
 /**
+ * Command-batch rejections carry an index, an entity id and a rollback trace, which overflow a
+ * toast. The full text stays on the queued row and is shown in the recovery dialog.
+ */
+const MAX_TOAST_FAILURE_CHARS = 160;
+
+/**
  * A stalled queue is only actionable if the user can tell an outage apart from a payload the
  * server will never accept. Surface the transport's own status and message rather than a generic
  * "sync incomplete".
  */
 function describeOfflineSyncFailure(failure?: OfflineSyncFailure): string {
 	if (!failure) return "The server did not accept the queued edits.";
-	if (failure.status === undefined) return failure.message;
-	return `HTTP ${failure.status}: ${failure.message}`;
+	const detail =
+		failure.message.length > MAX_TOAST_FAILURE_CHARS
+			? `${failure.message.slice(0, MAX_TOAST_FAILURE_CHARS).trimEnd()}…`
+			: failure.message;
+	if (failure.status === undefined) return detail;
+	return `HTTP ${failure.status}: ${detail}`;
 }
 
 // Hub configuration cache
@@ -2012,10 +2023,14 @@ export class BoardState implements IBoardState {
 		if (now - lastQueuedEditsToastAt < QUEUED_EDITS_TOAST_DEBOUNCE_MS) return;
 		lastQueuedEditsToastAt = now;
 
-		toast.warning("Server sync is incomplete — your queued edits were kept.", {
+		toast.warning("Server sync is incomplete — queued edits were kept.", {
 			description: describeOfflineSyncFailure(failure),
+			// Two actions plus a transport error do not fit the default toast width.
+			style: {
+				"--width": "min(28rem, calc(100vw - 2rem))",
+			} as CSSProperties,
 			action: {
-				label: "Retry now",
+				label: "Retry",
 				onClick: () => {
 					void this.retryOfflineSync(appId, boardId);
 				},
@@ -2023,7 +2038,7 @@ export class BoardState implements IBoardState {
 			// A queue the server permanently refuses cannot be retried out of. This opens the
 			// recovery dialog rather than resetting directly — discarding an edit needs consent.
 			cancel: {
-				label: "Fetch from server…",
+				label: "Fetch from server",
 				onClick: () => dispatchBoardSyncRecoveryRequest(appId, boardId),
 			},
 		});
