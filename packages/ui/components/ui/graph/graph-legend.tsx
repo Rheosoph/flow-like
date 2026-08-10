@@ -9,6 +9,8 @@ export interface LegendEntry {
 	label: string;
 	style: LabelStyle;
 	count?: number;
+	/** Whole-population size, when it is known exactly for this label. */
+	total?: number;
 	type: "node" | "edge";
 }
 
@@ -186,8 +188,14 @@ export function GraphLegend({
 									{entry.label}
 								</span>
 								{entry.count !== undefined && (
-									<span className="ml-auto text-muted-foreground">
-										{entry.count}
+									<span className="ml-auto text-muted-foreground tabular-nums">
+										{entry.count.toLocaleString()}
+										{entry.total !== undefined && (
+											<span className="opacity-60">
+												{" / "}
+												{entry.total.toLocaleString()}
+											</span>
+										)}
 									</span>
 								)}
 								<button
@@ -237,8 +245,14 @@ export function GraphLegend({
 									{entry.label}
 								</span>
 								{entry.count !== undefined && (
-									<span className="ml-auto text-muted-foreground">
-										{entry.count}
+									<span className="ml-auto text-muted-foreground tabular-nums">
+										{entry.count.toLocaleString()}
+										{entry.total !== undefined && (
+											<span className="opacity-60">
+												{" / "}
+												{entry.total.toLocaleString()}
+											</span>
+										)}
 									</span>
 								)}
 								<button

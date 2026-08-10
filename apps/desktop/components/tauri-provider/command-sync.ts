@@ -318,6 +318,110 @@ export function evaluateCommandSyncRemoteIdentity(
 	return { apply: true };
 }
 
+export interface CommandSyncQueueRow
+	extends CommandSyncMutationState,
+		CommandSyncRemoteIdentity {
+	commandId: string;
+	createdAt: Date;
+	chunkOffset?: number;
+	pendingReceiptAck?: string;
+	failedAttempts?: number;
+	lastFailureStatus?: number;
+	lastFailureMessage?: string;
+}
+
+/**
+ * Rows an explicit server-authoritative reset must remove.
+ *
+ * Only rows carrying an undelivered mutation qualify. Completed receipt tombstones — including
+ * FlowPilot's, which suppress native replay — are recovery evidence, not user edits: dropping them
+ * can reopen a duplicate delivery, and keeping them never blocks a drain.
+ */
+export function selectDiscardableSyncRows<T extends CommandSyncMutationState>(
+	rows: readonly T[],
+): T[] {
+	return rows.filter(commandSyncHasPendingMutation);
+}
+
+export interface BoardSyncQueueEntrySummary {
+	commandId: string;
+	createdAt: string;
+	commandCount: number;
+	partiallyDelivered: boolean;
+	blockedReason?: string;
+	failedAttempts?: number;
+	lastFailureStatus?: number;
+	lastFailureMessage?: string;
+	ownershipMismatch?: string;
+	remoteProfileId?: string;
+	remoteHub?: string;
+}
+
+export interface BoardSyncQueueSummary {
+	pendingBatches: number;
+	blockedBatches: number;
+	partiallyDeliveredBatches: number;
+	ownershipMismatch?: string;
+	entries: BoardSyncQueueEntrySummary[];
+}
+
+const countQueuedCommands = (row: CommandSyncMutationState): number =>
+	(row.chunks ?? []).reduce((total, chunk) => total + chunk.length, 0) +
+	(row.commands?.length ?? 0);
+
+/**
+ * Describe why a board's queue is stuck without attempting delivery.
+ *
+ * A legacy row (`remoteIdentityVersion !== 1`) has no provable owner, which blocks the drain just
+ * like a mismatch does, so it is reported as one rather than looking healthy.
+ */
+export function summarizeBoardSyncQueue(
+	rows: readonly CommandSyncQueueRow[],
+	current: CommandSyncRemoteIdentity,
+): BoardSyncQueueSummary {
+	const pending = selectDiscardableSyncRows(rows);
+	let ownershipMismatch: string | undefined;
+
+	const entries = pending.map((row) => {
+		const owner =
+			row.remoteIdentityVersion === 1
+				? evaluateCommandSyncRemoteIdentity(row, current)
+				: {
+						apply: false,
+						refusalReason:
+							"queued mutation predates account binding and has no provable owner",
+					};
+		if (!owner.apply && !ownershipMismatch) {
+			ownershipMismatch = owner.refusalReason;
+		}
+		return {
+			commandId: row.commandId,
+			createdAt: row.createdAt.toISOString(),
+			commandCount: countQueuedCommands(row),
+			partiallyDelivered:
+				(row.chunkOffset ?? 0) > 0 || Boolean(row.pendingReceiptAck),
+			blockedReason: row.blockedReason,
+			failedAttempts: row.failedAttempts,
+			lastFailureStatus: row.lastFailureStatus,
+			lastFailureMessage: row.lastFailureMessage,
+			ownershipMismatch: owner.apply ? undefined : owner.refusalReason,
+			remoteProfileId: row.remoteProfileId,
+			remoteHub: row.remoteHub,
+		};
+	});
+
+	return {
+		pendingBatches: entries.length,
+		blockedBatches: entries.filter((entry) => Boolean(entry.blockedReason))
+			.length,
+		partiallyDeliveredBatches: entries.filter(
+			(entry) => entry.partiallyDelivered,
+		).length,
+		ownershipMismatch,
+		entries,
+	};
+}
+
 /**
  * Lineage guard layered on top of the updated_at last-writer-wins checks: once
  * this client has applied or pushed past a remote revision, only a strictly

@@ -549,6 +549,7 @@ function BuilderComponent({
 		paste,
 		isComponentHidden,
 		components: builderComponents,
+		actionContext,
 	} = useBuilder();
 
 	const { activeId } = useBuilderDnd();
@@ -707,11 +708,15 @@ function BuilderComponent({
 		? renderChildForContainer
 		: parentRenderChild;
 
-	// Build component props
+	// Build component props. Elements that read live project data — the ontology
+	// explorer, widget instances — need the owning project here, not just on the
+	// ActionProvider, or the edit canvas renders them without any context.
 	const componentProps: ComponentProps = {
 		component,
 		componentId,
 		surfaceId,
+		appId: actionContext?.appId,
+		boardId: actionContext?.boardId,
 		style: style ?? component.style,
 		onAction: () => {},
 		renderChild: modifiedRenderChild,

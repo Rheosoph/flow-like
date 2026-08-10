@@ -171,7 +171,7 @@ function MediaTile({
 			) : (
 				<span className="pointer-events-none absolute inset-x-0 bottom-0 flex items-baseline gap-1.5 bg-linear-to-t from-black/70 to-transparent px-1.5 pb-1 pt-4 text-[11px] text-white opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
 					<span className="min-w-0 truncate">{file.displayName}</span>
-					{file.size !== undefined && (
+					{typeof file.size === "number" && (
 						<span className="shrink-0 text-[10px] opacity-80">
 							{humanFileSize(file.size, true)}
 						</span>
@@ -362,7 +362,7 @@ function FileChip({
 					{host}
 				</span>
 			) : (
-				file.size !== undefined && (
+				typeof file.size === "number" && (
 					<span className="shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground">
 						{humanFileSize(file.size, true)}
 					</span>

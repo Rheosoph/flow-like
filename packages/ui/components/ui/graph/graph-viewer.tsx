@@ -3,6 +3,7 @@
 import { AlertTriangle, Route, Search, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
+	GraphAnalyticsResult,
 	GraphOverlay,
 	GraphPathsResult,
 	LabelStyle,
@@ -13,6 +14,7 @@ import type {
 } from "../../../state/backend-state/graph-state";
 import { Popover, PopoverContent, PopoverTrigger } from "../popover";
 import { GraphCanvas } from "./graph-canvas";
+import { buildClusterModel } from "./graph-clusters";
 import { GraphEdgeInspector } from "./graph-edge-inspector";
 import { GraphLegend, type LegendEntry } from "./graph-legend";
 import {
@@ -118,6 +120,14 @@ export interface GraphViewerProps {
 	showLegend?: boolean;
 	/** Node/edge detail drawer opened by selection. */
 	showInspector?: boolean;
+	/** Whole-population counts, used to say what the loaded sample is a sample of. */
+	analytics?: GraphAnalyticsResult | null;
+	/**
+	 * Groups the canvas into constellations around their hubs. Off by default:
+	 * the inline a2ui graph element builds a synthetic overlay with no
+	 * containment mappings, and must keep rendering exactly as it does today.
+	 */
+	enableClusterLayout?: boolean;
 }
 
 interface PathOutcome {
@@ -152,6 +162,8 @@ export function GraphViewer({
 	showSearch = true,
 	showLegend = true,
 	showInspector = true,
+	analytics,
+	enableClusterLayout = false,
 }: GraphViewerProps) {
 	const [selectedNode, setSelectedNode] = useState<SubgraphNode | null>(null);
 	const [selectedEdge, setSelectedEdge] = useState<SubgraphEdge | null>(null);
@@ -193,6 +205,39 @@ export function GraphViewer({
 	const nodeCount = data?.nodes.length ?? 0;
 	const edgeCount = data?.edges.length ?? 0;
 
+	const clusterModel = useMemo(
+		() =>
+			enableClusterLayout && data ? buildClusterModel(data, overlay) : null,
+		[enableClusterLayout, data, overlay],
+	);
+
+	// Only node_count and label_counts describe the whole population; every other
+	// analytics field is measured over a bounded edge snapshot and would read as a
+	// finding about the ontology when it is really a fact about the sample.
+	//
+	// label_counts is count_rows() on the mapped table, so a label that shares its
+	// table with another label (an object collapsed by a coarser key, say) gets the
+	// row count rather than its own population. Those are dropped instead of shown
+	// as exact.
+	const populationByLabel = useMemo(() => {
+		const labelsPerTable = new Map<string, number>();
+		for (const node of overlay.nodes) {
+			labelsPerTable.set(node.table, (labelsPerTable.get(node.table) ?? 0) + 1);
+		}
+		const soleMappingLabels = new Set(
+			overlay.nodes
+				.filter((node) => (labelsPerTable.get(node.table) ?? 0) === 1)
+				.map((node) => node.label),
+		);
+
+		const totals = new Map<string, number>();
+		for (const entry of analytics?.label_counts ?? []) {
+			if (soleMappingLabels.has(entry.label))
+				totals.set(entry.label, entry.nodes);
+		}
+		return totals;
+	}, [analytics, overlay]);
+
 	const legendEntries = useMemo<LegendEntry[]>(() => {
 		const entries: LegendEntry[] = [];
 		const nodeCounts = new Map<string, number>();
@@ -212,6 +257,7 @@ export function GraphViewer({
 				label: nm.label,
 				style: nm.style,
 				count: nodeCounts.get(nm.label),
+				total: populationByLabel.get(nm.label),
 				type: "node",
 			});
 		}
@@ -224,7 +270,27 @@ export function GraphViewer({
 			});
 		}
 		return entries;
-	}, [overlay, data]);
+	}, [overlay, data, populationByLabel]);
+
+	/** Says what the loaded nodes are a sample of, so the view never implies it is everything. */
+	const censusSummary = useMemo(() => {
+		if (populationByLabel.size === 0) return null;
+
+		const loadedByLabel = new Map<string, number>();
+		for (const node of data?.nodes ?? []) {
+			loadedByLabel.set(node.label, (loadedByLabel.get(node.label) ?? 0) + 1);
+		}
+
+		const parts = Array.from(populationByLabel.entries())
+			.filter(([label]) => (loadedByLabel.get(label) ?? 0) > 0)
+			.sort((a, b) => b[1] - a[1])
+			.map(
+				([label, total]) =>
+					`${(loadedByLabel.get(label) ?? 0).toLocaleString()} of ${total.toLocaleString()} ${label}`,
+			);
+
+		return parts.length > 0 ? `Showing ${parts.join(" · ")}` : null;
+	}, [populationByLabel, data]);
 
 	const nodeMap = useMemo(() => {
 		if (!data) return new Map<string, SubgraphNode>();
@@ -777,6 +843,17 @@ export function GraphViewer({
 									</PopoverContent>
 								</Popover>
 							)}
+							{censusSummary && (
+								<span
+									className="text-xs text-muted-foreground truncate"
+									title={censusSummary}
+								>
+									{censusSummary}
+								</span>
+							)}
+							{/* Never suppressed by the census line: that line only names
+							    labels whose population is known exactly, so it can read as a
+							    complete description of a view that is nothing of the kind. */}
 							{truncated && (
 								<span className="text-xs text-amber-500 whitespace-nowrap">
 									Result truncated
@@ -818,6 +895,7 @@ export function GraphViewer({
 							pathHighlight ? (pathEdgeHighlight ?? undefined) : undefined
 						}
 						hiddenLabels={hiddenLabels.size > 0 ? hiddenLabels : undefined}
+						clusters={clusterModel}
 						onNodeClick={handleNodeClick}
 						onNodeShiftClick={handleNodeShiftClick}
 						onEdgeClick={handleEdgeClick}

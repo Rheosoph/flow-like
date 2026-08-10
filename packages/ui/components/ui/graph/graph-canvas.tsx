@@ -41,9 +41,11 @@ import type {
 	SubgraphResult,
 } from "../../../state/backend-state/graph-state";
 import { getParallelEdgeRenderAttributes } from "./edge-rendering";
+import type { ClusterModel } from "./graph-clusters";
 import {
 	type ConnectivityPartition,
 	type LayoutPosition as GraphPosition,
+	applyClusterLayout,
 	computeSeedSpread,
 	createAnchoredPosition,
 	createDeterministicPosition,
@@ -107,6 +109,8 @@ export interface GraphCanvasProps {
 	highlightedNodeIds?: Set<string>;
 	highlightedEdgeIds?: Set<string>;
 	hiddenLabels?: Set<string>;
+	/** Groups the nodes into constellations instead of one undifferentiated field. */
+	clusters?: ClusterModel | null;
 	onNodeClick?: (nodeId: string) => void;
 	onNodeShiftClick?: (nodeId: string, label: string) => void;
 	onEdgeClick?: (edgeKey: string) => void;
@@ -202,6 +206,27 @@ function styleToNodeSize(
 		return min + ratio * (max - min);
 	}
 	return 10;
+}
+
+const HUB_SIZE_MIN = 14;
+const HUB_SIZE_MAX = 34;
+/**
+ * Hub captions exempted from label culling. A forced label bypasses
+ * `labelRenderedSizeThreshold` and the label grid entirely, so forcing all 400
+ * groups would undo exactly the budget the large tiers exist to enforce. Past
+ * this the size encoding and sigma's own culling decide.
+ */
+const MAX_FORCED_HUB_LABELS = 48;
+
+/**
+ * Size carries fan-out, log-scaled so a corpus spanning orders of magnitude
+ * still fits one screen. Sigma orders label candidates by size and culls below
+ * `labelRenderedSizeThreshold`, so this doubles as the label-priority rule:
+ * hub captions survive, member captions drop out.
+ */
+function hubNodeSize(represented: number): number {
+	const scaled = HUB_SIZE_MIN + 2.2 * Math.log2(1 + Math.max(0, represented));
+	return Math.min(HUB_SIZE_MAX, Math.max(HUB_SIZE_MIN, scaled));
 }
 
 function hexToRgba(hex: string, alpha: number): string {
@@ -474,6 +499,7 @@ interface GraphBuildOptions {
 	previousPositions: ReadonlyMap<string, GraphPosition>;
 	anchorNodeId?: string | null;
 	forceLayout?: boolean;
+	clusters?: ClusterModel | null;
 }
 
 interface GraphBuildResult {
@@ -580,7 +606,12 @@ async function buildGraphAsync(
 	data: SubgraphResult,
 	updateState: (state: GraphPreparationState) => void,
 	isCancelled: () => boolean,
-	{ previousPositions, anchorNodeId, forceLayout = false }: GraphBuildOptions,
+	{
+		previousPositions,
+		anchorNodeId,
+		forceLayout = false,
+		clusters,
+	}: GraphBuildOptions,
 ): Promise<GraphBuildResult | null> {
 	const graph = new Graph({ multi: true, type: "directed" });
 	const nodeCount = data.nodes.length;
@@ -600,6 +631,13 @@ async function buildGraphAsync(
 	const assignedPositions = new Map<string, GraphPosition>();
 	const neighborLookup = buildNeighborLookup(data);
 	const columnRanges = computeColumnRanges(data.nodes);
+	// Groups arrive ranked by population, so the biggest hubs keep their captions.
+	const forcedHubIds = new Set(
+		(clusters?.clusters ?? [])
+			.map((cluster) => cluster.hubId)
+			.filter((hubId): hubId is string => hubId !== undefined)
+			.slice(0, MAX_FORCED_HUB_LABELS),
+	);
 	const seedSpread = computeSeedSpread(nodeCount);
 	// Newly expanded nodes land in a small ring around the node they came from,
 	// close enough to read as related but clear of it.
@@ -655,6 +693,18 @@ async function buildGraphAsync(
 				borderColor: nodeColor,
 				usesDefaultColor: !node.style?.color,
 			};
+
+			// Written at every graph size: above LARGE_THRESHOLD the reducers are
+			// skipped entirely, so raw attributes are all the renderer still sees.
+			const assignment = clusters?.byNode.get(node.id);
+			if (assignment) {
+				attrs.clusterId = assignment.clusterId;
+				if (assignment.isHub) {
+					attrs.isHub = true;
+					attrs.badge = assignment.badge;
+					attrs.forceLabel = forcedHubIds.has(node.id);
+				}
+			}
 
 			if (!isLarge) {
 				attrs.image = getIconDataUri(node.style?.icon ?? "database");
@@ -749,6 +799,18 @@ async function buildGraphAsync(
 		(node) => {
 			if (!graph.hasNode(node.id)) return;
 
+			const assignment = clusters?.byNode.get(node.id);
+			// Only the default fixed size is overridden — a user who chose
+			// by-degree or by-column sizing keeps the encoding they picked.
+			if (assignment?.isHub && node.style?.size?.mode === "fixed") {
+				graph.setNodeAttribute(
+					node.id,
+					"size",
+					hubNodeSize(assignment.represented),
+				);
+				return;
+			}
+
 			const baseSize = styleToNodeSize(
 				node.style,
 				degreeMap.get(node.id),
@@ -788,6 +850,38 @@ async function buildGraphAsync(
 			"Reusing the current node positions while adding new connections.",
 			"ready",
 		);
+		return {
+			graph,
+			shouldRunWorkerLayout: false,
+		};
+	}
+
+	// Grouping wins over the force layout when we have one: a simulation spreads
+	// nodes by connectivity alone, which says nothing about a sample that is
+	// mostly one object type or mostly detached.
+	if (clusters && clusters.clusters.length > 1) {
+		const base =
+			NODE_PROGRESS_WEIGHT + EDGE_PROGRESS_WEIGHT + SIZE_PROGRESS_WEIGHT;
+		publish(
+			base,
+			"Grouping nodes",
+			"Arranging each group around its hub.",
+			"layout",
+		);
+		await applyClusterLayout(graph, clusters.clusters, {
+			onProgress: (fraction) => {
+				publish(
+					base + LAYOUT_PROGRESS_WEIGHT * fraction,
+					"Grouping nodes",
+					`${Math.round(fraction * 100)}% of groups arranged.`,
+					"layout",
+				);
+			},
+			yieldToFrame: waitForNextFrame,
+			isCancelled,
+		});
+		if (isCancelled()) return null;
+		publish(1, "Graph ready", "Rendering interactive view.", "ready");
 		return {
 			graph,
 			shouldRunWorkerLayout: false,
@@ -1272,6 +1366,7 @@ export function GraphCanvas({
 	highlightedNodeIds,
 	highlightedEdgeIds,
 	hiddenLabels,
+	clusters,
 	onNodeClick,
 	onNodeShiftClick,
 	onEdgeClick,
@@ -1292,6 +1387,7 @@ export function GraphCanvas({
 	const loadingRef = useRef(loading);
 	const selectedNodeIdRef = useRef<string | null>(selectedNodeId ?? null);
 	const forceLayoutRef = useRef(false);
+	const lastClusterEpochRef = useRef<string | null>(null);
 	const lastPaletteKeyRef = useRef<string>("");
 
 	graphRef.current = graph;
@@ -1326,7 +1422,13 @@ export function GraphCanvas({
 		void layoutRunKey;
 		const nextData = data;
 		const previousPositions = snapshotGraphPositions(graphRef.current);
-		const forceLayout = forceLayoutRef.current;
+		// A regrouping has to relayout. Raising the node limit keeps enough old
+		// positions to clear the preserve threshold, which would otherwise swallow
+		// the new grouping and leave a stale-but-plausible arrangement on screen.
+		const clusterEpoch = clusters?.epoch ?? null;
+		const regrouped = clusterEpoch !== lastClusterEpochRef.current;
+		lastClusterEpochRef.current = clusterEpoch;
+		const forceLayout = forceLayoutRef.current || regrouped;
 		forceLayoutRef.current = false;
 		let cancelled = false;
 
@@ -1371,6 +1473,7 @@ export function GraphCanvas({
 					previousPositions,
 					anchorNodeId: selectedNodeIdRef.current,
 					forceLayout,
+					clusters,
 				},
 			);
 
@@ -1396,7 +1499,7 @@ export function GraphCanvas({
 		return () => {
 			cancelled = true;
 		};
-	}, [data, layoutRunKey]);
+	}, [data, layoutRunKey, clusters]);
 
 	const theme = useMemo(() => {
 		void themeTick;

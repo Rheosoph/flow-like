@@ -39,8 +39,22 @@ export interface ICommandSync {
 	deferredReceiptAcks?: string[];
 }
 
+/**
+ * A queued mutation removed by an explicit server-authoritative reset.
+ *
+ * The reset is the only path that drops an undelivered edit, so the exact row is retained here
+ * instead of being deleted outright: the user can still export what was discarded, and a support
+ * case can reconstruct it. Nothing replays from this store.
+ */
+export interface ICommandSyncArchive extends ICommandSync {
+	archiveId: string;
+	archivedAt: Date;
+	archiveReason: string;
+}
+
 const offlineSyncDB = new Dexie("OfflineSync") as Dexie & {
 	commands: EntityTable<ICommandSync, "commandId">;
+	discarded: EntityTable<ICommandSyncArchive, "archiveId">;
 };
 
 offlineSyncDB.version(1).stores({
@@ -53,6 +67,11 @@ offlineSyncDB.version(2).stores({
 
 offlineSyncDB.version(3).stores({
 	commands: "commandId, appId, [appId+boardId], sequence",
+});
+
+offlineSyncDB.version(4).stores({
+	commands: "commandId, appId, [appId+boardId], sequence",
+	discarded: "archiveId, appId, [appId+boardId], archivedAt",
 });
 
 export { offlineSyncDB };

@@ -17,7 +17,10 @@ import type { IBitState } from "./backend-state/bit-state";
 import type {
 	IApplyFlowIrCommitResponse,
 	IApplyFlowScriptResponse,
+	IBoardServerResetResult,
 	IBoardState,
+	IBoardSyncQueueEntry,
+	IBoardSyncStatus,
 	ICheckFlowScriptReconcileResponse,
 	IFlowScriptDiagnostic,
 } from "./backend-state/board-state";
@@ -87,6 +90,9 @@ export type {
 	IAppRouteState,
 	IBitState,
 	IBoardState,
+	IBoardServerResetResult,
+	IBoardSyncQueueEntry,
+	IBoardSyncStatus,
 	IApplyFlowIrCommitResponse,
 	IApplyFlowScriptResponse,
 	ICheckFlowScriptReconcileResponse,

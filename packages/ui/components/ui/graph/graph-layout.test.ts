@@ -1,13 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import Graph from "graphology";
+import type { GraphCluster } from "./graph-clusters";
 import {
+	CLUSTER_GAP,
+	type ClusterDisc,
 	NODE_GAP,
+	applyClusterLayout,
 	computeSeedSpread,
 	createDeterministicPosition,
 	getLayoutBounds,
+	packClusterDiscs,
 	packNodesOnGrid,
 	partitionByConnectivity,
 	placeDetachedNodes,
+	placeHubStar,
+	placePhyllotaxis,
 	relaxOverlaps,
 } from "./graph-layout";
 
@@ -125,6 +132,33 @@ describe("packNodesOnGrid", () => {
 		expect(worstOverlap(graph, ids)).toBeLessThanOrEqual(0);
 	});
 
+	test("pitches columns wider than rows so captions have room", () => {
+		const graph = buildGraph(100, () => ({ x: 0, y: 0 }));
+		const ids = graph.nodes();
+
+		packNodesOnGrid(graph, ids);
+
+		const distinctX = [
+			...new Set(ids.map((id) => graph.getNodeAttribute(id, "x") as number)),
+		].sort((a, b) => a - b);
+		const distinctY = [
+			...new Set(ids.map((id) => graph.getNodeAttribute(id, "y") as number)),
+		].sort((a, b) => a - b);
+
+		expect(distinctX[1] - distinctX[0]).toBeGreaterThan(
+			(distinctY[1] - distinctY[0]) * 2,
+		);
+	});
+
+	test("stays roughly square despite the wider column pitch", () => {
+		const graph = buildGraph(100, () => ({ x: 0, y: 0 }));
+		const bounds = packNodesOnGrid(graph, graph.nodes());
+
+		const aspect = (bounds?.width ?? 1) / (bounds?.height ?? 1);
+		expect(aspect).toBeGreaterThan(0.6);
+		expect(aspect).toBeLessThan(1.7);
+	});
+
 	test("centers the grid on the requested point", () => {
 		const graph = buildGraph(4, () => ({ x: 0, y: 0 }));
 		packNodesOnGrid(graph, graph.nodes(), { centerX: 100, centerY: -50 });
@@ -183,6 +217,247 @@ describe("placeDetachedNodes", () => {
 		placeDetachedNodes(graph, ids, null);
 
 		expect(worstOverlap(graph, ids)).toBeLessThanOrEqual(0);
+	});
+});
+
+function distanceFrom(
+	graph: Graph,
+	nodeId: string,
+	originX = 0,
+	originY = 0,
+): number {
+	return Math.hypot(
+		(graph.getNodeAttribute(nodeId, "x") as number) - originX,
+		(graph.getNodeAttribute(nodeId, "y") as number) - originY,
+	);
+}
+
+function buildHubGraph(
+	hubId: string,
+	childCount: number,
+	hubSize = 20,
+	childSize = 10,
+): Graph {
+	const graph = new Graph({ multi: true, type: "directed" });
+	graph.addNode(hubId, { x: 0, y: 0, size: hubSize, label: hubId });
+	for (let index = 0; index < childCount; index += 1) {
+		const childId = `${hubId}-c${index}`;
+		graph.addNode(childId, { x: 0, y: 0, size: childSize, label: childId });
+		graph.addEdge(hubId, childId);
+	}
+	return graph;
+}
+
+function hubCluster(
+	hubId: string,
+	graph: Graph,
+	represented: number,
+): GraphCluster {
+	const childIds = graph.neighbors(hubId);
+	return {
+		id: `hub:${hubId}`,
+		kind: "hub",
+		title: hubId,
+		memberIds: [hubId, ...childIds],
+		hubId,
+		childIds,
+		represented,
+		exact: true,
+	};
+}
+
+describe("placeHubStar", () => {
+	test("rings every child clear of the hub, one ring pitch apart", () => {
+		const graph = buildHubGraph("doc", 12);
+		const children = graph.neighbors("doc");
+
+		placeHubStar(graph, "doc", children, { centerX: 40, centerY: -15 });
+
+		expect(graph.getNodeAttribute("doc", "x")).toBe(40);
+		expect(graph.getNodeAttribute("doc", "y")).toBe(-15);
+
+		const distances = children.map((id) => distanceFrom(graph, id, 40, -15));
+		const rings = [
+			...new Set(distances.map((value) => Math.round(value))),
+		].sort((a, b) => a - b);
+
+		expect(rings).toHaveLength(2);
+		expect(Math.min(...distances)).toBeGreaterThanOrEqual(20 + NODE_GAP + 10);
+		expect(rings[1] - rings[0]).toBeCloseTo(2 * 10 + NODE_GAP, 6);
+	});
+
+	test("leaves a childless hub at the requested centre", () => {
+		const graph = buildHubGraph("doc", 0);
+
+		const bounds = placeHubStar(graph, "doc", [], { centerX: 7, centerY: 3 });
+
+		expect(bounds?.centerX).toBeCloseTo(7, 6);
+		expect(bounds?.centerY).toBeCloseTo(3, 6);
+	});
+
+	test("is deterministic for the same seed", () => {
+		const first = buildHubGraph("doc", 30);
+		const second = buildHubGraph("doc", 30);
+
+		placeHubStar(first, "doc", first.neighbors("doc"), { seed: "hub:doc" });
+		placeHubStar(second, "doc", second.neighbors("doc"), { seed: "hub:doc" });
+
+		expect(first.nodes().map((id) => distanceFrom(first, id))).toEqual(
+			second.nodes().map((id) => distanceFrom(second, id)),
+		);
+	});
+});
+
+describe("placePhyllotaxis", () => {
+	test("puts the first member nearest the centre and never moves back inward", () => {
+		const graph = buildGraph(120, () => ({ x: 0, y: 0 }));
+		const ids = graph.nodes();
+
+		placePhyllotaxis(graph, ids);
+
+		const distances = ids.map((id) => distanceFrom(graph, id));
+		expect(distances[0]).toBe(Math.min(...distances));
+		for (let index = 1; index < distances.length; index += 1) {
+			expect(distances[index]).toBeGreaterThan(distances[index - 1]);
+		}
+	});
+
+	test("seeds a dense set without overlap", () => {
+		const graph = buildGraph(200, () => ({ x: 0, y: 0 }));
+		const ids = graph.nodes();
+
+		placePhyllotaxis(graph, ids);
+
+		expect(worstOverlap(graph, ids)).toBeLessThanOrEqual(0);
+	});
+});
+
+describe("packClusterDiscs", () => {
+	const discs: ClusterDisc[] = Array.from({ length: 60 }, (_, index) => ({
+		id: `cluster-${index}`,
+		radius: 30 + (index % 7) * 25,
+		represented: 1000 - index * 7,
+		size: 40 - (index % 11),
+	}));
+
+	function worstDiscOverlap(centers: Map<string, { x: number; y: number }>) {
+		let worst = Number.NEGATIVE_INFINITY;
+		for (const a of discs) {
+			for (const b of discs) {
+				if (a.id >= b.id) continue;
+				const first = centers.get(a.id);
+				const second = centers.get(b.id);
+				if (!first || !second) continue;
+				const distance = Math.hypot(second.x - first.x, second.y - first.y);
+				worst = Math.max(worst, a.radius + b.radius + CLUSTER_GAP - distance);
+			}
+		}
+		return worst;
+	}
+
+	test("places the most-represented group at the centre of the stage", () => {
+		const centers = packClusterDiscs(discs);
+
+		expect(centers.get("cluster-0")).toEqual({ x: 0, y: 0 });
+	});
+
+	test("clears every other disc by the group gap", () => {
+		expect(worstDiscOverlap(packClusterDiscs(discs))).toBeLessThanOrEqual(1e-6);
+	});
+
+	test("ignores the order the groups arrive in", () => {
+		const reversed = packClusterDiscs([...discs].reverse());
+
+		expect([...reversed]).toEqual([...packClusterDiscs(discs)]);
+	});
+});
+
+describe("applyClusterLayout", () => {
+	test("keeps groups apart and every node readable", () => {
+		const graph = new Graph({ multi: true, type: "directed" });
+		const clusters: GraphCluster[] = [];
+		for (const [hubId, childCount] of [
+			["doc-a", 40],
+			["doc-b", 18],
+			["doc-c", 7],
+		] as const) {
+			graph.addNode(hubId, { x: 0, y: 0, size: 24, label: hubId });
+			const childIds: string[] = [];
+			for (let index = 0; index < childCount; index += 1) {
+				const childId = `${hubId}-c${index}`;
+				graph.addNode(childId, { x: 0, y: 0, size: 8, label: childId });
+				graph.addEdge(hubId, childId);
+				childIds.push(childId);
+			}
+			clusters.push({
+				id: `hub:${hubId}`,
+				kind: "hub",
+				title: hubId,
+				memberIds: [hubId, ...childIds],
+				hubId,
+				childIds,
+				represented: childCount * 10,
+				exact: false,
+			});
+		}
+
+		const bounds = applyClusterLayout(graph, clusters);
+
+		expect(bounds).not.toBeNull();
+		expect(worstOverlap(graph, graph.nodes())).toBeLessThanOrEqual(0);
+		// The dominant group holds the middle; the smallest is pushed outward.
+		expect(distanceFrom(graph, "doc-a")).toBeLessThan(
+			distanceFrom(graph, "doc-c"),
+		);
+	});
+
+	test("lays out a group with no hub and reports progress once per group", () => {
+		const graph = buildGraph(60, () => ({ x: 0, y: 0 }));
+		const ids = graph.nodes();
+		const clusters: GraphCluster[] = [
+			{
+				id: "type:Person",
+				kind: "type",
+				title: "Person",
+				memberIds: ids.slice(0, 30),
+				represented: 30,
+				exact: true,
+			},
+			{
+				id: "type:Team",
+				kind: "type",
+				title: "Team",
+				memberIds: ids.slice(30),
+				represented: 30,
+				exact: true,
+			},
+		];
+		const progress: number[] = [];
+
+		applyClusterLayout(graph, clusters, {
+			onProgress: (fraction) => progress.push(fraction),
+		});
+
+		expect(progress).toEqual([0.5, 1]);
+		expect(worstOverlap(graph, ids)).toBeLessThanOrEqual(0);
+	});
+
+	test("skips groups whose nodes are not in the graph", () => {
+		const graph = buildHubGraph("doc", 6);
+		const clusters: GraphCluster[] = [
+			hubCluster("doc", graph, 6),
+			{
+				id: "type:Ghost",
+				kind: "type",
+				title: "Ghost",
+				memberIds: ["missing-a", "missing-b"],
+				represented: 2,
+				exact: true,
+			},
+		];
+
+		expect(() => applyClusterLayout(graph, clusters)).not.toThrow();
+		expect(graph.order).toBe(7);
 	});
 });
 

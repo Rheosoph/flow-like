@@ -945,6 +945,7 @@ impl LanceGraphStore {
                 label: label.to_string(),
                 caption,
                 props: Value::Object(map),
+                stats: None,
             });
         }
 
@@ -2541,6 +2542,7 @@ mod tests {
                 label: "Person".to_string(),
                 caption: None,
                 props: Value::Null,
+                stats: None,
             })
             .collect::<Vec<_>>();
         let edges = vec![

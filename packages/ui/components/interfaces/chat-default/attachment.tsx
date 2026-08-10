@@ -37,7 +37,7 @@ export interface ProcessedAttachment {
 	isDataUrl: boolean;
 	thumbnailUrl?: string;
 	previewText?: string;
-	size?: number;
+	size?: number | null;
 	anchor?: string;
 }
 

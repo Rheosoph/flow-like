@@ -81,6 +81,11 @@ import {
 	useMobileHeader,
 } from "../..";
 import { BoardActivityIndicator } from "../../components/flow/board-activity-indicator";
+import {
+	BoardSyncRecoveryDialog,
+	BoardSyncStatusPill,
+	useBoardSyncRecoveryRequests,
+} from "../../components/flow/board-sync-recovery";
 import { CommentNode } from "../../components/flow/comment-node";
 import { FlowContextMenu } from "../../components/flow/flow-context-menu";
 import { FlowDock } from "../../components/flow/flow-dock";
@@ -984,6 +989,11 @@ export function FlowBoard({
 		},
 		[setLayerPath, setCurrentLayer],
 	);
+
+	// Undelivered board edits: the only exit when the outbox cannot drain.
+	const [syncRecoveryOpen, setSyncRecoveryOpen] = useState(false);
+	const openSyncRecovery = useCallback(() => setSyncRecoveryOpen(true), []);
+	useBoardSyncRecoveryRequests(appId, boardId, openSyncRecovery);
 
 	// Realtime chat
 	const [chatOpen, setChatOpen] = useState(false);
@@ -3419,7 +3429,18 @@ export function FlowBoard({
 				)}
 				{/* Board activity indicator */}
 				<BoardActivityIndicator boardId={boardId} />
+				<BoardSyncStatusPill
+					appId={appId}
+					boardId={boardId}
+					onOpenRecovery={openSyncRecovery}
+				/>
 			</div>
+			<BoardSyncRecoveryDialog
+				appId={appId}
+				boardId={boardId}
+				open={syncRecoveryOpen}
+				onOpenChange={setSyncRecoveryOpen}
+			/>
 			{/* Floating chat panel */}
 			{chatOpen && awareness && (
 				<div className="fixed right-3 top-28 z-50 sm:right-4 md:right-6 md:top-20">

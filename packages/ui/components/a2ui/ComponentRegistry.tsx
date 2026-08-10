@@ -34,6 +34,7 @@ import { A2UIIcon } from "./display/Icon";
 import { A2UIIframe } from "./display/Iframe";
 import { A2UIImage } from "./display/Image";
 import { A2UIMarkdown } from "./display/Markdown";
+import { A2UIOntologyGraph } from "./display/OntologyGraph";
 import { A2UIProgress } from "./display/Progress";
 import { A2UISkeleton } from "./display/Skeleton";
 import { A2UISpinner } from "./display/Spinner";
@@ -167,9 +168,10 @@ const registry: Record<string, ComponentRenderer> = {
 		import("./display/GeoMap").then(named("A2UIGeoMap")),
 	),
 	graph: lazyRenderer(() => import("./display/Graph").then(named("A2UIGraph"))),
-	ontologyGraph: lazyRenderer(() =>
-		import("./display/OntologyGraph").then(named("A2UIOntologyGraph")),
-	),
+	// Registered eagerly on purpose: the module is a thin wrapper that defers the
+	// sigma chunk itself, behind a fallback that keeps the element's own height.
+	// Loading it lazily instead would collapse the element to nothing first.
+	ontologyGraph: A2UIOntologyGraph as ComponentRenderer,
 	calendar: lazyRenderer(() =>
 		import("./display/Calendar").then(named("A2UICalendar")),
 	),

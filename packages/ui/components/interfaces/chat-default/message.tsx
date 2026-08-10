@@ -807,7 +807,7 @@ export const MessageComponent = memo(
 									/>
 								</div>
 							)}
-						</div>{" "}
+						</div>
 						{isUser && showToggle && (
 							<Button
 								variant="ghost"
@@ -846,7 +846,7 @@ export const MessageComponent = memo(
 							<AppReferences appIds={message.app_refs ?? []} />
 						)}
 						{hasUsageStats && (
-							<UsageStats stats={usageStats} className="mt-1" />
+							<UsageStats stats={usageStats} className="mt-2" />
 						)}
 						{FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report && (
 							<AgentDebugReport report={message.debug_report} />
@@ -866,7 +866,7 @@ export const MessageComponent = memo(
 							/>
 						)}
 					</div>
-				</div>{" "}
+				</div>
 				{fullscreenFile && (
 					<Dialog
 						open={!!fullscreenFile}

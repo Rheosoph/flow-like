@@ -6,6 +6,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useBackend } from "../../../state/backend-state";
 import type {
+	GraphAnalyticsResult,
 	GraphOverlay,
 	GraphPathsResult,
 	InvokeOntologyActionPayload,
@@ -37,6 +38,8 @@ export const GRAPH_SEARCH_MATCH_LIMIT = 12;
 export const GRAPH_VIEW_LIMIT_MAX = GRAPH_MAX_NODE_LIMIT;
 export const GRAPH_MAX_EXPANSION_DEPTH = 2;
 const GRAPH_DEFAULT_LIMIT = 200;
+/** Only the exact per-label totals are used, and those ignore this bound entirely. */
+const GRAPH_ANALYTICS_EDGE_LIMIT = 2_000;
 const STYLE_PERSIST_DEBOUNCE_MS = 500;
 
 function isConflictError(err: unknown): boolean {
@@ -107,6 +110,7 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 	const backend = useBackend();
 	const [overlay, setOverlay] = useState<GraphOverlay | null>(null);
 	const [data, setData] = useState<SubgraphResult | null>(null);
+	const [analytics, setAnalytics] = useState<GraphAnalyticsResult | null>(null);
 	const [loading, setLoading] = useState(true);
 	const [error, setError] = useState<string | null>(null);
 	const [cypherResults, setCypherResults] = useState<unknown[] | null>(null);
@@ -184,6 +188,20 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 				});
 				if (initialLoadRequestRef.current !== requestId) return;
 				setData(enrichSubgraphWithStyles(result, currentOverlay));
+
+				// Deliberately after the paint, never alongside it: graph queries share
+				// a small pool of connection permits, and the whole-population counts
+				// are a caption on the view rather than a prerequisite for drawing it.
+				void backend.graphState
+					.analytics(appId, overlayId, GRAPH_ANALYTICS_EDGE_LIMIT)
+					.then((result) => {
+						if (initialLoadRequestRef.current === requestId) {
+							setAnalytics(result);
+						}
+					})
+					.catch(() => {
+						// The census line is optional; the graph stays fully usable without it.
+					});
 			} catch (err) {
 				if (initialLoadRequestRef.current !== requestId) return;
 				reportError(extractGraphErrorMessage(err));
@@ -655,6 +673,8 @@ export const OntologyExplorer: React.FC<OntologyExplorerProps> = ({
 				limit={nodeLimit}
 				onFindPaths={allowPaths ? handleFindPaths : undefined}
 				onRunAction={allowActions ? handleRunAction : undefined}
+				analytics={analytics}
+				enableClusterLayout
 			/>
 			<OntologyActionDialog
 				target={actionTarget}
