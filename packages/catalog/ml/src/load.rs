@@ -90,6 +90,9 @@ impl NodeLogic for LoadMLModelNode {
         context.deactivate_exec_pin("exec_out").await?;
         let path: FlowPath = context.evaluate_pin("path").await?;
 
+        // mirror the extension Save Model writes, so the same path works on both nodes
+        let path = path.set_extension(context, "json").await?;
+
         // deserialize model
         let bytes = path.get(context, false).await?;
         let ml_model: MLModel = json::from_slice(&bytes)?;

@@ -362,9 +362,26 @@ impl MLModel {
             .deserialize(bytes)
             .map_err(|e| anyhow!("Fory deserialization failed: {}", e))?;
 
+        // Fory reads bit 0 of the first byte as a null marker and then returns an all-default
+        // struct without erroring, so a foreign file (JSON starts with `{` = 0x7B, null bit set)
+        // decodes as version 0 instead of failing. Reject that explicitly.
+        if wrapper.model_type.is_empty() && wrapper.msgpack_payload.is_empty() {
+            let hint = match bytes.first() {
+                Some(b'{') | Some(b'[') => {
+                    "the file contains JSON — load it with 'Load Model' instead, or re-save it with 'Save Model (Binary)'".to_string()
+                }
+                byte => format!("unexpected leading byte {byte:02x?}"),
+            };
+            return Err(anyhow!(
+                "Not a valid .flmodel binary model file ({} bytes): {}",
+                bytes.len(),
+                hint
+            ));
+        }
+
         if wrapper.version != 1 {
             return Err(anyhow!(
-                "Unsupported MLModel binary format version: {}",
+                "Unsupported MLModel binary format version: {} (expected 1)",
                 wrapper.version
             ));
         }

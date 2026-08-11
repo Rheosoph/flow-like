@@ -466,6 +466,64 @@ mod execute_tests {
     }
 
     #[test]
+    fn test_svm_fory_roundtrip() {
+        let data = Array2::from_shape_vec(
+            (9, 2),
+            vec![
+                0.0, 0.0, 0.1, 0.0, 0.0, 0.1, 5.0, 5.0, 5.1, 5.0, 5.0, 5.1, 10.0, 0.0, 10.1, 0.0,
+                10.0, 0.1,
+            ],
+        )
+        .unwrap();
+        let targets = Array1::from(vec![0usize, 0, 0, 1, 1, 1, 2, 2, 2]);
+        let dataset = linfa::DatasetBase::from(data).with_targets(targets);
+        let params = Svm::<_, Pr>::params().gaussian_kernel(30.0);
+        let svm_models = dataset
+            .one_vs_all()
+            .unwrap()
+            .into_iter()
+            .map(|(label, dataset)| (label, params.fit(&dataset).unwrap()))
+            .collect::<Vec<_>>();
+
+        let mut classes = HashMap::new();
+        classes.insert(0, "a".to_string());
+        classes.insert(1, "b".to_string());
+        classes.insert(2, "c".to_string());
+
+        let ml_model = MLModel::SVMMultiClass(ModelWithMeta {
+            model: svm_models,
+            classes: Some(classes),
+        });
+
+        let fory_bytes = ml_model.to_fory_vec().unwrap();
+        assert!(!fory_bytes.is_empty());
+
+        let restored = MLModel::from_fory_slice(&fory_bytes).unwrap();
+        match restored {
+            MLModel::SVMMultiClass(_) => {}
+            other => panic!("Expected SVMMultiClass model, got {other}"),
+        }
+    }
+
+    #[test]
+    fn test_from_fory_slice_rejects_json_instead_of_defaulting() {
+        // Fory treats bit 0 of the leading byte as a null marker, and `{` (0x7B) has it set,
+        // so JSON used to decode into an all-default wrapper reported as "version: 0".
+        for input in [
+            &br#"{"model_ref":"h12a5fbkujvy7w2otit56hlg"}"#[..],
+            &br#"{"type":"SVMMultiClass","model":[[0,{"alpha":[1.0]}]]}"#[..],
+        ] {
+            let err = MLModel::from_fory_slice(input).unwrap_err().to_string();
+            assert!(
+                err.contains("Not a valid .flmodel") && err.contains("JSON"),
+                "expected an actionable JSON error, got: {err}"
+            );
+        }
+
+        assert!(MLModel::from_fory_slice(&[]).is_err());
+    }
+
+    #[test]
     fn test_fory_is_smaller_than_json() {
         let data = Array2::from_shape_vec((100, 10), (0..1000).map(|i| i as f64 * 0.01).collect())
             .unwrap();
