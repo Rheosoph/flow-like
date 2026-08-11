@@ -6,7 +6,7 @@
 use crate::ml::{AutoMLEntry, AutoMLResult, NodeMLModel};
 #[cfg(feature = "execute")]
 use crate::ml::{
-    MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, values_to_array1_target,
+    MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, PersistedEnsemble, values_to_array1_target,
     values_to_array2_f64,
 };
 use flow_like::flow::{
@@ -35,14 +35,162 @@ use linfa::traits::{Fit, Predict};
 #[cfg(feature = "execute")]
 use linfa_bayes::GaussianNb;
 #[cfg(feature = "execute")]
+use linfa_ensemble::RandomForestParams;
+#[cfg(feature = "execute")]
+use linfa_logistic::{LogisticRegression, MultiLogisticRegression};
+#[cfg(feature = "execute")]
 use linfa_svm::Svm;
 #[cfg(feature = "execute")]
 use linfa_trees::DecisionTree as LinfaDecisionTree;
+// linfa 0.8 is built against rand 0.8, so the RNG handed to it cannot come from
+// `flow_like_types::rand` (0.9) — the `Rng` traits are different types.
+#[cfg(feature = "execute")]
+use rand_xoshiro::Xoshiro256Plus;
+#[cfg(feature = "execute")]
+use rand_xoshiro::rand_core::SeedableRng;
 #[cfg(feature = "execute")]
 use std::collections::{HashMap, HashSet};
 
+/// Kernel width shared with the standalone SVM node so the tuned SVM matches what that node trains.
 #[cfg(feature = "execute")]
 const GAUSSIAN_KERNEL_EPS: f64 = 30.0;
+
+/// Seed for the ensemble RNG, so re-running a flow produces the same leaderboard.
+#[cfg(feature = "execute")]
+const FOREST_SEED: u64 = 42;
+
+/// Scores predictions under the selected optimization metric.
+///
+/// `accuracy` is the share of correct rows; `macro_f1` averages the per-class F1 with equal weight
+/// per class, which is what you want when the classes are imbalanced and accuracy would be carried
+/// by the majority class alone.
+#[cfg(feature = "execute")]
+fn score_predictions(
+    metric: &str,
+    predictions: &ndarray::Array1<usize>,
+    targets: &[usize],
+) -> Result<f64> {
+    match metric {
+        "accuracy" => Ok(compute_accuracy(predictions, targets)),
+        "macro_f1" => Ok(compute_macro_f1(predictions, targets)),
+        other => Err(flow_like_types::anyhow!(
+            "Unknown metric `{other}`. Supported: accuracy, macro_f1"
+        )),
+    }
+}
+
+/// Trees grown per Random Forest candidate. Kept modest because it is paid once per CV fold.
+#[cfg(feature = "execute")]
+const FOREST_ENSEMBLE_SIZE: usize = 100;
+
+/// Number of distinct class ids in a target array.
+#[cfg(feature = "execute")]
+fn distinct_class_count(targets: &ndarray::Array1<usize>) -> usize {
+    targets.iter().copied().collect::<HashSet<usize>>().len()
+}
+
+/// Fits a logistic regression of the right arity and predicts the held-out fold.
+#[cfg(feature = "execute")]
+fn fit_logistic_predict(
+    train_ds: &DatasetBase<ndarray::Array2<f64>, ndarray::Array1<usize>>,
+    val_records: &ndarray::Array2<f64>,
+    alpha: f64,
+    is_multinomial: bool,
+) -> Result<ndarray::Array1<usize>> {
+    if is_multinomial {
+        let model = MultiLogisticRegression::<f64>::default()
+            .alpha(alpha)
+            .fit(train_ds)
+            .map_err(|err| {
+                flow_like_types::anyhow!("Multinomial Logistic Regression fit failed: {err}")
+            })?;
+        Ok(model.predict(val_records))
+    } else {
+        let model = LogisticRegression::<f64>::default()
+            .alpha(alpha)
+            .fit(train_ds)
+            .map_err(|err| flow_like_types::anyhow!("Logistic Regression fit failed: {err}"))?;
+        Ok(model.predict(val_records))
+    }
+}
+
+/// Random forest parameters used for every forest candidate.
+///
+/// `feature_proportion` must be greater than zero, so the standard sqrt(p) default is materialised
+/// here once the feature count is known. The RNG is seeded so the leaderboard is reproducible.
+#[cfg(feature = "execute")]
+fn forest_params(
+    n_features: usize,
+) -> linfa_ensemble::EnsembleLearnerParams<
+    linfa_trees::DecisionTreeParams<f64, usize>,
+    Xoshiro256Plus,
+> {
+    let features = n_features.max(1);
+    let proportion = ((features as f64).sqrt() / features as f64).clamp(f64::MIN_POSITIVE, 1.0);
+    RandomForestParams::new_fixed_rng(
+        LinfaDecisionTree::params().max_depth(Some(10)),
+        Xoshiro256Plus::seed_from_u64(FOREST_SEED),
+    )
+    .ensemble_size(FOREST_ENSEMBLE_SIZE)
+    .bootstrap_proportion(0.7)
+    .feature_proportion(proportion)
+}
+
+/// Fits the one-vs-all SVM ensemble, surfacing per-class failures instead of panicking.
+#[cfg(feature = "execute")]
+fn fit_one_vs_all_svm(
+    dataset: &DatasetBase<ndarray::Array2<f64>, ndarray::Array1<usize>>,
+) -> Result<Vec<(usize, Svm<f64, Pr>)>> {
+    let params = Svm::<_, Pr>::params().gaussian_kernel(GAUSSIAN_KERNEL_EPS);
+    dataset
+        .one_vs_all()?
+        .into_iter()
+        .map(|(label, binary)| {
+            params
+                .fit(&binary)
+                .map(|model| (label, model))
+                .map_err(|err| flow_like_types::anyhow!("SVM fit failed for class {label}: {err}"))
+        })
+        .collect()
+}
+
+/// Unweighted mean of the per-class F1 scores.
+#[cfg(feature = "execute")]
+fn compute_macro_f1(predictions: &ndarray::Array1<usize>, targets: &[usize]) -> f64 {
+    if predictions.len() != targets.len() || predictions.is_empty() {
+        return 0.0;
+    }
+
+    let classes: HashSet<usize> = targets
+        .iter()
+        .copied()
+        .chain(predictions.iter().copied())
+        .collect();
+    if classes.is_empty() {
+        return 0.0;
+    }
+
+    let mut total = 0.0;
+    for class in &classes {
+        let mut true_positive = 0.0;
+        let mut false_positive = 0.0;
+        let mut false_negative = 0.0;
+        for (predicted, actual) in predictions.iter().zip(targets.iter()) {
+            match (predicted == class, actual == class) {
+                (true, true) => true_positive += 1.0,
+                (true, false) => false_positive += 1.0,
+                (false, true) => false_negative += 1.0,
+                (false, false) => {}
+            }
+        }
+        // A class with no predictions and no instances contributes 0 rather than NaN.
+        let denominator = 2.0 * true_positive + false_positive + false_negative;
+        if denominator > 0.0 {
+            total += 2.0 * true_positive / denominator;
+        }
+    }
+    total / classes.len() as f64
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -60,10 +208,11 @@ impl NodeLogic for AutoClassifierNode {
         let mut node = Node::new(
             "ai_ml_tuning_auto_classifier",
             "Auto Classifier",
-            "Automatically finds the best classification model. Tries Naive Bayes, Decision Tree, and SVM with cross-validation.",
+            "Automatically finds the best classification model. Cross-validates Naive Bayes, Decision Tree, Logistic Regression, Random Forest and SVM, then retrains the winner on the full dataset. The reported Best Model Type can be fed straight into Grid Search to tune it further.",
             "AI/ML/Tuning",
         );
         node.add_icon("/flow/icons/chart-network.svg");
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()
@@ -94,12 +243,12 @@ impl NodeLogic for AutoClassifierNode {
         node.add_input_pin(
             "metric",
             "Metric",
-            "Optimization metric",
+            "Metric the leaderboard is ranked by. Accuracy is the share of correct rows; Macro F1 averages per-class F1 with equal weight per class, which is the right choice when the classes are imbalanced.",
             VariableType::String,
         )
         .set_options(
             PinOptions::new()
-                .set_valid_values(vec!["accuracy".to_string()])
+                .set_valid_values(vec!["accuracy".to_string(), "macro_f1".to_string()])
                 .build(),
         )
         .set_default_value(Some(json!("accuracy")));
@@ -108,6 +257,22 @@ impl NodeLogic for AutoClassifierNode {
             "include_svm",
             "Include SVM",
             "Include SVM in comparison (slower but often more accurate)",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(true)));
+
+        node.add_input_pin(
+            "include_logistic",
+            "Include Logistic Regression",
+            "Include Logistic Regression. Fast, and the only candidate that yields calibrated probabilities, but it expects scaled features — fit a Feature Scaler first for a fair comparison.",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(true)));
+
+        node.add_input_pin(
+            "include_random_forest",
+            "Include Random Forest",
+            "Include Random Forest. Usually the strongest candidate here, at the cost of training one tree per ensemble member on every fold.",
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(true)));
@@ -168,12 +333,20 @@ impl NodeLogic for AutoClassifierNode {
         let cv_folds: i64 = context.evaluate_pin("cv_folds").await?;
         let metric: String = context.evaluate_pin("metric").await?;
         let include_svm: bool = context.evaluate_pin("include_svm").await?;
+        let include_logistic: bool = context.evaluate_pin("include_logistic").await?;
+        let include_random_forest: bool = context.evaluate_pin("include_random_forest").await?;
         let source: String = context.evaluate_pin("source").await?;
 
-        let cv_folds = cv_folds as usize;
+        // Checked before the cast: a negative value would wrap to usize::MAX and sail past the
+        // guard, then blow up in Vec::with_capacity.
         if cv_folds < 2 {
-            return Err(flow_like_types::anyhow!("CV folds must be at least 2"));
+            return Err(flow_like_types::anyhow!(
+                "CV folds must be at least 2, got {cv_folds}"
+            ));
         }
+        let cv_folds = cv_folds as usize;
+        // Validate up front rather than after paying for a full sweep.
+        score_predictions(&metric, &ndarray::Array1::from(vec![0usize]), &[0usize])?;
 
         let start_time = Instant::now();
 
@@ -235,6 +408,13 @@ impl NodeLogic for AutoClassifierNode {
 
         // Prepare CV splits
         let n_samples = records.nsamples();
+        // With fewer rows than folds, fold_size is 0: every fold but the last scores an empty
+        // validation set as 0.0 and the last one trains on an empty split.
+        if n_samples < cv_folds {
+            return Err(flow_like_types::anyhow!(
+                "Cannot run {cv_folds}-fold cross-validation on {n_samples} rows. Reduce CV Folds or supply more training data."
+            ));
+        }
         let mut indices: Vec<usize> = (0..n_samples).collect();
         {
             let mut rng = rand::rng();
@@ -255,8 +435,7 @@ impl NodeLogic for AutoClassifierNode {
                 let model = GaussianNb::params().fit(&train_ds)?;
                 let val_ds = DatasetBase::from(val_records);
                 let predictions = model.predict(&val_ds);
-                let score = compute_accuracy(&predictions, &val_targets);
-                fold_scores.push(score);
+                fold_scores.push(score_predictions(&metric, &predictions, &val_targets)?);
             }
 
             let mean_score = fold_scores.iter().sum::<f64>() / fold_scores.len() as f64;
@@ -293,8 +472,7 @@ impl NodeLogic for AutoClassifierNode {
                         .fit(&train_ds)?;
                     let val_ds = DatasetBase::from(val_records);
                     let predictions = model.predict(&val_ds);
-                    let score = compute_accuracy(&predictions, &val_targets);
-                    fold_scores.push(score);
+                    fold_scores.push(score_predictions(&metric, &predictions, &val_targets)?);
                 }
 
                 let mean_score = fold_scores.iter().sum::<f64>() / fold_scores.len() as f64;
@@ -325,43 +503,106 @@ impl NodeLogic for AutoClassifierNode {
         };
         leaderboard.push(dt_result);
 
-        // 3. SVM (optional, slower)
-        if include_svm {
-            let svm_result = {
-                let model_start = Instant::now();
-                let mut fold_scores = Vec::with_capacity(cv_folds);
+        let is_multinomial = distinct_class_count(records.targets()) > 2;
 
+        // 3. Logistic Regression across a small regularization sweep
+        if include_logistic {
+            let model_start = Instant::now();
+            let alphas = [0.1, 1.0, 10.0];
+            let mut best_score = f64::NEG_INFINITY;
+            let mut best_alpha = 1.0;
+
+            for &alpha in &alphas {
+                let mut fold_scores = Vec::with_capacity(cv_folds);
                 for fold in 0..cv_folds {
                     let (train_ds, val_records, val_targets) =
                         create_fold_split(&records, &indices, fold, fold_size, cv_folds);
-
-                    // Train OvA SVM
-                    let params = Svm::<_, Pr>::params().gaussian_kernel(GAUSSIAN_KERNEL_EPS);
-                    let svm_models: Vec<(usize, Svm<f64, Pr>)> = train_ds
-                        .one_vs_all()?
-                        .into_iter()
-                        .map(|(l, x)| (l, params.fit(&x).unwrap()))
-                        .collect();
-
-                    let mult_class = MultiClassModel::from_iter(svm_models);
-                    let val_ds = DatasetBase::from(val_records);
-                    let predictions = mult_class.predict(&val_ds);
-                    let score = compute_accuracy(&predictions, &val_targets);
-                    fold_scores.push(score);
+                    let predictions =
+                        fit_logistic_predict(&train_ds, &val_records, alpha, is_multinomial)?;
+                    fold_scores.push(score_predictions(&metric, &predictions, &val_targets)?);
                 }
-
                 let mean_score = fold_scores.iter().sum::<f64>() / fold_scores.len() as f64;
-                context.log_message(&format!("SVM: CV score={:.4}", mean_score), LogLevel::Info);
-
-                AutoMLEntry {
-                    model_type: "SVMMultiClass".to_string(),
-                    best_params: HashMap::new(),
-                    cv_score: mean_score,
-                    train_time_secs: model_start.elapsed().as_secs_f64(),
-                    rank: 0,
+                if mean_score > best_score {
+                    best_score = mean_score;
+                    best_alpha = alpha;
                 }
-            };
-            leaderboard.push(svm_result);
+            }
+
+            context.log_message(
+                &format!("LogisticRegression: CV score={best_score:.4} (alpha={best_alpha})"),
+                LogLevel::Info,
+            );
+
+            let mut params = HashMap::new();
+            params.insert("alpha".to_string(), json!(best_alpha));
+            leaderboard.push(AutoMLEntry {
+                // Reported as one family regardless of arity: binary vs multinomial is decided
+                // from the class count at retrain time, and collapsing them keeps the value
+                // directly feedable into Grid Search's Model Type.
+                model_type: "LogisticRegression".to_string(),
+                best_params: params,
+                cv_score: best_score,
+                train_time_secs: model_start.elapsed().as_secs_f64(),
+                rank: 0,
+            });
+        }
+
+        // 4. Random Forest (slower, usually the strongest baseline)
+        if include_random_forest {
+            let model_start = Instant::now();
+            let mut fold_scores = Vec::with_capacity(cv_folds);
+
+            for fold in 0..cv_folds {
+                let (train_ds, val_records, val_targets) =
+                    create_fold_split(&records, &indices, fold, fold_size, cv_folds);
+                let model = forest_params(train_ds.records().ncols())
+                    .fit(&train_ds)
+                    .map_err(|err| flow_like_types::anyhow!("Random Forest fit failed: {err}"))?;
+                let predictions: ndarray::Array1<usize> = model.predict(&val_records);
+                fold_scores.push(score_predictions(&metric, &predictions, &val_targets)?);
+            }
+
+            let mean_score = fold_scores.iter().sum::<f64>() / fold_scores.len() as f64;
+            context.log_message(
+                &format!("RandomForest: CV score={mean_score:.4}"),
+                LogLevel::Info,
+            );
+
+            let mut params = HashMap::new();
+            params.insert("ensemble_size".to_string(), json!(FOREST_ENSEMBLE_SIZE));
+            leaderboard.push(AutoMLEntry {
+                model_type: "RandomForest".to_string(),
+                best_params: params,
+                cv_score: mean_score,
+                train_time_secs: model_start.elapsed().as_secs_f64(),
+                rank: 0,
+            });
+        }
+
+        // 5. SVM (optional, slower)
+        if include_svm {
+            let model_start = Instant::now();
+            let mut fold_scores = Vec::with_capacity(cv_folds);
+
+            for fold in 0..cv_folds {
+                let (train_ds, val_records, val_targets) =
+                    create_fold_split(&records, &indices, fold, fold_size, cv_folds);
+                let svm_models = fit_one_vs_all_svm(&train_ds)?;
+                let mult_class = MultiClassModel::from_iter(svm_models);
+                let predictions = mult_class.predict(&DatasetBase::from(val_records));
+                fold_scores.push(score_predictions(&metric, &predictions, &val_targets)?);
+            }
+
+            let mean_score = fold_scores.iter().sum::<f64>() / fold_scores.len() as f64;
+            context.log_message(&format!("SVM: CV score={mean_score:.4}"), LogLevel::Info);
+
+            leaderboard.push(AutoMLEntry {
+                model_type: "SVMMultiClass".to_string(),
+                best_params: HashMap::new(),
+                cv_score: mean_score,
+                train_time_secs: model_start.elapsed().as_secs_f64(),
+                rank: 0,
+            });
         }
 
         // Sort by score descending and assign ranks
@@ -396,25 +637,60 @@ impl NodeLogic for AutoClassifierNode {
                     classes: classes.clone(),
                 })
             }
-            "SVMMultiClass" => {
-                let params = Svm::<_, Pr>::params().gaussian_kernel(GAUSSIAN_KERNEL_EPS);
-                let svm_models: Vec<(usize, Svm<f64, Pr>)> = records
-                    .one_vs_all()?
-                    .into_iter()
-                    .map(|(l, x)| (l, params.fit(&x).unwrap()))
-                    .collect();
-                MLModel::SVMMultiClass(ModelWithMeta {
-                    model: svm_models,
-                    classes: classes.clone(),
-                })
+            "SVMMultiClass" => MLModel::SVMMultiClass(ModelWithMeta {
+                model: fit_one_vs_all_svm(&records)?,
+                classes: classes.clone(),
+            }),
+            "LogisticRegression" => {
+                let alpha = best_params
+                    .get("alpha")
+                    .and_then(|v| v.as_f64())
+                    .unwrap_or(1.0);
+                if is_multinomial {
+                    MLModel::MultinomialLogisticRegression(ModelWithMeta {
+                        model: MultiLogisticRegression::<f64>::default()
+                            .alpha(alpha)
+                            .fit(&records)
+                            .map_err(|err| {
+                                flow_like_types::anyhow!(
+                                    "Multinomial Logistic Regression fit failed: {err}"
+                                )
+                            })?,
+                        classes: classes.clone(),
+                    })
+                } else {
+                    MLModel::LogisticRegression(ModelWithMeta {
+                        model: LogisticRegression::<f64>::default()
+                            .alpha(alpha)
+                            .fit(&records)
+                            .map_err(|err| {
+                                flow_like_types::anyhow!("Logistic Regression fit failed: {err}")
+                            })?,
+                        classes: classes.clone(),
+                    })
+                }
             }
-            _ => return Err(flow_like_types::anyhow!("Unknown best model type")),
+            "RandomForest" => MLModel::RandomForest(ModelWithMeta {
+                model: PersistedEnsemble(
+                    forest_params(records.records().ncols())
+                        .fit(&records)
+                        .map_err(|err| {
+                            flow_like_types::anyhow!("Random Forest fit failed: {err}")
+                        })?,
+                ),
+                classes: classes.clone(),
+            }),
+            other => {
+                return Err(flow_like_types::anyhow!(
+                    "Unknown best model type: `{other}`"
+                ));
+            }
         };
 
         let result = AutoMLResult {
+            total_models_tried: leaderboard.len(),
             leaderboard,
             best_model_index: 0,
-            total_models_tried: if include_svm { 3 } else { 2 },
             total_time_secs: start_time.elapsed().as_secs_f64(),
             metric,
         };
@@ -483,6 +759,8 @@ impl NodeLogic for AutoClassifierNode {
                     VariableType::String,
                 );
             }
+        } else {
+            node.error = Some("Datasource Not Implemented".to_string());
         }
     }
 }

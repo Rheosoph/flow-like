@@ -465,6 +465,72 @@ mod execute_tests {
         }
     }
 
+    /// Every persisted model must survive BOTH serialization paths. The binary path is the one at
+    /// risk: `MLModel` is an internally tagged enum and the payload goes through MessagePack, which
+    /// encodes structs as arrays by default — a combination that breaks tag lookup on the way back.
+    /// Nested tagged enums (Frank & Hall carries its own `#[serde(tag = "base")]`) are the case most
+    /// likely to fail, so it is pinned here explicitly rather than assumed.
+    #[test]
+    fn test_frank_hall_roundtrips_through_both_formats() {
+        use flow_like_ordinal::FrankHallParams;
+        use linfa::error::Error as LinfaError;
+        use linfa_trees::DecisionTree as LinfaDecisionTree;
+
+        // Four rows, three ordered levels, cleanly separable on one feature.
+        let records = Array2::from_shape_vec((6, 1), vec![0.0, 0.5, 2.0, 2.5, 4.0, 4.5]).unwrap();
+        let targets = ndarray::Array1::from(vec![0usize, 0, 1, 1, 2, 2]);
+        let dataset = linfa::DatasetBase::new(records, targets);
+
+        let fitted =
+            FrankHallParams::<_, LinfaError>::new(LinfaDecisionTree::<f64, bool>::params())
+                .n_levels(3)
+                .fit(&dataset)
+                .expect("Frank & Hall fit failed");
+
+        let ml_model = MLModel::OrdinalFrankHall(ModelWithMeta {
+            model: crate::ml::FrankHallModel::DecisionTree(fitted),
+            classes: None,
+        });
+
+        // Predictions before, to compare against. Matching the variant alone would pass even if
+        // every fitted tree came back empty.
+        let probe = Array2::from_shape_vec((3, 1), vec![0.25, 2.25, 4.25]).unwrap();
+        let expected = match &ml_model {
+            MLModel::OrdinalFrankHall(model) => model.model.predict_levels(&probe),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            expected.to_vec(),
+            vec![0, 1, 2],
+            "fit did not separate the levels"
+        );
+
+        for (format, restored) in [
+            (
+                "JSON",
+                json::from_slice::<MLModel>(&ml_model.to_json_vec().expect("JSON serialize"))
+                    .expect("JSON round-trip"),
+            ),
+            (
+                "binary",
+                MLModel::from_fory_slice(&ml_model.to_fory_vec().expect("binary serialize"))
+                    .expect("binary round-trip"),
+            ),
+        ] {
+            match restored {
+                MLModel::OrdinalFrankHall(model) => {
+                    assert_eq!(model.model.n_classes(), 3, "{format}: level count lost");
+                    assert_eq!(
+                        model.model.predict_levels(&probe).to_vec(),
+                        expected.to_vec(),
+                        "{format}: predictions changed across the round-trip"
+                    );
+                }
+                other => panic!("{format}: expected OrdinalFrankHall, got {other}"),
+            }
+        }
+    }
+
     #[test]
     fn test_svm_fory_roundtrip() {
         let data = Array2::from_shape_vec(

@@ -140,12 +140,10 @@ impl NodeLogic for FitPcaNode {
                         ));
                     }
                     database
-                        .filter(
-                            "true",
-                            Some(vec![records_col.to_string()]),
-                            MAX_ML_PREDICTION_RECORDS,
-                            0,
-                        )
+                        // Full rows: the upsert below merges with `when_matched_update_all`,
+                        // which replaces the matched row wholesale, so a partial row would null
+                        // out every column that was not fetched.
+                        .filter("true", None, MAX_ML_PREDICTION_RECORDS, 0)
                         .await?
                 };
                 context.log_message(

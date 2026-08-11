@@ -1,12 +1,13 @@
-//! Node for Fitting Decision Tree Classifier
+//! Node for Fitting a **K-Nearest-Neighbours Regressor**
 //!
-//! This node loads a dataset, transforms it into a classification dataset,
-//! and fits a Decision Tree model using the [`linfa_trees`] crate.
+//! linfa ships nearest-neighbour *indexes* but no KNN estimator, so the fitted model is the
+//! training matrix itself (see [`crate::ml::KnnModel`]). "Training" therefore only validates the
+//! data and materialises it into the model — there is no optimisation step and nothing to converge.
 
 use crate::ml::NodeMLModel;
 #[cfg(feature = "execute")]
 use crate::ml::{
-    MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, values_to_array1_target,
+    KnnModel, MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, values_to_array1_f64,
     values_to_array2_f64,
 };
 use flow_like::flow::{
@@ -24,51 +25,46 @@ use flow_like_storage::databases::vector::VectorStore;
 use flow_like_types::anyhow;
 use flow_like_types::{Result, Value, async_trait, json::json};
 #[cfg(feature = "execute")]
-use linfa::DatasetBase;
-#[cfg(feature = "execute")]
-use linfa::traits::Fit;
-#[cfg(feature = "execute")]
-use linfa_trees::{DecisionTree as LinfaDecisionTree, SplitQuality};
-#[cfg(feature = "execute")]
 use std::collections::HashSet;
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct FitDecisionTreeNode {}
+pub struct FitKnnRegressorNode {}
 
-impl FitDecisionTreeNode {
+impl FitKnnRegressorNode {
     pub fn new() -> Self {
-        FitDecisionTreeNode {}
+        FitKnnRegressorNode {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for FitDecisionTreeNode {
+impl NodeLogic for FitKnnRegressorNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "fit_decision_tree",
-            "Train Classifier (Decision Tree)",
-            "Fit/Train a Decision Tree classifier. Native multi-class support with interpretable rules.",
-            "AI/ML/Classification",
+            "fit_knn_regressor",
+            "Train Regressor (K-Nearest Neighbours)",
+            "Fit a K-Nearest-Neighbours regressor that averages the target of the nearest training rows. Non-parametric and instance based: the fitted model embeds a verbatim copy of the whole training set instead of learned coefficients, so every training row (and any personal data in it) travels with the model, is written into every saved model file and can be reconstructed by anyone holding it. Treat the model with the same care as the source table.",
+            "AI/ML/Regression",
         );
-        node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 
+        // Deliberately far below the parametric regressors: the model is the raw training data,
+        // not a set of learned coefficients, so it leaks records and cannot be audited as a formula.
         node.set_scores(
             NodeScores::new()
-                .set_privacy(6)
-                .set_security(6)
-                .set_performance(8)
-                .set_governance(7) // More interpretable than SVM
+                .set_privacy(2)
+                .set_security(3)
+                .set_performance(4)
+                .set_governance(2)
                 .set_reliability(7)
-                .set_cost(8)
+                .set_cost(4)
                 .build(),
         );
 
         node.add_input_pin(
             "exec_in",
             "Input",
-            "Execution trigger that begins Decision Tree training",
+            "Execution trigger that begins KNN training",
             VariableType::Execution,
         );
 
@@ -86,62 +82,33 @@ impl NodeLogic for FitDecisionTreeNode {
         .set_default_value(Some(json!("Database")));
 
         node.add_input_pin(
-            "max_depth",
-            "Max Depth",
-            "Maximum depth of the tree. None means unlimited.",
+            "k",
+            "Neighbours (k)",
+            "How many nearest training rows are averaged for each prediction. Must be at least 1 and cannot exceed the number of training rows. Larger values smooth the response.",
             VariableType::Integer,
         )
-        .set_default_value(Some(json!(10)));
+        .set_options(PinOptions::new().set_range((1., 1000.)).build())
+        .set_default_value(Some(json!(5)));
 
         node.add_input_pin(
-            "min_samples_split",
-            "Min Samples Split",
-            "Minimum number of samples required to split a node",
-            VariableType::Integer,
+            "distance_weighted",
+            "Distance Weighted",
+            "Weight each neighbour by the inverse of its distance instead of taking a plain mean. Reduces the pull of distant neighbours when k is large.",
+            VariableType::Boolean,
         )
-        .set_default_value(Some(json!(2)));
-
-        node.add_input_pin(
-            "split_quality",
-            "Split Quality",
-            "Impurity metric that scores candidate splits. Gini is cheaper, Entropy favours balanced information gain.",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec!["Gini".to_string(), "Entropy".to_string()])
-                .build(),
-        )
-        .set_default_value(Some(json!("Gini")));
-
-        node.add_input_pin(
-            "min_weight_leaf",
-            "Min Samples Leaf",
-            "Minimum number of samples (total sample weight) a split has to place in each leaf",
-            VariableType::Float,
-        )
-        .set_options(PinOptions::new().set_range((0., 10000.)).build())
-        .set_default_value(Some(json!(1.0)));
-
-        node.add_input_pin(
-            "min_impurity_decrease",
-            "Min Impurity Decrease",
-            "Minimum impurity decrease a split has to bring to be applied. Must be greater than zero; larger values prune harder.",
-            VariableType::Float,
-        )
-        .set_default_value(Some(json!(0.00001)));
+        .set_default_value(Some(json!(false)));
 
         node.add_output_pin(
             "exec_out",
             "Done",
-            "Activated once training completes",
+            "Activated once the training set has been validated and embedded",
             VariableType::Execution,
         );
 
         node.add_output_pin(
             "model",
             "Model",
-            "Thread-safe handle to the trained Decision Tree classifier",
+            "Thread-safe handle to the trained KNN regressor. Contains a full copy of the training set.",
             VariableType::Struct,
         )
         .set_schema::<NodeMLModel>()
@@ -154,46 +121,18 @@ impl NodeLogic for FitDecisionTreeNode {
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
         let source: String = context.evaluate_pin("source").await?;
-        let max_depth: i64 = context.evaluate_pin("max_depth").await?;
-        let min_samples_split: i64 = context.evaluate_pin("min_samples_split").await?;
-        // Boards placed before these pins existed fall back to the linfa defaults, which is exactly
-        // what the node used to pass.
-        let split_quality: String = context
-            .evaluate_pin("split_quality")
-            .await
-            .unwrap_or_else(|_| "Gini".to_string());
-        let min_weight_leaf: f64 = context.evaluate_pin("min_weight_leaf").await.unwrap_or(1.0);
-        let min_impurity_decrease: f64 = context
-            .evaluate_pin("min_impurity_decrease")
-            .await
-            .unwrap_or(0.00001);
+        let k: i64 = context.evaluate_pin("k").await?;
+        let distance_weighted: bool = context.evaluate_pin("distance_weighted").await?;
 
-        let split_quality = match split_quality.as_str() {
-            "Gini" => SplitQuality::Gini,
-            "Entropy" => SplitQuality::Entropy,
-            other => {
-                return Err(anyhow!(
-                    "Unknown split quality `{other}`, expected `Gini` or `Entropy`"
-                ));
-            }
-        };
-        if !min_weight_leaf.is_finite() || min_weight_leaf < 0.0 {
+        if k < 1 {
             return Err(anyhow!(
-                "Min Samples Leaf has to be a finite value >= 0, got {min_weight_leaf}"
+                "KNN requires k >= 1, got {k}. Set the Neighbours (k) pin to a positive value."
             ));
         }
-        // linfa rejects anything below f64::EPSILON, and a NaN would slip past its `<` check and
-        // silently disable the impurity criterion altogether.
-        if !min_impurity_decrease.is_finite() || min_impurity_decrease < f64::EPSILON {
-            return Err(anyhow!(
-                "Min Impurity Decrease has to be greater than {:e}, got {}",
-                f64::EPSILON,
-                min_impurity_decrease
-            ));
-        }
+        let k = k as usize;
 
         let t0 = std::time::Instant::now();
-        let (ds, classes) = match source.as_str() {
+        let (train_array, target_array) = match source.as_str() {
             "Database" => {
                 let database: NodeDBConnection = context.evaluate_pin("database").await?;
                 let records_col: String = context.evaluate_pin("records").await?;
@@ -231,59 +170,91 @@ impl NodeLogic for FitDecisionTreeNode {
                     &format!("Got {} records for training", records.len()),
                     LogLevel::Debug,
                 );
-                // linfa unwraps the modal class of the root node, which panics on an empty dataset.
+
                 if records.is_empty() {
                     return Err(anyhow!(
-                        "No training records in the database; Decision Tree fitting needs at least one row"
+                        "KNN needs at least {k} training rows, but column `{records_col}` returned none."
                     ));
                 }
 
                 let train_array = values_to_array2_f64(&records, &records_col)?;
-                let (target_array, classes) = values_to_array1_target(&records, &targets_col)?;
-                (
-                    DatasetBase::from(train_array).with_targets(target_array),
-                    classes,
-                )
+                // Regression targets are continuous, so `values_to_array1_target` (which rejects
+                // floats outright) must not be used here.
+                let target_array = values_to_array1_f64(&records, &targets_col)?;
+                (train_array, target_array)
             }
             _ => return Err(anyhow!("Datasource Not Implemented!")),
         };
-        let elapsed = t0.elapsed();
-        context.log_message(&format!("Preprocess data: {elapsed:?}"), LogLevel::Debug);
-
-        let t0 = std::time::Instant::now();
-        let mut params = LinfaDecisionTree::params()
-            .split_quality(split_quality)
-            .min_weight_leaf(min_weight_leaf as f32)
-            .min_impurity_decrease(min_impurity_decrease);
-        if max_depth > 0 {
-            params = params.max_depth(Some(max_depth as usize));
-        }
-        if min_samples_split > 0 {
-            params = params.min_weight_split(min_samples_split as f32);
-        }
-        let tree_model = params.fit(&ds)?;
-        let elapsed = t0.elapsed();
-        context.log_message(&format!("Fit model: {elapsed:?}"), LogLevel::Debug);
-
-        let num_leaves = tree_model.num_leaves();
         context.log_message(
-            &format!(
-                "Fitted tree with {} leaves and depth {}",
-                num_leaves,
-                tree_model.max_depth()
-            ),
+            &format!("Preprocess data: {:?}", t0.elapsed()),
             LogLevel::Debug,
         );
-        if num_leaves <= 1 {
+
+        let n_rows = train_array.nrows();
+        let n_features = train_array.ncols();
+        if n_features == 0 {
+            return Err(anyhow!(
+                "KNN training rows have no features. The train column must hold non-empty numeric vectors."
+            ));
+        }
+        if n_rows < k {
+            return Err(anyhow!(
+                "KNN was asked for k = {k} neighbours but only {n_rows} training rows are available. Lower k or supply more data."
+            ));
+        }
+        if target_array.len() != n_rows {
+            return Err(anyhow!(
+                "KNN feature/target mismatch: {n_rows} feature rows vs {} targets.",
+                target_array.len()
+            ));
+        }
+
+        // Logical iteration order of an `Array2` is row-major, which is exactly the layout
+        // `KnnModel::features` is queried with.
+        let features: Vec<f64> = train_array.iter().copied().collect();
+        if let Some(offset) = features.iter().position(|value| !value.is_finite()) {
+            // Non-finite features poison the distance sort, which falls back to `Ordering::Equal`
+            // and would silently return arbitrary neighbours.
+            return Err(anyhow!(
+                "KNN training row {} column {} is not a finite number. Clean or impute the data before training.",
+                offset / n_features,
+                offset % n_features
+            ));
+        }
+
+        if let Some(row) = target_array.iter().position(|target| !target.is_finite()) {
+            // A single NaN/inf target would silently poison the weighted mean of every prediction
+            // whose neighbourhood contains it.
+            return Err(anyhow!(
+                "KNN target value in training row {row} is not a finite number. Clean or impute the target column before training."
+            ));
+        }
+        let targets: Vec<f64> = target_array.to_vec();
+
+        if k == 1 {
             context.log_message(
-                "Decision tree collapsed to a single leaf and predicts one class for every input. Lower Min Impurity Decrease / Min Samples Split or raise Max Depth.",
+                "KNN k = 1 returns the raw target of the single nearest row; predictions will follow noise in the training data.",
                 LogLevel::Warn,
             );
         }
 
-        let model = MLModel::DecisionTree(ModelWithMeta {
-            model: tree_model,
-            classes,
+        context.log_message(
+            &format!(
+                "KNN model embeds {n_rows} training rows x {n_features} features (~{} KiB) and carries them into every saved model file",
+                (features.len() * std::mem::size_of::<f64>()) / 1024
+            ),
+            LogLevel::Info,
+        );
+
+        let model = MLModel::KnnRegressor(ModelWithMeta {
+            model: KnnModel {
+                features,
+                n_features,
+                targets,
+                k,
+                distance_weighted,
+            },
+            classes: None,
         });
         let node_model = NodeMLModel::new(context, model).await;
         context.set_pin_value("model", json!(node_model)).await?;
@@ -333,7 +304,7 @@ impl NodeLogic for FitDecisionTreeNode {
                 node.add_input_pin(
                     "targets",
                     "Target Col",
-                    "Column Containing the Target Values to Fit the Classifier on",
+                    "Column Containing the Continuous Target Values to Fit the Regressor on",
                     VariableType::String,
                 );
             }

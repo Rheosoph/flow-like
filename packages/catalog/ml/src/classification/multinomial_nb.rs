@@ -1,13 +1,13 @@
-//! Node for Fitting Support Vector Machines (SVM) for Multi-Class Classification
+//! Node for Fitting Multinomial Naive Bayes Classifier
 //!
-//! This node loads a dataset (currently from a Database), transforms it into a classification dataset,
-//! and fits multiple SVM-models using the [`linfa`] crate.
+//! This node loads a dataset, transforms it into a classification dataset,
+//! and fits a Multinomial Naive Bayes model using the [`linfa_bayes`] crate.
 
 use crate::ml::NodeMLModel;
 #[cfg(feature = "execute")]
 use crate::ml::{
-    MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, POLYNOMIAL_KERNEL_CONSTANT,
-    validate_polynomial_degree, values_to_array1_target, values_to_array2_f64,
+    MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, values_to_array1_target,
+    values_to_array2_f64,
 };
 use flow_like::flow::{
     board::Board,
@@ -26,93 +26,73 @@ use flow_like_types::{Result, Value, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
-use linfa::{prelude::Pr, traits::Fit};
+use linfa::traits::Fit;
 #[cfg(feature = "execute")]
-use linfa_svm::{Svm, SvmError, SvmParams};
+use linfa_bayes::MultinomialNb;
+#[cfg(feature = "execute")]
+use ndarray::Array2;
 #[cfg(feature = "execute")]
 use std::collections::HashSet;
 
-/// Constant term of the polynomial kernel `(<x, x'> + c)^degree`. Fixed so a single kernel
-/// parameter pin can serve all three kernels.
+/// Rejects feature matrices that multinomial Naive Bayes cannot model.
+///
+/// Smoothed counts are turned into log probabilities directly, so a negative or non-finite cell
+/// becomes a NaN log probability. That NaN is never reported: it survives the fit and only surfaces
+/// at prediction time, where linfa's `argmax().unwrap()` panics on the undefined ordering.
 #[cfg(feature = "execute")]
-/// The SMO solver materialises a dense `n x n` kernel matrix per class, so training cost grows
-/// quadratically with the number of rows.
-#[cfg(feature = "execute")]
-const DENSE_KERNEL_WARN_ROWS: usize = 5000;
-
-/// Upstream prints this prefix when the solver stopped on the iteration cap instead of the
-/// tolerance. The exit reason itself is a private field, so the rendered summary is the only signal.
-#[cfg(feature = "execute")]
-const NON_CONVERGED_PREFIX: &str = "Reached maximal iterations";
-
-#[cfg(feature = "execute")]
-fn is_positive(value: f64) -> bool {
-    value.is_finite() && value > 0.0
-}
-
-#[cfg(feature = "execute")]
-fn apply_kernel<T>(
-    params: SvmParams<f64, T>,
-    kernel: &str,
-    kernel_param: f64,
-) -> Result<SvmParams<f64, T>> {
-    match kernel {
-        "Gaussian" => {
-            if !is_positive(kernel_param) {
-                return Err(anyhow!(
-                    "Gaussian kernel parameter must be a finite value > 0, got {kernel_param}"
-                ));
-            }
-            Ok(params.gaussian_kernel(kernel_param))
-        }
-        "Linear" => Ok(params.linear_kernel()),
-        "Polynomial" => {
-            validate_polynomial_degree(kernel_param)?;
-            Ok(params.polynomial_kernel(POLYNOMIAL_KERNEL_CONSTANT, kernel_param))
-        }
-        other => Err(anyhow!(
-            "Unknown kernel `{other}`. Expected `Gaussian`, `Linear` or `Polynomial`"
-        )),
+fn ensure_count_features(features: &Array2<f64>, column: &str) -> Result<()> {
+    if features.ncols() == 0 {
+        return Err(anyhow!(
+            "Column `{column}` holds zero-width feature vectors, so there is nothing to learn from"
+        ));
     }
+    if let Some(((row, col), value)) = features
+        .indexed_iter()
+        .find(|(_, value)| !value.is_finite() || **value < 0.0)
+    {
+        return Err(anyhow!(
+            "Multinomial Naive Bayes models counts and requires non-negative, finite features, but row {row} feature {col} of column `{column}` is {value}. Feed it raw counts or TF-IDF weights (see the Fit TF-IDF Vectorizer node) instead of centered or standardized vectors."
+        ));
+    }
+    Ok(())
 }
 
 #[crate::register_node]
 #[derive(Default)]
-pub struct FitSVMMultiClassNode {}
+pub struct FitMultinomialNaiveBayesNode {}
 
-impl FitSVMMultiClassNode {
+impl FitMultinomialNaiveBayesNode {
     pub fn new() -> Self {
-        FitSVMMultiClassNode {}
+        FitMultinomialNaiveBayesNode {}
     }
 }
 
 #[async_trait]
-impl NodeLogic for FitSVMMultiClassNode {
+impl NodeLogic for FitMultinomialNaiveBayesNode {
     fn get_node(&self) -> Node {
         let mut node = Node::new(
-            "fit_svm_multi_class",
-            "Train Classifier (SVM)",
-            "Fit/Train Support Vector Machines (SVM) for Multi-Class Classification ",
+            "fit_multinomial_naive_bayes",
+            "Train Classifier (Multinomial Naive Bayes)",
+            "Fit/Train a Multinomial Naive Bayes classifier, the standard baseline for text and other count data. Features must be non-negative counts or TF-IDF weights, which is what the Fit TF-IDF Vectorizer node produces. Native multi-class support and a single pass over the data.",
             "AI/ML/Classification",
         );
-        node.set_version(1);
         node.add_icon("/flow/icons/chart-network.svg");
 
         node.set_scores(
             NodeScores::new()
                 .set_privacy(6)
                 .set_security(6)
-                .set_performance(6)
+                .set_performance(9) // Single pass over the data, no iterative optimization
                 .set_governance(6)
                 .set_reliability(7)
-                .set_cost(7)
+                .set_cost(9)
                 .build(),
         );
 
         node.add_input_pin(
             "exec_in",
             "Input",
-            "Execution trigger that begins SVM training",
+            "Execution trigger that begins Multinomial Naive Bayes training",
             VariableType::Execution,
         );
 
@@ -124,44 +104,18 @@ impl NodeLogic for FitSVMMultiClassNode {
         )
         .set_options(
             PinOptions::new()
-                .set_valid_values(vec!["Database".to_string()]) // , "CSV".to_string()
+                .set_valid_values(vec!["Database".to_string()])
                 .build(),
         )
         .set_default_value(Some(json!("Database")));
 
         node.add_input_pin(
-            "kernel",
-            "Kernel",
-            "Feature-space mapping. Gaussian separates non-linear classes, Linear is the plain SVM, Polynomial adds interaction terms.",
-            VariableType::String,
-        )
-        .set_options(
-            PinOptions::new()
-                .set_valid_values(vec![
-                    "Gaussian".to_string(),
-                    "Linear".to_string(),
-                    "Polynomial".to_string(),
-                ])
-                .build(),
-        )
-        .set_default_value(Some(json!("Gaussian")));
-
-        node.add_input_pin(
-            "kernel_param",
-            "Kernel Parameter",
-            "Gaussian: the eps in exp(-||x - x'||^2 / eps), larger means smoother boundaries. Polynomial: the degree of (<x, x'> + 1)^degree. Ignored for Linear.",
+            "alpha",
+            "Alpha",
+            "Additive (Laplace/Lidstone) smoothing added to every feature count. 1.0 is the usual choice; smaller values trust the training counts more, and 0 disables smoothing so any term unseen in a class makes that class impossible.",
             VariableType::Float,
         )
-        .set_options(PinOptions::new().set_range((0.0001, 1000.0)).build())
-        .set_default_value(Some(json!(30.0)));
-
-        node.add_input_pin(
-            "c",
-            "C",
-            "Penalty for misclassified training rows, applied to both the positive and the negative side. Higher values fit the training data harder and risk overfitting.",
-            VariableType::Float,
-        )
-        .set_options(PinOptions::new().set_range((0.0001, 100000.0)).build())
+        .set_options(PinOptions::new().set_range((0., 100.)).build())
         .set_default_value(Some(json!(1.0)));
 
         node.add_output_pin(
@@ -174,7 +128,7 @@ impl NodeLogic for FitSVMMultiClassNode {
         node.add_output_pin(
             "model",
             "Model",
-            "Thread-safe handle to the trained SVM classifier",
+            "Thread-safe handle to the trained Multinomial Naive Bayes classifier",
             VariableType::Struct,
         )
         .set_schema::<NodeMLModel>()
@@ -185,20 +139,22 @@ impl NodeLogic for FitSVMMultiClassNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
-        // fetch inputs
         context.deactivate_exec_pin("exec_out").await?;
         let source: String = context.evaluate_pin("source").await?;
-        let kernel: String = context.evaluate_pin("kernel").await?;
-        let kernel_param: f64 = context.evaluate_pin("kernel_param").await?;
-        let c: f64 = context.evaluate_pin("c").await?;
+        let alpha: f64 = context.evaluate_pin("alpha").await?;
 
-        // linfa panics on an invalid parameter combination instead of returning an error, so the
-        // hyperparameters are validated before they reach the solver.
-        if !is_positive(c) {
-            return Err(anyhow!("C must be a finite value > 0, got {c}"));
+        if !alpha.is_finite() || alpha < 0.0 {
+            return Err(anyhow!(
+                "Alpha is a smoothing amount and must be finite and non-negative, got {alpha}"
+            ));
+        }
+        if alpha == 0.0 {
+            context.log_message(
+                "Alpha is 0, so any feature that never occurs in a class yields a -inf log probability for it",
+                LogLevel::Warn,
+            );
         }
 
-        // load dataset
         let t0 = std::time::Instant::now();
         let (ds, classes) = match source.as_str() {
             "Database" => {
@@ -206,7 +162,6 @@ impl NodeLogic for FitSVMMultiClassNode {
                 let records_col: String = context.evaluate_pin("records").await?;
                 let targets_col: String = context.evaluate_pin("targets").await?;
 
-                // fetch records
                 let records = {
                     let cached_db = database.load(context).await?;
                     cached_db.ensure_flushed().await?;
@@ -234,14 +189,27 @@ impl NodeLogic for FitSVMMultiClassNode {
                             0,
                         )
                         .await?
-                }; // drop db
+                };
+                if records.is_empty() {
+                    return Err(anyhow!("No records to train on"));
+                }
                 context.log_message(
                     &format!("Got {} records for training", records.len()),
                     LogLevel::Debug,
                 );
 
                 let train_array = values_to_array2_f64(&records, &records_col)?;
+                ensure_count_features(&train_array, &records_col)?;
                 let (target_array, classes) = values_to_array1_target(&records, &targets_col)?;
+
+                let distinct: HashSet<usize> = target_array.iter().copied().collect();
+                if distinct.len() < 2 {
+                    return Err(anyhow!(
+                        "Target col `{}` holds {} distinct class(es); a classifier needs at least 2",
+                        targets_col,
+                        distinct.len()
+                    ));
+                }
                 (
                     DatasetBase::from(train_array).with_targets(target_array),
                     classes,
@@ -252,54 +220,16 @@ impl NodeLogic for FitSVMMultiClassNode {
         let elapsed = t0.elapsed();
         context.log_message(&format!("Preprocess data: {elapsed:?}"), LogLevel::Debug);
 
-        let n_samples = ds.records().nrows();
-        if n_samples < 2 {
-            return Err(anyhow!(
-                "SVM classification needs at least 2 training rows, got {n_samples}"
-            ));
-        }
-        let n_classes = ds.targets.iter().copied().collect::<HashSet<usize>>().len();
-        if n_classes < 2 {
-            return Err(anyhow!(
-                "SVM classification needs at least 2 distinct classes in the target col, got {n_classes}"
-            ));
-        }
-        if n_samples > DENSE_KERNEL_WARN_ROWS {
-            context.log_message(
-                &format!(
-                    "Training {n_classes} one-vs-all models on {n_samples} rows: each builds a dense {n_samples}x{n_samples} kernel matrix, expect high memory usage"
-                ),
-                LogLevel::Warn,
-            );
-        }
-
-        // train model
         let t0 = std::time::Instant::now();
-        let params = apply_kernel(
-            Svm::<f64, Pr>::params().pos_neg_weights(c, c),
-            &kernel,
-            kernel_param,
-        )?;
-        let mut svm_models: Vec<(usize, Svm<f64, Pr>)> = Vec::with_capacity(n_classes);
-        for (class_id, subset) in ds.one_vs_all()? {
-            let fitted: std::result::Result<Svm<f64, Pr>, SvmError> = params.fit(&subset);
-            let fitted =
-                fitted.map_err(|err| anyhow!("SVM fit failed for class {class_id}: {err}"))?;
-            let summary = fitted.to_string();
-            if summary.starts_with(NON_CONVERGED_PREFIX) {
-                context.log_message(
-                    &format!("SVM for class {class_id} hit the iteration cap: {summary}"),
-                    LogLevel::Warn,
-                );
-            }
-            svm_models.push((class_id, fitted));
-        }
+        // linfa 0.8.1 leaves a `dbg!` of the per-class histogram in this fit path, so one block per
+        // class is printed to stderr while training.
+        let params = MultinomialNb::params().alpha(alpha);
+        let nb_model = params.fit(&ds)?;
         let elapsed = t0.elapsed();
         context.log_message(&format!("Fit model: {elapsed:?}"), LogLevel::Debug);
 
-        // set outputs
-        let model = MLModel::SVMMultiClass(ModelWithMeta {
-            model: svm_models,
+        let model = MLModel::MultinomialNaiveBayes(ModelWithMeta {
+            model: nb_model,
             classes,
         });
         let node_model = NodeMLModel::new(context, model).await;
@@ -341,7 +271,7 @@ impl NodeLogic for FitSVMMultiClassNode {
                 node.add_input_pin(
                     "records",
                     "Train Col",
-                    "Column Containing the Values to Train on",
+                    "Column Containing the Count or TF-IDF Vectors to Train on",
                     VariableType::String,
                 )
                 .set_default_value(Some(json!("vector")));
@@ -356,7 +286,6 @@ impl NodeLogic for FitSVMMultiClassNode {
             }
         } else {
             node.error = Some("Datasource Not Implemented".to_string());
-            return;
         }
     }
 }

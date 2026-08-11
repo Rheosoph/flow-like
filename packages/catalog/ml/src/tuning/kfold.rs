@@ -1,13 +1,20 @@
 //! K-Fold Cross Validation Dataset Generator
 //!
-//! Generates K train/test fold pairs for cross-validation evaluation.
+//! Generates K train/test fold pairs for cross-validation evaluation and drives the
+//! connected fold branch once per fold, synchronously, like the `For Each` control node.
 
+#[cfg(feature = "execute")]
+use ahash::AHashSet;
+#[cfg(feature = "execute")]
+use flow_like::flow::execution::internal_node::InternalNode;
 use flow_like::flow::{
     execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic, NodeScores},
     pin::PinOptions,
     variable::VariableType,
 };
+#[cfg(feature = "execute")]
+use flow_like_catalog_core::CachedDB;
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::arrow_utils::record_batch_to_value;
@@ -34,6 +41,19 @@ pub struct KFoldInfo {
     pub samples_per_fold: usize,
 }
 
+/// Empties a fold database before it is refilled, so re-running a fold replaces its rows instead
+/// of appending a second copy. A destination that was never written has no table yet, and `delete`
+/// would fail on the missing table — which is the normal state on the very first fold.
+#[cfg(feature = "execute")]
+async fn clear_destination(db: &CachedDB) -> Result<()> {
+    db.ensure_flushed().await?;
+    let guard = db.db.read().await;
+    if guard.inner().raw().await.is_err() {
+        return Ok(());
+    }
+    guard.delete("true").await
+}
+
 #[crate::register_node]
 #[derive(Default)]
 pub struct KFoldGeneratorNode {}
@@ -50,7 +70,7 @@ impl NodeLogic for KFoldGeneratorNode {
         let mut node = Node::new(
             "ai_ml_dataset_kfold",
             "K-Fold Split",
-            "Generate K train/test splits for cross-validation. Each fold uses (K-1)/K data for training and 1/K for validation.",
+            "Generate K train/test splits for cross-validation. Each fold uses (K-1)/K data for training and 1/K for validation, and runs the connected fold branch once per fold.",
             "AI/ML/Dataset",
         );
         node.add_icon("/flow/icons/chart-network.svg");
@@ -92,7 +112,7 @@ impl NodeLogic for KFoldGeneratorNode {
         node.add_input_pin(
             "source",
             "Source Database",
-            "Source database containing the dataset",
+            "Source database containing the dataset. It is only read, never modified.",
             VariableType::Struct,
         )
         .set_schema::<NodeDBConnection>()
@@ -120,14 +140,14 @@ impl NodeLogic for KFoldGeneratorNode {
         node.add_output_pin(
             "exec_fold",
             "For Each Fold",
-            "Triggered K times, once per fold. Connect your training/evaluation logic here.",
+            "Executed K times, once per fold, and awaited before the next fold overwrites the databases. Connect your training/evaluation logic here.",
             VariableType::Execution,
         );
 
         node.add_output_pin(
             "exec_done",
             "Done",
-            "Triggered after all folds complete",
+            "Triggered after all folds completed successfully",
             VariableType::Execution,
         );
 
@@ -151,35 +171,68 @@ impl NodeLogic for KFoldGeneratorNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
-        context.deactivate_exec_pin("exec_fold").await?;
-        context.deactivate_exec_pin("exec_done").await?;
+        let exec_fold = context.get_pin_by_name("exec_fold").await?;
+        let exec_done = context.get_pin_by_name("exec_done").await?;
+        context.deactivate_exec_pin_ref(&exec_fold).await?;
+        context.deactivate_exec_pin_ref(&exec_done).await?;
 
         let k: i64 = context.evaluate_pin("k").await?;
         let shuffle: bool = context.evaluate_pin("shuffle").await?;
-        let source: NodeDBConnection = context.evaluate_pin("source").await?;
+        let source_ref: NodeDBConnection = context.evaluate_pin("source").await?;
         let train_db_ref: NodeDBConnection = context.evaluate_pin("train_db").await?;
         let test_db_ref: NodeDBConnection = context.evaluate_pin("test_db").await?;
 
-        let k = k as usize;
+        // Checked before the cast: a negative i64 would wrap into a huge usize.
         if k < 2 {
             return Err(flow_like_types::anyhow!(
-                "K must be at least 2 for cross-validation"
+                "K must be at least 2 for cross-validation, got {}",
+                k
+            ));
+        }
+        let k = k as usize;
+
+        if train_db_ref.cache_key == test_db_ref.cache_key {
+            return Err(flow_like_types::anyhow!(
+                "Training and validation database must be different, both point at `{}`",
+                train_db_ref.cache_key
+            ));
+        }
+        if source_ref.cache_key == train_db_ref.cache_key
+            || source_ref.cache_key == test_db_ref.cache_key
+        {
+            return Err(flow_like_types::anyhow!(
+                "Source database `{}` must differ from the fold databases; they are cleared on every fold and the source rows would be lost",
+                source_ref.cache_key
             ));
         }
 
-        // Load all data from source
-        let source = source.load(context).await?;
-        source.ensure_flushed().await?;
-        let source_guard = source.db.read().await;
-        let source_table = source_guard.inner().raw().await?;
-        let query = source_table.query();
-        let mut item_stream = query.execute().await?;
+        // Fully materialize the source and release its lock before any fold body runs,
+        // otherwise a fold body writing to a database would contend with this read guard.
+        let mut all_items = {
+            let source = source_ref.load(context).await?;
+            source.ensure_flushed().await?;
+            let source_table = {
+                let source_guard = source.db.read().await;
+                source_guard.inner().raw().await?
+            };
+            let query = source_table.query();
+            let mut item_stream = query.execute().await?;
 
-        let mut all_items = Vec::new();
-        while let Ok(Some(batch)) = item_stream.try_next().await {
-            let items = record_batch_to_value(&batch)?;
-            all_items.extend(items);
-        }
+            let mut items: Vec<flow_like_types::Value> = Vec::new();
+            loop {
+                match item_stream.try_next().await {
+                    Ok(Some(batch)) => items.extend(record_batch_to_value(&batch)?),
+                    Ok(None) => break,
+                    Err(err) => {
+                        return Err(flow_like_types::anyhow!(
+                            "Failed to read source dataset for K-Fold split: {}",
+                            err
+                        ));
+                    }
+                }
+            }
+            items
+        };
 
         let total_samples = all_items.len();
         if total_samples < k {
@@ -190,13 +243,11 @@ impl NodeLogic for KFoldGeneratorNode {
             ));
         }
 
-        // Shuffle if requested
         if shuffle {
             let mut rng = rand::rng();
             all_items.shuffle(&mut rng);
         }
 
-        // Calculate fold sizes
         let fold_size = total_samples / k;
         let remainder = total_samples % k;
 
@@ -215,13 +266,25 @@ impl NodeLogic for KFoldGeneratorNode {
         };
         context.set_pin_value("info", json!(info)).await?;
 
-        // Generate each fold
+        let connected = exec_fold.get_connected_nodes();
+        if connected.is_empty() {
+            context.log_message(
+                "K-Fold: nothing connected to `For Each Fold`, the folds are generated but never evaluated",
+                LogLevel::Warn,
+            );
+        }
+
+        // Seeded with this node's id so a fold body looping back into the K-Fold node
+        // cannot re-enter it and clobber the databases of the running fold.
+        let node_id = context.read_node().await.id.clone();
+        let recursion_guard = AHashSet::from_iter(vec![node_id]);
+
+        context.activate_exec_pin_ref(&exec_fold).await?;
+
         for fold_idx in 0..k {
-            // Calculate validation set range for this fold
             let val_start = fold_idx * fold_size + fold_idx.min(remainder);
             let val_end = val_start + fold_size + if fold_idx < remainder { 1 } else { 0 };
 
-            // Split into train and validation
             let mut train_items = Vec::with_capacity(total_samples - (val_end - val_start));
             let mut val_items = Vec::with_capacity(val_end - val_start);
 
@@ -244,34 +307,55 @@ impl NodeLogic for KFoldGeneratorNode {
                 LogLevel::Debug,
             );
 
-            // Clear and fill train database
+            // Both databases are flushed after filling: inserts are buffered, and the fold
+            // body reads them within this same tick.
             let train_db = train_db_ref.load(context).await?;
-            train_db.ensure_flushed().await?;
-            train_db.db.read().await.delete("true").await?;
+            clear_destination(&train_db).await?;
             if !train_items.is_empty() {
                 train_db.insert_from(context, train_items).await?;
             }
+            train_db.ensure_flushed().await?;
 
-            // Clear and fill validation database
             let test_db = test_db_ref.load(context).await?;
-            test_db.ensure_flushed().await?;
-            test_db.db.read().await.delete("true").await?;
+            clear_destination(&test_db).await?;
             if !val_items.is_empty() {
                 test_db.insert_from(context, val_items).await?;
             }
+            test_db.ensure_flushed().await?;
 
-            // Output current fold index and trigger fold execution
             context
                 .set_pin_value("fold_index", json!(fold_idx as i64))
                 .await?;
-            context.activate_exec_pin("exec_fold").await?;
 
-            // Note: In a real flow, the downstream nodes would execute here
-            // This is a loop node pattern - the flow engine handles iteration
+            for node in connected.iter() {
+                let mut sub_context = context.create_sub_context(node).await;
+                let run = InternalNode::trigger(
+                    &mut sub_context,
+                    &mut Some(recursion_guard.clone()),
+                    true,
+                )
+                .await;
+                sub_context.end_trace();
+                context.push_sub_context(&mut sub_context);
+
+                if let Err(error) = run {
+                    context.log_message(
+                        &format!("Error: {:?} in fold {}/{}", error, fold_idx + 1, k),
+                        LogLevel::Error,
+                    );
+                    context.deactivate_exec_pin_ref(&exec_fold).await?;
+                    return Err(flow_like_types::anyhow!(
+                        "K-Fold cross-validation aborted, fold {} of {} failed: {:?}",
+                        fold_idx + 1,
+                        k,
+                        error
+                    ));
+                }
+            }
         }
 
-        context.deactivate_exec_pin("exec_fold").await?;
-        context.activate_exec_pin("exec_done").await?;
+        context.deactivate_exec_pin_ref(&exec_fold).await?;
+        context.activate_exec_pin_ref(&exec_done).await?;
         Ok(())
     }
 

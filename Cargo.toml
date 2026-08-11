@@ -34,6 +34,7 @@ members = [
     "packages/catalog/web",
     "packages/catalog/media",
     "packages/catalog/ml",
+    "packages/ordinal",
     "packages/catalog/onnx",
     "packages/catalog/llm",
     "packages/catalog/processing",
@@ -67,6 +68,7 @@ flow-like-catalog-data = { path = "packages/catalog/data" }
 flow-like-catalog-web = { path = "packages/catalog/web" }
 flow-like-catalog-media = { path = "packages/catalog/media" }
 flow-like-catalog-ml = { path = "packages/catalog/ml" }
+flow-like-ordinal = { path = "packages/ordinal" }
 flow-like-catalog-onnx = { path = "packages/catalog/onnx" }
 flow-like-catalog-llm = { path = "packages/catalog/llm" }
 flow-like-catalog-processing = { path = "packages/catalog/processing" }

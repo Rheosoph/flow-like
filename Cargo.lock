@@ -2721,6 +2721,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "bhtsne"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ed2b75685f61d5d102a61ad716bba1c796f24650089ed999d63b274467554da"
+dependencies = [
+ "csv",
+ "num-traits 0.2.19",
+ "pdqselect",
+ "rand 0.8.6",
+ "rand_distr 0.4.3",
+]
+
+[[package]]
 name = "bigdecimal"
 version = "0.4.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8056,6 +8069,7 @@ dependencies = [
  "flow-like-catalog-core",
  "flow-like-catalog-macros",
  "flow-like-model-provider",
+ "flow-like-ordinal",
  "flow-like-storage",
  "flow-like-types",
  "fory",
@@ -8065,12 +8079,18 @@ dependencies = [
  "linfa-bayes",
  "linfa-clustering",
  "linfa-datasets",
+ "linfa-elasticnet",
+ "linfa-ensemble",
  "linfa-linear",
+ "linfa-logistic",
  "linfa-nn",
+ "linfa-preprocessing",
  "linfa-reduction",
  "linfa-svm",
  "linfa-trees",
+ "linfa-tsne",
  "ndarray 0.16.1",
+ "rand_xoshiro 0.6.0",
  "rmp-serde",
  "schemars 1.2.1",
  "serde",
@@ -8385,6 +8405,15 @@ dependencies = [
  "tiktoken-rs 0.7.0",
  "tokenizers 0.22.2",
  "tracing",
+]
+
+[[package]]
+name = "flow-like-ordinal"
+version = "0.1.0"
+dependencies = [
+ "linfa",
+ "ndarray 0.16.1",
+ "serde",
 ]
 
 [[package]]
@@ -13830,6 +13859,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "linfa-elasticnet"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4231548fd532403798cd5286a94b415d9279e29b1eee7beb259806bf091e5d7"
+dependencies = [
+ "approx 0.5.1",
+ "linfa",
+ "linfa-linalg",
+ "ndarray 0.16.1",
+ "num-traits 0.2.19",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "linfa-ensemble"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "28e48cb23c1b19c12ab2e376e26d904730aabdd6db971be959a056ee0129ba28"
+dependencies = [
+ "linfa",
+ "linfa-trees",
+ "ndarray 0.16.1",
+ "ndarray-rand",
+ "rand 0.8.6",
+]
+
+[[package]]
 name = "linfa-kernel"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13872,6 +13929,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "linfa-logistic"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fdad0a0023be38b71d197ba18626afb2fc55f453f9eef911f98efa6f9782b34d"
+dependencies = [
+ "argmin",
+ "argmin-math",
+ "linfa",
+ "ndarray 0.16.1",
+ "ndarray-stats",
+ "num-traits 0.2.19",
+ "serde",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "linfa-nn"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13886,6 +13959,28 @@ dependencies = [
  "order-stat",
  "serde",
  "thiserror 2.0.18",
+]
+
+[[package]]
+name = "linfa-preprocessing"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "adf745f6659c609d72d81ad2a7d4411efab315e6ed0c09bd84a5d14aabfcb68d"
+dependencies = [
+ "approx 0.5.1",
+ "encoding",
+ "itertools 0.14.0",
+ "linfa",
+ "linfa-linalg",
+ "ndarray 0.16.1",
+ "ndarray-rand",
+ "ndarray-stats",
+ "regex",
+ "serde",
+ "serde_regex",
+ "sprs",
+ "thiserror 2.0.18",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -13932,6 +14027,20 @@ dependencies = [
  "ndarray 0.16.1",
  "ndarray-rand",
  "serde",
+]
+
+[[package]]
+name = "linfa-tsne"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b792e979fa8d31c24b9f4a84a918a5e95d53e98dabd43a4f019bce1ab642b42"
+dependencies = [
+ "bhtsne",
+ "linfa",
+ "ndarray 0.16.1",
+ "ndarray-rand",
+ "pdqselect",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -17067,6 +17176,12 @@ dependencies = [
  "digest 0.11.2",
  "hmac 0.13.0",
 ]
+
+[[package]]
+name = "pdqselect"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7778906d9321dd56cde1d1ffa69a73e59dcf5fda6d366f62727adf2bd4193aee"
 
 [[package]]
 name = "pem"
@@ -20943,6 +21058,16 @@ dependencies = [
  "percent-encoding",
  "serde",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "serde_regex"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bafc8d0c5330cecff10f16b459b479fd9acaa5b4acd7167301414e21b0057012"
+dependencies = [
+ "regex",
+ "serde",
 ]
 
 [[package]]
