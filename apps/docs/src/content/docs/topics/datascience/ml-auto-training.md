@@ -35,7 +35,7 @@ The Auto node's `Best Model Type` output and the matching Grid Search `Model Typ
 | Auto Classifier | Gaussian Naive Bayes, Decision Tree (three depths), Logistic Regression (three penalties), Random Forest, one-vs-all SVM | Nothing; SVM, Logistic Regression and Random Forest each have an include toggle |
 | Auto Ordinal | Proportional Odds and Ordered Probit, All-Threshold under a logistic and a hinge margin, Ordinal Ridge (three penalties), Continuation Ratio, Adjacent Category | The neural family (CORAL and CORN heads) |
 
-Neither Auto node covers everything in the catalog. [AdaBoost](/nodes/ai/ml/classification/fit-adaboost/), [KNN](/nodes/ai/ml/classification/fit-knn-classifier/) and [Frank & Hall](/nodes/ai/ml/ordinal/fit-ordinal-frank-hall/) are not swept by an Auto node, so reach for [Grid Search](/nodes/ai/ml/tuning/ai-ml-tuning-grid-search/) or the training node directly if you want to try them.
+Neither Auto node covers everything in the catalog. [AdaBoost](/nodes/ai/ml/classification/fit-adaboost/), [KNN](/nodes/ai/ml/classification/fit-knn-classifier/), [Multinomial Naive Bayes](/nodes/ai/ml/classification/fit-multinomial-naive-bayes/) and [Frank & Hall](/nodes/ai/ml/ordinal/fit-ordinal-frank-hall/) are not swept by an Auto node, and neither Grid Search node can tune them either, so reach for the training node directly if you want to try them. [One-Class SVM](/nodes/ai/ml/classification/fit-one-class-svm/) is novelty detection rather than a classifier over a target column, so no tuner covers it at all.
 
 ## Why ordered targets need their own tuners
 
@@ -79,7 +79,7 @@ Auto Ordinal returns the fullest result. Each leaderboard entry carries:
 | `train_time_secs` | Seconds spent fitting and scoring this configuration across all folds |
 | `rank` | Position, 1 being best under the metric **and its direction** |
 
-Alongside the leaderboard, the ordinal nodes return a `skipped` list. A configuration that fails to fit on any fold is dropped from the ranking with a warning in the run log and its reason recorded, rather than ending the run. That matters because some failures are structural rather than accidental: Continuation Ratio refuses to fit when a fold omits a middle level, and a CORN head fails on a fold that omits a level nothing reaches, while every other family on the same folds is healthy. Only when *every* configuration fails does the node return an error, and it lists the reasons.
+Alongside the leaderboard, the ordinal nodes return a `skipped` list. A configuration that fails to fit on any fold is dropped from the ranking with a warning in the run log and its reason recorded, rather than ending the run. That matters because some failures are structural rather than accidental: Continuation Ratio refuses to fit when a fold omits a middle level, and a CORN head fails on a fold that omits a level nothing reaches, while every other family on the same folds is healthy. Only when *every* configuration fails does the node return an error. Ordinal Grid Search lists the reasons in that error; Auto Ordinal only does so when nothing ever completed a fold — when configurations failed *after* an earlier one had scored, it errors with a bare `Leaderboard is empty after ranking` and the reasons are left in the run-log warnings.
 
 Auto Classifier and Grid Search have no equivalent. A fit failure there aborts the whole run.
 
@@ -123,6 +123,7 @@ Accepted parameter names per family:
 | Ordinal Grid Search | `OrdinalRidge` | `alpha` |
 | Ordinal Grid Search | `OrdinalContinuationRatio` | `alpha`, `link`, `learning_rate` |
 | Ordinal Grid Search | `OrdinalAdjacentCategory` | `alpha`, `learning_rate` |
+| Ordinal Grid Search | `OrdinalNeural` | `alpha`, `head`, `activation`, `hidden_layers`, `learning_rate`, `max_iterations`, `seed` |
 
 Keep grids small. Every added value multiplies into the product, and every resulting combination is refitted once per fold.
 

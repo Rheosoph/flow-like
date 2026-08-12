@@ -27,6 +27,7 @@ Start with the target column, not the algorithm.
 | Levels with an order | [Ordinal](/nodes/ai/ml/ordinal/) | Being off by two levels is worse than being off by one |
 | A continuous number | [Regression](/nodes/ai/ml/regression/) | The difference between 10 and 12 means the same as between 100 and 102 |
 | No target column | [Clustering](/nodes/ai/ml/clustering/) | You want groups, but nothing supplies the correct groups |
+| No target column, and the columns themselves are the problem | [Dimensionality reduction](/nodes/ai/ml/reduction/) | You want fewer, denser columns or a two-dimensional picture, not row groups |
 | Only examples of normal behaviour | Novelty detection with [One-Class SVM](/nodes/ai/ml/classification/fit-one-class-svm/) | New rows should be flagged as inliers or outliers |
 
 ### Ordinal is its own task
@@ -75,12 +76,12 @@ Start with the simplest model that matches the target and constraints. Compare a
 
 | Model | Node | Pick it when | Watch out for |
 |-------|------|--------------|---------------|
-| Proportional Odds | [Train Ordinal Model (Proportional Odds)](/nodes/ai/ml/ordinal/fit-ordinal-logistic/) | Default first choice; you want calibrated per-level probabilities and one readable coefficient vector | One shared coefficient vector is assumed across all cut points, and the gradient fit needs scaled features |
+| Proportional Odds | [Train Ordinal Model (Proportional Odds)](/nodes/ai/ml/ordinal/fit-ordinal-logistic/) | Default first choice; you want calibrated per-level probabilities and one readable coefficient vector | One shared coefficient vector across all cut points is the default assumption — Free Features frees chosen features into one slope per cut point, at the price of a non-zero Crossing Rate — and the gradient fit needs scaled features |
 | Ordinal Ridge | [Train Ordinal Model (Ridge)](/nodes/ai/ml/ordinal/fit-ordinal-ridge/) | You want a fast closed-form baseline with many levels or many features | It returns the level and its latent score, but no calibrated probabilities |
-| Frank & Hall | [Train Ordinal Model (Frank & Hall)](/nodes/ai/ml/ordinal/fit-ordinal-frank-hall/) | The boundary between levels bends and you want a tree-based learner on an ordered target | It predicts by counting how many of the K−1 cut models say yes, so there are no calibrated probabilities and no coefficient vector |
+| Frank & Hall | [Train Ordinal Model (Frank & Hall)](/nodes/ai/ml/ordinal/fit-ordinal-frank-hall/) | The boundary between levels bends and you want a non-linear base learner on an ordered target: Decision Tree, Random Forest, or Gaussian Naive Bayes when rows are few relative to columns | It predicts by counting how many of the K−1 cut models say yes, so there are no calibrated probabilities and no coefficient vector |
 | Continuation Ratio | [Train Ordinal Model (Continuation Ratio)](/nodes/ai/ml/ordinal/fit-ordinal-continuation-ratio/) | The levels are a sequential process that can halt: escalation tiers, disease stages, funnel depth | Stricter than the others — every declared level must occur, middle ones included — and higher levels are fitted on fewer rows |
 | Adjacent Category | [Train Ordinal Model (Adjacent Category)](/nodes/ai/ml/ordinal/fit-ordinal-adjacent-category/) | The question is about one step up: ratings, severity grades, Likert answers | Its coefficients mean "level k+1 versus level k", not "at or below cut k", and the bottom-to-top effect is (K−1) times the per-step effect |
-| Neural CORAL/CORN | [Train Ordinal Model (Neural CORAL/CORN)](/nodes/ai/ml/ordinal/fit-ordinal-neural/) | The level is genuinely not monotone in the features and you still need probabilities | With no hidden layers CORAL is exactly Proportional Odds with the All-Threshold loss and CORN is exactly Continuation Ratio, so prefer those for linear problems |
+| Neural CORAL/CORN | [Train Ordinal Model (Neural CORAL/CORN)](/nodes/ai/ml/ordinal/fit-ordinal-neural/) | The level is genuinely not monotone in the features and you still need probabilities | With no hidden layers CORAL is exactly Proportional Odds with Loss = AllThreshold and Margin = Logistic, and CORN is exactly Continuation Ratio with the logit link, so prefer those for linear problems |
 
 The neural node is the only ordinal trainer that is non-linear, probabilistic, and rank-consistent at once. That combination costs a non-convex objective — the seed changes the fit — and far more rows than a linear model. Read its Architecture output, which reports parameter count next to row count, before trusting a training score.
 
@@ -105,7 +106,7 @@ Clusters do not acquire business meaning automatically. Review representative re
 
 | Step | Node | Pick it when | Watch out for |
 |------|------|--------------|---------------|
-| Feature Scaler | [Fit Feature Scaler](/nodes/ai/ml/preprocessing/fit-feature-scaler/) | Any distance- or gradient-based model is downstream: Logistic Regression, Elastic Net, SVM, KNN, Gaussian Mixture, every ordinal trainer | It learns offsets and scales from the data it sees, so fit it on the training split only |
+| Feature Scaler | [Fit Feature Scaler](/nodes/ai/ml/preprocessing/fit-feature-scaler/) | Any distance- or gradient-based model is downstream: Logistic Regression, Elastic Net, SVM, KNN, Gaussian Mixture, and every ordinal trainer except Frank & Hall, whose base learners need no scaling | It learns offsets and scales from the data it sees, so fit it on the training split only |
 | TF-IDF Vectorizer | [Fit TF-IDF Vectorizer](/nodes/ai/ml/preprocessing/fit-tfidf-vectorizer/) | A text column has to become numeric vectors for a classifier | linfa recomputes the inverse document frequencies from the corpus being transformed, so vectors are only comparable within a single Apply Transform run |
 | Apply Transform | [Apply Transform](/nodes/ai/ml/preprocessing/ml-apply-transform/) | A fitted transformer has to be replayed on another table | Pass the same fitted model you trained with; a second Fit call produces different statistics |
 
@@ -137,21 +138,25 @@ Supporting dataset nodes: [K-Fold Split](/nodes/ai/ml/dataset/ai-ml-dataset-kfol
 
 ### Let the catalog compare candidates
 
-[Auto Classifier](/nodes/ai/ml/tuning/ai-ml-tuning-auto-classifier/) cross-validates several classifier families and retrains the winner; [Auto Ordinal](/nodes/ai/ml/tuning/ai-ml-tuning-auto-ordinal/) does the same for ordered targets and ranks by a distance-aware metric. Feed the reported best model type into [Grid Search](/nodes/ai/ml/tuning/ai-ml-tuning-grid-search/) or [Ordinal Grid Search](/nodes/ai/ml/tuning/ai-ml-tuning-ordinal-grid-search/) to tune it. The exception is an `OrdinalNeural` winner, which Ordinal Grid Search does not support; configure that trainer directly. Use the ordinal pair for ordered targets — Auto Classifier resolves the target without its order and ranks by accuracy, which scores a five-level miss exactly like a one-level one. See [Auto Training](/topics/datascience/ml-auto-training/).
+[Auto Classifier](/nodes/ai/ml/tuning/ai-ml-tuning-auto-classifier/) cross-validates several classifier families and retrains the winner; [Auto Ordinal](/nodes/ai/ml/tuning/ai-ml-tuning-auto-ordinal/) does the same for ordered targets and ranks by a distance-aware metric. Feed the reported best model type into [Grid Search](/nodes/ai/ml/tuning/ai-ml-tuning-grid-search/) or [Ordinal Grid Search](/nodes/ai/ml/tuning/ai-ml-tuning-ordinal-grid-search/) to tune it, including an `OrdinalNeural` winner — its grid takes `hidden_layers`, `head`, `activation`, `alpha`, `learning_rate` and `max_iterations`, but keep it small, because every combination trains a network from scratch on every fold. Use the ordinal pair for ordered targets — Auto Classifier resolves the target without its order and ranks by accuracy or macro F1, either of which scores a five-level miss exactly like a one-level one. See [Auto Training](/topics/datascience/ml-auto-training/).
 
 ## Evaluate on untouched data
 
 | Task | Nodes | Note |
 |------|-------|------|
 | Classification | [Accuracy](/nodes/ai/ml/metrics/ml-eval-accuracy/), [Confusion Matrix](/nodes/ai/ml/metrics/ml-eval-confusion-matrix/) | Accuracy alone hides poor minority-class performance; read the matrix |
-| Binary classification with probabilities | [ROC-AUC & Log Loss](/nodes/ai/ml/metrics/ml-roc-auc/) | Needs P(positive class); the Predict node's confidence is the winning class's probability, so convert it first |
+| Binary classification with probabilities | [ROC-AUC & Log Loss](/nodes/ai/ml/metrics/ml-roc-auc/) | Needs a P(positive class) column, which batch prediction does not produce — see below |
 | Regression | [Regression Metrics](/nodes/ai/ml/metrics/ml-eval-regression/) | MSE, RMSE, MAE, and R²; also check residual patterns, not one aggregate |
 | Ordinal | [Ordinal Metrics](/nodes/ai/ml/ordinal/ml-ordinal-metrics/) | Quadratic weighted kappa as headline, plus linear kappa, macro error, and rank correlation |
 | Clustering | [Silhouette Score](/nodes/ai/ml/metrics/ml-silhouette-score/) | Distances are euclidean, so scale features before reading the score |
 
 Accuracy is the wrong headline for an ordered target because it gives no partial credit for a near miss: one level off counts exactly like four levels off. [Ordinal Metrics](/nodes/ai/ml/ordinal/ml-ordinal-metrics/) weights every miss by how far off it was.
 
-For ROC-AUC, use the winning-class confidence directly only where the prediction is the positive class, and `1 - confidence` elsewhere. Feeding the raw confidence column in produces a meaningless curve.
+ROC-AUC needs a column of `P(positive class)`, and [Predict](/nodes/ai/ml/ml-predict/) does not write one. In Database mode it writes the predicted class only; the `confidence` figure exists solely on the struct returned by its **Vector** mode, one row at a time. So building that column means looping rows through Vector-mode Predict and writing the value yourself.
+
+Converting it correctly matters as much as producing it: `confidence` is the **winning** class's probability, not the positive class's. Use it directly where the prediction is the positive class and `1 - confidence` elsewhere. A raw confidence column produces a meaningless curve and does not error.
+
+Only models that carry a probability model report a confidence at all. Decision Tree, Random Forest, AdaBoost, both Naive Bayes variants, Frank & Hall, Ordinal Ridge and every regressor return none, so ROC-AUC and log loss are unavailable for them.
 
 To inspect a fitted model: [Model Info](/nodes/ai/ml/model-info/ml-model-info/) for general metadata, [Get Coefficients](/nodes/ai/ml/model-info/ml-get-linear-coefficients/) for linear regression, [Get Centroids](/nodes/ai/ml/model-info/ml-get-kmeans-centroids/) for KMeans, and [Feature Importance](/nodes/ai/ml/model-info/ml-feature-importance/) for Decision Tree, Random Forest, and AdaBoost.
 

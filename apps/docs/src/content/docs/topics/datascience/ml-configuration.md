@@ -34,7 +34,7 @@ This guide covers settings that change what a model *is*, not only how well it s
 | Margin | Logistic, Hinge, SquaredHinge | Shape of the penalty a misplaced cut point pays | Whether only rows near a cut point should influence the fit |
 | Free Features | Feature indices | One shared slope vs one slope per cut point | Parsimony vs per-threshold effects, at the risk of crossing curves |
 
-The axes are not fully orthogonal in effect: Link applies only under the CumulativeLink loss, and Margin applies only under the two threshold losses. The node logs a warning when a setting is being ignored.
+The axes are not fully orthogonal in effect: Link applies only under the CumulativeLink loss, and Margin applies only under the two threshold losses. The node logs a warning when a non-Logistic Margin is ignored under CumulativeLink, but a Link chosen under a threshold loss is dropped without one.
 
 ### Link function
 
@@ -147,8 +147,9 @@ Three nodes share one kernel implementation: [Train Classifier (SVM)](/nodes/ai/
 | Linear | Ignored | The plain SVM/SVR, and a half-space boundary for One-Class SVM |
 | Polynomial | The degree in `(<x, x'> + 1)^degree` | Interaction terms |
 
-Two constraints on the polynomial kernel are enforced at fit time.
+Three constraints on the polynomial kernel are enforced at fit time.
 
+- **The degree must be finite and at least 1.** A degree below 1, or a non-finite one, is rejected before the other two checks run — there is no fractional-order or negative-order polynomial kernel here.
 - **The degree must be a whole number.** The kernel is computed with `powf`, which returns NaN for any non-integer exponent once the base is negative — and the base `<x, x'> + 1` goes negative for any pair of rows whose inner product is below -1, which is routine for centred or standardized features. A single NaN entry then either panics inside the classifier's Platt scaling or passes silently, with SVR emitting null and One-Class SVM marking every row an outlier. Fractional degrees are rejected instead.
 - **The degree is capped at 10.** Kernel values grow as `(<x, x'> + 1)^degree`, so a large degree spans more than 20 orders of magnitude and the solve stops being meaningful long before the cap. Typical values are 2 to 5.
 
@@ -159,10 +160,11 @@ The remaining SVM knobs are per-node:
 | Pin | Node | Effect |
 |-----|------|--------|
 | C | SVM, SVR | Penalty for training rows outside the tolerated margin. Higher fits the training data harder and risks overfitting |
+| Mode | SVR | Picks the formulation: Epsilon-SVR penalises deviations larger than Epsilon, Nu-SVR replaces Epsilon with Nu. Defaults to Epsilon-SVR |
 | Epsilon | SVR (Epsilon-SVR mode) | Width of the insensitive tube; errors smaller than this are not penalised |
 | Nu | SVR (Nu-SVR mode) | Replaces Epsilon with a target fraction of support vectors |
 | Nu | One-Class SVM | Upper bound on the fraction of training rows treated as outliers. Raise it when the training set is known to be contaminated |
-| Solver Tolerance | All three | SMO stopping threshold. Smaller trains longer for a more precise solution |
+| Solver Tolerance | SVR, One-Class SVM | SMO stopping threshold. Smaller trains longer for a more precise solution. The SVM classifier does not expose it and keeps linfa's default |
 
 The SMO solver materialises a dense n-by-n kernel matrix, so training cost grows quadratically with row count. The SVM nodes log a warning past 5000 rows.
 
@@ -248,8 +250,9 @@ The fitted vocabulary is verbatim training text and travels inside the saved mod
 | [Model Info](/nodes/ai/ml/model-info/ml-model-info/) | Any model | Model type, class or cluster count, class names |
 | [Feature Importance](/nodes/ai/ml/model-info/ml-feature-importance/) | Decision Tree, Random Forest, AdaBoost | Normalized per-feature importance, the top feature, and leaf and depth statistics. Accepts optional column labels in training order |
 | [Get Coefficients](/nodes/ai/ml/model-info/ml-get-linear-coefficients/) | Linear Regression | Coefficients and intercept |
+| [Get Centroids](/nodes/ai/ml/model-info/ml-get-kmeans-centroids/) | KMeans | The cluster centroids, with the cluster count and their dimensionality |
 
-Get Coefficients is specific to [Train Regression (Linear)](/nodes/ai/ml/regression/fit-linear-regression/) and errors on anything else. The other linear fits publish their own Coefficients output pin instead: the penalized regressors, Ordinal Ridge and Adjacent Category each expose coefficients directly on the training node.
+Get Coefficients is specific to [Train Regression (Linear)](/nodes/ai/ml/regression/fit-linear-regression/) and errors on anything else. Some of the other linear fits publish their own Coefficients output pin instead: [Ridge/Lasso/ElasticNet](/nodes/ai/ml/regression/fit-elastic-net/), Ordinal Ridge and Adjacent Category each expose coefficients directly on the training node. [GLM](/nodes/ai/ml/regression/fit-glm/) and [Logistic Regression](/nodes/ai/ml/classification/fit-logistic-regression/) expose none — their only output is the model handle, and no diagnostics node reads their coefficients.
 
 Read Adjacent Category coefficients as **per-step** quantities: `exp(coefficient)` is the factor on the odds of scoring one level higher rather than staying put. A cumulative coefficient from Proportional Odds means something else — the log odds ratio of everything at or below a cut against everything above it. Same number, different meaning. Because the per-step effect applies once per step, the bottom-to-top effect is (levels - 1) times it, which the Coefficients struct reports directly as `bottom_to_top_effect`.
 
@@ -262,13 +265,16 @@ Read Adjacent Category coefficients as **per-step** quantities: `exp(coefficient
 | Crossing Rate | Proportional Odds | Above 0 means freed features produced crossing cumulative curves and the per-level probabilities are no longer trustworthy |
 | Effective Coefficients | Proportional Odds | Every feature's coefficient at every cut point, plus each freed feature's spread |
 | Subset Sizes | Continuation Ratio | Rows behind each sub-model. The last entry is the evidence behind the top level |
+| Coefficients | Ordinal Ridge, Adjacent Category | Ridge: coefficients and intercept on the rank scale, where the sign says which way a feature pushes the level. Adjacent Category: the shared per-step coefficients, the level contrasts, and `bottom_to_top_effect` |
 | Architecture | Neural | Head, activation, fitted layer widths, parameter count and rows per parameter |
 
 **Check Levels first whenever an ordinal model behaves oddly.** A wrong level order does not fail and does not look wrong: it trains a confident, well-converged, backwards model, and no accuracy or kappa figure reveals it. Nothing else in the run exposes it, which is why the resolved order is also written to the run log at Info level.
 
 Evaluate ordinal predictions with [Ordinal Metrics](/nodes/ai/ml/ordinal/ml-ordinal-metrics/) rather than plain accuracy, which charges a one-level miss the same as a four-level miss.
 
-One wiring trap worth naming: [ROC-AUC & Log Loss](/nodes/ai/ml/metrics/ml-roc-auc/) needs `P(positive class)` in its Probabilities Column. The Predict node's `confidence` output is the **winning** class's probability, which is a different number. Use it directly where the prediction is the positive class and `1 - confidence` elsewhere. Feeding confidence in raw produces a curve that means nothing and does not error.
+One wiring trap worth naming: [ROC-AUC & Log Loss](/nodes/ai/ml/metrics/ml-roc-auc/) needs `P(positive class)` in its Probabilities Column, and no node writes that column for you. [Predict](/nodes/ai/ml/ml-predict/) in Database mode writes the predicted class and nothing else; `confidence` is only a field on the struct its **Vector** mode returns for a single row. Building the column means looping rows through Vector mode and writing the value yourself.
+
+Convert it while you do. `confidence` is the **winning** class's probability, which is a different number from the positive class's: use it directly where the prediction is the positive class and `1 - confidence` elsewhere. Feeding confidence in raw produces a curve that means nothing and does not error. Models with no probability model — Decision Tree, Random Forest, AdaBoost, both Naive Bayes variants, Frank & Hall and Ordinal Ridge — report no confidence at all, so neither metric is available for them.
 
 ## Next steps
 

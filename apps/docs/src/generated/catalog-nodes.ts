@@ -16182,7 +16182,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "probabilities_col",
         "friendlyName": "Probabilities Column",
-        "description": "Column holding P(positive class) for each row, between 0 and 1 — the probability of the class named in Positive Label, NOT the probability of whichever class was predicted. The Predict node's `confidence` output is the winning class's probability, so it must be converted first: use it directly where the prediction is the positive class, and 1 - confidence elsewhere. A raw decision value or an uncalibrated score produces a meaningless curve.",
+        "description": "Column holding P(positive class) for each row, between 0 and 1 — the probability of the class named in Positive Label, NOT the probability of whichever class was predicted. No node writes this column for you: Predict in Database mode writes the predicted class only, and `confidence` is a field on the struct its Vector mode returns for one row, so build the column by looping rows through Vector mode. Convert as you go, because `confidence` is the winning class's probability: use it directly where the prediction is the positive class, and 1 - confidence elsewhere. A raw decision value or an uncalibrated score produces a meaningless curve.",
         "pinType": "Input",
         "dataType": "String",
         "valueType": "Normal",
