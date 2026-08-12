@@ -691,6 +691,15 @@ export function useCopilotCommands({
 			for (const cmd of commands) {
 				if (cmd.command_type === "CreateLayer" && isSetupLayerCommand(cmd)) {
 					const layerId = createId();
+					const layerType = layerTypeFromCommand(cmd.layer_type);
+					if (cmd.cache != null && layerType !== ILayerType.Function) {
+						recordCommandFailure(
+							cmd,
+							"layer creation",
+							`Cannot configure function cache on non-Function layer "${cmd.name}"`,
+						);
+						continue;
+					}
 					const position = cmd.position || {
 						x: baseX + (nodeIndex % 3) * 300,
 						y: baseY + Math.floor(nodeIndex / 3) * 200,
@@ -699,13 +708,14 @@ export function useCopilotCommands({
 					const layer: ILayer = {
 						id: layerId,
 						name: cmd.name,
-						type: layerTypeFromCommand(cmd.layer_type),
+						type: layerType,
 						color: cmd.color || null,
 						coordinates: [position.x, position.y, 0],
 						nodes: {},
 						variables: {},
 						comments: {},
 						pins: pinsFromDefs(cmd.pins, false),
+						cache: cmd.cache ?? null,
 						parent_id: targetLayer,
 					};
 
@@ -1311,6 +1321,15 @@ export function useCopilotCommands({
 							break;
 						}
 						const layerId = createId();
+						const layerType = layerTypeFromCommand(cmd.layer_type);
+						if (cmd.cache != null && layerType !== ILayerType.Function) {
+							recordCommandFailure(
+								cmd,
+								"layer creation",
+								`Cannot configure function cache on non-Function layer "${cmd.name}"`,
+							);
+							break;
+						}
 						const targetLayer =
 							resolveLayerId(cmd.target_layer) ?? currentLayer;
 						const nodeIds = resolveNodeIds(cmd.node_ids || []);
@@ -1319,13 +1338,14 @@ export function useCopilotCommands({
 						const layer: ILayer = {
 							id: layerId,
 							name: cmd.name,
-							type: layerTypeFromCommand(cmd.layer_type),
+							type: layerType,
 							color: cmd.color || null,
 							coordinates: [position.x, position.y, 0],
 							nodes: {},
 							variables: {},
 							comments: {},
 							pins: pinsFromDefs(cmd.pins, false),
+							cache: cmd.cache ?? null,
 							parent_id: targetLayer,
 						};
 
@@ -1344,6 +1364,41 @@ export function useCopilotCommands({
 							[cmd.ref_id, cmd.name, layerId],
 							layerAsNode(layer),
 						);
+						break;
+					}
+
+					case "UpdateLayerCache": {
+						const existingLayer = resolveLayer(cmd.layer_id);
+						if (!existingLayer) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot update function cache: "${cmd.layer_id}" was not found`,
+							);
+							break;
+						}
+						if (existingLayer.type !== ILayerType.Function) {
+							recordCommandFailure(
+								cmd,
+								"board edit",
+								`Cannot update function cache: "${cmd.layer_id}" is not a Function layer`,
+							);
+							break;
+						}
+
+						const updatedLayer: ILayer = {
+							...existingLayer,
+							cache: cmd.cache ?? null,
+						};
+						remainingGenericCommands.push(
+							upsertLayerCommand({
+								layer: updatedLayer,
+								node_ids: [],
+								current_layer: existingLayer.parent_id ?? null,
+								old_layer: existingLayer,
+							}),
+						);
+						latestBoardLayers[existingLayer.id] = updatedLayer;
 						break;
 					}
 

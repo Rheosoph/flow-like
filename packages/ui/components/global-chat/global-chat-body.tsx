@@ -683,6 +683,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				responseMessage,
 				agentSelection: turnSelection,
 				label: trimmed,
+				sourceAttachments: [...attachments],
 				inputPreview: {
 					prompt: trimmed,
 					attachments: allFiles.map((file) => ({
@@ -1326,7 +1327,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						</Button>
 					)}
 				</div>
-				<GlobalChatHistory />
+				<GlobalChatHistory className="ml-auto" />
 			</header>
 
 			<div

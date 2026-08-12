@@ -201,6 +201,8 @@ export interface GlobalChatRun {
 	startedAt: number;
 	/** First line of the prompt that started the turn — labels its stop/steer controls. */
 	label: string;
+	/** Files attached to the owning user turn, snapshotted before concurrent runs can advance chat. */
+	sourceAttachments: IAttachment[];
 	selection: GlobalChatTurnSelection;
 	/** The assistant reply being streamed into. Its id always equals `runId`. */
 	message: IMessage | null;
@@ -381,7 +383,12 @@ interface GlobalChatState {
 	startRun: (
 		run: Pick<
 			GlobalChatRun,
-			"runId" | "conversationId" | "selection" | "label" | "message"
+			| "runId"
+			| "conversationId"
+			| "selection"
+			| "label"
+			| "message"
+			| "sourceAttachments"
 		>,
 	) => void;
 	/** Replace a run's streaming bubble. No-op once the run has ended, so a late chunk from a
@@ -653,7 +660,14 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 			messages[index] = message;
 			return { messages };
 		}),
-	startRun: ({ runId, conversationId, selection, label, message }) =>
+	startRun: ({
+		runId,
+		conversationId,
+		selection,
+		label,
+		message,
+		sourceAttachments,
+	}) =>
 		set((state) => {
 			const existing = state.runs[runId];
 			if (existing) {
@@ -671,6 +685,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 						conversationId,
 						selection,
 						label,
+						sourceAttachments,
 						message,
 						status: "streaming",
 						startedAt: Date.now(),

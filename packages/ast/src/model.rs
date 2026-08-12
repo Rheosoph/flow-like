@@ -101,8 +101,70 @@ pub struct FnDecl {
     pub params: Vec<Param>,
     pub returns: Vec<Param>,
     pub body: Block,
+    /// Result-cache policy for this function. Presence maps to an enabled layer cache and is
+    /// rendered as `@cache` (defaults) or `@cache({ ... })` immediately above the declaration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache: Option<FunctionCache>,
     /// Stable identity anchor (the layer id).
     pub anchor: Option<String>,
+}
+
+/// Default namespace used by a bare `@cache` decorator.
+pub const DEFAULT_FUNCTION_CACHE_NAMESPACE: &str = "global";
+/// Default entry lifetime used by a bare `@cache` decorator, in seconds.
+pub const DEFAULT_FUNCTION_CACHE_TTL_SECONDS: u64 = 300;
+
+/// Result-cache settings attached to a FlowScript function.
+///
+/// The language calls `prefix` a namespace because that is the cache-backend concept exposed to
+/// authors. FlowScript defaults to the global namespace with a five-minute lifetime; an explicit
+/// lifetime of zero keeps entries until they are invalidated.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FunctionCache {
+    #[serde(default = "default_function_cache_namespace")]
+    pub namespace: String,
+    #[serde(default = "default_function_cache_ttl_seconds")]
+    pub ttl_seconds: Option<u64>,
+    #[serde(default)]
+    pub scope: FunctionCacheScope,
+}
+
+fn default_function_cache_namespace() -> String {
+    DEFAULT_FUNCTION_CACHE_NAMESPACE.to_string()
+}
+
+fn default_function_cache_ttl_seconds() -> Option<u64> {
+    Some(DEFAULT_FUNCTION_CACHE_TTL_SECONDS)
+}
+
+impl Default for FunctionCache {
+    fn default() -> Self {
+        Self {
+            namespace: default_function_cache_namespace(),
+            ttl_seconds: default_function_cache_ttl_seconds(),
+            scope: FunctionCacheScope::App,
+        }
+    }
+}
+
+/// Who may share a cached function result.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FunctionCacheScope {
+    /// Shared by callers of the app.
+    #[default]
+    App,
+    /// Private to the user who triggered the run.
+    User,
+}
+
+impl FunctionCacheScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::User => "user",
+        }
+    }
 }
 
 /// A named, typed function parameter or return value.

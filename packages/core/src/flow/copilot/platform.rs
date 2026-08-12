@@ -34,9 +34,8 @@ use url::Url;
 
 use super::memory::AssistantMemory;
 use super::public_web::{
-    MAX_ARCHIVE_CALLS_PER_SESSION, MAX_SEARCH_CALLS_PER_SESSION, OpenUrlSessionBudget,
-    WebResearchSession, normalize_public_discovery_url, run_archive_lookup_for_session,
-    run_open_url_for_session, source_id_for_url,
+    WebResearchSession, normalize_public_discovery_url, public_urls_in_user_text,
+    run_archive_lookup_for_session, run_open_url_for_session, source_id_for_url,
 };
 use super::stream::{
     FlowScriptToolCallPreviewTracker, detailed_tool_end_frame, detailed_tool_start_frame,
@@ -58,8 +57,6 @@ use crate::state::FlowLikeState;
 pub const PLATFORM_TOOL_IMAGE_URLS_FIELD: &str = "_flowpilot_image_urls";
 
 const MAX_PLATFORM_TOOL_ROUNDS: usize = 8;
-const MAX_SEARCH_CALLS_PER_ROUND: usize = 5;
-const MAX_ARCHIVE_CALLS_PER_ROUND: usize = 2;
 const MAX_SEARCH_QUERY_CHARS: usize = 512;
 const MAX_SEARCH_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_SEARCH_TITLE_CHARS: usize = 300;
@@ -279,6 +276,12 @@ fn platform_tool_serialization_lane(name: &str, arguments: &Value) -> Option<Str
     // `data_studio_agent` in particular needs no approval and so reads as read-only to the effect
     // classifier, yet two data builds on one app absolutely do contend.
     match name {
+        // App runtimes are independent across apps, while two calls into one app may share state
+        // or trigger conflicting side effects. This makes A/B/C fan-out real without racing one
+        // app against itself; an unresolved target falls into one conservative shared lane.
+        "call_app_chat" | "call_app_event" => {
+            return Some(format!("app-runtime:{}", app()));
+        }
         "flowpilot_board" if is_editing_flowpilot_board_call(name, arguments) => {
             // An unresolved board target may create or adopt the app's first board, so it shares
             // the app's board lane; a named target only contends with edits of that same board.
@@ -479,7 +482,12 @@ impl PlatformCopilot {
             system_prompt.push_str(&memory.prompt_sections(&user_prompt).await);
         }
 
-        let tool_definitions: Vec<_> = platform_loop_tool_specs(memory.is_some())
+        let tool_specs = platform_loop_tool_specs(memory.is_some());
+        let advertised_tool_names: HashSet<String> = tool_specs
+            .iter()
+            .map(|spec| spec.name.to_string())
+            .collect();
+        let tool_definitions: Vec<_> = tool_specs
             .into_iter()
             .map(|spec| spec.to_tool_definition())
             .collect();
@@ -556,10 +564,9 @@ impl PlatformCopilot {
         // agent's own model usage alongside any stats reported by apps it called.
         let mut session_stats = LLMUsageStats::default();
         let mut current_prompt = prompt_message;
-        let mut open_url_budget = OpenUrlSessionBudget::default();
         let web_research_session = Arc::new(WebResearchSession::new(&user_prompt));
-        let mut session_search_calls = 0usize;
-        let mut session_archive_calls = 0usize;
+        let mut local_app_discovery_complete = false;
+        let mut sealed_research_used = false;
 
         // Tool rounds and answer generation have separate budgets. The last iteration deliberately
         // advertises no tools, guaranteeing that a search/open chain cannot consume the final turn
@@ -751,74 +758,8 @@ impl PlatformCopilot {
                 break;
             }
 
-            open_url_budget.begin_round(
-                tool_calls
-                    .iter()
-                    .filter(|tool_call| tool_call.function.name == OPEN_URL_TOOL)
-                    .count(),
-            );
-            let mut round_search_calls = 0usize;
-            let mut round_archive_calls = 0usize;
-            let mut prepared_arguments = Vec::with_capacity(tool_calls.len());
-            for tool_call in &tool_calls {
-                let tool_name = tool_call.function.name.as_str();
-                if is_public_web_tool(tool_name)
-                    && let Some(error) = web_research_session.public_web_phase_error(tool_name)
-                {
-                    prepared_arguments.push(Err(error.to_string()));
-                    continue;
-                }
-                let prepared = match tool_name {
-                    INTERNET_SEARCH_TOOL => {
-                        if round_search_calls >= MAX_SEARCH_CALLS_PER_ROUND {
-                            Err(web_call_budget_error(
-                                tool_name,
-                                "search_round_call_budget_exceeded",
-                                "This research round reached its search-query budget. Inspect the current results and refine only unresolved gaps in the next round.",
-                                true,
-                            ))
-                        } else if session_search_calls >= MAX_SEARCH_CALLS_PER_SESSION {
-                            Err(web_call_budget_error(
-                                tool_name,
-                                "search_session_call_budget_exceeded",
-                                "This assistant run reached its search-query budget. Synthesize the strongest verified evidence already collected and disclose remaining gaps.",
-                                false,
-                            ))
-                        } else {
-                            round_search_calls += 1;
-                            session_search_calls += 1;
-                            Ok(tool_call.function.arguments.clone())
-                        }
-                    }
-                    ARCHIVE_LOOKUP_TOOL => {
-                        if round_archive_calls >= MAX_ARCHIVE_CALLS_PER_ROUND {
-                            Err(web_call_budget_error(
-                                tool_name,
-                                "archive_round_call_budget_exceeded",
-                                "This research round reached its archive-lookup budget. Inspect the returned captures before trying another historical lead.",
-                                true,
-                            ))
-                        } else if session_archive_calls >= MAX_ARCHIVE_CALLS_PER_SESSION {
-                            Err(web_call_budget_error(
-                                tool_name,
-                                "archive_session_call_budget_exceeded",
-                                "This assistant run reached its archive-lookup budget. Use the captures already found or disclose that the historical record remains incomplete.",
-                                false,
-                            ))
-                        } else {
-                            round_archive_calls += 1;
-                            session_archive_calls += 1;
-                            Ok(tool_call.function.arguments.clone())
-                        }
-                    }
-                    _ => open_url_budget
-                        .prepare_call(tool_name, tool_call.function.arguments.clone()),
-                };
-                prepared_arguments.push(prepared);
-            }
-
-            current_history.push(current_prompt.clone());
-
+            // Publish starts before any preparation that may itself run a long isolated
+            // researcher, so the user never sees an unexplained silent stall.
             let mut frame_ids: Vec<String> = Vec::new();
             for tool_call in &tool_calls {
                 plan_step_counter += 1;
@@ -837,6 +778,133 @@ impl PlatformCopilot {
                 }
                 frame_ids.push(frame_id);
             }
+
+            let round_has_research_fallback = tool_calls
+                .iter()
+                .any(|tool_call| tool_call.function.name == RESEARCH_AGENT_TOOL);
+            let round_has_private_call = tool_calls
+                .iter()
+                .any(|tool_call| platform_tool_enters_private_context(&tool_call.function.name));
+            let mut prepared_arguments = Vec::with_capacity(tool_calls.len());
+            for tool_call in &tool_calls {
+                let tool_name = tool_call.function.name.as_str();
+                if !advertised_tool_names.contains(tool_name) {
+                    prepared_arguments.push(Err(json!({
+                        "status": "error",
+                        "tool": tool_name,
+                        "code": "platform_tool_not_advertised",
+                        "retryable": false,
+                        "message": "This tool was not advertised in the active FlowPilot surface and was not executed."
+                    })
+                    .to_string()));
+                    continue;
+                }
+                if is_public_web_tool(tool_name)
+                    && let Some(error) = web_research_session.public_web_phase_error(tool_name)
+                {
+                    prepared_arguments.push(Err(error.to_string()));
+                    continue;
+                }
+                let prepared = match tool_name {
+                    RESEARCH_AGENT_TOOL => {
+                        let output = if round_has_private_call {
+                            json!({
+                                "status": "error",
+                                "code": "sealed_research_must_be_separate_wave",
+                                "retryable": true,
+                                "message": "Run sealed public research in its own assistant wave before any local app, data, memory, file, or interactive call."
+                            })
+                            .to_string()
+                        } else if !local_app_discovery_complete {
+                            json!({
+                                "status": "error",
+                                "code": "local_app_discovery_required",
+                                "retryable": true,
+                                "message": "Call list_apps in an earlier round and wait for a complete inventory before using public-web fallback."
+                            })
+                            .to_string()
+                        } else if sealed_research_used {
+                            json!({
+                                "status": "error",
+                                "code": "sealed_research_already_used",
+                                "retryable": false,
+                                "message": "The sealed public researcher is one-shot for this run; synthesize its findings and disclose remaining gaps."
+                            })
+                            .to_string()
+                        } else {
+                            sealed_research_used = true;
+                            let timeout_secs = find_global_tool_spec(RESEARCH_AGENT_TOOL)
+                                .map(|spec| spec.timeout_secs)
+                                .unwrap_or(900);
+                            match tokio::time::timeout(
+                                Duration::from_secs(timeout_secs),
+                                run_sealed_research_agent(
+                                    completion_client.as_ref(),
+                                    &model_name,
+                                    &user_prompt,
+                                ),
+                            )
+                            .await
+                            {
+                                Ok(Ok((findings, research_stats))) => {
+                                    for call in &research_stats.calls {
+                                        session_stats.accumulate(
+                                            &call.usage,
+                                            Some(call.model.as_str()),
+                                        );
+                                    }
+                                    json!({
+                                        "status": "ok",
+                                        "sealed_to_source_request": true,
+                                        "findings": findings,
+                                    })
+                                    .to_string()
+                                }
+                                Ok(Err(error)) => json!({
+                                    "status": "error",
+                                    "code": "sealed_research_failed",
+                                    "retryable": false,
+                                    "message": error.to_string(),
+                                })
+                                .to_string(),
+                                Err(_) => json!({
+                                    "status": "timeout",
+                                    "code": "sealed_research_timeout",
+                                    "retryable": false,
+                                    "message": format!("The sealed researcher exceeded its {timeout_secs}-second execution limit."),
+                                })
+                                .to_string(),
+                            }
+                        };
+                        // A prepared error is an already-computed tool result in this loop.
+                        Err(output)
+                    }
+                    INTERNET_SEARCH_TOOL | OPEN_URL_TOOL | ARCHIVE_LOOKUP_TOOL => Err(json!({
+                        "status": "error",
+                        "tool": tool_name,
+                        "code": "raw_public_web_tool_unavailable",
+                        "retryable": false,
+                        "message": "Raw public-web tools are unavailable to the root assistant; use the sealed no-argument research_agent fallback."
+                    })
+                    .to_string()),
+                    _ if round_has_research_fallback
+                        && platform_tool_enters_private_context(tool_name) =>
+                    {
+                        Err(json!({
+                            "status": "error",
+                            "tool": tool_name,
+                            "code": "private_call_deferred_for_sealed_research",
+                            "retryable": true,
+                            "message": "This private/local call was not executed because research_agent must run in a separate earlier wave. Retry it after the research result."
+                        })
+                        .to_string())
+                    }
+                    _ => Ok(tool_call.function.arguments.clone()),
+                };
+                prepared_arguments.push(prepared);
+            }
+
+            current_history.push(current_prompt.clone());
 
             // Group the round into serialization lanes, then run the lanes concurrently. A lane
             // preserves the model's declared order internally; laneless (read-only) calls each get
@@ -962,9 +1030,14 @@ impl PlatformCopilot {
             // All calls in one model-authored batch may complete. Once that batch has introduced
             // app, memory, or interactive data, later model rounds lose public-network access so
             // private values cannot be transformed into a new query or outbound URL.
+            if tool_results.iter().any(|(_id, name, output, _images)| {
+                name == "list_apps" && complete_app_inventory_result(output)
+            }) {
+                local_app_discovery_complete = true;
+            }
             let round_entered_private_context = tool_calls
                 .iter()
-                .any(|tool_call| !is_public_web_tool(&tool_call.function.name));
+                .any(|tool_call| platform_tool_enters_private_context(&tool_call.function.name));
             if round_entered_private_context {
                 web_research_session.close_public_web_phase();
             }
@@ -1118,33 +1191,196 @@ fn citation_allowlist_text(opened_urls: &[String]) -> String {
         .join("\n")
 }
 
-fn web_call_budget_error(tool: &str, code: &str, message: &str, retryable: bool) -> String {
-    json!({
-        "status": "error",
-        "tool": tool,
-        "code": code,
-        "retryable": retryable,
-        "error": message,
-    })
-    .to_string()
+fn unverified_citation_urls(text: &str, opened_urls: &[String]) -> Vec<String> {
+    let allowed = opened_urls.iter().cloned().collect::<HashSet<_>>();
+    let mut unverified = public_urls_in_user_text(text)
+        .into_iter()
+        .filter_map(|raw| Url::parse(&raw).ok().map(|url| url.as_str().to_string()))
+        .filter(|url| !allowed.contains(url))
+        .collect::<Vec<_>>();
+    unverified.sort();
+    unverified.dedup();
+    unverified
 }
 
-/// Tools advertised to the rig/Bits platform loop.
-///
-/// The public-web tools moved off the shared orchestrator set and onto the Research scope, which
-/// only the tool-driven backends can host. This loop cannot spawn a nested scope, and it already
-/// implements the search/open/archive handlers inline — so it keeps them directly; dropping them
-/// here would remove web research from the Bits backend outright rather than relocating it. For the
-/// same reason `research_agent` must NOT be advertised: delegating it would open a Research scope
-/// this backend cannot run, and the host's capability notice would come back to the orchestrator
-/// looking exactly like research findings. The prompt variant paired with this set is
-/// [`WebResearchCapability::Inline`](super::assistant::WebResearchCapability).
+/// Tools advertised to the rig/Bits platform loop. The root receives the same sealed
+/// `research_agent` fallback as every other backend; this host executes it in a fresh local
+/// public-only model context. Raw search/open/archive schemas never enter the root context.
 fn platform_loop_tool_specs(memory_enabled: bool) -> Vec<PlatformToolSpec> {
     global_assistant_tool_specs(memory_enabled)
+}
+
+const MAX_SEALED_RESEARCH_ROUNDS: usize = 6;
+
+/// Run public research in a context that can see only the immutable source request and public-web
+/// tools. This is the rig/Bits equivalent of the frontend-managed Research specialist. The root
+/// model cannot supply arguments, history, recalled memory, attachments, or app inventory to this
+/// loop, so local-app discovery cannot be encoded into an outbound query.
+async fn run_sealed_research_agent(
+    completion_client: &(dyn CompletionClientDyn + Send + Sync),
+    model_name: &str,
+    source_user_prompt: &str,
+) -> Result<(String, LLMUsageStats)> {
+    let research_date = format!(
+        "Current UTC date: {}.",
+        chrono::Utc::now().format("%Y-%m-%d")
+    );
+    let research_prompt = crate::copilot::prompts::research_system_prompt(&research_date);
+    let agent = completion_client
+        .agent(model_name)
+        .preamble(&research_prompt)
+        .build();
+    let tools: Vec<_> = public_web_tool_specs()
         .into_iter()
-        .filter(|spec| spec.name != RESEARCH_AGENT_TOOL)
-        .chain(public_web_tool_specs())
-        .collect()
+        .map(|spec| spec.to_tool_definition())
+        .collect();
+    // This sealed child gets a fresh authorization view even when the parent has already called a
+    // local research app. It still receives only the immutable source request, never the parent's
+    // app result, so local-first fallback remains possible without reopening the root context.
+    let web_session = WebResearchSession::new(source_user_prompt);
+    let mut history = Vec::new();
+    let mut current_prompt = rig::message::Message::User {
+        content: OneOrMany::one(UserContent::text(source_user_prompt.to_string())),
+    };
+    let mut research_stats = LLMUsageStats::default();
+
+    for iteration in 0..=MAX_SEALED_RESEARCH_ROUNDS {
+        let tools_for_round = if iteration < MAX_SEALED_RESEARCH_ROUNDS {
+            tools.clone()
+        } else {
+            Vec::new()
+        };
+        let request = agent
+            .completion(current_prompt.clone(), history.clone())
+            .await
+            .map_err(|error| flow_like_types::anyhow!("Sealed research completion error: {error}"))?
+            .tools(tools_for_round);
+        let mut stream = request
+            .stream()
+            .await
+            .map_err(|error| flow_like_types::anyhow!("Sealed research stream error: {error}"))?;
+        let mut response_contents = Vec::new();
+        let mut round_text = String::new();
+        while let Some(item) = stream.next().await {
+            match item.map_err(|error| {
+                flow_like_types::anyhow!("Sealed research stream error: {error}")
+            })? {
+                StreamedAssistantContent::Text(text) => {
+                    round_text.push_str(&text.text);
+                    response_contents.push(AssistantContent::Text(text));
+                }
+                StreamedAssistantContent::ToolCall { tool_call, .. } => {
+                    response_contents.push(AssistantContent::ToolCall(tool_call));
+                }
+                StreamedAssistantContent::Final(response) => {
+                    if let Some(usage) = response.token_usage() {
+                        research_stats.accumulate(&Usage::from_rig(usage), Some(model_name));
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let tool_calls: Vec<_> = response_contents
+            .iter()
+            .filter_map(|content| match content {
+                AssistantContent::ToolCall(call) => Some(call.clone()),
+                _ => None,
+            })
+            .collect();
+        if tool_calls.is_empty() {
+            if round_text.trim().is_empty() {
+                return Err(flow_like_types::anyhow!(
+                    "The sealed researcher returned no synthesis"
+                ));
+            }
+            let unverified = unverified_citation_urls(&round_text, &web_session.opened_urls());
+            if !unverified.is_empty() {
+                return Err(flow_like_types::anyhow!(
+                    "The sealed researcher cited URLs it did not successfully open: {}",
+                    unverified.join(", ")
+                ));
+            }
+            return Ok((round_text, research_stats));
+        }
+        if iteration == MAX_SEALED_RESEARCH_ROUNDS {
+            return Err(flow_like_types::anyhow!(
+                "The sealed researcher exhausted its tool budget without a synthesis"
+            ));
+        }
+
+        // Preserve a valid alternating transcript: the original source request and every later
+        // tool-result prompt must precede the assistant turn that answered it. Without this, the
+        // second research round loses the user's question and later providers may reject orphaned
+        // tool calls/results.
+        history.push(current_prompt.clone());
+        history.push(rig::message::Message::Assistant {
+            id: None,
+            content: OneOrMany::many(response_contents).unwrap_or_else(|_| {
+                OneOrMany::one(AssistantContent::Text(rig::message::Text {
+                    text: String::new(),
+                    additional_params: None,
+                }))
+            }),
+        });
+
+        let mut results = Vec::with_capacity(tool_calls.len());
+        for call in tool_calls {
+            let name = call.function.name.as_str();
+            let arguments = call.function.arguments;
+            let mut value = match name {
+                INTERNET_SEARCH_TOOL => {
+                    if web_session.reserve_search_call() {
+                        run_internet_search(&arguments).await
+                    } else {
+                        json!({
+                            "status": "error",
+                            "tool": name,
+                            "code": "search_session_call_budget_exceeded",
+                            "retryable": false,
+                        })
+                    }
+                }
+                OPEN_URL_TOOL => match web_session.prepare_open_url_call(arguments) {
+                    Ok(arguments) => run_open_url_for_session(&arguments, &web_session).await,
+                    Err(output) => serde_json::from_str(&output).unwrap_or_else(
+                        |_| json!({ "status": "error", "tool": name, "error": output }),
+                    ),
+                },
+                ARCHIVE_LOOKUP_TOOL => {
+                    if web_session.reserve_archive_call() {
+                        run_archive_lookup_for_session(&arguments, &web_session).await
+                    } else {
+                        json!({
+                            "status": "error",
+                            "tool": name,
+                            "code": "archive_session_call_budget_exceeded",
+                            "retryable": false,
+                        })
+                    }
+                }
+                _ => json!({
+                    "status": "error",
+                    "tool": name,
+                    "code": "sealed_research_tool_not_allowed",
+                }),
+            };
+            web_session.register_and_decorate_tool_result(name, &mut value);
+            results.push(UserContent::ToolResult(RigToolResult {
+                id: call.id,
+                call_id: None,
+                content: OneOrMany::one(ToolResultContent::text(value.to_string())),
+            }));
+        }
+        current_prompt = rig::message::Message::User {
+            content: OneOrMany::many(results)
+                .unwrap_or_else(|_| OneOrMany::one(UserContent::text(""))),
+        };
+    }
+
+    Err(flow_like_types::anyhow!(
+        "The sealed researcher ended unexpectedly"
+    ))
 }
 
 fn is_public_web_tool(name: &str) -> bool {
@@ -1152,6 +1388,22 @@ fn is_public_web_tool(name: &str) -> bool {
         name,
         INTERNET_SEARCH_TOOL | OPEN_URL_TOOL | ARCHIVE_LOOKUP_TOOL
     )
+}
+
+/// Root-context tools whose results can contain private/user-controlled data. App inventory is a
+/// routing exception only because the root has no raw web tools and the sealed researcher accepts
+/// no model text. Its metadata therefore cannot cross the outbound boundary.
+fn platform_tool_enters_private_context(name: &str) -> bool {
+    !is_public_web_tool(name) && !matches!(name, "list_apps" | RESEARCH_AGENT_TOOL)
+}
+
+fn complete_app_inventory_result(output: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return false;
+    };
+    value.get("status").and_then(Value::as_str) == Some("ok")
+        && value.get("complete").and_then(Value::as_bool) == Some(true)
+        && value.get("truncated").and_then(Value::as_bool) != Some(true)
 }
 
 /// Dispatch a tool call: memory and safe public-page reads run locally; everything else goes to the
@@ -1662,19 +1914,51 @@ fn search_query_contains_likely_secret(query: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// This loop researches the web itself. Advertising the delegating specialist as well makes the
-    /// model hand every web question to a Research scope this backend cannot start.
+    /// Raw public-web schemas must stay out of the root context. The sealed no-argument fallback
+    /// runs an isolated local research loop instead.
     #[test]
-    fn platform_loop_holds_web_tools_and_hides_the_research_specialist() {
+    fn platform_loop_exposes_only_the_sealed_research_fallback() {
         let names: Vec<&str> = platform_loop_tool_specs(true)
             .iter()
             .map(|spec| spec.name)
             .collect();
-        assert!(!names.contains(&RESEARCH_AGENT_TOOL));
-        assert!(names.contains(&INTERNET_SEARCH_TOOL));
-        assert!(names.contains(&OPEN_URL_TOOL));
-        assert!(names.contains(&ARCHIVE_LOOKUP_TOOL));
+        assert!(names.contains(&RESEARCH_AGENT_TOOL));
+        assert!(!names.contains(&INTERNET_SEARCH_TOOL));
+        assert!(!names.contains(&OPEN_URL_TOOL));
+        assert!(!names.contains(&ARCHIVE_LOOKUP_TOOL));
         assert!(names.contains(&MEMORY_SEARCH_TOOL));
+    }
+
+    #[test]
+    fn public_fallback_requires_a_complete_app_inventory() {
+        assert!(complete_app_inventory_result(
+            &json!({ "status": "ok", "complete": true, "apps": [] }).to_string()
+        ));
+        assert!(!complete_app_inventory_result(
+            &json!({ "status": "ok", "complete": false, "apps": [] }).to_string()
+        ));
+        assert!(!complete_app_inventory_result(
+            &json!({ "status": "ok", "apps": [] }).to_string()
+        ));
+        assert!(!complete_app_inventory_result(
+            &json!({ "status": "ok", "truncated": true, "apps": [] }).to_string()
+        ));
+        assert!(!complete_app_inventory_result("not json"));
+    }
+
+    #[test]
+    fn sealed_research_and_private_tools_are_detected_as_separate_waves() {
+        assert!(!platform_tool_enters_private_context("list_apps"));
+        assert!(!platform_tool_enters_private_context(RESEARCH_AGENT_TOOL));
+        for name in [
+            "describe_app_interface",
+            "call_app_chat",
+            "call_app_event",
+            "data_studio_agent",
+            MEMORY_SEARCH_TOOL,
+        ] {
+            assert!(platform_tool_enters_private_context(name), "{name}");
+        }
     }
 
     #[test]
@@ -1690,6 +1974,21 @@ mod tests {
                 "https://z.example/source".to_string(),
             ]),
             "- https://a.example/source\n- https://z.example/source"
+        );
+    }
+
+    #[test]
+    fn sealed_research_rejects_urls_outside_the_opened_allowlist() {
+        let opened = vec!["https://example.com/opened".to_string()];
+        assert!(
+            unverified_citation_urls("Use [this](https://example.com/opened).", &opened).is_empty()
+        );
+        assert_eq!(
+            unverified_citation_urls(
+                "Unsupported [claim](https://example.com/search-only).",
+                &opened
+            ),
+            vec!["https://example.com/search-only".to_string()]
         );
     }
 
@@ -1816,6 +2115,32 @@ mod tests {
         assert!(platform_tool_serialization_lane("list_apps", &list_args).is_none());
         assert!(
             platform_tool_serialization_lane("describe_app_interface", &describe_args).is_none()
+        );
+    }
+
+    #[test]
+    fn app_runtime_lanes_parallelize_apps_but_serialize_each_app() {
+        let app_a_chat = json!({ "app_id": "app-a", "message": "one" });
+        let app_a_event = json!({ "app_id": "app-a", "event_id": "event" });
+        let app_b_chat = json!({ "app_id": "app-b", "message": "two" });
+        let unresolved_chat = json!({ "message": "unknown" });
+        let unresolved_event = json!({ "event_id": "event" });
+
+        assert_eq!(
+            platform_tool_serialization_lane("call_app_chat", &app_a_chat),
+            platform_tool_serialization_lane("call_app_event", &app_a_event)
+        );
+        assert_ne!(
+            platform_tool_serialization_lane("call_app_chat", &app_a_chat),
+            platform_tool_serialization_lane("call_app_chat", &app_b_chat)
+        );
+        assert_eq!(
+            platform_tool_serialization_lane("call_app_chat", &unresolved_chat),
+            Some("app-runtime:*".to_string())
+        );
+        assert_eq!(
+            platform_tool_serialization_lane("call_app_chat", &unresolved_chat),
+            platform_tool_serialization_lane("call_app_event", &unresolved_event)
         );
     }
 

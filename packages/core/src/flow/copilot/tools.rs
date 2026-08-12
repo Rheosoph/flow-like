@@ -2076,9 +2076,13 @@ impl Tool for GetCurrentFlowScriptTool {
 
 Use this once before starting a new retained draft for an existing board. The returned document is
 the source you must edit and submit in full to `write_flowscript`; preserve all `//@n:<id>` anchors
-on statements you keep. After a write/check diagnostic, do NOT read the unchanged live board again:
-continue from the retained source and revision with patch_flowscript/check_flowscript/
-commit_flowscript."#
+and every `@cache` decorator on functions you keep. Cache settings use
+`@cache({ namespace: "...", ttlSeconds: 3600, scope: "user" })`; bare `@cache` defaults to the
+`global` namespace, a 300-second lifetime, and app scope. Use `ttlSeconds: 0` for no expiry.
+If existing context reports `ttl_seconds: null`, it is a permanent cache; preserve it as
+explicit `ttlSeconds: 0` rather than applying the new omission default.
+After a write/check diagnostic, do NOT read the unchanged live board again: continue from the
+retained source and revision with patch_flowscript/check_flowscript/commit_flowscript."#
                 .to_string(),
             parameters: json!({
                 "type": "object",
@@ -3315,6 +3319,12 @@ and catalog declarations, then produces minimal changes:
   resolvable FlowScript references/nested calls.
 - A new unanchored `function name(...) { ... }` declaration → creates a Function layer, places
   body nodes inside it, creates boundary pins from params/returns, and wires `return` values.
+- `@cache({ namespace: "...", ttlSeconds: 3600, scope: "user" })` immediately above a function
+  configures its result cache; bare `@cache` uses the `global` namespace, a 300-second lifetime,
+  and app scope. Set `ttlSeconds: 0` explicitly for a permanent entry. A hit skips the entire
+  function body and its side effects, so cache only input-determined functions.
+- Existing context may report `ttl_seconds: null` for a permanent cache. Preserve that as
+  explicit `ttlSeconds: 0`; omission on newly authored cache settings means 300 seconds.
 
 RULES:
 - PRESERVE every `//@n:<id>` anchor comment on statements you keep, exactly as given.
@@ -3483,7 +3493,7 @@ impl Tool for WriteFlowScriptTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Start a retained code-first FlowScript draft. Write the complete source document; the host binds it to the immutable user request, parses it into internal BoardAst, returns structured source diagnostics, and preserves the exact text for inline preview and later patches. When a retained draft already exists for this same request (a follow-up repair run), do NOT start a new draft: reuse the SAME draft_id and exact expected_revision and repair it in place. Function returns accept node outputs, params, literals, and mutable `let` bindings (one return value per declared return pin). A `let` reassigned across if/for promotes to a board variable with its initializer preserved; never reassign a `const` inside a branch arm — declare it with `let`. Catalog-related diagnostics automatically include exact live signatures or bounded candidates in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Defaults to additive scope. Use replace mode only for an intentional complete-board document."
+            description: "Start a retained code-first FlowScript draft. Write the complete source document; the host binds it to the immutable user request, parses it into internal BoardAst, returns structured source diagnostics, and preserves the exact text for inline preview and later patches. When a retained draft already exists for this same request (a follow-up repair run), do NOT start a new draft: reuse the SAME draft_id and exact expected_revision and repair it in place. Preserve existing function cache decorators. To cache an input-determined function, place `@cache({ namespace: \"...\", ttlSeconds: 3600, scope: \"user\" })` immediately above it; bare `@cache` defaults to the `global` namespace, 300 seconds, and app scope, while `ttlSeconds: 0` is permanent. A cache hit skips the entire body and all side effects. Function returns accept node outputs, params, literals, and mutable `let` bindings (one return value per declared return pin). A `let` reassigned across if/for promotes to a board variable with its initializer preserved; never reassign a `const` inside a branch arm — declare it with `let`. Catalog-related diagnostics automatically include exact live signatures or bounded candidates in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Defaults to additive scope. Use replace mode only for an intentional complete-board document."
                 .to_string(),
             parameters: serde_json::to_value(schema_for!(WriteFlowScriptArgs))
                 .unwrap_or_else(|_| json!({ "type": "object" })),
@@ -3515,7 +3525,7 @@ impl Tool for PatchFlowScriptTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Patch one exact, uniquely occurring text range in a retained FlowScript draft using revision compare-and-swap. This is the way to resume a retained draft in a follow-up repair run: keep its SAME draft_id and exact expected_revision instead of rewriting from scratch. The full updated source and structured diagnostics are returned inline. Function returns accept node outputs, params, literals, and mutable `let` bindings; a `let` reassigned across if/for promotes to a board variable — never reassign a `const` inside a branch arm. Catalog-related diagnostics automatically include repair signatures in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Ambiguous, stale, replayed, or scope-collapsing patches do not mutate the draft."
+            description: "Patch one exact, uniquely occurring text range in a retained FlowScript draft using revision compare-and-swap. This is the way to resume a retained draft in a follow-up repair run: keep its SAME draft_id and exact expected_revision instead of rewriting from scratch. The full updated source and structured diagnostics are returned inline. Preserve an existing function `@cache` decorator during unrelated repairs; the canonical configured form is `@cache({ namespace: \"...\", ttlSeconds: 3600, scope: \"user\" })`. Bare `@cache` defaults to the `global` namespace, 300 seconds, and app scope; `ttlSeconds: 0` is permanent. A cache hit skips the body and its side effects. Function returns accept node outputs, params, literals, and mutable `let` bindings; a `let` reassigned across if/for promotes to a board variable — never reassign a `const` inside a branch arm. Catalog-related diagnostics automatically include repair signatures in fix.catalog_declarations and structural context in fix.companion_declarations; use those before another lookup. Ambiguous, stale, replayed, or scope-collapsing patches do not mutate the draft."
                 .to_string(),
             parameters: serde_json::to_value(schema_for!(PatchFlowScriptArgs))
                 .unwrap_or_else(|_| json!({ "type": "object" })),
@@ -3630,14 +3640,30 @@ pub fn build_list_board_nodes_output(graph_context: &GraphContext) -> String {
         lines.push(format!("\nLayers ({}):", graph_context.layers.len()));
         for layer in &graph_context.layers {
             let parent = layer.parent_id.as_deref().unwrap_or("root");
+            let cache = layer.cache.as_ref().map_or_else(String::new, |cache| {
+                let ttl = cache
+                    .ttl_seconds
+                    .filter(|seconds| *seconds > 0)
+                    .map(|seconds| format!("{seconds}s"))
+                    .unwrap_or_else(|| "no-expiry".to_string());
+                format!(
+                    " | cache:{} namespace:{:?} ttl:{} scope:{}",
+                    if cache.enabled { "on" } else { "off" },
+                    cache.namespace,
+                    ttl,
+                    cache.scope,
+                )
+            });
             lines.push(format!(
-                "- {} | {} | parent:{} | nodes:{} | pos:({},{})",
+                "- {} | {} | type:{} | parent:{} | nodes:{} | pos:({},{}){}",
                 layer.id,
                 layer.name,
+                layer.layer_type,
                 parent,
                 layer.node_ids.len(),
                 layer.position.0,
                 layer.position.1,
+                cache,
             ));
         }
     }
@@ -3979,6 +4005,125 @@ mod tests {
                 })
                 .collect()
         }
+    }
+
+    #[tokio::test]
+    async fn active_flowscript_tools_document_function_cache_decorators() {
+        let board = Arc::new(Board::new_detached(
+            Some("cache-tool-docs".to_string()),
+            flow_like_storage::Path::default(),
+        ));
+        let provider: Arc<dyn CatalogProvider> = Arc::new(BatchDispatchProvider::default());
+        let store = Arc::new(FlowIrDraftStore::new());
+        let acceptance_binding =
+            store.bind_request_acceptance_contract(&board.id, "cache calculatePricing");
+
+        let current_description = GetCurrentFlowScriptTool {
+            board: board.clone(),
+        }
+        .definition(String::new())
+        .await
+        .description;
+        let write_description = WriteFlowScriptTool {
+            board: board.clone(),
+            provider: provider.clone(),
+            store: store.clone(),
+            acceptance_binding: acceptance_binding.clone(),
+        }
+        .definition(String::new())
+        .await
+        .description;
+        let patch_description = PatchFlowScriptTool {
+            board,
+            provider,
+            store,
+            acceptance_binding,
+        }
+        .definition(String::new())
+        .await
+        .description;
+
+        for description in [
+            current_description.as_str(),
+            write_description.as_str(),
+            patch_description.as_str(),
+        ] {
+            assert!(description.contains("@cache"));
+            assert!(description.contains("namespace"));
+            assert!(description.contains("ttlSeconds"));
+            assert!(description.contains("scope"));
+            assert!(description.contains("global"));
+            assert!(description.contains("300"));
+            assert!(description.contains("ttlSeconds: 0"));
+        }
+        assert!(current_description.contains("ttl_seconds: null"));
+        assert!(write_description.contains("skips the entire body and all side effects"));
+    }
+
+    #[test]
+    fn board_listing_exposes_default_function_cache_settings() {
+        use super::super::context::{LayerCacheContext, LayerContext};
+
+        let graph = GraphContext {
+            nodes: vec![],
+            edges: vec![],
+            layers: vec![LayerContext {
+                id: "pricing-layer".to_string(),
+                name: "calculatePricing".to_string(),
+                layer_type: "Function".to_string(),
+                parent_id: None,
+                node_ids: vec![],
+                position: (10, 20),
+                inputs: vec![],
+                outputs: vec![],
+                cache: Some(LayerCacheContext {
+                    enabled: true,
+                    namespace: "global".to_string(),
+                    ttl_seconds: Some(300),
+                    scope: "app".to_string(),
+                }),
+            }],
+            variables: vec![],
+            selected_nodes: vec![],
+        };
+
+        let listing = build_list_board_nodes_output(&graph);
+        assert!(listing.contains("cache:on"));
+        assert!(listing.contains("namespace:\"global\""));
+        assert!(listing.contains("ttl:300s"));
+        assert!(listing.contains("scope:app"));
+    }
+
+    #[test]
+    fn board_listing_reports_zero_cache_ttl_as_no_expiry() {
+        use super::super::context::{LayerCacheContext, LayerContext};
+
+        let graph = GraphContext {
+            nodes: vec![],
+            edges: vec![],
+            layers: vec![LayerContext {
+                id: "pricing-layer".to_string(),
+                name: "calculatePricing".to_string(),
+                layer_type: "Function".to_string(),
+                parent_id: None,
+                node_ids: vec![],
+                position: (10, 20),
+                inputs: vec![],
+                outputs: vec![],
+                cache: Some(LayerCacheContext {
+                    enabled: true,
+                    namespace: "pricing".to_string(),
+                    ttl_seconds: Some(0),
+                    scope: "app".to_string(),
+                }),
+            }],
+            variables: vec![],
+            selected_nodes: vec![],
+        };
+
+        let listing = build_list_board_nodes_output(&graph);
+        assert!(listing.contains("ttl:no-expiry"));
+        assert!(!listing.contains("ttl:0s"));
     }
 
     #[test]

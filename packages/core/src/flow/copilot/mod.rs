@@ -31,8 +31,8 @@ pub use assistant::{
     run_platform_chat,
 };
 pub use context::{
-    EdgeContext, GraphContext, LayerContext, NodeContext, PinContext, VariableContext,
-    prepare_context,
+    EdgeContext, GraphContext, LayerCacheContext, LayerContext, NodeContext, PinContext,
+    VariableContext, prepare_context,
 };
 pub use evaluation::{
     FLOWPILOT_GENERATION_EVALUATION_VERSION, FlowPilotDurationMetric, FlowPilotEvaluationRunStatus,
@@ -42,11 +42,11 @@ pub use evaluation::{
 pub use ir::{
     FLOW_IR_VERSION, FlowCapabilityCandidate, FlowCapabilityPlan, FlowCapabilityPlanRequest,
     FlowCapabilityRequirement, FlowCapabilityResolution, FlowIrArg, FlowIrCompileResult,
-    FlowIrContainer, FlowIrDataType, FlowIrDiagnostic, FlowIrExecutionArm, FlowIrInterface,
-    FlowIrInterfaceField, FlowIrLiteral, FlowIrModule, FlowIrObjectField, FlowIrParam,
-    FlowIrProgram, FlowIrStep, FlowIrType, FlowIrValue, FlowIrVariable, FlowModuleEstimate,
-    FlowModuleKind, FlowPinRequirement, compile_flow_ir, plan_flow_capabilities,
-    validate_flow_capability_usage,
+    FlowIrContainer, FlowIrDataType, FlowIrDiagnostic, FlowIrExecutionArm, FlowIrFunctionCache,
+    FlowIrFunctionCacheScope, FlowIrInterface, FlowIrInterfaceField, FlowIrLiteral, FlowIrModule,
+    FlowIrObjectField, FlowIrParam, FlowIrProgram, FlowIrStep, FlowIrType, FlowIrValue,
+    FlowIrVariable, FlowModuleEstimate, FlowModuleKind, FlowPinRequirement, compile_flow_ir,
+    plan_flow_capabilities, validate_flow_capability_usage,
 };
 pub use ir_tools::{
     BeginFlowIrDraftArgs, BeginFlowIrDraftTool, BoardScopePlan, BoundBeginFlowIrDraftTool,

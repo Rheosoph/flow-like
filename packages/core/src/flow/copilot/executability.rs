@@ -931,6 +931,7 @@ fn project_graph(
             | BoardCommand::CreateLayer { .. }
             | BoardCommand::CreateVariable { .. }
             | BoardCommand::MoveNode { .. }
+            | BoardCommand::UpdateLayerCache { .. }
             | BoardCommand::SetNodeFunctionRefs { .. }
             | BoardCommand::AddComment { .. }
             | BoardCommand::RemoveComment { .. } => {}
@@ -1904,6 +1905,7 @@ mod tests {
             position: None,
             color: None,
             target_layer: None,
+            cache: None,
             summary: None,
         };
         let mut commands = vec![
@@ -1957,6 +1959,7 @@ mod tests {
             position: None,
             color: None,
             target_layer: None,
+            cache: None,
             summary: None,
         }
     }

@@ -1,3 +1,5 @@
+import type { ILayerCache } from "./board";
+
 /// Agent types for the multi-agent system
 export type AgentType = "Explain" | "Edit";
 
@@ -56,7 +58,6 @@ export interface PlaceholderPinDef {
 	enforce_schema?: boolean;
 }
 
-/// Commands that can be executed on the board
 export type BoardCommand =
 	| {
 			command_type: "AddNode";
@@ -191,9 +192,18 @@ export type BoardCommand =
 			color?: string;
 			node_ids?: string[];
 			pins?: PlaceholderPinDef[];
+			/** Result-cache settings for a Function layer. */
+			cache?: ILayerCache | null;
 			position?: { x: number; y: number };
 			/** Parent layer ID for nesting. If undefined, creates at current layer. */
 			target_layer?: string;
+			summary?: string;
+	  }
+	| {
+			command_type: "UpdateLayerCache";
+			layer_id: string;
+			/** New cache settings, or explicit null to remove caching. */
+			cache: ILayerCache | null;
 			summary?: string;
 	  }
 	| {

@@ -13,8 +13,8 @@ use std::sync::Condvar;
 
 use flow_like_ast::model::{
     Arg as AstArg, Block as AstBlock, BoardAst, Call as AstCall, EventBlock as AstEventBlock,
-    Expr as AstExpr, FnDecl as AstFnDecl, Literal as AstLiteral, Param as AstParam,
-    Stmt as AstStmt,
+    Expr as AstExpr, FnDecl as AstFnDecl, FunctionCacheScope as AstFunctionCacheScope,
+    Literal as AstLiteral, Param as AstParam, Stmt as AstStmt,
 };
 use flow_like_types::create_id;
 use rig::{completion::ToolDefinition, tool::Tool};
@@ -24,12 +24,12 @@ use serde_json::json;
 
 use super::ir::{
     FlowCapabilityPlan, FlowCapabilityPlanRequest, FlowIrArg, FlowIrCompileResult, FlowIrContainer,
-    FlowIrDataType, FlowIrDiagnostic, FlowIrInterface, FlowIrLiteral, FlowIrModule,
-    FlowIrObjectField, FlowIrParam, FlowIrProgram, FlowIrStep, FlowIrType, FlowIrValue,
-    FlowIrVariable, FlowModuleKind, MAX_FLOW_IR_CAPABILITY_REQUIREMENTS,
-    MAX_FLOW_IR_PIN_REQUIREMENTS_PER_DIRECTION, ReachableFlowIrOccurrence, compile_flow_ir,
-    plan_flow_capabilities, reachable_flow_ir_occurrences, validate_flow_capability_usage,
-    validate_ir_resource_limits,
+    FlowIrDataType, FlowIrDiagnostic, FlowIrFunctionCache, FlowIrFunctionCacheScope,
+    FlowIrInterface, FlowIrLiteral, FlowIrModule, FlowIrObjectField, FlowIrParam, FlowIrProgram,
+    FlowIrStep, FlowIrType, FlowIrValue, FlowIrVariable, FlowModuleKind,
+    MAX_FLOW_IR_CAPABILITY_REQUIREMENTS, MAX_FLOW_IR_PIN_REQUIREMENTS_PER_DIRECTION,
+    ReachableFlowIrOccurrence, compile_flow_ir, plan_flow_capabilities,
+    reachable_flow_ir_occurrences, validate_flow_capability_usage, validate_ir_resource_limits,
 };
 use super::provider::{CatalogProvider, metadata_to_signature};
 use super::tools::{
@@ -173,6 +173,11 @@ pub fn typed_ir_schema_hint() -> serde_json::Value {
             "function": "helper",
             "args": []
         },
+        "function_cache": {
+            "namespace": "global",
+            "ttl_seconds": 300,
+            "scope": "app"
+        },
         "if_step": {
             "kind": "if",
             "id": "branch",
@@ -193,6 +198,7 @@ pub fn typed_ir_schema_hint() -> serde_json::Value {
             "use canonical type objects with boolean and integer",
             "references use kind=ref; function calls use kind=call_function",
             "if bodies use then_steps and else_steps",
+            "an empty function cache object defaults to namespace=global, ttl_seconds=300, scope=app; ttl_seconds=0 is permanent",
             "every required capability must select exact_node_type from a selection_required candidate before feasible can be true"
         ]
     })
@@ -4994,6 +5000,14 @@ impl<'a> FlowScriptAcceptanceProjection<'a> {
             name: function.name.clone(),
             params: project_ast_params(&function.params),
             returns: project_ast_params(&function.returns),
+            cache: function.cache.as_ref().map(|cache| FlowIrFunctionCache {
+                namespace: cache.namespace.clone(),
+                ttl_seconds: cache.ttl_seconds,
+                scope: match cache.scope {
+                    AstFunctionCacheScope::App => FlowIrFunctionCacheScope::App,
+                    AstFunctionCacheScope::User => FlowIrFunctionCacheScope::User,
+                },
+            }),
             steps,
             anchor: function.anchor.clone(),
         }
@@ -10407,7 +10421,7 @@ impl Tool for UpsertFlowIrModuleTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Add or replace one typed function/Event module, compile the whole draft, and retain the previous revision if diagnostics worsen or executable scope shrinks without explicit user authorization."
+            description: "Add or replace one typed function/Event module, compile the whole draft, and retain the previous revision if diagnostics worsen or executable scope shrinks without explicit user authorization. Function modules accept an optional cache object; an empty object defaults to namespace `global`, ttl_seconds 300, and app scope, while ttl_seconds 0 is permanent. A cache hit skips the entire function body and its side effects, so cache only input-determined functions."
                 .to_string(),
             parameters: json_schema::<UpsertFlowIrModuleArgs>(),
         }
@@ -10625,6 +10639,41 @@ mod tests {
             payload["schema_hint"]["capability_selection"]["selected"]["exact_node_type"],
             "utils_hash_sha256"
         );
+    }
+
+    #[test]
+    fn typed_function_cache_is_exposed_by_the_upsert_schema() {
+        let schema = json_schema::<UpsertFlowIrModuleArgs>();
+        let schema = serde_json::to_string(&schema).expect("serialize upsert schema");
+        for field in ["cache", "namespace", "ttl_seconds", "scope"] {
+            assert!(schema.contains(field), "schema omits {field}: {schema}");
+        }
+        assert!(
+            schema.contains("global"),
+            "schema omits namespace default: {schema}"
+        );
+        assert!(schema.contains("300"), "schema omits TTL default: {schema}");
+    }
+
+    #[test]
+    fn flowscript_function_cache_projects_into_typed_ir() {
+        let ast = flow_like_ast::parse(
+            r#"@cache({ namespace: "pricing", ttlSeconds: 3600, scope: "user" })
+function calculatePricing() {
+}
+"#,
+        )
+        .expect("cached function source parses");
+        let projected = FlowScriptAcceptanceProjection::new(&ast, &[]).project(&ast);
+        let FlowIrModule::Function {
+            cache: Some(cache), ..
+        } = &projected.modules[0]
+        else {
+            panic!("expected projected cached function")
+        };
+        assert_eq!(cache.namespace, "pricing");
+        assert_eq!(cache.ttl_seconds, Some(3_600));
+        assert_eq!(cache.scope, FlowIrFunctionCacheScope::User);
     }
 
     fn pin(name: &str, data_type: &str) -> PinMetadata {
@@ -13289,6 +13338,7 @@ eventsSimple() {
             name: "notifySlack".to_string(),
             params: Vec::new(),
             returns: Vec::new(),
+            cache: None,
             steps: acceptance_program().modules[0].steps()[1..].to_vec(),
             anchor: None,
         };
@@ -14219,6 +14269,7 @@ eventsSimple() {
             name: "reviewLoop".to_string(),
             params: Vec::new(),
             returns: Vec::new(),
+            cache: None,
             steps: vec![
                 FlowIrStep::If {
                     id: "decision".to_string(),
@@ -14327,6 +14378,7 @@ eventsSimple() {
             name: "eventsSimple".to_string(),
             params: Vec::new(),
             returns: Vec::new(),
+            cache: None,
             steps: vec![FlowIrStep::Node {
                 id: "message".to_string(),
                 node_type: "string_format".to_string(),

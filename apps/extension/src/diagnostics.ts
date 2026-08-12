@@ -15,6 +15,54 @@ const CONTROL_NAMES = new Set([
 	"interface",
 ]);
 
+export interface DecoratorValidationIssue {
+	readonly message: string;
+	readonly code: "unknown-decorator" | "decorator-arg";
+}
+
+/** Validate a decorator argument captured with its surrounding parentheses. */
+export function validateDecoratorArgument(
+	name: string,
+	argGroup: string | undefined,
+): DecoratorValidationIssue | undefined {
+	const def = getDecorator(name);
+	if (!def) {
+		return {
+			message: `Unknown decorator '@${name}'.`,
+			code: "unknown-decorator",
+		};
+	}
+
+	const hasArg = argGroup !== undefined;
+	switch (def.argumentKind) {
+		case "required-string":
+			return hasArg
+				? undefined
+				: {
+						message: `Decorator '@${name}' requires a string argument, e.g. @${name}("…").`,
+						code: "decorator-arg",
+					};
+		case "none":
+			return hasArg
+				? {
+						message: `Decorator '@${name}' does not take an argument.`,
+						code: "decorator-arg",
+					}
+				: undefined;
+		case "optional-cache-settings": {
+			const argument = argGroup?.slice(1, -1).trim();
+			return argument === undefined ||
+				(argument.startsWith("{") && argument.endsWith("}"))
+				? undefined
+				: {
+						message:
+							'Decorator \'@cache\' takes an optional settings object, e.g. @cache({ namespace: "global", ttlSeconds: 300, scope: "user" }). Use ttlSeconds: 0 for no expiry.',
+						code: "decorator-arg",
+					};
+		}
+	}
+}
+
 export class FlowLinter {
 	private readonly collection: vscode.DiagnosticCollection;
 
@@ -68,31 +116,9 @@ export class FlowLinter {
 				new vscode.Position(line, nameStart),
 				new vscode.Position(line, nameStart + name.length),
 			);
-			const def = getDecorator(name);
-			if (!def) {
-				this.pushWarning(
-					range,
-					`Unknown decorator '@${name}'.`,
-					"unknown-decorator",
-					diagnostics,
-				);
-				continue;
-			}
-			const hasArg = argGroup !== undefined;
-			if (def.hasArg && !hasArg) {
-				this.pushWarning(
-					range,
-					`Decorator '@${name}' requires a string argument, e.g. @${name}("…").`,
-					"decorator-arg",
-					diagnostics,
-				);
-			} else if (!def.hasArg && hasArg) {
-				this.pushWarning(
-					range,
-					`Decorator '@${name}' does not take an argument.`,
-					"decorator-arg",
-					diagnostics,
-				);
+			const issue = validateDecoratorArgument(name, argGroup);
+			if (issue) {
+				this.pushWarning(range, issue.message, issue.code, diagnostics);
 			}
 		}
 	}

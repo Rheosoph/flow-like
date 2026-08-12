@@ -15,6 +15,12 @@ export interface IGlobalChatSession extends ISession {
 	boardId?: string;
 	/** Conversation scope: platform-wide ("global"), board copilot ("board"), or UI builder ("ui"). */
 	mode?: "global" | "board" | "ui";
+	/**
+	 * Epoch millis the user pinned this conversation; absent means unpinned. A timestamp rather
+	 * than a boolean because booleans are not valid IndexedDB keys — `pinned` would index nothing —
+	 * and it gives pinned rows a stable order for free.
+	 */
+	pinnedAt?: number;
 }
 
 /**
@@ -34,6 +40,11 @@ globalChatDb.version(1).stores({
 
 globalChatDb.version(2).stores({
 	sessions: "id, updatedAt, boardId, mode",
+	messages: "id, sessionId, timestamp",
+});
+
+globalChatDb.version(3).stores({
+	sessions: "id, updatedAt, boardId, mode, pinnedAt",
 	messages: "id, sessionId, timestamp",
 });
 

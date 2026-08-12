@@ -146,9 +146,11 @@ impl LayerCache {
         self.enabled
     }
 
-    /// The TTL handed to the cache backend, with `0` normalized to "never expires".
+    /// The TTL handed to the cache backend. Layer settings define both omission and `0` as
+    /// "never expires", so normalize both to explicit `Some(0)`. At the remote cache boundary,
+    /// `None` instead means "use the deployment default" and would violate that layer contract.
     pub fn ttl(&self) -> Option<u64> {
-        self.ttl_seconds.filter(|ttl| *ttl > 0)
+        Some(self.ttl_seconds.unwrap_or(0))
     }
 }
 

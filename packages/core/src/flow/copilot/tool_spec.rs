@@ -21,8 +21,9 @@ pub const OPEN_URL_TOOL: &str = "open_url";
 pub const ARCHIVE_LOOKUP_TOOL: &str = "archive_lookup";
 pub const MEMORY_STORE_TOOL: &str = "_memory_store";
 pub const MEMORY_SEARCH_TOOL: &str = "_memory_search";
-/// Delegating web-research tool. Only backends that can host the nested `Research` scope may
-/// advertise it; the rig/Bits loop holds [`public_web_tool_specs`] directly instead.
+/// Sealed public-web fallback. Tool-driven backends delegate it to the nested `Research` scope;
+/// the rig/Bits loop runs an equivalent isolated researcher locally. It deliberately accepts no
+/// model-authored text: the host binds it to the immutable top-level user request.
 pub const RESEARCH_AGENT_TOOL: &str = "research_agent";
 
 /// The externally observable effect of a platform tool call. This is deliberately independent of
@@ -360,11 +361,25 @@ fn flowpilot_widget_message(args: &Value) -> String {
 
 fn call_app_chat_message(args: &Value) -> String {
     let app_id = spec_arg_str(args, "app_id", "appId");
-    if app_id.is_empty() {
+    let mut message = if app_id.is_empty() {
         "FlowPilot wants to message an app's chat.".to_string()
     } else {
         format!("FlowPilot wants to message the chat of app '{app_id}'.")
+    };
+    let files: Vec<&str> = args
+        .get("forward_files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .collect();
+    if files.is_empty() {
+        message.push_str(" No attachments will be forwarded.");
+    } else {
+        message.push_str(&format!(" Forward attachments: {}.", files.join(", ")));
     }
+    message
 }
 
 fn graph_overlay_message(args: &Value) -> String {
@@ -680,10 +695,15 @@ pub fn global_assistant_tool_specs(memory_enabled: bool) -> Vec<PlatformToolSpec
         PlatformToolSpec {
             name: "list_apps",
             description: r#"List the apps visible in the user's CURRENT profile, with the callable interfaces each
-one exposes. Every event carries a `kind` that tells you which tool consumes it: "chat" →
-`open_app_chat`/`call_app_chat`, "page" → `open_app_page` (embed the app's UI inline), "headless"
-(simple/REST/MCP/…) → `call_app_event`. Use this before acting on any app. Only apps in the current
-profile are returned."#,
+one exposes. Every callable event carries its Event `id`, `kind`, and one exact `consumer_tool`:
+"chat" → `call_app_chat` (`open_app_chat` when the user should take over), "page" →
+`open_app_page` (embed the app's UI inline), "headless"
+(simple/REST/MCP/…) → `call_app_event`. A page may also expose `page_id` and `route`; neither is its
+Event `id`, so never pass them as `event_id`. An `unavailable` event has no consumer and must not be
+called. Use this before acting on any app. Only apps in the current profile are returned.
+`complete: false`, truncation, or an app's `events_status: "error"` means the
+inventory cannot prove that no suitable local interface exists; do not use public-web fallback from
+that partial result."#,
             schema: || json!({ "type": "object", "properties": {} }),
             approval: ToolApprovalSpec::None,
             timeout_secs: 120,
@@ -734,13 +754,14 @@ information displayed in that page; read the returned images before answering. C
 `screenshot_count` and `screenshot_complete`, and never claim to have read content that was not
 captured. Works ONLY for events with kind "page" in `list_apps` — NOT for "chat" events (use
 `open_app_chat`/`call_app_chat`) or "headless" events (use `call_app_event`). Non-destructive UI
-change."#,
+change. Pass the page Event's `id` as `event_id`, never its `page_id`. A structured failure supersedes
+older inventory: do not guess another Event or route; relist at most once only when `relist_required`."#,
             schema: || {
                 json!({
                     "type": "object",
                     "properties": {
                         "app_id": { "type": "string", "description": "App id (from list_apps)." },
-                        "event_id": { "type": "string", "description": "Page event id (kind \"page\" in list_apps). Optional; defaults to the app's first page-capable event." }
+                        "event_id": { "type": "string", "description": "Exact Event id (`events[].id`, kind \"page\") from list_apps; never `page_id`/`default_page_id`. Optional; defaults to the app's first page-capable event." }
                     },
                     "required": ["app_id"]
                 })
@@ -827,65 +848,11 @@ approval dialog with a "don't ask again this session" option before it runs."#,
         },
         PlatformToolSpec {
             name: "flowpilot_board",
-            description: r#"The single entry point for ANYTHING about a specific board or workflow LOGIC — building it, explaining it, editing it, or debugging it. Delegates to the board FlowPilot, the only specialist allowed to author FlowScript or change board nodes, connections, entry events, and layers. Page/widget/component DESIGN is not board work and goes to flowpilot_widget.
+            description: r#"The board/workflow specialist and only tool allowed to explain or change FlowScript, nodes, connections, layers, and Event entry nodes. UI belongs to `flowpilot_widget`; app data belongs to `data_studio_agent`.
 
-Two modes (set `mode`):
-- mode="explain" (read-only): answer the user's question about the board — "explain this workflow", "what does this do", "why is this failing". Nothing is modified and no approval is asked. Relay the returned answer to the user.
-- mode="edit" (default): build or modify the board's WORKFLOW LOGIC (add/connect/configure nodes and events). This is NOT for UI — pages, widgets and components go to flowpilot_widget. If the app has no board yet, one is created automatically — never ask the user to create a board manually. Give a complete, self-contained instruction (trigger/event, the processing steps, and where results go). The specialist prepares and validates the edit first; approval is requested only before the retained edit is applied.
+Use `mode="explain"` for a read-only board question. Use `mode="edit"` (default) with one complete acceptance contract for one board; it creates the app's first board when needed. Send independent boards together, but never overlap edits to the same or unresolved board target.
 
-For edit mode, the complete user-requested behavior is the acceptance contract. Do not replace a
-failed/timeout full build with a reduced smoke test.
-
-ONE BOARD PER CALL, ALL BOARDS AT ONCE. Send each board's FULL scope in ONE call: never decompose a
-single board's work into a sequence of partial calls, because the specialist plans and segments a
-large build internally and the host drives those segments for you. But when the work spans SEVERAL
-independent boards — separate triggers, separate entry events, no shared execution path — emit one
-call per board in the SAME turn. They run concurrently and the turn finishes in the time of the
-slowest board instead of their sum. Sequencing independent boards is pure waste.
-
-Never overlap mutations of the SAME board: two edit calls naming one board_id, or two calls that
-both omit board_id in an app whose target would resolve to the same board, must not be in flight
-together. That is the only ordering constraint. A timeout or transport drop is an unknown outcome,
-not proof that the board is empty; inspect the same board after the request is terminal, then retry
-the full scope with diagnostics if necessary.
-
-A result may report `segments_applied` and `segments_remaining`: that is a genuine partial build, not
-a failure. Say plainly which parts are on the board and which are missing, and continue from it with
-the same acceptance contract rather than restarting the whole request.
-
-A result with `no_recoverable_candidate` and source/check/commit counters all zero is zero progress.
-Retry it at most once, and only with a material strategy change: require a scope plan that splits the
-build into smaller segments so the first source write lands quickly, after one bounded,
-highest-leverage declaration batch and at most six ancillary pre-draft inspection calls.
-Rewording or shortening the same instruction is not a material strategy change. If the equivalent
-zero-progress result repeats, report it honestly and do not launch a third equivalent board call.
-
-When the user's request includes both UI and behavior, building AND applying the workflow board is
-MANDATORY before the turn ends — a page without its board is not a deliverable. Never spend the
-remaining turn narrating that a board call is "still running": wait for its terminal result, and
-when that result is a failure or timeout, continue the pipeline in the same turn with the retained
-draft and its diagnostics instead of only reporting status.
-
-The delegated board specialist owns the FlowScript draft and its edit/validate/repair loop. The
-platform caller must not turn a validation problem into a new implementation request such as a
-"minimal diagnostic", empty Event, one-node log/notify test, or ask_user choice to downgrade the
-workflow. If any result reports `retained_candidate`, `retained_flowscript`, or a retained draft,
-that document remains the active recovery workspace even if the persisted board is still empty.
-Retained drafts are bound to THIS conversation plus the ORIGINAL user request: a follow-up
-repair call resumes them only within the same conversation, never from a different one. Include
-that original user request text verbatim in the instruction, name the retained draft_id and its
-expected_revision, and direct the specialist to repair that draft in place — same draft_id, same
-revision chain, never "start a new draft" or a from-scratch rewrite. The single exception is a
-`FLOWSCRIPT_BASE_REVISION_CONFLICT` result: the board moved underneath the draft and every
-operation on it will fail forever, so the specialist must restart with a fresh draft_id from the
-current board while keeping the same acceptance contract. Retry on the SAME app/board
-with the original acceptance contract and observed diagnostics, and explicitly instruct the
-specialist to repair and queue the retained production candidate. Only an
-explicit NEW end-user request may discard or reduce it.
-
-When a board is already open (see CURRENTLY OPEN BOARD in your context), pass its app_id/board_id and route the user's board question here directly — do NOT ask which app or board, and do NOT answer board questions yourself.
-
-SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use create_app), rename apps, or change app metadata/settings — do not put such requests in the instruction."#,
+Edit results identify the exact app/board, summary, persisted `event_nodes`, progress counters, retained-draft diagnostics, and any `segments_remaining`/`manual_steps`. A timeout is an unknown outcome. Resume a retained draft on the same conversation/request and revision; preserve full scope. Only `FLOWSCRIPT_BASE_REVISION_CONFLICT` permits a fresh draft. Report partial/manual work rather than claiming completion."#,
             schema: || {
                 json!({
                     "type": "object",
@@ -915,13 +882,11 @@ SCOPE: it reads/edits board/page CONTENTS only. It cannot create apps (use creat
         },
         PlatformToolSpec {
             name: "flowpilot_widget",
-            description: r#"The UI specialist — design and build interfaces (A2UI). Two modes:
-- mode="edit": change an EXISTING page or widget. With the builder open on the target, generated components are staged for the user's review. With no builder open, pass app_id plus page_id (or route/page_name) and the saved page is rewritten directly — applied immediately, with no review card, so always name the page you changed when you report back. Ambient open-builder state is used only in this mode.
-- mode="create": create a NEW page from scratch in an app (pass app_id). Supplying app_id/page_id/board_id/page_name/route defaults to create mode even when another builder is open, so say mode="edit" explicitly to change a page that already exists. A page is board-scoped, so a board is created automatically if the app has none.
-	It builds the page AND any reusable widgets it needs — repeated or dynamic elements like list/grid cards, project or save-state rows, email-list items — in ONE call, then navigates the user to the page builder. A simple one-off layout (e.g. a dashboard with a chart and a table) needs no widget. Give a complete instruction for layout, content, and interaction affordances. When the user specified exact reusable-widget names, pass them in widget_names so the persisted entities keep those names even if the UI renderer omits an inline label. Side-effecting; asks for approval.
-SCOPE: UI only — pages, widgets, components. This specialist has no FlowScript or board-mutation authority and cannot build nodes, connections, entry events, or data wiring. A page may require an empty board record as its owner; that metadata scaffold is NOT workflow logic and is never proof that the board was built. Any requested behavior must be delegated separately to flowpilot_board. Never include FlowScript in this instruction and never treat this tool's success as satisfying board work.
+            description: r#"The UI specialist for A2UI pages, widgets, and components. It has no FlowScript, node, Event-entry, or data authority.
 
-RUN IT ALONGSIDE THE BOARD. You do NOT have to wait for this result before calling flowpilot_board. Every identifier the board needs to point at is one YOU choose, not one this tool invents: pass `board_id`, `page_id`, `route`, `widget_names` and the element/action ids you named in the instruction, then send those same strings to flowpilot_board in the SAME turn. When the board does not exist yet, call flowpilot_board with that exact board_id plus create_new_board=true. Both specialists bind to the contract you declared, so generation runs concurrently and persistence is safely coordinated. Only fall back to sequencing — widget first, then board — when you did not fix the ids up front."#,
+Use `mode="create"` for a new persisted page and `mode="edit"` for an existing page/open builder. Give the complete layout, content, interaction affordances, exact reusable-widget names, and caller-chosen page/route/element/action IDs. A created page may need a board record as its owner; that scaffold is not workflow logic.
+
+When IDs are fixed, pass the same board/page/UI contract to this tool and `flowpilot_board` in one wave. The result states whether UI was persisted or staged for user review; staged is not applied."#,
             schema: || {
                 json!({
                     "type": "object",
@@ -1010,10 +975,10 @@ don't blindly forward everything — but when unsure whether a file is relevant,
                         "forward_files": {
                             "type": "array",
                             "items": { "type": "string" },
-                            "description": "Exact names (from the FILES ATTACHED THIS TURN context) of the user's attached files to hand to this app. Omit to forward all attached files; pass an empty array to forward none. Pick the files whose type/content fit this app; when unsure, include the file."
+                            "description": "Exact names (from FILES ATTACHED THIS TURN) to hand to this app. Pass [] for none. Omission also forwards none, but always set this explicitly so forwarding is reviewable."
                         }
                     },
-                    "required": ["app_id", "message"]
+                    "required": ["app_id", "message", "forward_files"]
                 })
             },
             approval: ToolApprovalSpec::Execute {
@@ -1124,15 +1089,9 @@ Omit event_id to create; pass it to update. Side-effecting; asks for approval."#
         },
         PlatformToolSpec {
             name: "data_studio_agent",
-            description: r#"The single entry point for ANYTHING about an app's DATA — its databases/tables, ontologies (graph overlays), objects, graph queries, analytics, and ontology actions. Delegates to the Data Studio specialist, a data agent with full access to the app's graph/data tools.
+            description: r#"The data specialist for creating, inspecting, updating, querying, or dropping app databases/tables; SQL and Cypher; ontologies/overlays; graph queries/elements; analytics; ontology actions; and data visualizations. It does not edit workflow boards or UI.
 
-Use this for: setting up or updating databases/tables, DELETING/DROPPING a table (permanent, approval-gated, and it also prunes ontology references), creating/editing ontologies and overlays, writing/optimizing Cypher or SQL queries, running analytics/subgraph/paths/neighbors, adding graph nodes/edges, visualizing data as charts, and listing/reading/EXECUTING ontology actions on objects.
-
-Give a complete, self-contained instruction of what the user wants to know or change about the data. If a Data Studio page is currently open (see your context), its app and overlay are the default target — pass them here so the specialist starts there; it can still reach OTHER apps' data when asked. The specialist reports back transparently: the queries it ran, a step log, links, and inline charts — relay its answer (including any chart/query blocks) to the user verbatim.
-
-The specialist inspects with read-only tools freely; mutating operations (create/update/drop tables or overlays, add nodes/edges, execute actions) ask the user for approval individually. Dropping a table destroys its rows and schema irreversibly — route such a request here, name the exact table, and relay the reported cascade (pruned ontologies, saved queries left dangling) back to the user. SCOPE: data only — it does NOT edit workflow boards (use flowpilot_board) or UI (use flowpilot_widget).
-
-Data setup is NEVER a prerequisite for building a board. If this returns pending/failed table or index setup — unavailable on the deployment, refused, or approval declined — dispatch flowpilot_board anyway: LanceDB tables are created by the workflow's first write, and for embedding tables that first write derives a better schema (the model's exact vector width) than an explicit create can guess. Report the pending setup to the user; do not retry it in a loop and do not abandon the build over it."#,
+Give one complete question/change with the exact app and optional overlay from context. It returns its answer plus material query/action/chart evidence. Read-only inspection needs no approval; nested destructive/mutating operations ask separately and report their effects. If optional data setup is unavailable or declined during a larger build, disclose it but continue independent board work; do not retry in a loop."#,
             schema: || {
                 json!({
                     "type": "object",
@@ -1152,15 +1111,9 @@ Data setup is NEVER a prerequisite for building a board. If this returns pending
         },
         PlatformToolSpec {
             name: "project_scout",
-            description: r#"Research PRIOR ART before building from scratch. Delegates to the Scout specialist, a read-only researcher that searches the user's own apps, the public app store and the template catalog, inspects the candidates, and returns a foundation plan.
+            description: r#"Read-only prior-art research for a new BUILD. It searches owned apps, the public store, and templates, then returns a foundation plan; it never creates, forks, acquires, or edits anything.
 
-Call this BEFORE creating a new app or authoring a new workflow. Skip it only for a small edit to a board that already exists, or when the user already named the foundation to use. Do not skip it because the task sounds simple — rebuilding an app the user already owns is waste.
-
-The scout MUTATES NOTHING. It returns a plan; you execute it. The plan has a `base` (fork / acquire / template / new), a list of `parts` drawn from possibly DIFFERENT sources (a FlowScript fragment from one app, a template for another board, a data shape from a third), a `data` and `events` section, `changes` the user must make themselves, `blockers`, and an ordered `plan` of tool calls.
-
-Executing it: run the base step first; `fork_app` returns a `board_id_map` you must use to retarget every part's `target.board_ref` (those name boards in the SOURCE app, and a fork allocates new ids); then dispatch each part to the specialist matching its `source.kind` — `flowscript_fragment`/`board`/`event_config`/`template` to `flowpilot_board`, `data_schema` to `data_studio_agent` — passing the part's `locator` through so that specialist fetches the referenced source itself. Parts on different boards can go out together; parts on one board must be sequenced. Report `changes` and `blockers` to the user at the end.
-
-For a request spanning several distinct functional areas, call this SEVERAL times in one turn with DISJOINT `focus` values so the plans compose."#,
+Call before a from-scratch app/workflow, except for a small existing-target edit or a user-selected foundation. The result describes `base`, reusable `parts` with locators/dependencies, data/events, required user `changes`, `blockers`, and an ordered plan. The orchestrator executes that plan using the BUILD contract. Use disjoint `focus` values for genuinely independent scouts."#,
             schema: || {
                 json!({
                     "type": "object",
@@ -1181,26 +1134,22 @@ For a request spanning several distinct functional areas, call this SEVERAL time
         },
         PlatformToolSpec {
             name: RESEARCH_AGENT_TOOL,
-            description: r#"Research the PUBLIC WEB. Delegates to the Research specialist, a read-only researcher holding the only public-web tools in the system: search, page reading, and Internet Archive lookup.
+            description: r#"Run FlowPilot's sealed PUBLIC-WEB fallback for the current top-level user request.
 
-You cannot browse yourself — this tool is how any question about current external facts, documentation, prices, news, standards or third-party products gets answered. Use it whenever the answer is not already in the user's apps and not something you reliably know.
+Use only after `list_apps` found no suitable local app/interface, or no useful, nonredundant local
+research candidate produced a usable public answer. This tool accepts no question or context
+arguments: the host gives an isolated read-only researcher the immutable user request and date. It
+receives no root history, memory, attachments, app inventory/results, or model-authored arguments;
+from a mixed source request it extracts only safe public factual subquestions and never searches for
+secrets, credentials, or private identifiers. It returns cited findings plus evidence gaps.
 
-Give it the question in full, plus any constraints that matter (a date range, a jurisdiction, which sources to trust, what the user already tried). It returns a synthesis with inline markdown links to the exact pages it verified, a list of the URLs actually opened, and an explicit statement of what it could NOT establish. Relay its citations as-is — never invent, alter or re-title a link.
-
-Run several in ONE turn for genuinely separate questions; give each a distinct `question` so their findings compose. They share one research budget for the turn, so splitting one question into many near-duplicate calls buys nothing and spends the allowance faster.
-
-TWO ORDERING RULES:
-- Research BEFORE touching private data. Once you have read app databases, storage, files or memory this turn, the public-web phase closes and further research is refused — that boundary stops private data being laundered into an outbound query, and delegating does not bypass it. If a task needs both, research first, then read the app.
-- Never paste private app data, secrets, file contents or user credentials into the `question`. Describe what you need in neutral terms instead."#,
+It cannot use a local app's output as research context. If the next public query must be derived
+from private output, request a new explicit sanitized public-only turn instead."#,
             schema: || {
                 json!({
                     "type": "object",
-                    "properties": {
-                        "question": { "type": "string", "description": "The research question, in full. Include constraints that matter: dates, jurisdiction, which sources count as authoritative, and what the user already ruled out." },
-                        "context": { "type": "string", "description": "Non-private background that helps the researcher judge relevance. NEVER include app data, secrets, file contents or credentials." },
-                        "recency": { "type": "string", "description": "How current the evidence must be, e.g. \"last 30 days\", \"as of 2026\", or a historical cutoff for archive lookups." }
-                    },
-                    "required": ["question"]
+                    "properties": {},
+                    "additionalProperties": false
                 })
             },
             approval: ToolApprovalSpec::None,
@@ -1334,8 +1283,8 @@ pub fn find_global_tool_spec(name: &str) -> Option<PlatformToolSpec> {
 /// researcher has no app, database, storage or memory tools; the orchestrator has no outbound
 /// network. Provenance and spend are shared through the turn's `WebResearchSession`.
 ///
-/// The rig/Bits orchestrator still runs its own inline web loop (`platform.rs`) because that backend
-/// cannot host a nested tool-driven scope — see `research_agent`'s description.
+/// The rig/Bits orchestrator executes the same sealed fallback in a fresh local research loop; raw
+/// public-web schemas still never enter its root context.
 pub fn public_web_tool_specs() -> Vec<PlatformToolSpec> {
     vec![
         PlatformToolSpec {
@@ -1894,52 +1843,21 @@ mod tests {
         let spec = find_global_tool_spec("flowpilot_board").expect("flowpilot_board spec");
         assert!(
             spec.description
-                .contains("complete user-requested behavior")
+                .contains("one complete acceptance contract")
         );
-        assert!(spec.description.contains("reduced smoke test"));
-        assert!(spec.description.contains("Never overlap mutations"));
+        assert!(spec.description.contains("never overlap edits"));
         assert!(spec.description.contains("unknown outcome"));
+        assert!(spec.description.contains("retained draft"));
+        assert!(spec.description.contains("same conversation/request"));
         assert!(
             spec.description
-                .contains("source/check/commit counters all zero")
-        );
-        assert!(spec.description.contains("Retry it at most once"));
-        assert!(spec.description.contains("Rewording or shortening"));
-        assert!(spec.description.contains("at most six"));
-        assert!(
-            spec.description
-                .contains("do not launch a third equivalent")
+                .contains("`FLOWSCRIPT_BASE_REVISION_CONFLICT`")
         );
         assert!(
             spec.description
-                .contains("specialist owns the FlowScript draft")
+                .contains("`segments_remaining`/`manual_steps`")
         );
-        assert!(spec.description.contains("retained_flowscript"));
-        assert!(spec.description.contains("active recovery workspace"));
-        assert!(spec.description.contains("minimal diagnostic"));
-        assert!(spec.description.contains("explicit NEW end-user request"));
-        assert!(
-            spec.description
-                .contains("original user request text verbatim")
-        );
-        assert!(
-            spec.description
-                .contains("only within the same conversation")
-        );
-        assert!(
-            spec.description
-                .contains("retained draft_id and its\nexpected_revision")
-        );
-        assert!(spec.description.contains("never \"start a new draft\""));
-        assert!(
-            spec.description
-                .contains("applying the workflow board is\nMANDATORY before the turn ends")
-        );
-        assert!(spec.description.contains("still running"));
-        assert!(
-            spec.description
-                .contains("continue the pipeline in the same turn with the retained\ndraft")
-        );
+        assert!(spec.description.len() < 2_000);
         // A board build earns wall clock by proving progress, so this bound only has to outlive the
         // longest run it can earn. Every other dispatch bound on the path derives from the same
         // constant; see the desktop test that asserts the child CLI's MCP timeout tracks it.
@@ -2059,38 +1977,24 @@ mod tests {
         assert!(
             board
                 .description
-                .contains("only specialist allowed to author FlowScript")
+                .contains("only tool allowed to explain or change FlowScript")
         );
         assert!(
             board
                 .description
-                .contains("Page/widget/component DESIGN is not board work")
+                .contains("UI belongs to `flowpilot_widget`")
         );
 
         let widget = find_global_tool_spec("flowpilot_widget").expect("flowpilot_widget spec");
+        assert!(widget.description.contains("no FlowScript"));
         assert!(
             widget
                 .description
-                .contains("no FlowScript or board-mutation authority")
-        );
-        assert!(
-            widget
-                .description
-                .contains("metadata scaffold is NOT workflow logic")
-        );
-        assert!(
-            widget
-                .description
-                .contains("delegated separately to flowpilot_board")
-        );
-        assert!(
-            widget
-                .description
-                .contains("never treat this tool's success as satisfying board work")
+                .contains("scaffold is not workflow logic")
         );
         assert!(widget.description.contains("mode=\"create\""));
-        assert!(widget.description.contains("exact board_id"));
-        assert!(widget.description.contains("pass them in widget_names"));
+        assert!(widget.description.contains("same board/page/UI contract"));
+        assert!(widget.description.len() < 2_000);
         let widget_schema = (widget.schema)();
         assert_eq!(
             widget_schema["properties"]["widget_names"]["items"]["type"],
@@ -2116,6 +2020,108 @@ mod tests {
                 .expect("create_new_board description")
                 .contains("exact caller-chosen id")
         );
+    }
+
+    #[test]
+    fn app_page_tools_keep_event_and_page_identifiers_distinct() {
+        let inventory = find_global_tool_spec("list_apps").expect("list_apps spec");
+        assert!(
+            inventory
+                .description
+                .contains("Every callable event carries its Event `id`")
+        );
+        assert!(
+            inventory
+                .description
+                .contains("never pass them as `event_id`")
+        );
+
+        let open_page = find_global_tool_spec("open_app_page").expect("open_app_page spec");
+        assert!(open_page.description.contains("structured failure supersedes"));
+        assert!(open_page.description.contains("older inventory"));
+        assert!(open_page.description.contains("relist at most once"));
+        let open_page_schema = (open_page.schema)();
+        let event_id = open_page_schema["properties"]["event_id"]["description"]
+            .as_str()
+            .expect("event_id description");
+        assert!(event_id.contains("Exact Event id"));
+        assert!(event_id.contains("never `page_id`/`default_page_id`"));
+    }
+
+    #[test]
+    fn global_specialist_descriptions_stay_concise_and_schemas_stay_strict() {
+        for name in [
+            "flowpilot_board",
+            "flowpilot_widget",
+            "data_studio_agent",
+            "project_scout",
+            RESEARCH_AGENT_TOOL,
+        ] {
+            let spec = find_global_tool_spec(name).expect("global specialist spec");
+            assert!(
+                spec.description.len() < 2_000,
+                "{name} description exceeds the reviewed 2 KB model-facing budget"
+            );
+        }
+
+        let research = find_global_tool_spec(RESEARCH_AGENT_TOOL).unwrap();
+        let research_schema = (research.schema)();
+        assert_eq!(research_schema["properties"], json!({}));
+        assert_eq!(research_schema["additionalProperties"], json!(false));
+        assert!(research_schema.get("required").is_none());
+
+        let chat = find_global_tool_spec("call_app_chat").unwrap();
+        assert!(
+            (chat.schema)()["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("forward_files"))
+        );
+        let approval = resolve_tool_approval(
+            &chat,
+            &json!({
+                "app_id": "knowledge",
+                "message": "summarize",
+                "forward_files": ["brief.pdf"]
+            }),
+        );
+        assert!(approval.description.contains("brief.pdf"));
+    }
+
+    #[test]
+    fn global_tool_descriptions_stay_within_model_facing_budget() {
+        let specs = global_assistant_tool_specs(false);
+        let total: usize = specs.iter().map(|spec| spec.description.len()).sum();
+        assert!(
+            total <= 15_000,
+            "global tool descriptions grew beyond the reviewed 15 KB budget: {total} bytes"
+        );
+        for spec in specs {
+            assert!(
+                spec.description.len() <= 2_000,
+                "{} description exceeds the 2 KB per-tool budget",
+                spec.name
+            );
+        }
+    }
+
+    #[test]
+    fn eager_global_tool_payload_stays_within_reviewed_budget() {
+        for (memory_enabled, budget) in [(false, 32_000usize), (true, 34_000usize)] {
+            let specs = global_assistant_tool_specs(memory_enabled);
+            let total: usize = specs
+                .iter()
+                .map(|spec| {
+                    spec.name.len()
+                        + spec.description.len()
+                        + serde_json::to_string(&(spec.schema)()).unwrap().len()
+                })
+                .sum();
+            assert!(
+                total <= budget,
+                "eager global tool payload grew beyond {budget} bytes (memory={memory_enabled}): {total}"
+            );
+        }
     }
 
     #[test]

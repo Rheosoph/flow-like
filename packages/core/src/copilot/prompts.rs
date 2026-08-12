@@ -1057,6 +1057,39 @@ nodes. `check_flowscript` REJECTS source that would exceed this, so design withi
   revision, and reply paths that were also requested) is not a successful full-workflow edit.
 "#;
 
+/// Function-layer result-cache syntax and safety contract shared by every board-capable prompt.
+/// The runtime skips the complete function body on a hit, so this must be explicit model context
+/// rather than an undocumented piece of layer metadata.
+pub const FUNCTION_CACHE_GUIDANCE: &str = r#"
+## FUNCTION RESULT CACHING
+FlowScript configures result caching with a decorator immediately above a `function` declaration.
+Use the canonical object form when settings matter:
+```ts
+@cache({ namespace: "pricing", ttlSeconds: 3600, scope: "user" })
+function calculatePricing(subtotal: float): (price: float) {
+    return floatRound({ float: subtotal })
+}
+```
+A bare `@cache` enables the defaults: the `"global"` namespace, a 300-second lifetime, and app
+scope. Missing fields in an object-form decorator inherit those same defaults. `namespace` groups
+entries for invalidation, `ttlSeconds` is a non-negative lifetime in seconds, and `scope` is
+exactly `"app"` or `"user"`. Set `ttlSeconds: 0` explicitly for a permanent entry with no expiry.
+When authoring through typed Flow IR, use its snake_case `cache` object fields: `namespace`,
+`ttl_seconds`, and `scope`; an empty cache object has the same `global`/300-second/app defaults,
+and `ttl_seconds: 0` is permanent. Existing graph context may expose `ttl_seconds: null` for a
+permanent cache. Preserve that behavior by authoring explicit `ttl_seconds: 0` in typed IR
+or `ttlSeconds: 0` in FlowScript; do not treat that null as the new 300-second omission
+default. The compiled FlowScript decorator uses `ttlSeconds`.
+
+The cache key is derived from the function layer and all function inputs. On a cache hit the saved
+outputs are replayed and the ENTIRE function body is skipped, including every side effect. Cache
+only deterministic functions whose outputs are fully determined by their inputs. Use `scope:
+"user"` whenever a result depends on the triggering user or must remain private; use `"app"` only
+for results safe to share across the app. Preserve an existing `@cache` decorator during unrelated
+edits. Add, change, or remove it only when the requested edit changes caching behavior. Decorators
+apply only to `function` declarations, never Events or catalog calls.
+"#;
+
 /// Execution wiring contract shared by board prompts.
 pub const EXECUTION_FLOW_GUIDANCE: &str = r#"
 ## EXECUTION FLOW AND MULTI-OUTPUT NODES
@@ -1818,6 +1851,8 @@ FlowScript through write/patch/check/commit.
 
 {organization_guidance}
 
+{function_cache_guidance}
+
 {execution_guidance}
 
 {numbers_guidance}
@@ -1833,15 +1868,16 @@ FlowScript through write/patch/check/commit.
 {flowscript}
 ```
 
-## Graph Context (abbreviated keys: t=type, n=name, i=inputs, o=outputs, p=position, s=size, f=from, fp=from_pin, tp=to_pin, v=value, p=parent)
+## Graph Context (abbreviated keys: t=type, n=name, i=inputs, o=outputs, p=position, s=size, f=from, fp=from_pin, tp=to_pin, v=value, p=parent; function-layer `cache` uses enabled/namespace/ttl_seconds/scope)
 {context}
 
 ## Layers Are Read-Only Context
-The context's `layers` array contains `id`, `n` (name), `p` (parent), `nodes`, and `pos` for
-explanation/debugging. Model-facing `emit_commands` cannot create, remove, or change membership of
-any layer because the compact context cannot prove that such a mutation is non-executable.
-Function layers are authored only with FlowScript `function` declarations. `AddPlaceholder` and
-all direct layer commands are unavailable to workflow-authoring models.
+The context's `layers` array contains `id`, `n` (name), `t` (layer type), `p` (parent), `nodes`,
+`pos`, and optional function-result `cache` settings for explanation/debugging. Model-facing `emit_commands` cannot
+create, remove, or change membership of any layer because the compact context cannot prove that
+such a mutation is non-executable. Function layers and their cache settings are authored only with
+FlowScript `function` declarations and `@cache`; `AddPlaceholder` and all direct layer commands are
+unavailable to workflow-authoring models.
 
 ## Tools
 **Understanding**: think (reason step-by-step), get_node_details (get full info about a specific node)
@@ -1888,6 +1924,7 @@ emit_commands (position-only MoveNode and canvas comments only)
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
+        function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
         segmentation_guidance = SCOPE_SEGMENTATION_GUIDANCE,
@@ -2318,6 +2355,10 @@ That isolation is deliberate and is a security boundary, not an inconvenience:
 - The orchestrator that CAN see private data has no outbound network. It delegates to you instead.
 
 Consequences for how you work:
+- The immutable source request may mix public research with private-app or action instructions.
+  Extract only the public factual subquestion(s). Never search for or repeat credentials, secrets,
+  personal/private identifiers, local app names, file contents, or action payloads that appear in
+  the request; say that those private parts remain for the orchestrator.
 - If answering properly would need the user's own app data, files or database, say so plainly and
   name what is missing. Do NOT guess at it, and do NOT ask the user to paste it — the orchestrator
   can read it and combine your findings with it.
@@ -2446,6 +2487,8 @@ pub fn general_system_prompt() -> String {
 
 {organization_guidance}
 
+{function_cache_guidance}
+
 {execution_guidance}
 
 {numbers_guidance}
@@ -2467,6 +2510,7 @@ pub fn general_system_prompt() -> String {
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
+        function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
         segmentation_guidance = SCOPE_SEGMENTATION_GUIDANCE,
@@ -2525,6 +2569,8 @@ FlowScript surface is required.
 
 {organization_guidance}
 
+{function_cache_guidance}
+
 {execution_guidance}
 
 {numbers_guidance}
@@ -2544,6 +2590,7 @@ resend it; if the error says FlowScript is required, switch to the retained sour
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
+        function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
         segmentation_guidance = SCOPE_SEGMENTATION_GUIDANCE,
@@ -2665,6 +2712,8 @@ resend.
 
 {organization_guidance}
 
+{function_cache_guidance}
+
 {execution_guidance}
 
 {numbers_guidance}
@@ -2709,6 +2758,7 @@ check_flowscript (compile/validate), commit_flowscript (queue the checked batch)
         numbers_guidance = NUMBERS_CONVERSIONS_GUIDANCE,
         flowpath_guidance = FLOW_PATH_ACCESSOR_GUIDANCE,
         organization_guidance = BOARD_ORGANIZATION_GUIDANCE,
+        function_cache_guidance = FUNCTION_CACHE_GUIDANCE,
         explanation_guidance = EXPLANATION_WORKFLOW_GUIDANCE,
         autonomy_guidance = AUTONOMY_PLACEHOLDER_GUIDANCE,
         segmentation_guidance = SCOPE_SEGMENTATION_GUIDANCE,
@@ -3056,6 +3106,36 @@ mod tests {
             assert!(
                 prompt.contains("Post-apply runtime verification belongs to a later orchestrator")
             );
+        }
+    }
+
+    #[test]
+    fn board_prompts_expose_function_cache_syntax_and_runtime_semantics() {
+        let prompts = [
+            board_system_prompt("{}", "", 0, false, false),
+            board_sdk_system_prompt(),
+            board_sdk_flowscript_system_prompt("", 0),
+            general_system_prompt(),
+        ];
+
+        for prompt in prompts {
+            assert!(prompt.contains("## FUNCTION RESULT CACHING"));
+            assert!(
+                prompt.contains(
+                    r#"@cache({ namespace: "pricing", ttlSeconds: 3600, scope: "user" })"#
+                )
+            );
+            assert!(prompt.contains("A bare `@cache` enables the defaults"));
+            assert!(prompt.contains("`\"global\"` namespace"));
+            assert!(prompt.contains("300-second lifetime"));
+            assert!(prompt.contains("`ttlSeconds: 0` explicitly for a permanent entry"));
+            assert!(prompt.contains("`ttl_seconds: null`"));
+            assert!(prompt.contains("permanent cache"));
+            assert!(prompt.contains("`scope` is"));
+            assert!(prompt.contains("exactly `\"app\"` or `\"user\"`"));
+            assert!(prompt.contains("ENTIRE function body is skipped"));
+            assert!(prompt.contains("including every side effect"));
+            assert!(prompt.contains("Preserve an existing `@cache` decorator"));
         }
     }
 
@@ -3640,6 +3720,8 @@ mod tests {
 
         // It cannot reach private data, and must say so rather than guess.
         assert!(prompt.contains("do NOT ask the user to paste it"));
+        assert!(prompt.contains("Extract only the public factual subquestion(s)"));
+        assert!(prompt.contains("Never search for or repeat credentials"));
 
         // Archive captures are time-boxed evidence.
         assert!(prompt.contains("evidence of what a page said AT THAT CAPTURE TIME"));

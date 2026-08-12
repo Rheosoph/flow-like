@@ -23,12 +23,12 @@
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
+			<key>CFBundleURLName</key>
+			<string>flow-like</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>flow-like</string>
 			</array>
-			<key>CFBundleURLName</key>
-			<string>flow-like</string>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>

@@ -200,7 +200,18 @@ export function makeGlobalChatMessage(
 	};
 }
 
+/**
+ * Conversations deleted in this session.
+ *
+ * Cancelling a run only *requests* teardown — the backend call returns on delivery, and the run's
+ * own `finally` still commits its partial reply afterwards. Without this guard that write lands
+ * under the sessionId that was just deleted, leaving message rows no session owns and nothing ever
+ * collects (globalChatDb is not pruned). Ids are cuid2 and never reused, so membership is final.
+ */
+const deletedConversations = new Set<string>();
+
 export async function persistGlobalChatMessage(message: IMessage) {
+	if (deletedConversations.has(message.sessionId)) return;
 	try {
 		if (FLOWPILOT_DEBUG_ENABLED) {
 			await globalChatDb.messages.put(message);
@@ -219,12 +230,17 @@ export async function persistGlobalChatSession(
 	sessionId: string,
 	title: string,
 ) {
+	if (deletedConversations.has(sessionId)) return;
 	try {
 		const existing = await globalChatDb.sessions.get(sessionId);
 		const now = Date.now();
+		// Spread the existing row: this is a whole-row put, so anything not restated here would be
+		// erased on the user's next send — `pinnedAt`, `boardId` and `mode` all live only on the row.
 		await globalChatDb.sessions.put({
+			...existing,
 			id: sessionId,
 			appId: GLOBAL_CHAT_APP_ID,
+			// Sticky: the first title wins, so a user rename survives every later send.
 			summarization: existing?.summarization || title.slice(0, 80),
 			createdAt: existing?.createdAt ?? now,
 			updatedAt: now,
@@ -232,6 +248,71 @@ export async function persistGlobalChatSession(
 	} catch {
 		// history persistence is best-effort in v1
 	}
+}
+
+/**
+ * Pin/unpin a conversation. Deliberately a partial `update` that leaves `updatedAt` alone —
+ * touching it would yank the conversation into the "Today" group just for being pinned.
+ */
+export async function setGlobalChatSessionPinned(
+	sessionId: string,
+	pinned: boolean,
+) {
+	try {
+		await globalChatDb.sessions.update(sessionId, {
+			pinnedAt: pinned ? Date.now() : undefined,
+		});
+	} catch {
+		// history mutation is best-effort
+	}
+}
+
+/** Rename a conversation. Empty titles are ignored rather than blanking the row. */
+export async function renameGlobalChatSession(
+	sessionId: string,
+	title: string,
+) {
+	const next = title.trim().slice(0, 80);
+	if (!next) return;
+	try {
+		await globalChatDb.sessions.update(sessionId, { summarization: next });
+	} catch {
+		// history mutation is best-effort
+	}
+}
+
+/**
+ * Delete a conversation and its messages. Starts a fresh conversation when the deleted one was
+ * active, so the surface is never left pointing at a session row that no longer exists.
+ *
+ * Live runs are cancelled first. Runs deliberately survive a conversation switch and keep
+ * checkpointing into IndexedDB under their own conversation id, so deleting the rows out from
+ * under one would let it re-create the session moments later — the conversation would visibly
+ * come back from the dead.
+ */
+export async function deleteGlobalChatConversation(sessionId: string) {
+	// Tombstone first: cancellation is not synchronous, so this is what actually stops a run's
+	// in-flight checkpoint or its closing write from re-creating rows behind the delete.
+	deletedConversations.add(sessionId);
+
+	const state = useGlobalChatStore.getState();
+	const liveRunIds = Object.values(state.runs)
+		.filter((run) => run.conversationId === sessionId)
+		.map((run) => run.runId);
+	await Promise.allSettled(
+		liveRunIds.map((runId) => cancelGlobalChatRun(runId)),
+	);
+
+	try {
+		await globalChatDb.messages.where("sessionId").equals(sessionId).delete();
+		await globalChatDb.sessions.delete(sessionId);
+	} catch {
+		// history mutation is best-effort
+	}
+
+	// Re-read: cancelling a run mutates the store, so the pre-cancel snapshot is stale here.
+	const current = useGlobalChatStore.getState();
+	if (current.activeConversationId === sessionId) current.newConversation();
 }
 
 interface DriveOptions {
@@ -245,6 +326,8 @@ interface DriveOptions {
 	isResume?: boolean;
 	/** Bounded/redacted user input metadata included in the persisted debug report. */
 	inputPreview?: unknown;
+	/** Exact files from the owning user turn, captured before concurrent turns can change history. */
+	sourceAttachments?: IMessage["files"];
 	/**
 	 * Transport hook. Drives the underlying run and forwards every raw FlowPilot stream chunk to
 	 * `onChunk`; resolves with the transport's result (the desktop Tauri command's return value or,
@@ -283,6 +366,7 @@ export async function driveGlobalChatStream({
 	label,
 	isResume,
 	inputPreview,
+	sourceAttachments,
 	start,
 }: DriveOptions) {
 	const store = useGlobalChatStore;
@@ -291,6 +375,22 @@ export async function driveGlobalChatStream({
 	let lastCheckpoint = 0;
 	let streamFailure: string | undefined;
 	const turnSelection = beginGlobalChatTurnSelection(runId, agentSelection);
+	const owningAttachments =
+		sourceAttachments ??
+		(() => {
+			const messages = store.getState().messages;
+			for (let index = messages.length - 1; index >= 0; index -= 1) {
+				const candidate = messages[index];
+				if (
+					candidate.sessionId === responseMessage.sessionId &&
+					candidate.inner.role === IRole.User &&
+					candidate.timestamp <= responseMessage.timestamp
+				) {
+					return [...(candidate.files ?? [])];
+				}
+			}
+			return [];
+		})();
 	// Register the run BEFORE anything streams: every per-run store write (sub-agent buffers, debug
 	// events, the bubble itself) is addressed by run id and is a no-op until the record exists.
 	store.getState().startRun({
@@ -299,6 +399,7 @@ export async function driveGlobalChatStream({
 		selection: turnSelection,
 		label: label?.trim() || "Assistant turn",
 		message: { ...responseMessage },
+		sourceAttachments: owningAttachments,
 	});
 	// Desktop control is derivable from the run id alone. The web transport replaces this with an
 	// SSE-addressed control once the server hands back its own run id.

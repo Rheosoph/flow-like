@@ -4,7 +4,7 @@ use std::sync::Arc;
 use flow_like::flow::{
     board::{Board, Layer, LayerCache, LayerCacheScope, LayerType},
     execution::{
-        LogLevel, context::ExecutionContext, internal_node::InternalNode,
+        EventTrigger, LogLevel, context::ExecutionContext, internal_node::InternalNode,
         internal_pin::InternalPin,
     },
     node::{Node, NodeLogic},
@@ -13,7 +13,11 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_catalog_data::data::cache::{CacheScope, FlowCache, cache_get, cache_set};
-use flow_like_types::{Value, async_trait, json::from_slice};
+use flow_like_types::{Value, async_trait, json::from_slice, sync::RwLock};
+
+/// Cache persistence is an optimization and must never hold the execution chain open forever.
+/// This also bounds local object-store writes, which do not have the HTTP client's request timeout.
+const FUNCTION_CACHE_WRITE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Fold a value into the hasher in a shape that does not depend on how its maps happen to
 /// be ordered in memory, so the same inputs always produce the same cache key.
@@ -199,6 +203,86 @@ impl CallFunctionNode {
         }
 
         Ok(())
+    }
+
+    /// Start persisting a miss without putting the write on the node's successor-critical path.
+    /// The completion hook joins the task before the run is finalized, keeping writes reliable in
+    /// short-lived runtimes while downstream nodes are free to execute concurrently.
+    async fn persist_cache_result(
+        context: &mut ExecutionContext,
+        function_name: String,
+        handle: FlowCache,
+        key: String,
+        outputs: Value,
+        ttl: Option<u64>,
+    ) {
+        let node_id = context.id.to_string();
+        let mut write_context = context.clone();
+        // Completion callbacks retain their captures for the life of the run. Detach the cloned
+        // context's registry so callback -> task -> context cannot point back to the callback.
+        write_context.completion_callbacks = Arc::new(RwLock::new(Vec::new()));
+
+        let write_function_name = function_name.clone();
+        let cancellation = write_context.get_cancellation_token();
+        let task = flow_like_types::tokio::spawn(async move {
+            let write = async {
+                match flow_like_types::tokio::time::timeout(
+                    FUNCTION_CACHE_WRITE_TIMEOUT,
+                    cache_set(&write_context, &handle, &key, outputs, ttl),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => None,
+                    Ok(Err(error)) => Some(format!(
+                        "Could not cache the result of function '{}': {:?}",
+                        write_function_name, error
+                    )),
+                    Err(_) => Some(format!(
+                        "Caching the result of function '{}' timed out after {} seconds",
+                        write_function_name,
+                        FUNCTION_CACHE_WRITE_TIMEOUT.as_secs()
+                    )),
+                }
+            };
+
+            if let Some(cancellation) = cancellation {
+                flow_like_types::tokio::select! {
+                    biased;
+                    _ = cancellation.cancelled() => None,
+                    warning = write => warning,
+                }
+            } else {
+                write.await
+            }
+        });
+        let task = Arc::new(flow_like_types::tokio::sync::Mutex::new(Some(task)));
+
+        let completion_event: EventTrigger = Arc::new(move |run| {
+            let task = task.clone();
+            let node_id = node_id.clone();
+            let function_name = function_name.clone();
+            Box::pin(async move {
+                let task = { task.lock().await.take() };
+                let Some(task) = task else {
+                    return Ok(());
+                };
+
+                let warning = match task.await {
+                    Ok(warning) => warning,
+                    Err(error) => Some(format!(
+                        "Cache write task for function '{}' failed: {:?}",
+                        function_name, error
+                    )),
+                };
+                if let Some(warning) = warning {
+                    run.log_node_warning(&node_id, None, &warning).await;
+                }
+
+                // Cache persistence is best-effort and must not change a successful flow result.
+                Ok(())
+            })
+        });
+        context.hook_completion_event(completion_event).await;
     }
 
     fn find_node_id_by_pin(
@@ -547,17 +631,15 @@ impl NodeLogic for CallFunctionNode {
 
         if let (Some(settings), Some((handle, key))) = (&cache_settings, &cache_lookup) {
             let outputs = self.collect_cacheable_outputs(context).await;
-            // A value the backend rejects (too large, backend unreachable) costs this call
-            // nothing — it already produced its outputs.
-            if let Err(error) = cache_set(context, handle, key, outputs, settings.ttl()).await {
-                context.log_message(
-                    &format!(
-                        "Could not cache the result of function '{}': {:?}",
-                        layer.name, error
-                    ),
-                    LogLevel::Warn,
-                );
-            }
+            Self::persist_cache_result(
+                context,
+                layer.name.clone(),
+                handle.clone(),
+                key.clone(),
+                outputs,
+                settings.ttl(),
+            )
+            .await;
         }
 
         Ok(())
@@ -852,23 +934,27 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_lifetime_means_the_entry_never_expires() {
+    fn a_zero_or_omitted_lifetime_explicitly_disables_expiry() {
         let mut settings = LayerCache {
             enabled: true,
             prefix: String::new(),
             ttl_seconds: Some(0),
             scope: LayerCacheScope::App,
         };
-        assert_eq!(settings.ttl(), None);
+        assert_eq!(settings.ttl(), Some(0));
 
         settings.ttl_seconds = None;
-        assert_eq!(settings.ttl(), None);
+        assert_eq!(settings.ttl(), Some(0));
     }
 
     #[test]
     fn caching_is_off_until_it_is_switched_on() {
         let settings = LayerCache::default();
         assert!(!settings.is_active());
-        assert!(Layer::new("l".into(), "L".into(), LayerType::Function).cache.is_none());
+        assert!(
+            Layer::new("l".into(), "L".into(), LayerType::Function)
+                .cache
+                .is_none()
+        );
     }
 }

@@ -351,7 +351,9 @@ impl MarkdownWriter {
         }
         let mut label = caption_text(node);
         if label.is_empty() {
-            label = str_prop(node, "name").unwrap_or(node_type(node)).to_string();
+            label = str_prop(node, "name")
+                .unwrap_or(node_type(node))
+                .to_string();
         }
         self.push_line(&format!("[{}]({})", escape_link_text(&label), url));
     }
@@ -372,7 +374,10 @@ impl MarkdownWriter {
                 .iter()
                 .map(|cell| {
                     let text = self.inline_blocks(children(cell));
-                    text.replace('|', "\\|").replace('\n', " ").trim().to_string()
+                    text.replace('|', "\\|")
+                        .replace('\n', " ")
+                        .trim()
+                        .to_string()
                 })
                 .collect();
             let all_header = children(row)
@@ -445,7 +450,11 @@ impl MarkdownWriter {
                 "img" if self.images == ImageHandling::Keep => {
                     let url = media_url(node);
                     if !url.is_empty() {
-                        out.push_str(&format!("![{}]({})", escape_link_text(&caption_text(node)), url));
+                        out.push_str(&format!(
+                            "![{}]({})",
+                            escape_link_text(&caption_text(node)),
+                            url
+                        ));
                     }
                 }
                 _ => {
@@ -583,7 +592,12 @@ fn apply_marks(node: &Value, text: &str) -> String {
         wrapped = format!("<mark>{wrapped}</mark>");
     }
 
-    format!("{}{}{}", &text[..trimmed_start], wrapped, &text[text.len() - trimmed_end..])
+    format!(
+        "{}{}{}",
+        &text[..trimmed_start],
+        wrapped,
+        &text[text.len() - trimmed_end..]
+    )
 }
 
 fn escape_markdown(text: &str) -> String {
@@ -658,8 +672,10 @@ impl HtmlWriter {
             }
             "blockquote" => {
                 let body = self.inline(children(node));
-                self.out
-                    .push_str(&format!("<blockquote{}>{body}</blockquote>\n", block_attrs(node)));
+                self.out.push_str(&format!(
+                    "<blockquote{}>{body}</blockquote>\n",
+                    block_attrs(node)
+                ));
             }
             "callout" => {
                 let icon = str_prop(node, "icon").unwrap_or_default();
@@ -790,7 +806,11 @@ impl HtmlWriter {
 
         let body = self.inline(children(node));
         if style == "todo" {
-            let checked = if flag(node, "checked") { " checked" } else { "" };
+            let checked = if flag(node, "checked") {
+                " checked"
+            } else {
+                ""
+            };
             self.out.push_str(&format!(
                 "<li class=\"task-list-item\"><input type=\"checkbox\" disabled{checked} /> {body}</li>\n"
             ));
@@ -819,8 +839,10 @@ impl HtmlWriter {
         let alt = caption_text(node);
         if self.images == ImageHandling::AltText || url.is_empty() {
             let label = if alt.is_empty() { "Image" } else { &alt };
-            self.out
-                .push_str(&format!("<p class=\"image-placeholder\">{}</p>\n", escape_html(label)));
+            self.out.push_str(&format!(
+                "<p class=\"image-placeholder\">{}</p>\n",
+                escape_html(label)
+            ));
             return;
         }
         let width = node
@@ -874,14 +896,23 @@ impl HtmlWriter {
                     "td"
                 };
                 let mut attrs = String::new();
-                if let Some(span) = cell.get("colSpan").and_then(Value::as_u64).filter(|s| *s > 1) {
+                if let Some(span) = cell
+                    .get("colSpan")
+                    .and_then(Value::as_u64)
+                    .filter(|s| *s > 1)
+                {
                     attrs.push_str(&format!(" colspan=\"{span}\""));
                 }
-                if let Some(span) = cell.get("rowSpan").and_then(Value::as_u64).filter(|s| *s > 1) {
+                if let Some(span) = cell
+                    .get("rowSpan")
+                    .and_then(Value::as_u64)
+                    .filter(|s| *s > 1)
+                {
                     attrs.push_str(&format!(" rowspan=\"{span}\""));
                 }
                 let body = self.cell_body(children(cell));
-                self.out.push_str(&format!("<{tag}{attrs}>{body}</{tag}>\n"));
+                self.out
+                    .push_str(&format!("<{tag}{attrs}>{body}</{tag}>\n"));
             }
             self.out.push_str("</tr>\n");
 
