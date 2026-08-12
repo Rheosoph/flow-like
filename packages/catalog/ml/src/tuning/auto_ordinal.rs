@@ -175,12 +175,12 @@ const KIND_ADJACENT_CATEGORY: &str = "OrdinalAdjacentCategory";
 #[cfg(feature = "execute")]
 const KIND_NEURAL: &str = "OrdinalNeural";
 
-const METRIC_QUADRATIC_KAPPA: &str = "QuadraticWeightedKappa";
-const METRIC_LINEAR_KAPPA: &str = "LinearWeightedKappa";
-const METRIC_MEAN_ABSOLUTE_RANK_ERROR: &str = "MeanAbsoluteRankError";
-const METRIC_MACRO_MEAN_ABSOLUTE_ERROR: &str = "MacroMeanAbsoluteError";
-const METRIC_KENDALL_TAU_B: &str = "KendallTauB";
-const METRIC_SPEARMAN: &str = "SpearmanRankCorrelation";
+const METRIC_QUADRATIC_KAPPA: &str = "Quadratic Kappa";
+const METRIC_LINEAR_KAPPA: &str = "Linear Kappa";
+const METRIC_MEAN_ABSOLUTE_RANK_ERROR: &str = "Mean Rank Error";
+const METRIC_MACRO_MEAN_ABSOLUTE_ERROR: &str = "Macro Rank Error";
+const METRIC_KENDALL_TAU_B: &str = "Kendall Tau-b";
+const METRIC_SPEARMAN: &str = "Spearman";
 
 const METRICS: [&str; 6] = [
     METRIC_QUADRATIC_KAPPA,
@@ -570,7 +570,7 @@ impl NodeLogic for AutoOrdinalNode {
         node.add_input_pin(
             "metric",
             "Metric",
-            "What the leaderboard is ranked by. QuadraticWeightedKappa is chance-corrected agreement that forgives a near miss and punishes a distant one four times as hard - the standard headline metric for ordered targets. LinearWeightedKappa charges the same for every step along the scale, which is what you want when one level is one unit of loss. MeanAbsoluteRankError is the average number of levels a prediction is off by, and MacroMeanAbsoluteError is the same averaged per true level so a rare level counts as much as the majority one - both are ERROR metrics, so the leaderboard ranks their smallest value first. KendallTauB and SpearmanRankCorrelation ask only whether the rows come out in the right order and ignore calibration entirely, so a model whose levels are all shifted by one still scores perfectly.",
+            "What the leaderboard is ranked by. Quadratic Kappa is chance-corrected agreement that forgives a near miss and punishes a distant one four times as hard - the standard headline metric for ordered targets. Linear Kappa charges the same for every step along the scale, which is what you want when one level is one unit of loss. Mean Rank Error is the average number of levels a prediction is off by, and Macro Rank Error is the same averaged per true level so a rare level counts as much as the majority one - both are ERROR metrics, so the leaderboard ranks their smallest value first. Kendall Tau-b and Spearman ask only whether the rows come out in the right order and ignore calibration entirely, so a model whose levels are all shifted by one still scores perfectly.",
             VariableType::String,
         )
         .set_options(

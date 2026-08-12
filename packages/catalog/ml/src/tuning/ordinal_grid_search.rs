@@ -29,8 +29,9 @@ use flow_like::flow::{
 use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_ordinal::{
-    AdjacentCategory, AdjacentCategoryParams, ContinuationRatio, ContinuationRatioParams, Link,
-    Margin, OrdinalError, OrdinalLogistic, OrdinalLogisticParams, OrdinalLoss, OrdinalRidge,
+    Activation, AdjacentCategory, AdjacentCategoryParams, ContinuationRatio,
+    ContinuationRatioParams, Link, Margin, OrdinalError, OrdinalHead, OrdinalLogistic,
+    OrdinalLogisticParams, OrdinalLoss, OrdinalNeural, OrdinalNeuralParams, OrdinalRidge,
     OrdinalRidgeParams, kendall_tau_b, linear_weighted_kappa, macro_mean_absolute_error,
     mean_absolute_rank_error, quadratic_weighted_kappa, spearman_rank_correlation,
 };
@@ -112,20 +113,22 @@ const KIND_LOGISTIC: &str = "OrdinalLogistic";
 const KIND_RIDGE: &str = "OrdinalRidge";
 const KIND_CONTINUATION_RATIO: &str = "OrdinalContinuationRatio";
 const KIND_ADJACENT_CATEGORY: &str = "OrdinalAdjacentCategory";
+const KIND_NEURAL: &str = "OrdinalNeural";
 
-const TUNABLE_ORDINAL_MODELS: [&str; 4] = [
+const TUNABLE_ORDINAL_MODELS: [&str; 5] = [
     KIND_LOGISTIC,
     KIND_RIDGE,
     KIND_CONTINUATION_RATIO,
     KIND_ADJACENT_CATEGORY,
+    KIND_NEURAL,
 ];
 
-const METRIC_QUADRATIC_KAPPA: &str = "QuadraticWeightedKappa";
-const METRIC_LINEAR_KAPPA: &str = "LinearWeightedKappa";
-const METRIC_MEAN_ABSOLUTE_RANK_ERROR: &str = "MeanAbsoluteRankError";
-const METRIC_MACRO_MEAN_ABSOLUTE_ERROR: &str = "MacroMeanAbsoluteError";
-const METRIC_KENDALL_TAU_B: &str = "KendallTauB";
-const METRIC_SPEARMAN: &str = "SpearmanRankCorrelation";
+const METRIC_QUADRATIC_KAPPA: &str = "Quadratic Kappa";
+const METRIC_LINEAR_KAPPA: &str = "Linear Kappa";
+const METRIC_MEAN_ABSOLUTE_RANK_ERROR: &str = "Mean Rank Error";
+const METRIC_MACRO_MEAN_ABSOLUTE_ERROR: &str = "Macro Rank Error";
+const METRIC_KENDALL_TAU_B: &str = "Kendall Tau-b";
+const METRIC_SPEARMAN: &str = "Spearman";
 
 const METRICS: [&str; 6] = [
     METRIC_QUADRATIC_KAPPA,
@@ -142,6 +145,10 @@ const LINK_NAMES: [&str; 4] = ["Logit", "Probit", "CLogLog", "Cauchit"];
 const LOSS_NAMES: [&str; 3] = ["CumulativeLink", "AllThreshold", "ImmediateThreshold"];
 #[cfg(feature = "execute")]
 const MARGIN_NAMES: [&str; 3] = ["Logistic", "Hinge", "SquaredHinge"];
+#[cfg(feature = "execute")]
+const HEAD_NAMES: [&str; 2] = ["Coral", "Corn"];
+#[cfg(feature = "execute")]
+const ACTIVATION_NAMES: [&str; 2] = ["Relu", "Tanh"];
 
 /// The metric the sweep is ranked by.
 ///
@@ -234,6 +241,7 @@ enum OrdinalFamily {
     Ridge,
     ContinuationRatio,
     AdjacentCategory,
+    Neural,
 }
 
 #[cfg(feature = "execute")]
@@ -244,6 +252,7 @@ impl OrdinalFamily {
             KIND_RIDGE => Ok(OrdinalFamily::Ridge),
             KIND_CONTINUATION_RATIO => Ok(OrdinalFamily::ContinuationRatio),
             KIND_ADJACENT_CATEGORY => Ok(OrdinalFamily::AdjacentCategory),
+            KIND_NEURAL => Ok(OrdinalFamily::Neural),
             other => Err(anyhow!(
                 "Unknown model type: `{other}`. Supported: {}",
                 TUNABLE_ORDINAL_MODELS.join(", ")
@@ -271,6 +280,15 @@ impl OrdinalFamily {
             OrdinalFamily::Ridge => &["alpha"],
             OrdinalFamily::ContinuationRatio => &["alpha", "link", "learning_rate"],
             OrdinalFamily::AdjacentCategory => &["alpha", "learning_rate"],
+            OrdinalFamily::Neural => &[
+                "alpha",
+                "head",
+                "activation",
+                "hidden_layers",
+                "learning_rate",
+                "max_iterations",
+                "seed",
+            ],
         }
     }
 }
@@ -282,9 +300,13 @@ impl OrdinalFamily {
 #[cfg(feature = "execute")]
 fn default_param_grid(model_type: &str) -> Value {
     match OrdinalFamily::parse(model_type) {
+        // Deliberately NOT sweeping `link` here: Auto Ordinal already decides Logit vs Probit when
+        // it picks the family, so re-deciding it downstream spends the budget on a settled question
+        // while leaving the Adam step size — which decides whether the fit converges at all —
+        // untouched. Same combination count either way.
         Ok(OrdinalFamily::Logistic) => json!([
             {"name": "alpha", "values": [0.1, 1.0, 10.0]},
-            {"name": "link", "values": ["Logit", "Probit"]}
+            {"name": "learning_rate", "values": [0.05, 0.1]}
         ]),
         Ok(OrdinalFamily::Ridge) => json!([
             {"name": "alpha", "values": [0.01, 0.1, 1.0, 10.0]}
@@ -297,16 +319,32 @@ fn default_param_grid(model_type: &str) -> Value {
             {"name": "alpha", "values": [0.1, 1.0, 10.0]},
             {"name": "learning_rate", "values": [0.05, 0.1]}
         ]),
+        // Two dimensions, and no more. The backbone is the point of this family — the estimator's
+        // own width, twice that, and whether a second layer helps at all — but architecture alone
+        // is not enough: this is the only non-convex estimator in the node, and a step size that
+        // does not converge fails all three architectures identically, so the sweep would report
+        // nothing rather than a winner. Everything else (alpha, head, activation) stays out because
+        // each entry multiplies into the cartesian product and every combination trains a network
+        // from scratch on each fold.
+        Ok(OrdinalFamily::Neural) => json!([
+            {"name": "hidden_layers", "values": ["16", "32", "16, 8"]},
+            {"name": "learning_rate", "values": [0.01, 0.05]}
+        ]),
         Err(_) => json!([]),
     }
 }
 
 /// One parsed grid combination, ready to fit.
 ///
-/// Every field is optional so that a parameter absent from the grid keeps the estimator's own
+/// Every grid field is optional so that a parameter absent from the grid keeps the estimator's own
 /// default instead of being silently pinned to a value chosen here.
+///
+/// NOT `Copy`: the neural backbone is a `Vec<usize>` of arbitrary depth, and the alternative -
+/// pinning it to a fixed-capacity array to keep the marker - would cap how deep a network the user
+/// may write in the grid for the sake of one dereference on the winning combination. The only site
+/// that relied on `Copy` is the winner's refit, which clones instead.
 #[cfg(feature = "execute")]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct OrdinalConfig {
     family: OrdinalFamily,
     alpha: Option<f64>,
@@ -315,6 +353,13 @@ struct OrdinalConfig {
     link: Option<Link>,
     loss: Option<OrdinalLoss>,
     margin: Option<Margin>,
+    head: Option<OrdinalHead>,
+    activation: Option<Activation>,
+    hidden_layers: Option<Vec<usize>>,
+    /// Weight initialization seed for the neural family, taken from the node's Seed pin. Not a grid
+    /// parameter: it is carried on the config so the winner's refit initializes from exactly the
+    /// same point the cross-validated score was earned at.
+    seed: u64,
 }
 
 /// Reads a JSON value as an integer, accepting `500` and `500.0` alike.
@@ -336,7 +381,9 @@ impl OrdinalConfig {
     ///
     /// Runs before any data is loaded so a malformed grid entry fails immediately rather than after
     /// the first fold of the first combination has already been fitted.
-    fn parse(family: OrdinalFamily, params: &HashMap<String, Value>) -> Result<Self> {
+    ///
+    /// `seed` is the node's Seed pin, reused for the neural weight initialization; see the field.
+    fn parse(family: OrdinalFamily, params: &HashMap<String, Value>, seed: u64) -> Result<Self> {
         let mut config = OrdinalConfig {
             family,
             alpha: None,
@@ -345,6 +392,10 @@ impl OrdinalConfig {
             link: None,
             loss: None,
             margin: None,
+            head: None,
+            activation: None,
+            hidden_layers: None,
+            seed,
         };
 
         if let Some(value) = params.get("alpha") {
@@ -438,6 +489,81 @@ impl OrdinalConfig {
             )?);
         }
 
+        if let Some(value) = params.get("head") {
+            config.head = Some(parse_named(
+                value,
+                "head",
+                &HEAD_NAMES,
+                |name| match name {
+                    "Coral" => Some(OrdinalHead::Coral),
+                    "Corn" => Some(OrdinalHead::Corn),
+                    _ => None,
+                },
+            )?);
+        }
+
+        if let Some(value) = params.get("activation") {
+            config.activation = Some(parse_named(
+                value,
+                "activation",
+                &ACTIVATION_NAMES,
+                |name| match name {
+                    "Relu" => Some(Activation::Relu),
+                    "Tanh" => Some(Activation::Tanh),
+                    _ => None,
+                },
+            )?);
+        }
+
+        // A string rather than a JSON array, so the grid says what the neural node's Hidden Layers
+        // pin says and a user can move a value between the two unchanged. Parsed exactly as that
+        // pin parses it, down to skipping blank entries, so a grid that trains there trains here.
+        if let Some(value) = params.get("hidden_layers") {
+            let mut widths: Vec<usize> = Vec::new();
+            // Two accepted spellings on purpose. The string form matches the neural node's Hidden
+            // Layers pin, so a value moves between the two unchanged. The array form is what Auto
+            // Ordinal writes into its leaderboard, so a winning row can be pasted straight into
+            // this grid — rejecting it would break the very hand-off this node exists to serve.
+            let tokens: Vec<String> = match value {
+                Value::String(text) => text
+                    .split(',')
+                    .map(|token| token.trim().to_string())
+                    .filter(|token| !token.is_empty())
+                    .collect(),
+                Value::Array(entries) => entries.iter().map(|entry| entry.to_string()).collect(),
+                other => {
+                    return Err(anyhow!(
+                        "Parameter `hidden_layers` expects comma-separated layer widths as a string such as \"16, 8\", or a list such as [16, 8], got {other}. Use \"\" for no hidden layer at all."
+                    ));
+                }
+            };
+            for token in tokens {
+                let width = token.parse::<usize>().map_err(|_| {
+                    anyhow!(
+                        "Parameter `hidden_layers` takes comma-separated layer widths such as `16, 8`, but `{token}` is not a whole number. Use an empty string for no hidden layer at all."
+                    )
+                })?;
+                if width == 0 {
+                    return Err(anyhow!(
+                        "Parameter `hidden_layers` gives layer {} a width of 0 (entry `{token}`); a zero-width layer disconnects the head from the features and can only fit a constant. Give it at least 1 unit, or use an empty string for no hidden layer at all.",
+                        widths.len()
+                    ));
+                }
+                widths.push(width);
+            }
+            config.hidden_layers = Some(widths);
+        }
+
+        // Also accepted so an Auto Ordinal leaderboard row pastes in whole. Sweeping it is a real
+        // use too: a win that survives several seeds is a win, and one that does not was luck in
+        // the weight initialization.
+        if let Some(value) = params.get("seed") {
+            let seed = as_integer(value).ok_or_else(|| {
+                anyhow!("Parameter `seed` expects a non-negative whole number, got {value}")
+            })?;
+            config.seed = seed as u64;
+        }
+
         Ok(config)
     }
 
@@ -497,6 +623,34 @@ impl OrdinalConfig {
         params
     }
 
+    /// The neural configuration, built in one place so cross-validation and the winner's refit
+    /// cannot diverge: the weight initialization is the only randomness in the fit, and a winner
+    /// rebuilt from a different starting point is not the model whose score was reported.
+    fn neural_params(&self, n_levels: usize) -> OrdinalNeuralParams<f64> {
+        let mut params = OrdinalNeural::<f64>::params()
+            .n_levels(n_levels)
+            .seed(self.seed);
+        if let Some(alpha) = self.alpha {
+            params = params.alpha(alpha);
+        }
+        if let Some(rate) = self.learning_rate {
+            params = params.learning_rate(rate);
+        }
+        if let Some(iterations) = self.max_iterations {
+            params = params.max_iterations(iterations);
+        }
+        if let Some(head) = self.head {
+            params = params.head(head);
+        }
+        if let Some(activation) = self.activation {
+            params = params.activation(activation);
+        }
+        if let Some(layers) = self.hidden_layers.as_deref() {
+            params = params.hidden_layers(layers);
+        }
+        params
+    }
+
     /// Fits on the training split and predicts the held-out rows.
     ///
     /// `n_levels` is always the resolved level count, never the fold's own: a level a fold happens
@@ -527,6 +681,11 @@ impl OrdinalConfig {
                 .predict(validation),
             OrdinalFamily::AdjacentCategory => self
                 .adjacent_params(n_levels)
+                .fit(train)
+                .map_err(describe)?
+                .predict(validation),
+            OrdinalFamily::Neural => self
+                .neural_params(n_levels)
                 .fit(train)
                 .map_err(describe)?
                 .predict(validation),
@@ -575,6 +734,13 @@ impl OrdinalConfig {
                     .map_err(describe)?,
                 classes,
             }),
+            OrdinalFamily::Neural => MLModel::OrdinalNeural(ModelWithMeta {
+                model: self
+                    .neural_params(n_levels)
+                    .fit(dataset)
+                    .map_err(describe)?,
+                classes,
+            }),
         };
         Ok(model)
     }
@@ -588,6 +754,7 @@ fn family_label(family: OrdinalFamily) -> &'static str {
         OrdinalFamily::Ridge => "ordinal ridge",
         OrdinalFamily::ContinuationRatio => "the continuation ratio model",
         OrdinalFamily::AdjacentCategory => "the adjacent category model",
+        OrdinalFamily::Neural => "the neural ordinal model",
     }
 }
 
@@ -695,7 +862,7 @@ impl NodeLogic for OrdinalGridSearchNode {
         node.add_input_pin(
             "model_type",
             "Model Type",
-            "Which ordinal family to tune. OrdinalLogistic is the threshold model, the widest family here: it takes a link, a loss and a margin, and covers proportional odds, ordered probit and support vector ordinal regression. OrdinalRidge is rank regression with learned cut points, closed-form and so by far the cheapest to sweep, but it has only a penalty to tune. OrdinalContinuationRatio models a sequential progression, `P(stop at k | reached k)`. OrdinalAdjacentCategory contrasts neighbouring levels instead of splitting the scale cumulatively. Switching this after the Parameter Grid was seeded does NOT rewrite the grid - the run rejects parameters the new family does not consume rather than ignoring them silently.",
+            "Which ordinal family to tune. OrdinalLogistic is the threshold model, the widest family here: it takes a link, a loss and a margin, and covers proportional odds, ordered probit and support vector ordinal regression. OrdinalRidge is rank regression with learned cut points, closed-form and so by far the cheapest to sweep, but it has only a penalty to tune. OrdinalContinuationRatio models a sequential progression, `P(stop at k | reached k)`. OrdinalAdjacentCategory contrasts neighbouring levels instead of splitting the scale cumulatively. OrdinalNeural is a small network under a rank-consistent CORAL or CORN head, the only family here that is not linear in the features and the only one that can represent a level that is not monotone in them - and by a wide margin the most expensive to sweep, since every combination trains a whole network from scratch on every fold, so keep its grid small. Switching this after the Parameter Grid was seeded does NOT rewrite the grid - the run rejects parameters the new family does not consume rather than ignoring them silently.",
             VariableType::String,
         )
         .set_options(
@@ -730,7 +897,7 @@ impl NodeLogic for OrdinalGridSearchNode {
         node.add_input_pin(
             "metric",
             "Metric",
-            "What the sweep is ranked by. QuadraticWeightedKappa is chance-corrected agreement that forgives a near miss and punishes a distant one four times as hard - the standard headline metric for ordered targets. LinearWeightedKappa charges the same for every step along the scale, which is what you want when one level is one unit of loss. MeanAbsoluteRankError is the average number of levels a prediction is off by, and MacroMeanAbsoluteError is the same averaged per true level so a rare level counts as much as the majority one - both are ERROR metrics, so the SMALLEST value wins and the `higher_is_better` output says so. KendallTauB and SpearmanRankCorrelation ask only whether the rows come out in the right order and ignore calibration entirely, so a model whose levels are all shifted by one still scores perfectly.",
+            "What the sweep is ranked by. Quadratic Kappa is chance-corrected agreement that forgives a near miss and punishes a distant one four times as hard - the standard headline metric for ordered targets. Linear Kappa charges the same for every step along the scale, which is what you want when one level is one unit of loss. Mean Rank Error is the average number of levels a prediction is off by, and Macro Rank Error is the same averaged per true level so a rare level counts as much as the majority one - both are ERROR metrics, so the SMALLEST value wins and the `higher_is_better` output says so. Kendall Tau-b and Spearman ask only whether the rows come out in the right order and ignore calibration entirely, so a model whose levels are all shifted by one still scores perfectly.",
             VariableType::String,
         )
         .set_options(
@@ -743,7 +910,7 @@ impl NodeLogic for OrdinalGridSearchNode {
         node.add_input_pin(
             "seed",
             "Seed",
-            "Seed for the fold shuffle. The same seed reproduces the same folds and therefore the same winner; change it to check whether a narrow win survives a different split.",
+            "Seed for the fold shuffle, and for the weight initialization when Model Type is OrdinalNeural - the two sources of randomness in the sweep, tied to one value so the same seed reproduces the same folds, the same fits and therefore the same winner. Change it to check whether a narrow win survives a different split, which for the neural family also re-rolls the starting point of a non-convex fit. The winner is retrained from the same initialization it was scored at.",
             VariableType::Integer,
         )
         .set_options(PinOptions::new().set_range((0.0, 4294967295.0)).build())
@@ -861,8 +1028,11 @@ impl NodeLogic for OrdinalGridSearchNode {
             .filter(|name| !accepted.contains(name))
             .collect();
         if !unknown.is_empty() {
+            // The pin is seeded once, at the model type selected when the node was placed, and is
+            // deliberately never rewritten. Switching Model Type therefore lands here, so the
+            // message has to carry the recovery rather than only the diagnosis.
             return Err(anyhow!(
-                "{model_type} does not use these Parameter Grid entries: {}. It accepts: {}.",
+                "{model_type} does not use these Parameter Grid entries: {}. It accepts: {}. The grid is seeded once when the node is placed and is not rewritten when Model Type changes, so this is what a leftover grid from a previous family looks like — clear the Parameter Grid to fall back to the defaults for {model_type}.",
                 unknown.join(", "),
                 accepted.join(", ")
             ));
@@ -877,7 +1047,7 @@ impl NodeLogic for OrdinalGridSearchNode {
         // the first combination has already been fitted on every fold.
         let mut trials: Vec<Trial> = Vec::with_capacity(n_combinations);
         for params in param_combinations {
-            let config = OrdinalConfig::parse(family, &params)?;
+            let config = OrdinalConfig::parse(family, &params, seed)?;
             trials.push(Trial {
                 params,
                 config,
@@ -1003,6 +1173,17 @@ impl NodeLogic for OrdinalGridSearchNode {
             ),
             LogLevel::Info,
         );
+        // The runtime jump is large enough that the size of the sweep is worth saying out loud
+        // before it starts rather than after it has been running for an hour.
+        if family == OrdinalFamily::Neural {
+            context.log_message(
+                &format!(
+                    "Neural family selected: {n_combinations} combinations, each refitted once per fold across {cv_folds} folds, so {} network fits before the winner is retrained on the full data. A network is by far the most expensive estimator here - every other ordinal family is one gradient or least-squares fit over a single coefficient vector - so keep the grid small and add architectures one at a time. Its hidden layers are the only thing it adds: with none, CORAL is exactly the all-threshold model and CORN exactly Continuation Ratio, so if a linear family scores as well, prefer it.",
+                    n_combinations.saturating_mul(cv_folds)
+                ),
+                LogLevel::Warn,
+            );
+        }
 
         let mut indices: Vec<usize> = (0..n_samples).collect();
         // Seeded on purpose: an unseeded shuffle makes the sweep irreproducible, and with several
@@ -1142,7 +1323,7 @@ impl NodeLogic for OrdinalGridSearchNode {
         }
 
         let (best_config, best_params, _) = &finished[best_index];
-        let best_config = *best_config;
+        let best_config = best_config.clone();
         let best_params = best_params.clone();
 
         let dataset = DatasetBase::new(features, ranks);
@@ -1226,7 +1407,7 @@ impl NodeLogic for OrdinalGridSearchNode {
             node.add_input_pin(
                 "param_grid",
                 "Parameter Grid",
-                "Hyperparameters to search over, as a list of `{name, values}` entries; the sweep is their full cartesian product. Leave empty to use the default grid for the selected Model Type. Names must be ones the family consumes - OrdinalLogistic takes alpha, link, loss, margin, learning_rate and max_iterations; OrdinalRidge takes alpha; OrdinalContinuationRatio takes alpha, link and learning_rate; OrdinalAdjacentCategory takes alpha and learning_rate - and anything else is rejected rather than ignored, because an ignored entry would score the same configuration over and over.",
+                "Hyperparameters to search over, as a list of `{name, values}` entries; the sweep is their full cartesian product. Leave empty to use the default grid for the selected Model Type. Names must be ones the family consumes - OrdinalLogistic takes alpha, link, loss, margin, learning_rate and max_iterations; OrdinalRidge takes alpha; OrdinalContinuationRatio takes alpha, link and learning_rate; OrdinalAdjacentCategory takes alpha and learning_rate; OrdinalNeural takes alpha, head (`Coral` or `Corn`), activation (`Relu` or `Tanh`), hidden_layers, learning_rate and max_iterations - and anything else is rejected rather than ignored, because an ignored entry would score the same configuration over and over. hidden_layers is a STRING of comma-separated widths written exactly as the neural node's Hidden Layers pin takes them, e.g. `\"16\"` or `\"16, 8\"`, with `\"\"` for no hidden layer at all; every width must be at least 1. Keep the neural grid small - each of its combinations trains a network from scratch on every fold, and the default already crosses three architectures with two step sizes.",
                 VariableType::Struct,
             )
             .set_schema::<Vec<ParameterSpec>>()

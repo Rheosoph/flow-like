@@ -194,7 +194,7 @@ impl NodeLogic for FitOrdinalLogisticNode {
         node.add_input_pin(
             "free_features",
             "Free Features",
-            "Comma-separated feature INDICES (0-based, e.g. `0, 3`) that get their own coefficient at EVERY cut point instead of one shared across all of them — the partial proportional-odds model. Empty is the standard model, where a single slope describes every cut point; that is an assumption, and the Proportional Odds Report node tells you which features violate it. Freeing only those keeps every other feature parsimonious. Listing every index gives the fully generalized ordinal model. The price shows up on Crossing Rate: unconstrained per-cut slopes let the cumulative curves cross, which is no longer a valid probability model.",
+            "Comma-separated feature INDICES (0-based, e.g. `0, 3`) that get their own coefficient at EVERY cut point instead of one shared across all of them — the partial proportional-odds model. Empty is the standard model, where a single slope describes every cut point; that is an assumption. Free a feature when you suspect it violates it, then check the Effective Coefficients output: a feature whose per-cut slopes barely differ gained nothing by being freed. Freeing only the ones that do differ keeps every other feature parsimonious. Listing every index gives the fully generalized ordinal model. The price shows up on Crossing Rate: unconstrained per-cut slopes let the cumulative curves cross, which is no longer a valid probability model.",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));

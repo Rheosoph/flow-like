@@ -1,0 +1,24 @@
+---
+title: "Train Ordinal Model (Continuation Ratio) Node"
+description: "Train Ordinal Model (Continuation Ratio) Flow-Like node: Fit/Train a continuation-ratio model on an ORDERED target that is really a process that can halt."
+sidebar:
+  label: "Train Ordinal Model (Continuation Ratio)"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Train Ordinal Model (Continuation Ratio), Train Ordinal Model (Continuation Ratio) node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Ordinal, ml, fit_ordinal_continuation_ratio, AI, Ordinal, pins, schemas, security rating"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/ML/Ordinal"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Train Ordinal Model (Continuation Ratio) Node\",\"name\":\"Train Ordinal Model (Continuation Ratio)\",\"description\":\"Train Ordinal Model (Continuation Ratio) Flow-Like node: Fit/Train a continuation-ratio model on an ORDERED target that is really a process that can halt.\",\"url\":\"https://docs.flow-like.com/nodes/ai/ml/ordinal/fit-ordinal-continuation-ratio/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/ML/Ordinal\",\"keywords\":\"Train Ordinal Model (Continuation Ratio), Train Ordinal Model (Continuation Ratio) node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Ordinal, ml, fit_ordinal_continuation_ratio, AI, Ordinal, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Train Ordinal Model (Continuation Ratio)\",\"description\":\"Fit/Train a continuation-ratio model on an ORDERED target that is really a process that can halt. It fits K-1 sub-models, where sub-model k answers `given this row reached level k, did it STOP there?`, so the model describes a progression through the levels instead of placing cut points on a latent scale. Reach for it when the levels are genuinely sequential and each one had to be passed to get to the next: escalation tiers, disease stages, how far a signup funnel got, how far an incident escalated before it was contained. Each sub-model carries its own coefficient vector, so nothing assumes proportional odds, and the per-level probabilities are exact by the chain rule rather than differences of two fits. The cost is strictness: because each sub-model is conditioned on having reached its level, EVERY level must occur in the training data, middle ones included. Scale your features first with the Fit Feature Scaler node: these are gradient fits, and unscaled columns make them converge slowly or not at all.\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
+---
+
+import { NodeReference } from "../../../../../../components/node-docs/NodeReference";
+import { nodesBySlug } from "../../../../../../generated/catalog-nodes";
+
+<NodeReference node={nodesBySlug["nodes/ai/ml/ordinal/fit-ordinal-continuation-ratio"]} />

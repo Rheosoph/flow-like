@@ -1,6 +1,7 @@
 {
 	"schemaVersion": 1,
 	"createdOn": "2026-07-29",
+	"updatedOn": "2026-08-11",
 	"visualSystem": {
 		"canvas": "dark charcoal",
 		"primary": "#ff7656",
@@ -92,6 +93,30 @@
 			"dimensions": "1440x720",
 			"source": "deterministic SVG composition",
 			"page": "topics/ontology/remote.md"
+		},
+		{
+			"file": "MachineLearningOverview.webp",
+			"dimensions": "1672x941",
+			"source": "built-in image generation",
+			"page": "topics/datascience/ml.md"
+		},
+		{
+			"file": "MLTaskDecisionGuide.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/datascience/ml.md"
+		},
+		{
+			"file": "MLConfigurationMap.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/datascience/ml-configuration.md"
+		},
+		{
+			"file": "MLAutoTraining.svg",
+			"dimensions": "1440x720",
+			"source": "deterministic SVG composition",
+			"page": "topics/datascience/ml-auto-training.md"
 		}
 	]
 }
