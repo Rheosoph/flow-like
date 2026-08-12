@@ -15,7 +15,7 @@ use axum::{
 use flow_like_types::create_id;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter,
-    TransactionTrait,
+    TransactionTrait, sea_query::OnConflict,
 };
 
 #[utoipa::path(
@@ -114,6 +114,24 @@ pub async fn accept_invite(
         }
     }
 
+    // The user may already be a member via an invite link or approved join
+    // request while a stale invitation lingers. Inserting again would hit the
+    // (userId, appId) unique constraint and 500; instead, clear the invite and
+    // report success so the pending card disappears and the counts settle.
+    let already_member = membership::Entity::find()
+        .filter(membership::Column::AppId.eq(app.id.clone()))
+        .filter(membership::Column::UserId.eq(sub.clone()))
+        .one(&txn)
+        .await?
+        .is_some();
+
+    if already_member {
+        let invite: invitation::ActiveModel = invite.into();
+        invite.delete(&txn).await?;
+        txn.commit().await?;
+        return Ok(Json(()));
+    }
+
     let membership = membership::ActiveModel {
         id: Set(create_id()),
         user_id: Set(sub),
@@ -124,7 +142,16 @@ pub async fn accept_invite(
         joined_via: Set(Some("invite".to_string())),
     };
 
-    membership.insert(&txn).await?;
+    // do_nothing guards the residual race with a concurrent join on the same
+    // (userId, appId); either way the invite is consumed below.
+    membership::Entity::insert(membership)
+        .on_conflict(
+            OnConflict::columns([membership::Column::UserId, membership::Column::AppId])
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec_without_returning(&txn)
+        .await?;
 
     let invite: invitation::ActiveModel = invite.into();
     invite.delete(&txn).await?;

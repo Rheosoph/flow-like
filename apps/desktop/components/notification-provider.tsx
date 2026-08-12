@@ -1,12 +1,15 @@
 "use client";
 
+import { useBackend, useHub } from "@flow-like/flow-like-ui";
+import type {
+	IIntercomEvent,
+	INotificationEvent,
+} from "@flow-like/flow-like-ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
-import { useBackend, useHub } from "@flow-like/flow-like-ui";
-import type { IIntercomEvent, INotificationEvent } from "@flow-like/flow-like-ui";
-import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../lib/api";
@@ -16,16 +19,16 @@ import {
 } from "../lib/flow-notification-events";
 import { addLocalNotification } from "../lib/notifications-db";
 import {
+	type PushTargetPlatform,
 	REMOTE_PUSH_PREFERENCE_EVENT,
+	type RemotePushApi,
+	type RemotePushListener,
+	type RemotePushPayload,
 	canUseRemotePushForPlatform,
 	detectPushPlatform,
 	getPushDeviceId,
 	isRemotePushPreferenceEnabled,
 	loadRemotePushPlugin,
-	type PushTargetPlatform,
-	type RemotePushApi,
-	type RemotePushListener,
-	type RemotePushPayload,
 } from "../lib/remote-push";
 import type { TauriBackend } from "./tauri-provider";
 
@@ -145,6 +148,12 @@ export default function NotificationProvider({
 	const userId = currentUser?.profile?.sub ?? "offline-user";
 	const notificationApi = useRef<NotificationApi | null>(null);
 	const permissionGranted = useRef<boolean>(false);
+	// Signed-in runs persist notifications to the hub (the run carries a token),
+	// so a local copy would be a duplicate. Tracked in a ref so the long-lived
+	// stream listeners always read the current value, not a stale closure.
+	const hubOwnsPersistenceRef = useRef<boolean>(false);
+	hubOwnsPersistenceRef.current =
+		Boolean(isAuthenticated) && Boolean(tauriBackend?.profile);
 	const remotePushApi = useRef<RemotePushApi | null>(null);
 	const remotePushListeners = useRef<RemotePushListener[]>([]);
 	const tapListener = useRef<RemotePushListener | null>(null);
@@ -182,17 +191,22 @@ export default function NotificationProvider({
 		try {
 			const notificationAppId = appIdOverride ?? appId;
 
-			await addLocalNotification({
-				userId,
-				appId: notificationAppId,
-				title,
-				description,
-				icon,
-				link,
-				notificationType: notificationType ?? "WORKFLOW",
-				sourceRunId,
-				sourceNodeId,
-			});
+			// Keep a local copy only for offline history; when the hub owns
+			// persistence the same notification already lives server-side, so writing
+			// it locally too would double it in the list and the unread badge.
+			if (!hubOwnsPersistenceRef.current) {
+				await addLocalNotification({
+					userId,
+					appId: notificationAppId,
+					title,
+					description,
+					icon,
+					link,
+					notificationType: notificationType ?? "WORKFLOW",
+					sourceRunId,
+					sourceNodeId,
+				});
+			}
 
 			await queryClient.refetchQueries({
 				predicate: (query) => {

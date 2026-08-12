@@ -1,7 +1,7 @@
 use crate::{entity::user, state::AppState};
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use billing::get_billing_session;
 use flow_like_types::create_id;
@@ -137,7 +137,11 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/notifications/{notification_id}",
-            post(notifications::mark_notification_read).delete(notifications::delete_notification),
+            delete(notifications::delete_notification),
+        )
+        .route(
+            "/notifications/{notification_id}/read",
+            post(notifications::mark_notification_read),
         )
         .route(
             "/invites/{invite_id}",

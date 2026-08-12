@@ -360,7 +360,7 @@ async fn run_node_logic_only(
     if let Err(e) = result {
         let err_string = format!("{:?}", e);
         ctx.log_message(
-            &format!("Failed to execute node: {}", &err_string),
+            &format!("Failed to execute node: {}", err_string),
             LogLevel::Error,
         );
         finish_debug_log(ctx, &mut log_message);
@@ -1050,7 +1050,7 @@ impl InternalNode {
 
         if connected.is_empty() {
             context.log_message(
-                &format!("No error handling nodes found for: {}", &context.id),
+                &format!("No error handling nodes found for: {}", context.id),
                 LogLevel::Error,
             );
             return Err(InternalNodeError::ExecutionFailed(error.to_string()));

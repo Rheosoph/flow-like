@@ -2,6 +2,7 @@ pub mod add_image_stamp;
 pub mod add_page_numbers;
 pub mod add_watermark;
 pub mod compress;
+pub mod create_from_markdown;
 pub mod decrypt;
 pub mod encrypt;
 pub mod extract_pages;
@@ -11,6 +12,8 @@ pub mod list_form_fields;
 pub mod merge;
 pub mod metadata;
 pub mod page_count;
+#[cfg(feature = "execute")]
+pub mod render;
 pub mod replace_image;
 pub mod replace_text;
 pub mod rotate_pages;

@@ -118,7 +118,6 @@
 		"@udecode/cmdk": "^0.2.1",
 		"@udecode/cn": "^49.0.15",
 		"@uidotdev/usehooks": "^2.4.1",
-		"@uploadthing/react": "^7.3.2",
 		"@vitejs/plugin-react": "^4.3.4",
 		"@xyflow/react": "^12.10.0",
 		"add": "^2.0.6",

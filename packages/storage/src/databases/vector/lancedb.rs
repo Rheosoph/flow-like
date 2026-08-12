@@ -28,7 +28,10 @@ use lancedb::{
 use std::{any::Any, path::PathBuf, sync::Arc};
 
 use crate::arrow_utils::record_batch_to_value;
-use crate::arrow_utils::{ValueBatchReader, value_to_batch_reader_with_fields};
+use crate::arrow_utils::{
+    ValueBatchReader, value_to_batch_reader_with_fields,
+    value_to_batch_reader_with_utc_timestamp_inference,
+};
 
 use super::VectorStore;
 
@@ -74,6 +77,10 @@ impl LanceDBVectorStore {
 
     pub fn table_name(&self) -> &str {
         &self.table_name
+    }
+
+    pub fn connection(&self) -> &Connection {
+        &self.connection
     }
 
     pub async fn new(path: PathBuf, table_name: String) -> Result<Self> {
@@ -131,7 +138,7 @@ impl LanceDBVectorStore {
                 .expect("table existence was checked")
                 .schema()
                 .await?;
-            if existing_schema.as_ref() == &schema {
+            if schemas_compatible_for_creation(existing_schema.as_ref(), &schema) {
                 return Ok(false);
             }
             return Err(anyhow!(
@@ -160,7 +167,12 @@ impl LanceDBVectorStore {
             }
             Err(error) => return Err(error.into()),
         };
-        if !created && table.schema().await?.as_ref() != requested_schema.as_ref() {
+        if !created
+            && !schemas_compatible_for_creation(
+                table.schema().await?.as_ref(),
+                requested_schema.as_ref(),
+            )
+        {
             return Err(anyhow!(
                 "Table '{}' already exists with a different schema",
                 self.table_name
@@ -367,15 +379,44 @@ impl LanceDBVectorStore {
     }
 
     async fn write_batch_reader(&self, items: Vec<Value>) -> Result<ValueBatchReader> {
-        let fields = if let Some(table) = &self.table {
+        if let Some(table) = &self.table {
             let schema = table.schema().await?;
-            Some(schema.fields().iter().cloned().collect())
-        } else {
-            None
-        };
+            let fields = schema.fields().iter().cloned().collect();
+            return value_to_batch_reader_with_fields(items, Some(fields));
+        }
 
-        value_to_batch_reader_with_fields(items, fields)
+        value_to_batch_reader_with_utc_timestamp_inference(items)
     }
+}
+
+/// Treat the historical timezone-less millisecond timestamp as compatible
+/// with the UTC-aware schema now emitted for new timestamp columns. The stored
+/// schema remains authoritative; writes to that legacy shape are normalized at
+/// the serialization boundary.
+fn schemas_compatible_for_creation(existing: &Schema, requested: &Schema) -> bool {
+    if existing == requested {
+        return true;
+    }
+
+    existing.metadata() == requested.metadata()
+        && existing.fields().len() == requested.fields().len()
+        && existing
+            .fields()
+            .iter()
+            .zip(requested.fields())
+            .all(|(existing, requested)| {
+                existing.name() == requested.name()
+                    && existing.is_nullable() == requested.is_nullable()
+                    && existing.metadata() == requested.metadata()
+                    && (existing.data_type() == requested.data_type()
+                        || matches!(
+                            (existing.data_type(), requested.data_type()),
+                            (
+                                DataType::Timestamp(existing_unit, None),
+                                DataType::Timestamp(requested_unit, Some(timezone)),
+                            ) if existing_unit == requested_unit && timezone.eq_ignore_ascii_case("UTC")
+                        ))
+            })
 }
 
 pub fn record_batches_to_vec(batches: Option<Vec<RecordBatch>>) -> Result<Vec<Value>> {
@@ -779,8 +820,10 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::databases::vector::buffered::BufferedVectorStore;
-    use arrow_schema::Field;
+    use crate::databases::vector::buffered::{
+        BufferedVectorStore, BufferedWriteError, BufferedWriteKind, BufferedWriteOrigin,
+    };
+    use arrow_schema::{Field, TimeUnit};
     use flow_like_types::{
         create_id,
         json::{from_value, json, to_value},
@@ -837,6 +880,100 @@ mod tests {
         let mismatch = Schema::new(vec![Field::new("id", DataType::Utf8, false)]);
         let error = db.create_empty_table(mismatch, true).await.unwrap_err();
         assert!(error.to_string().contains("different schema"));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn new_tables_infer_utc_dates_without_changing_legacy_string_columns() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+        let timestamp = "2026-08-09T12:34:56.789Z";
+
+        let mut inferred =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "inferred_dates".to_string())
+                .await?;
+        inferred
+            .insert(vec![json!({ "created_at": timestamp })])
+            .await?;
+        assert_eq!(
+            inferred
+                .schema()
+                .await?
+                .field_with_name("created_at")?
+                .data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into()))
+        );
+
+        let mut legacy =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "legacy_strings".to_string())
+                .await?;
+        legacy
+            .create_empty_table(
+                Schema::new(vec![Field::new("created_at", DataType::LargeUtf8, false)]),
+                false,
+            )
+            .await?;
+        let mut legacy =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "legacy_strings".to_string())
+                .await?;
+        legacy
+            .insert(vec![json!({ "created_at": timestamp })])
+            .await?;
+        assert_eq!(
+            legacy
+                .schema()
+                .await?
+                .field_with_name("created_at")?
+                .data_type(),
+            &DataType::LargeUtf8
+        );
+        assert_eq!(legacy.list(None, 1, 0).await?[0]["created_at"], timestamp);
+
+        let mut legacy_timestamp =
+            LanceDBVectorStore::new(PathBuf::from(&test_path), "legacy_timestamp".to_string())
+                .await?;
+        legacy_timestamp
+            .create_empty_table(
+                Schema::new(vec![
+                    Field::new("id", DataType::Int64, false),
+                    Field::new(
+                        "created_at",
+                        DataType::Timestamp(TimeUnit::Millisecond, None),
+                        false,
+                    ),
+                ]),
+                false,
+            )
+            .await?;
+        assert!(
+            !legacy_timestamp
+                .create_empty_table(
+                    Schema::new(vec![
+                        Field::new("id", DataType::Int64, false),
+                        Field::new(
+                            "created_at",
+                            DataType::Timestamp(TimeUnit::Millisecond, Some("UTC".into())),
+                            false,
+                        ),
+                    ]),
+                    true,
+                )
+                .await?
+        );
+        legacy_timestamp
+            .insert(vec![json!({ "id": 1, "created_at": timestamp })])
+            .await?;
+        assert_eq!(legacy_timestamp.count(None).await?, 1);
+        assert_eq!(
+            legacy_timestamp
+                .schema()
+                .await?
+                .field_with_name("created_at")?
+                .data_type(),
+            &DataType::Timestamp(TimeUnit::Millisecond, None)
+        );
 
         std::fs::remove_dir_all(&test_path)?;
         Ok(())
@@ -1369,6 +1506,139 @@ mod tests {
 
         std::fs::remove_dir_all(&test_path).unwrap();
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn buffered_write_failures_keep_the_exact_writer_origin() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+
+        let inner = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        let mut db = BufferedVectorStore::new(inner, 2);
+
+        // Establish a non-nullable three-column schema first.
+        db.upsert(
+            vec![json!({"id": 1, "name": "seed", "tag": "seed"})],
+            "id".to_string(),
+        )
+        .await?;
+        db.flush().await?;
+
+        let good_origin =
+            BufferedWriteOrigin::new(Arc::from("writer-good"), Some("operation-good".to_string()));
+        let bad_origin =
+            BufferedWriteOrigin::new(Arc::from("writer-bad"), Some("operation-bad".to_string()));
+
+        db.upsert_with_origin(
+            vec![json!({"id": 2, "name": "persisted", "tag": "valid"})],
+            "id".to_string(),
+            good_origin,
+        )
+        .await?;
+        let error = db
+            .upsert_with_origin(
+                vec![json!({"id": 3, "name": "rejected"})],
+                "id".to_string(),
+                bad_origin.clone(),
+            )
+            .await
+            .expect_err("the second row should trigger a threshold flush failure");
+
+        let report = error
+            .downcast_ref::<BufferedWriteError>()
+            .expect("flush error should retain structured failures");
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].origin.as_ref(), Some(&bad_origin));
+        assert_eq!(report.failures[0].operation, BufferedWriteKind::Upsert);
+        assert!(!report.failures[0].error.is_empty());
+        assert!(!error.to_string().contains("rejected"));
+
+        // The report survives the failed flush so a completion callback can
+        // still create a node-attributed error after the buffer was drained.
+        assert!(!db.is_dirty());
+        assert!(db.has_write_failures());
+        assert_eq!(
+            db.write_failure_report()
+                .expect("ensure-flush callers should still see the failure")
+                .failures,
+            report.failures
+        );
+        let retained = db.take_write_failures();
+        assert_eq!(retained, report.failures);
+        assert!(!db.has_write_failures());
+
+        let insert_origin = BufferedWriteOrigin::new(
+            Arc::from("insert-writer"),
+            Some("insert-operation".to_string()),
+        );
+        db.insert_with_origin(
+            vec![json!({"id": 4, "name": "invalid-insert"})],
+            insert_origin.clone(),
+        )
+        .await?;
+        let insert_error = db.flush().await.expect_err("insert row should fail");
+        let insert_report = insert_error
+            .downcast_ref::<BufferedWriteError>()
+            .expect("insert flush should retain structured failures");
+        assert_eq!(insert_report.failures.len(), 1);
+        assert_eq!(
+            insert_report.failures[0].origin.as_ref(),
+            Some(&insert_origin)
+        );
+        assert_eq!(
+            insert_report.failures[0].operation,
+            BufferedWriteKind::Insert
+        );
+        db.take_write_failures();
+
+        let rows = db.list(None, 10, 0).await?;
+        assert!(rows.iter().any(|row| row["id"] == json!(2)));
+        assert!(!rows.iter().any(|row| row["id"] == json!(3)));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn buffered_upsert_deduplication_keeps_last_writer_origin() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+
+        let inner = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        let mut db = BufferedVectorStore::new(inner, 10);
+        db.upsert(
+            vec![json!({"id": 1, "name": "seed", "tag": "seed"})],
+            "id".to_string(),
+        )
+        .await?;
+        db.flush().await?;
+
+        let first_origin =
+            BufferedWriteOrigin::new(Arc::from("writer-first"), Some("first".to_string()));
+        let last_origin =
+            BufferedWriteOrigin::new(Arc::from("writer-last"), Some("last".to_string()));
+        db.upsert_with_origin(
+            vec![json!({"id": 2, "name": "first-invalid"})],
+            "id".to_string(),
+            first_origin,
+        )
+        .await?;
+        db.upsert_with_origin(
+            vec![json!({"id": 2, "name": "last-invalid"})],
+            "id".to_string(),
+            last_origin.clone(),
+        )
+        .await?;
+
+        let error = db.flush().await.expect_err("deduplicated row should fail");
+        let report = error
+            .downcast_ref::<BufferedWriteError>()
+            .expect("flush error should retain structured failures");
+        assert_eq!(report.failures.len(), 1);
+        assert_eq!(report.failures[0].origin.as_ref(), Some(&last_origin));
+
+        std::fs::remove_dir_all(&test_path)?;
         Ok(())
     }
 

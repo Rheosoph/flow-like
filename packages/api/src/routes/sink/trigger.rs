@@ -723,7 +723,7 @@ pub async fn trigger_event(
         None => None,
     };
 
-    let wasm_packages = resolve_wasm_packages(&state, &sink.app_id).await;
+    let wasm_packages = resolve_wasm_packages(state, &sink.app_id).await;
 
     // Build dispatch request
     let request = DispatchRequest {

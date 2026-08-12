@@ -63,6 +63,7 @@ fn key_condition(key: &CacheKey) -> Condition {
         .add(app_cache_entry::Column::AppId.eq(key.app_id.clone()))
         .add(app_cache_entry::Column::Scope.eq(scope_to_entity(key.scope)))
         .add(app_cache_entry::Column::UserId.eq(key.user_id.clone()))
+        .add(app_cache_entry::Column::Namespace.eq(key.namespace.clone()))
         .add(app_cache_entry::Column::Key.eq(key.key.clone()))
 }
 
@@ -73,11 +74,15 @@ fn live_condition(now: sea_orm::prelude::DateTime) -> Condition {
         .add(app_cache_entry::Column::ExpiresAt.gt(now))
 }
 
-fn active_model(entry: &SetCacheEntry, now: sea_orm::prelude::DateTime) -> app_cache_entry::ActiveModel {
+fn active_model(
+    entry: &SetCacheEntry,
+    now: sea_orm::prelude::DateTime,
+) -> app_cache_entry::ActiveModel {
     app_cache_entry::ActiveModel {
         app_id: Set(entry.key.app_id.clone()),
         scope: Set(scope_to_entity(entry.key.scope)),
         user_id: Set(entry.key.user_id.clone()),
+        namespace: Set(entry.key.namespace.clone()),
         key: Set(entry.key.key.clone()),
         value: Set(entry.value.clone()),
         expires_at: Set(entry.expires_at.map(ts_to_datetime)),
@@ -134,6 +139,7 @@ impl CacheStore for PostgresCacheStore {
                     app_cache_entry::Column::AppId,
                     app_cache_entry::Column::Scope,
                     app_cache_entry::Column::UserId,
+                    app_cache_entry::Column::Namespace,
                     app_cache_entry::Column::Key,
                 ])
                 .update_columns([
@@ -171,6 +177,7 @@ impl CacheStore for PostgresCacheStore {
                     app_cache_entry::Column::AppId,
                     app_cache_entry::Column::Scope,
                     app_cache_entry::Column::UserId,
+                    app_cache_entry::Column::Namespace,
                     app_cache_entry::Column::Key,
                 ])
                 .update_columns([
@@ -215,6 +222,34 @@ impl CacheStore for PostgresCacheStore {
             .map_err(|e| CacheStoreError::Database(e.to_string()))?;
 
         Ok(result.rows_affected > 0)
+    }
+
+    async fn delete_namespace(
+        &self,
+        app_id: &str,
+        scope: CacheScope,
+        user_id: &str,
+        namespace: &str,
+    ) -> Result<i64, CacheStoreError> {
+        if namespace.is_empty() {
+            return Err(CacheStoreError::InvalidInput(
+                "Namespace invalidation requires a non-empty namespace".to_string(),
+            ));
+        }
+
+        let result = app_cache_entry::Entity::delete_many()
+            .filter(
+                Condition::all()
+                    .add(app_cache_entry::Column::AppId.eq(app_id))
+                    .add(app_cache_entry::Column::Scope.eq(scope_to_entity(scope)))
+                    .add(app_cache_entry::Column::UserId.eq(user_id))
+                    .add(app_cache_entry::Column::Namespace.eq(namespace)),
+            )
+            .exec(self.db.as_ref())
+            .await
+            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+
+        Ok(result.rows_affected as i64)
     }
 
     async fn delete_app(&self, app_id: &str) -> Result<i64, CacheStoreError> {

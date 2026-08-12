@@ -1,4 +1,4 @@
-use crate::data::datafusion::session::DataFusionSession;
+use crate::data::datafusion::session::{CachedDataFusionSession, DataFusionSession, DeferredMount};
 use crate::data::path::FlowPath;
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -8,7 +8,7 @@ use flow_like::flow::{
 use flow_like_storage::datafusion::{
     common::TableReference,
     datasource::{
-        file_format::{csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat},
+        file_format::{FileFormat, csv::CsvFormat, json::JsonFormat, parquet::ParquetFormat},
         listing::{ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl},
     },
 };
@@ -17,6 +17,111 @@ use std::sync::Arc;
 
 fn build_store_url(store_ref: &str, path: &str) -> String {
     format!("flowlike://{}/{}", store_ref, path.trim_start_matches('/'))
+}
+
+/// Which listing format a deferred store mount should use.
+enum ListingMountFormat {
+    Parquet,
+    Csv { has_header: bool, delimiter: u8 },
+    Json,
+}
+
+impl ListingMountFormat {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Parquet => "Parquet",
+            Self::Csv { .. } => "CSV",
+            Self::Json => "JSON",
+        }
+    }
+
+    fn file_format(&self) -> Arc<dyn FileFormat> {
+        match self {
+            Self::Parquet => Arc::new(ParquetFormat::default()),
+            Self::Csv {
+                has_header,
+                delimiter,
+            } => Arc::new(
+                CsvFormat::default()
+                    .with_has_header(*has_header)
+                    .with_delimiter(*delimiter),
+            ),
+            Self::Json => Arc::new(JsonFormat::default()),
+        }
+    }
+}
+
+/// Deferred mount shared by the Parquet/CSV/JSON store nodes. Listing the prefix and
+/// inferring the schema hit the object store, so the work only happens when a consumer
+/// actually queries the session.
+struct ListingStoreMount {
+    path: FlowPath,
+    table_name: String,
+    file_extension: String,
+    format: ListingMountFormat,
+}
+
+#[async_trait]
+impl DeferredMount for ListingStoreMount {
+    fn describe(&self) -> String {
+        format!(
+            "{} table '{}' from '{}'",
+            self.format.label(),
+            self.table_name,
+            self.path.path
+        )
+    }
+
+    fn dedupe_key(&self) -> Option<String> {
+        Some(format!("table:{}", self.table_name))
+    }
+
+    async fn mount(
+        &self,
+        session: &CachedDataFusionSession,
+        context: &mut ExecutionContext,
+    ) -> flow_like_types::Result<()> {
+        let store = self.path.to_store(context).await?;
+        let object_store = store.as_generic();
+
+        let url_str = build_store_url(&self.path.store_ref, &self.path.path);
+        let url = Url::parse(&url_str)?;
+        let table_path = ListingTableUrl::parse(&url_str)?;
+
+        session.ctx.register_object_store(&url, object_store);
+
+        let listing_options = ListingOptions::new(self.format.file_format())
+            .with_file_extension(&self.file_extension);
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(listing_options)
+            .infer_schema(&session.ctx.state())
+            .await?;
+
+        let table = ListingTable::try_new(config)?;
+
+        // Retry-safe: a previous partially-failed run of this mount may already have
+        // registered the name.
+        let _ = session
+            .ctx
+            .deregister_table(TableReference::bare(self.table_name.clone()));
+        session.ctx.register_table(
+            TableReference::bare(self.table_name.clone()),
+            Arc::new(table),
+        )?;
+
+        Ok(())
+    }
+}
+
+async fn defer_listing_mount(
+    context: &mut ExecutionContext,
+    session: &DataFusionSession,
+    mount: ListingStoreMount,
+) -> flow_like_types::Result<()> {
+    let cached_session = session.load_lazy(context).await?;
+    cached_session.defer_mount(Arc::new(mount)).await;
+    Ok(())
 }
 
 #[crate::register_node]
@@ -35,7 +140,7 @@ impl NodeLogic for MountStoreParquetNode {
         let mut node = Node::new(
             "df_mount_parquet",
             "Mount Parquet",
-            "Mount Parquet files from a FlowPath prefix into a DataFusion session as a queryable table",
+            "Mount Parquet files from a FlowPath prefix into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.",
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");
@@ -105,30 +210,17 @@ impl NodeLogic for MountStoreParquetNode {
         let table_name: String = context.evaluate_pin("table_name").await?;
         let file_extension: String = context.evaluate_pin("file_extension").await?;
 
-        let cached_session = session.load(context).await?;
-        let store = path.to_store(context).await?;
-        let object_store = store.as_generic();
-
-        let url_str = build_store_url(&path.store_ref, &path.path);
-        let url = Url::parse(&url_str)?;
-        let table_path = ListingTableUrl::parse(&url_str)?;
-
-        cached_session.ctx.register_object_store(&url, object_store);
-
-        let format = ParquetFormat::default();
-        let listing_options =
-            ListingOptions::new(Arc::new(format)).with_file_extension(&file_extension);
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(listing_options)
-            .infer_schema(&cached_session.ctx.state())
-            .await?;
-
-        let table = ListingTable::try_new(config)?;
-
-        cached_session
-            .ctx
-            .register_table(TableReference::bare(table_name), Arc::new(table))?;
+        defer_listing_mount(
+            context,
+            &session,
+            ListingStoreMount {
+                path,
+                table_name,
+                file_extension,
+                format: ListingMountFormat::Parquet,
+            },
+        )
+        .await?;
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())
@@ -151,7 +243,7 @@ impl NodeLogic for MountStoreCsvNode {
         let mut node = Node::new(
             "df_mount_csv",
             "Mount CSV",
-            "Mount CSV files from a FlowPath into a DataFusion session as a queryable table",
+            "Mount CSV files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.",
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");
@@ -239,34 +331,22 @@ impl NodeLogic for MountStoreCsvNode {
         let delimiter: String = context.evaluate_pin("delimiter").await?;
         let file_extension: String = context.evaluate_pin("file_extension").await?;
 
-        let cached_session = session.load(context).await?;
-        let store = path.to_store(context).await?;
-        let object_store = store.as_generic();
-
-        let url_str = build_store_url(&path.store_ref, &path.path);
-        let url = Url::parse(&url_str)?;
-        let table_path = ListingTableUrl::parse(&url_str)?;
-
-        cached_session.ctx.register_object_store(&url, object_store);
-
         let delimiter_byte = delimiter.as_bytes().first().copied().unwrap_or(b',');
-        let format = CsvFormat::default()
-            .with_has_header(has_header)
-            .with_delimiter(delimiter_byte);
 
-        let listing_options =
-            ListingOptions::new(Arc::new(format)).with_file_extension(&file_extension);
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(listing_options)
-            .infer_schema(&cached_session.ctx.state())
-            .await?;
-
-        let table = ListingTable::try_new(config)?;
-
-        cached_session
-            .ctx
-            .register_table(TableReference::bare(table_name), Arc::new(table))?;
+        defer_listing_mount(
+            context,
+            &session,
+            ListingStoreMount {
+                path,
+                table_name,
+                file_extension,
+                format: ListingMountFormat::Csv {
+                    has_header,
+                    delimiter: delimiter_byte,
+                },
+            },
+        )
+        .await?;
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())
@@ -289,7 +369,7 @@ impl NodeLogic for MountStoreJsonNode {
         let mut node = Node::new(
             "df_mount_json",
             "Mount JSON",
-            "Mount JSON (newline-delimited) files from a FlowPath into a DataFusion session as a queryable table",
+            "Mount JSON (newline-delimited) files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely.",
             "Data/DataFusion",
         );
         node.add_icon("/flow/icons/database.svg");
@@ -359,30 +439,17 @@ impl NodeLogic for MountStoreJsonNode {
         let table_name: String = context.evaluate_pin("table_name").await?;
         let file_extension: String = context.evaluate_pin("file_extension").await?;
 
-        let cached_session = session.load(context).await?;
-        let store = path.to_store(context).await?;
-        let object_store = store.as_generic();
-
-        let url_str = build_store_url(&path.store_ref, &path.path);
-        let url = Url::parse(&url_str)?;
-        let table_path = ListingTableUrl::parse(&url_str)?;
-
-        cached_session.ctx.register_object_store(&url, object_store);
-
-        let format = JsonFormat::default();
-        let listing_options =
-            ListingOptions::new(Arc::new(format)).with_file_extension(&file_extension);
-
-        let config = ListingTableConfig::new(table_path)
-            .with_listing_options(listing_options)
-            .infer_schema(&cached_session.ctx.state())
-            .await?;
-
-        let table = ListingTable::try_new(config)?;
-
-        cached_session
-            .ctx
-            .register_table(TableReference::bare(table_name), Arc::new(table))?;
+        defer_listing_mount(
+            context,
+            &session,
+            ListingStoreMount {
+                path,
+                table_name,
+                file_extension,
+                format: ListingMountFormat::Json,
+            },
+        )
+        .await?;
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())

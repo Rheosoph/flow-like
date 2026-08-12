@@ -47,21 +47,12 @@ import {
 } from "../../ui";
 import {
 	FilePreviewer,
+	PdfFrame,
 	canPreview,
 	isCode,
 	isText,
 } from "../../ui/file-previewer";
-import type { ProcessedAttachment } from "./attachment";
-
-const getDisplayFileName = (name: string) => {
-	try {
-		const decoded = decodeURIComponent(name);
-		const parts = decoded.split(/[/\\]/);
-		return parts[parts.length - 1];
-	} catch {
-		return name;
-	}
-};
+import { type ProcessedAttachment, getDisplayFileName } from "./attachment";
 
 type SortKey = "name" | "type" | "size";
 type FilterKey = ProcessedAttachment["type"] | "all";
@@ -91,8 +82,21 @@ interface FileDialogProps {
 	trigger?: React.ReactNode;
 }
 
+/**
+ * The classifier already resolved the kind from the declared mime type, so an
+ * extension-less URL — a `blob:` handle, a signed key without a suffix — must not
+ * demote a known media file back to a download.
+ */
 export const canPreviewFile = (file: ProcessedAttachment) => {
-	return canPreview(file.url);
+	if (
+		file.type === "image" ||
+		file.type === "video" ||
+		file.type === "audio" ||
+		file.type === "pdf"
+	) {
+		return true;
+	}
+	return canPreview(file.url, file.name || undefined);
 };
 
 export async function downloadFile(file: ProcessedAttachment): Promise<void> {
@@ -931,21 +935,16 @@ export function FileDialogPreview({ file }: Readonly<FileDialogPreviewProps>) {
 					</audio>
 				</div>
 			);
-		case "pdf": {
-			const pdfUrl =
-				file.pageNumber !== undefined
-					? `${file.url}#page=${file.pageNumber}`
-					: file.url;
+		case "pdf":
 			return (
 				<div className="w-full h-full">
-					<iframe
-						src={pdfUrl}
-						className="w-full h-full border-0"
-						title={file.name}
+					<PdfFrame
+						url={file.url}
+						page={file.pageNumber}
+						filename={file.name}
 					/>
 				</div>
 			);
-		}
 		case "document":
 		case "other":
 			if (showTextPreview) {

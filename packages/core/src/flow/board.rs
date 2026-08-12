@@ -100,11 +100,67 @@ pub enum VersionType {
     Patch,
 }
 
+/// Who a layer's cached results belong to. Mirrors the scopes the flow cache backends
+/// understand; kept here so the layer settings do not have to depend on the catalog.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LayerCacheScope {
+    /// Shared by everyone who can execute in the app.
+    #[default]
+    App,
+    /// Private to the user who triggered the run.
+    User,
+}
+
+impl LayerCacheScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::App => "app",
+            Self::User => "user",
+        }
+    }
+}
+
+/// Result caching for a layer invoked as a function.
+///
+/// A hit replaces the whole call: the function body never runs, so its side effects do
+/// not happen either. Only turn this on for layers whose outputs are a function of their
+/// inputs.
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, Default, PartialEq, Eq)]
+pub struct LayerCache {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Namespace every entry for this layer is written under, so one layer's cache can be
+    /// invalidated without touching the rest of the app's.
+    #[serde(default)]
+    pub prefix: String,
+    /// Lifetime of an entry in seconds. `None` or `0` keeps it until it is invalidated.
+    #[serde(default)]
+    pub ttl_seconds: Option<u64>,
+    #[serde(default)]
+    pub scope: LayerCacheScope,
+}
+
+impl LayerCache {
+    pub fn is_active(&self) -> bool {
+        self.enabled
+    }
+
+    /// The TTL handed to the cache backend, with `0` normalized to "never expires".
+    pub fn ttl(&self) -> Option<u64> {
+        self.ttl_seconds.filter(|ttl| *ttl > 0)
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug)]
 pub struct Layer {
     pub id: String,
     pub parent_id: Option<String>,
     pub name: String,
+    /// Folder the layer is filed under in the sidebar, nested with forward slashes.
+    /// Empty means the top level. Purely organizational, it does not affect execution.
+    #[serde(default)]
+    pub category: Option<String>,
     pub r#type: LayerType,
     pub nodes: HashMap<String, Node>,
     pub variables: HashMap<String, Variable>,
@@ -116,6 +172,8 @@ pub struct Layer {
     pub comment: Option<String>,
     pub error: Option<String>,
     pub color: Option<String>,
+    #[serde(default)]
+    pub cache: Option<LayerCache>,
     pub hash: Option<u64>,
 }
 
@@ -125,6 +183,7 @@ impl Layer {
             id,
             parent_id: None,
             name,
+            category: None,
             r#type,
             nodes: HashMap::new(),
             variables: HashMap::new(),
@@ -136,6 +195,7 @@ impl Layer {
             comment: None,
             error: None,
             color: None,
+            cache: None,
             hash: None,
         }
     }
@@ -151,6 +211,10 @@ impl Layer {
         hasher.append(self.id.as_bytes());
         hasher.append(self.name.as_bytes());
         hasher.append(format!("{:?}", self.r#type).as_bytes());
+
+        if let Some(category) = &self.category {
+            hasher.append(category.as_bytes());
+        }
 
         if let Some(parent_id) = &self.parent_id {
             hasher.append(parent_id.as_bytes());
@@ -193,6 +257,13 @@ impl Layer {
 
         if let Some(color) = &self.color {
             hasher.append(color.as_bytes());
+        }
+
+        if let Some(cache) = &self.cache {
+            hasher.append(&[cache.enabled as u8]);
+            hasher.append(cache.prefix.as_bytes());
+            hasher.append(&cache.ttl_seconds.unwrap_or_default().to_le_bytes());
+            hasher.append(cache.scope.as_str().as_bytes());
         }
 
         self.hash = Some(hasher.finalize64());
@@ -1104,14 +1175,12 @@ impl Board {
         let board = published.to_proto();
         if let Err(create_error) =
             compress_to_file_create(store.clone(), board_version_path, &board).await
-        {
-            if !published
+            && !published
                 .snapshot_matches_current(version, Some(store.clone()))
                 .await
                 .unwrap_or(false)
-            {
-                return Err(create_error);
-            }
+        {
+            return Err(create_error);
         }
 
         // The board object is the publication marker, so do one final read of

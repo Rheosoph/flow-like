@@ -1425,7 +1425,7 @@ fn pin_not_found_message(
     let expected_pins: Vec<_> = entity
         .pins
         .iter()
-        .filter(|pin| expected_direction.map_or(true, |direction| pin.direction == direction))
+        .filter(|pin| expected_direction.is_none_or(|direction| pin.direction == direction))
         .map(|pin| pin.name.as_str())
         .collect();
 

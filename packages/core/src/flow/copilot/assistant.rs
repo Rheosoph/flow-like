@@ -221,13 +221,19 @@ Rules:
   one; retry the same target or report the failure honestly.
 - `flowpilot_board` edits board CONTENTS only (nodes/entry nodes/logic) — it cannot create the app-level Event record or configure its interface/sink, cannot create or rename apps or change app settings, and does NOT build UI (that's `flowpilot_widget`). Pick the final app `name` yourself when calling `create_app` (derive a good one from the request); renaming afterwards is not possible via tools.
 - Building or editing the UI — a page, a widget, or components — goes through `flowpilot_widget`. Use mode="edit" to change a page that already exists: with its builder open the components are staged for review, and with no builder open pass app_id plus page_id (or route/page_name) to rewrite that saved page directly — no review card, so tell the user which page you changed. Use mode="create" plus app_id for a NEW persisted page. Explicit app/page/board targets always mean create unless you explicitly say mode="edit", so an unrelated open builder cannot hijack the request. In one call it builds the page plus any reusable widgets it needs and opens the builder. When the user specifies exact reusable-widget names, always pass those names via `widget_name` or `widget_names`; the host uses them as the persisted entity names even if the renderer omits an inline label. Board/workflow logic stays with `flowpilot_board`; never put FlowScript or node/event construction in the widget instruction.
-- Anything about an app's DATA goes through `data_studio_agent`: setting up or updating databases/tables, creating or editing ontologies (graph overlays), writing/optimizing Cypher or SQL queries, running analytics/subgraph/paths, adding graph nodes/edges, visualizing data as charts, and listing/reading/EXECUTING ontology actions on objects. If a Data Studio page is currently open (see DATA STUDIO context), the user's "this data / this database / this ontology" refers to it — pass its app_id/overlay_id and route the question straight to `data_studio_agent`; do not answer data questions or hand-write queries yourself. The specialist can also reach OTHER apps' data. `data_studio_agent` never searches the web or opens public URLs — public-web research belongs to `research_agent`. For a mixed public-web + app-data request, delegate the public evidence to `research_agent` FIRST (reading app data closes the web phase for the turn), then delegate the app-data portion, then synthesize both with the researcher's inline citations. Relay the specialist's answer — including any chart, query, or step-log blocks it returns — to the user as-is.
+- Anything about an app's DATA goes through `data_studio_agent`: setting up or updating databases/tables, deleting/dropping a table (permanent and approval-gated — the specialist also prunes ontology references and reports which saved queries are left dangling; relay that cascade), creating or editing ontologies (graph overlays), writing/optimizing Cypher or SQL queries, running analytics/subgraph/paths, adding graph nodes/edges, visualizing data as charts, and listing/reading/EXECUTING ontology actions on objects. If a Data Studio page is currently open (see DATA STUDIO context), the user's "this data / this database / this ontology" refers to it — pass its app_id/overlay_id and route the question straight to `data_studio_agent`; do not answer data questions or hand-write queries yourself. The specialist can also reach OTHER apps' data. `data_studio_agent` never searches the web or opens public URLs — public-web research belongs to `research_agent`. For a mixed public-web + app-data request, delegate the public evidence to `research_agent` FIRST (reading app data closes the web phase for the turn), then delegate the app-data portion, then synthesize both with the researcher's inline citations. Relay the specialist's answer — including any chart, query, or step-log blocks it returns — to the user as-is.
 - Human-facing table labels may contain characters the physical database identifier cannot. The data
   specialist's `create_table` normalizes such labels to stable snake_case and returns the requested
   label plus the authoritative physical `table_name`. This mapping preserves the semantic table
   identity: use the returned physical name in the board instruction and continue the complete app
   build. Never stop the whole build merely because a requested display label contained spaces, and
   never spend a second data-specialist call probing for a separate alias feature.
+- TEMPORAL BUILD CONTRACT: decide temporal field names once and pass the same contract to both
+  specialists. Tell `data_studio_agent` to create every real instant/date-time column with the exact
+  Lance field type `timestamp:ms:UTC`, and tell `flowpilot_board` to model that same field as
+  FlowLike `Date` in FlowScript interfaces, pins, parameters, returns, and variables. Never ask
+  either specialist to substitute `string` or an epoch number for this pairing. Existing table
+  schemas remain authoritative and are not implicitly migrated by this rule.
 - Events have TWO layers. First `flowpilot_board` creates a compatible board entry node; then `upsert_event` creates the app-level Event record that exposes or schedules it. Choose the entry node by payload shape, NOT by sink name:
   - `eventsSimple()` — no input payload; use for quick actions and scheduled/background sinks such as `cron` (also daemon/rest/mcp when requested). Cron is Event setup on a Simple Event, NEVER a catalog node; never ask `flowpilot_board` to find or create a cron node.
   - `eventsGeneric(payload: Struct, fieldName: string, ...)` — request/form/API payload plus typed output pins and an optional returned result; use for `generic_form`, API, or deeplink flows. On a new Generic entry, each declared parameter after `payload` creates that output pin and receives the matching payload field.
@@ -768,5 +774,14 @@ mod tests {
         assert!(prompt.contains("use the returned physical name in the board instruction"));
         assert!(prompt.contains("Never stop the whole build"));
         assert!(prompt.contains("never spend a second data-specialist call"));
+    }
+
+    #[test]
+    fn app_build_contract_pairs_temporal_columns_with_board_dates() {
+        let prompt = global_assistant_system_prompt();
+        assert!(prompt.contains("TEMPORAL BUILD CONTRACT"));
+        assert!(prompt.contains("exact\n  Lance field type `timestamp:ms:UTC`"));
+        assert!(prompt.contains("FlowLike `Date` in FlowScript interfaces"));
+        assert!(prompt.contains("Existing table\n  schemas remain authoritative"));
     }
 }

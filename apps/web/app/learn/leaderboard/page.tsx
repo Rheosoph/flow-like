@@ -1,5 +1,4 @@
 "use client";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	Button,
 	Input,
@@ -9,6 +8,7 @@ import {
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { Eye, EyeOff, Trophy } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -111,7 +111,10 @@ export default function LeaderboardPage() {
 						/>
 					</div>
 					<div className="space-y-2">
-						<Label htmlFor="display-name" className="text-xs uppercase tracking-wide text-muted-foreground">
+						<Label
+							htmlFor="display-name"
+							className="text-xs uppercase tracking-wide text-muted-foreground"
+						>
 							Display name
 						</Label>
 						<Input

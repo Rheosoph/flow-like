@@ -261,7 +261,7 @@ pub fn declarations_by_category(signatures: &[Signature]) -> Vec<DeclarationFile
             let mut sigs = buckets.remove(&top).unwrap_or_default();
             sigs.sort_by(|a, b| {
                 full_category(a)
-                    .cmp(&full_category(b))
+                    .cmp(full_category(b))
                     .then_with(|| a.display.cmp(&b.display))
             });
             let content = render_declaration_file(&top, &sigs);

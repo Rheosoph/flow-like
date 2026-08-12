@@ -592,6 +592,26 @@ export interface TextFieldComponent extends ComponentBase {
 	debounceMs?: BoundValue; // pause before the "input" event fires (default 400, min 100)
 }
 
+export interface RichTextComponent extends ComponentBase {
+	type: "richText";
+	/** The editor document, a `plate_json::`-prefixed string. */
+	value: BoundValue;
+	label?: BoundValue;
+	helperText?: BoundValue;
+	placeholder?: BoundValue;
+	error?: BoundValue;
+	disabled?: BoundValue;
+	readOnly?: BoundValue;
+	/** Storage folder that pasted or dropped images are uploaded into. */
+	uploadPrefix?: BoundValue;
+	/** "app" (shared storage, default) or "user" (the viewer's private area). */
+	uploadScope?: BoundValue;
+	minHeight?: BoundValue;
+	maxHeight?: BoundValue;
+	/** Pause before the "change" event fires (default 600, min 100). */
+	debounceMs?: BoundValue;
+}
+
 export interface SelectComponent extends ComponentBase {
 	type: "select";
 	value: BoundValue;
@@ -1769,6 +1789,7 @@ export type A2UIComponent =
 	| FeedbackComponent
 	| AppLinkComponent
 	| TextFieldComponent
+	| RichTextComponent
 	| SelectComponent
 	| SliderComponent
 	| CheckboxComponent

@@ -42,10 +42,10 @@ pub fn migrate_notification_icon_pin(node: &mut Node) {
 }
 
 pub async fn resolve_notification_icon(context: &mut ExecutionContext) -> String {
-    if let Ok(icon_path) = context.evaluate_pin::<FlowPath>(ICON_PIN_NAME).await {
-        if let Some(icon) = signed_icon_url(context, icon_path).await {
-            return icon;
-        }
+    if let Ok(icon_path) = context.evaluate_pin::<FlowPath>(ICON_PIN_NAME).await
+        && let Some(icon) = signed_icon_url(context, icon_path).await
+    {
+        return icon;
     }
 
     if let Ok(icon) = context.evaluate_pin::<String>(ICON_PIN_NAME).await {

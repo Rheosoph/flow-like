@@ -1072,23 +1072,23 @@ fn frontend_tool_result_with_timeout(
     } else {
         block_on_tool(download_platform_tool_images(image_urls))
     };
-    if expected_image_count > 0 {
-        if let Some(object) = result.as_object_mut() {
-            object.insert("screenshot_count".to_string(), json!(images.len()));
-            let was_complete = object
-                .get("screenshot_complete")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
+    if expected_image_count > 0
+        && let Some(object) = result.as_object_mut()
+    {
+        object.insert("screenshot_count".to_string(), json!(images.len()));
+        let was_complete = object
+            .get("screenshot_complete")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        object.insert(
+            "screenshot_complete".to_string(),
+            json!(was_complete && images.len() == expected_image_count),
+        );
+        if images.is_empty() {
             object.insert(
-                "screenshot_complete".to_string(),
-                json!(was_complete && images.len() == expected_image_count),
-            );
-            if images.is_empty() {
-                object.insert(
                     "message".to_string(),
                     json!("The page was embedded inline, but its temporary visual captures could not be loaded by this agent. Do not claim to have read the page visually."),
                 );
-            }
         }
     }
     let mut output = ToolResultObject::text(
@@ -1209,6 +1209,29 @@ const READ_WRITE_DATABASE_OPERATIONS: &[&str] = &[
     "add_column",
     "drop_columns",
     "alter_column",
+    "delete_table",
+];
+const CREATE_TABLE_FIELD_TYPES: &[&str] = &[
+    "string",
+    "boolean",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
+    "float32",
+    "float64",
+    "binary",
+    "date32",
+    "timestamp:ms:UTC",
+    "vector",
+    // Accepted for existing/replayed tool calls. New FlowPilot calls use the canonical type above.
+    "timestamp",
+    "datetime",
+    "timestamp_ms",
 ];
 const READ_ONLY_STORAGE_OPERATIONS: &[&str] = &["list_files", "read_file"];
 const READ_WRITE_STORAGE_OPERATIONS: &[&str] =
@@ -1241,7 +1264,62 @@ fn database_operation_requires_approval(operation: &str) -> bool {
             | "add_column"
             | "drop_columns"
             | "alter_column"
+            | "delete_table"
     )
+}
+
+/// `delete_table` destroys one specific table, so its "don't ask again" memory must not authorize
+/// dropping every other table for the rest of the session.
+fn database_approval_session_key(operation: &str, table_name: &str) -> String {
+    if operation == "delete_table" {
+        return format!("database:{operation}:{table_name}");
+    }
+    format!("database:{operation}")
+}
+
+fn database_approval_message(operation: &str, table_name: &str) -> String {
+    if operation == "delete_table" {
+        return format!(
+            "FlowPilot wants to PERMANENTLY DROP table '{table_name}', including every row and the table schema. This cannot be undone, and ontology overlays referencing the table are pruned."
+        );
+    }
+    format!(
+        "FlowPilot wants to run database operation '{}'{}.",
+        operation,
+        if table_name.is_empty() {
+            String::new()
+        } else {
+            format!(" on table '{table_name}'")
+        }
+    )
+}
+
+fn database_approval_title(operation: &str) -> &'static str {
+    if operation == "delete_table" {
+        "Approve permanent table drop"
+    } else {
+        "Approve database change"
+    }
+}
+
+/// Guards against a malformed or confused call, not against a deliberate wrong drop: the model
+/// supplies both names. It forces the destructive target to be stated twice, so a truncated or
+/// mis-templated argument fails instead of dropping a table nobody named.
+fn delete_table_confirmation_error(table_name: &str, confirm_table_name: &str) -> Option<String> {
+    if table_name.trim().is_empty() {
+        return Some("delete_table requires table_name.".to_string());
+    }
+    if confirm_table_name.trim().is_empty() {
+        return Some(
+            "delete_table requires confirm_table_name repeating table_name exactly.".to_string(),
+        );
+    }
+    if table_name.trim() != confirm_table_name.trim() {
+        return Some(format!(
+            "delete_table confirmation mismatch: confirm_table_name '{confirm_table_name}' does not match table_name '{table_name}'. Nothing was deleted. Repeat the exact table name to drop it."
+        ));
+    }
+    None
 }
 
 fn flowscript_validation_message(flowscript: &str, diagnostics: &[String]) -> String {
@@ -1303,6 +1381,61 @@ fn flowscript_summary(flowscript: &str) -> Value {
     })
 }
 
+fn database_tool_schema(operations: &[&str]) -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": operations
+            },
+            "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
+            "table_name": { "type": "string", "description": "Table name for table operations." },
+            "user_scoped": { "type": "boolean", "description": "Use user-scoped storage/database tables." },
+            "include_sample": { "type": "boolean", "description": "For describe_table, include sample rows. Defaults to true. Use false for bounded schema-only discovery." },
+            "fields": {
+                "type": "array",
+                "description": "Explicit fields for create_table. Supported types: string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64, float32/float64, binary, date32 (calendar-only), timestamp:ms:UTC (FlowLike Date/date-time instant), vector. Legacy timestamp/datetime/timestamp_ms spellings remain accepted for replay compatibility but MUST NOT be used in new calls. Vector fields require vector_size.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "name": { "type": "string" },
+                        "type": {
+                            "type": "string",
+                            "enum": CREATE_TABLE_FIELD_TYPES,
+                            "description": "Use timestamp:ms:UTC for a FlowLike Date or any real date-time instant. Legacy timestamp/datetime/timestamp_ms spellings are accepted only for replay compatibility. Use date32 only for a calendar-only value without a time or timezone."
+                        },
+                        "nullable": { "type": "boolean", "description": "Defaults to true." },
+                        "vector_size": { "type": "integer", "minimum": 1 }
+                    },
+                    "required": ["name", "type"]
+                }
+            },
+            "if_not_exists": { "type": "boolean", "description": "For create_table, succeed if the table already exists. Defaults to true." },
+            "confirm_table_name": { "type": "string", "description": "Required for delete_table: repeat table_name exactly. A mismatch rejects the call and deletes nothing." },
+            "query": { "type": "object", "description": "Query payload: {sql, filter, fts_term, vector_query, rerank}." },
+            "offset": { "type": "integer" },
+            "limit": { "type": "integer" },
+            "items": { "type": "array", "items": { "type": "object" } },
+            "filter": { "type": "string", "description": "Delete/update filter expression." },
+            "updates": { "type": "object" },
+            "column": { "type": "string" },
+            "columns": { "type": "array", "items": { "type": "string" } },
+            "index_type": {
+                "type": "string",
+                "enum": ["FullText", "BTree", "Bitmap", "LabelList", "Auto", "full_text", "btree", "bitmap", "label_list", "auto"]
+            },
+            "index_name": { "type": "string" },
+            "optimize": { "type": "boolean" },
+            "keep_versions": { "type": "boolean" },
+            "nullable": { "type": "boolean" },
+            "column_definition": { "type": "object", "description": "For add_column: {name, sql_expression}." }
+        },
+        "required": ["operation"]
+    })
+}
+
 fn create_database_tool(
     bridge: FrontendToolBridge,
     access: SpecialistDataAccess,
@@ -1331,6 +1464,10 @@ Operations:
   punctuation are normalized to stable snake_case identifiers (for example `Library Files` becomes
   `library_files`); the result returns both `requested_table_name` and the authoritative
   `table_name`. Continue with the returned `table_name` instead of probing for a separate alias.
+  For a real instant/date-time field, use the exact type `timestamp:ms:UTC`; it is the native
+  Lance/Arrow counterpart of a FlowLike `Date` and its RFC3339 UTC value. `date32` is only for
+  standalone calendar data that is intentionally not exchanged as a board `Date`. Existing table
+  schemas are not implicitly migrated.
   `if_not_exists` defaults to true; no seed row is inserted. A `partial` result with
   `explicit_schema_create_not_deployed` means the remote API is older than this client: retain the
   schema request and continue the workflow build instead of switching to a smoke test.
@@ -1342,57 +1479,21 @@ Operations:
   discovery that an immutable FlowPilot manifest can satisfy; omitted/true also reads sample rows.
 - query: SQL/filter/vector/FTS query via the existing database query API.
 - insert/add_items, delete/remove_items, update.
-- build_index, drop_index, optimize, add_column, drop_columns, alter_column."#,
+- build_index, drop_index, optimize, add_column, drop_columns, alter_column.
+- delete_table: PERMANENTLY drop a whole table — every row AND the table schema are destroyed.
+  This is IRREVERSIBLE: there is no undo, no restore, and no version history to roll back to.
+  Requires `confirm_table_name` to repeat `table_name` exactly; a mismatch rejects the call.
+  Never drop a table to "reset", "clear", "truncate", "re-seed", or "fix" it — use
+  `delete`/`remove_items` with a filter to remove rows while keeping the schema, indices and every
+  ontology/workflow reference intact. Only drop a table the user explicitly asked to delete, and ask
+  first. The result reports the cascade: `ontologies_pruned` (graph overlays whose node/edge
+  mappings referenced the table and were pruned), `saved_queries_referencing` (stored queries whose
+  SQL still names the table — they are NOT deleted and will fail until edited), and `warnings`.
+  Always relay that cascade to the user."#,
             READ_WRITE_DATABASE_OPERATIONS,
         ),
     };
-    let schema = json!({
-        "type": "object",
-        "properties": {
-            "operation": {
-                "type": "string",
-                "enum": operations
-            },
-            "app_id": { "type": "string", "description": "App id. Optional when FlowPilot knows the current app." },
-            "table_name": { "type": "string", "description": "Table name for table operations." },
-            "user_scoped": { "type": "boolean", "description": "Use user-scoped storage/database tables." },
-            "include_sample": { "type": "boolean", "description": "For describe_table, include sample rows. Defaults to true. Use false for bounded schema-only discovery." },
-            "fields": {
-                "type": "array",
-                "description": "Explicit fields for create_table. Supported types: string, boolean, int8/int16/int32/int64, uint8/uint16/uint32/uint64, float32/float64, binary, date32, timestamp, vector. Vector fields require vector_size.",
-                "items": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "properties": {
-                        "name": { "type": "string" },
-                        "type": { "type": "string" },
-                        "nullable": { "type": "boolean", "description": "Defaults to true." },
-                        "vector_size": { "type": "integer", "minimum": 1 }
-                    },
-                    "required": ["name", "type"]
-                }
-            },
-            "if_not_exists": { "type": "boolean", "description": "For create_table, succeed if the table already exists. Defaults to true." },
-            "query": { "type": "object", "description": "Query payload: {sql, filter, fts_term, vector_query, rerank}." },
-            "offset": { "type": "integer" },
-            "limit": { "type": "integer" },
-            "items": { "type": "array", "items": { "type": "object" } },
-            "filter": { "type": "string", "description": "Delete/update filter expression." },
-            "updates": { "type": "object" },
-            "column": { "type": "string" },
-            "columns": { "type": "array", "items": { "type": "string" } },
-            "index_type": {
-                "type": "string",
-                "enum": ["FullText", "BTree", "Bitmap", "LabelList", "Auto", "full_text", "btree", "bitmap", "label_list", "auto"]
-            },
-            "index_name": { "type": "string" },
-            "optimize": { "type": "boolean" },
-            "keep_versions": { "type": "boolean" },
-            "nullable": { "type": "boolean" },
-            "column_definition": { "type": "object", "description": "For add_column: {name, sql_expression}." }
-        },
-        "required": ["operation"]
-    });
+    let schema = database_tool_schema(operations);
     let schema = if access == SpecialistDataAccess::ReadOnly {
         (shared_read_only_spec.schema)()
     } else {
@@ -1420,20 +1521,28 @@ Operations:
                 .to_string(),
             );
         }
+        let table_name = arg_string(args, "table_name", "tableName");
+        if operation == "delete_table" {
+            let confirm_table_name = arg_string(args, "confirm_table_name", "confirmTableName");
+            if let Some(message) = delete_table_confirmation_error(&table_name, &confirm_table_name)
+            {
+                return ToolResultObject::text(
+                    json!({
+                        "status": "error",
+                        "tool": "database_tool",
+                        "operation": operation,
+                        "dropped": false,
+                        "message": message
+                    })
+                    .to_string(),
+                );
+            }
+        }
         let approval = if database_operation_requires_approval(&operation) {
-            let table_name = arg_string(args, "table_name", "tableName");
             FrontendToolApproval::mutating(
-                "Approve database change",
-                format!(
-                    "FlowPilot wants to run database operation '{}'{}.",
-                    operation,
-                    if table_name.is_empty() {
-                        String::new()
-                    } else {
-                        format!(" on table '{table_name}'")
-                    }
-                ),
-                format!("database:{operation}"),
+                database_approval_title(&operation),
+                database_approval_message(&operation, &table_name),
+                database_approval_session_key(&operation, &table_name),
             )
         } else {
             FrontendToolApproval::none()
@@ -1795,9 +1904,9 @@ fn create_emit_commands_tool(
         let queued_count = parsed_commands.len();
         if let Some(store) = &side_effect_commands
             && let Ok(mut queued) = store.lock()
+            && !queued.extend(parsed_commands)
         {
-            if !queued.extend(parsed_commands) {
-                return ToolResultObject::text(
+            return ToolResultObject::text(
                     json!({
                         "status": "error",
                         "code": "COMMAND_DELIVERY_CONFLICT",
@@ -1807,7 +1916,6 @@ fn create_emit_commands_tool(
                     })
                     .to_string(),
                 );
-            }
         }
 
         // The queued batch travels through the side-effect store (the chat loop drains it into a
@@ -2975,9 +3083,9 @@ RULES:
         let queued_count = result.commands.len();
         if let Some(store) = &side_effect_commands
             && let Ok(mut commands) = store.lock()
+            && !commands.extend(result.commands)
         {
-            if !commands.extend(result.commands) {
-                return ToolResultObject::text(
+            return ToolResultObject::text(
                     json!({
                         "status": "error",
                         "code": "COMMAND_DELIVERY_CONFLICT",
@@ -2988,7 +3096,6 @@ RULES:
                     })
                     .to_string(),
                 );
-            }
         }
         if let Some(store) = &queued_flowscript
             && let Ok(mut workspace) = store.lock()
@@ -3544,6 +3651,20 @@ fn known_props_for_type(component_type: &str) -> Option<&'static [&'static str]>
             "required",
             "debounceMs",
         ]),
+        "richText" => Some(&[
+            "value",
+            "label",
+            "helperText",
+            "placeholder",
+            "error",
+            "disabled",
+            "readOnly",
+            "uploadPrefix",
+            "uploadScope",
+            "minHeight",
+            "maxHeight",
+            "debounceMs",
+        ]),
         "select" => Some(&[
             "value",
             "options",
@@ -3891,6 +4012,7 @@ fn required_props_for_type(component_type: &str) -> &'static [&'static str] {
         "progress" => &["value"],
         "button" => &["label"],
         "textField" => &["value"],
+        "richText" => &["value"],
         "select" => &["value", "options"],
         "slider" => &["value"],
         "checkbox" => &["checked"],
@@ -3949,6 +4071,18 @@ const MAX_UI_COMPONENT_ID_CHARS: usize = 120;
 const MAX_UI_CUSTOM_CSS_CHARS: usize = 12_000;
 const MAX_UI_STYLE_STRING_CHARS: usize = 1_000;
 const MAX_UI_ACTIONS: usize = 20;
+/// The action names `ActionHandler.tsx` dispatches. Anything else falls through its `default`
+/// branch into a no-op `userAction`, so the control renders but never runs — keep in sync with
+/// `executeAction` there and with `BUILTIN_ACTION_NAMES` in `validateComponents.ts`.
+const BUILTIN_ACTION_NAMES: &[&str] = &[
+    "workflow_event",
+    "widget_event",
+    "navigate_page",
+    "external_link",
+    "navigate_app_config",
+    "navigate_app_overview",
+    "submit_feedback",
+];
 const MAX_UI_EVENT_HANDLERS: usize = 64;
 const MAX_UI_EVENT_NAME_CHARS: usize = 128;
 
@@ -4463,24 +4597,66 @@ fn validate_actions_value(
             }
         }
 
-        match action_obj.get("name").and_then(Value::as_str) {
-            Some(name) if !name.trim().is_empty() => {}
-            _ => errors.push(format!(
-                "{}: {path}[{index}].name must be a non-empty string",
+        let name = match action_obj.get("name").and_then(Value::as_str) {
+            Some(name) if !name.trim().is_empty() => Some(name.trim()),
+            _ => {
+                errors.push(format!(
+                    "{}: {path}[{index}].name must be a non-empty string",
+                    component_id,
+                ));
+                None
+            }
+        };
+
+        let context = match action_obj.get("context") {
+            Some(Value::Object(context)) => Some(context),
+            Some(_) => {
+                errors.push(format!(
+                    "{}: {path}[{index}].context must be an object",
+                    component_id,
+                ));
+                None
+            }
+            None => {
+                errors.push(format!(
+                    "{}: {path}[{index}].context is required",
+                    component_id,
+                ));
+                None
+            }
+        };
+
+        let Some(name) = name else { continue };
+
+        if !BUILTIN_ACTION_NAMES.contains(&name) {
+            errors.push(format!(
+                "{}: {path}[{index}].name '{}' is not a built-in action. The name is a fixed verb, never a board node / event / widget action id — put that id in the context instead. Valid: {}. To run a board event use {{\"name\": \"workflow_event\", \"context\": {{\"nodeId\": \"<event node id>\"}}}}; to run a widget action use {{\"name\": \"widget_event\", \"context\": {{\"actionId\": \"<widget action id>\"}}}}",
                 component_id,
-            )),
+                name,
+                BUILTIN_ACTION_NAMES.join(", "),
+            ));
+            continue;
         }
 
-        match action_obj.get("context") {
-            Some(Value::Object(_)) => {}
-            Some(_) => errors.push(format!(
-                "{}: {path}[{index}].context must be an object",
+        let Some(context) = context else { continue };
+
+        // A routing action without its target id renders a control that does nothing, which is
+        // indistinguishable from a wired one until a user clicks it.
+        let required_key = match name {
+            "workflow_event" => Some(("nodeId", "the id of an event entry node on the board")),
+            "widget_event" => Some(("actionId", "the id of an action declared on the widget")),
+            _ => None,
+        };
+        if let Some((key, meaning)) = required_key
+            && !context
+                .get(key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.trim().is_empty())
+        {
+            errors.push(format!(
+                "{}: {path}[{index}] is a '{name}' action but its context has no '{key}' — it would render a control that does nothing. Set context.{key} to {meaning}.",
                 component_id,
-            )),
-            None => errors.push(format!(
-                "{}: {path}[{index}].context is required",
-                component_id,
-            )),
+            ));
         }
     }
 }
@@ -4758,6 +4934,7 @@ mod tests {
             "insert",
             "update",
             "delete",
+            "delete_table",
             "build_index",
             "drop_columns",
         ] {
@@ -4785,6 +4962,71 @@ mod tests {
                 READ_WRITE_STORAGE_OPERATIONS,
             ));
         }
+    }
+
+    #[test]
+    fn delete_table_is_read_write_only_and_approval_gated_per_table() {
+        assert!(READ_WRITE_DATABASE_OPERATIONS.contains(&"delete_table"));
+        assert!(!READ_ONLY_DATABASE_OPERATIONS.contains(&"delete_table"));
+        assert!(database_operation_requires_approval("delete_table"));
+
+        assert_eq!(
+            database_approval_session_key("delete_table", "orders"),
+            "database:delete_table:orders"
+        );
+        assert_ne!(
+            database_approval_session_key("delete_table", "orders"),
+            database_approval_session_key("delete_table", "customers")
+        );
+        assert_eq!(
+            database_approval_session_key("insert", "orders"),
+            "database:insert"
+        );
+
+        let schema = database_tool_schema(READ_WRITE_DATABASE_OPERATIONS);
+        assert!(
+            schema
+                .pointer("/properties/confirm_table_name")
+                .is_some_and(Value::is_object)
+        );
+    }
+
+    #[test]
+    fn delete_table_requires_an_exact_table_name_confirmation() {
+        assert!(delete_table_confirmation_error("orders", "orders").is_none());
+        assert!(delete_table_confirmation_error("orders", "").is_some());
+        assert!(delete_table_confirmation_error("", "orders").is_some());
+        assert!(delete_table_confirmation_error("orders", "orders_archive").is_some());
+        assert!(delete_table_confirmation_error("orders", "Orders").is_some());
+    }
+
+    #[test]
+    fn database_tool_schema_prefers_utc_timestamps_without_rejecting_legacy_calls() {
+        let schema = database_tool_schema(READ_WRITE_DATABASE_OPERATIONS);
+        let field_types = schema
+            .pointer("/properties/fields/items/properties/type/enum")
+            .and_then(Value::as_array)
+            .expect("create_table field type enum");
+        let field_types = field_types
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+
+        assert!(field_types.contains(&"timestamp:ms:UTC"));
+        assert!(field_types.contains(&"date32"));
+        for legacy in ["timestamp", "datetime", "timestamp_ms"] {
+            assert!(
+                field_types.contains(&legacy),
+                "legacy tool calls using {legacy} must remain schema-valid"
+            );
+        }
+
+        let type_description = schema
+            .pointer("/properties/fields/items/properties/type/description")
+            .and_then(Value::as_str)
+            .expect("field type guidance");
+        assert!(type_description.contains("Use timestamp:ms:UTC"));
+        assert!(type_description.contains("only for replay compatibility"));
     }
 
     fn empty_board(id: &str) -> Board {
@@ -5925,8 +6167,20 @@ mod tests {
     /// catalog embedded in the system prompt plus the detailed schema pages).
     fn documented_component_types() -> Vec<String> {
         let mut types = Vec::new();
+        // Only the "Quick Reference" section lists component TYPES. Later sections use the same
+        // bullet shape for component PROPS (voiceInput's `- \`value\` - binding path …`), which
+        // must not be mistaken for a type.
+        let mut in_type_list = false;
         for line in flow_like::a2ui::copilot::COMPONENT_CATALOG.lines() {
-            if let Some(rest) = line.trim().strip_prefix("- `")
+            let trimmed = line.trim();
+            if let Some(heading) = trimmed.strip_prefix("## ") {
+                in_type_list = heading.starts_with("Quick Reference");
+                continue;
+            }
+            if !in_type_list {
+                continue;
+            }
+            if let Some(rest) = trimmed.strip_prefix("- `")
                 && let Some(end) = rest.find('`')
             {
                 types.push(rest[..end].to_string());
@@ -6056,6 +6310,94 @@ mod tests {
         assert_eq!(
             validated[0]["component"]["eventHandlers"],
             components[0]["component"]["eventHandlers"]
+        );
+    }
+
+    #[test]
+    fn emit_ui_rejects_action_names_that_are_not_built_in() {
+        // The reported failure: the model names the action after the board event node (or after a
+        // widget action id) instead of using the fixed `workflow_event`/`widget_event` verbs.
+        // ActionHandler.tsx drops those, so the button renders and silently does nothing.
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Approve" },
+                "actions": [{ "name": "approve_request", "context": {} }],
+                "eventHandlers": {
+                    "click": [{ "name": "custom:refresh_dashboard", "context": {} }]
+                }
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("actions[0].name 'approve_request'")),
+            "legacy action with an invented name must be rejected: {errors:?}"
+        );
+        assert!(
+            errors.iter().any(|error| {
+                error.contains("eventHandlers.click[0].name 'custom:refresh_dashboard'")
+            }),
+            "named handler with an invented name must be rejected: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("workflow_event") && error.contains("widget_event")),
+            "the rejection must teach the correct contract: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn emit_ui_rejects_routing_actions_without_their_target_id() {
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Run" },
+                "actions": [{ "name": "workflow_event", "context": {} }],
+                "eventHandlers": {
+                    "click": [{ "name": "widget_event", "context": { "actionId": "  " } }]
+                }
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("actions[0]") && error.contains("'nodeId'")),
+            "workflow_event without nodeId must be rejected: {errors:?}"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("eventHandlers.click[0]")
+                    && error.contains("'actionId'")),
+            "widget_event without actionId must be rejected: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn emit_ui_accepts_the_widget_action_contract() {
+        let components = json!([{
+            "id": "root",
+            "component": {
+                "type": "button",
+                "label": { "literalString": "Approve" },
+                "actions": [
+                    { "name": "widget_event", "context": { "actionId": "approve" } }
+                ]
+            }
+        }]);
+
+        let (_, errors) = validate_ui_components("root", &json!({}), &components);
+        assert!(
+            errors.is_empty(),
+            "the documented widget action shape must validate: {errors:?}"
         );
     }
 

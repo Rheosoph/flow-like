@@ -165,7 +165,7 @@ impl NodeLogic for RegisterDeltaTableNode {
             let table_name: String = context.evaluate_pin("table_name").await?;
             let version: i64 = context.evaluate_pin("version").await.unwrap_or(-1);
 
-            let cached_session = session.load(context).await?;
+            let cached_session = session.load_lazy(context).await?;
             let store = path.to_store(context).await?;
             let object_store = store.as_generic();
 
@@ -332,7 +332,7 @@ impl NodeLogic for DeltaTimeTravelNode {
             let version: i64 = context.evaluate_pin("version").await.unwrap_or(0);
             let timestamp: String = context.evaluate_pin("timestamp").await.unwrap_or_default();
 
-            let cached_session = session.load(context).await?;
+            let cached_session = session.load_lazy(context).await?;
             let store = path.to_store(context).await?;
             let object_store = store.as_generic();
 
@@ -655,7 +655,7 @@ impl NodeLogic for RegisterHivePartitionedParquetNode {
         let path: FlowPath = context.evaluate_pin("path").await?;
         let table_name: String = context.evaluate_pin("table_name").await?;
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
         let store = path.to_store(context).await?;
         let object_store = store.as_generic();
 
@@ -791,7 +791,7 @@ impl NodeLogic for RegisterPartitionedJsonNode {
             .await
             .unwrap_or_else(|_| ".json".to_string());
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
         let store = path.to_store(context).await?;
         let object_store = store.as_generic();
 
@@ -955,6 +955,8 @@ impl NodeLogic for WriteDeltaTableNode {
                 .await
                 .unwrap_or_default();
 
+            // df_write_delta consumes the session (it runs the query), so deferred
+            // mounts must be materialized first — full load, not load_lazy.
             let cached_session = session.load(context).await?;
 
             let df = cached_session.ctx.sql(&query).await?;
@@ -1146,7 +1148,7 @@ impl NodeLogic for RegisterIcebergTableNode {
             let metadata_file: String = context.evaluate_pin("metadata_file").await?;
             let table_name: String = context.evaluate_pin("table_name").await?;
 
-            let cached_session = session.load(context).await?;
+            let cached_session = session.load_lazy(context).await?;
             let store = warehouse_path.to_store(context).await?;
 
             let url_str = build_store_url(&warehouse_path.store_ref, &warehouse_path.path);
@@ -1507,7 +1509,7 @@ impl NodeLogic for IcebergTimeTravelNode {
                 .unwrap_or_default();
             let timestamp_ms: i64 = context.evaluate_pin("timestamp_ms").await.unwrap_or(0);
 
-            let cached_session = session.load(context).await?;
+            let cached_session = session.load_lazy(context).await?;
             let store = warehouse_path.to_store(context).await?;
 
             let url_str = build_store_url(&warehouse_path.store_ref, &warehouse_path.path);

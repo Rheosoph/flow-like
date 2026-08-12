@@ -1,11 +1,43 @@
-use crate::data::datafusion::session::DataFusionSession;
+use crate::data::datafusion::session::{CachedDataFusionSession, DataFusionSession, DeferredMount};
 use crate::data::excel::CSVTable;
 use flow_like::flow::{
     execution::context::ExecutionContext,
     node::{Node, NodeLogic, NodeScores},
     variable::VariableType,
 };
+use flow_like_storage::datafusion::common::TableReference;
 use flow_like_types::{async_trait, json::json};
+use std::sync::Arc;
+
+/// Building the Arrow MemTable is deferred to the first query, so a cached query never
+/// pays for the conversion.
+struct CsvTableMount {
+    table: CSVTable,
+    table_name: String,
+}
+
+#[async_trait]
+impl DeferredMount for CsvTableMount {
+    fn describe(&self) -> String {
+        format!("table '{}' from an in-memory CSVTable", self.table_name)
+    }
+
+    fn dedupe_key(&self) -> Option<String> {
+        Some(format!("table:{}", self.table_name))
+    }
+
+    async fn mount(
+        &self,
+        session: &CachedDataFusionSession,
+        _context: &mut ExecutionContext,
+    ) -> flow_like_types::Result<()> {
+        let _ = session
+            .ctx
+            .deregister_table(TableReference::bare(self.table_name.clone()));
+        self.table
+            .register_with_datafusion(&session.ctx, &self.table_name)
+    }
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -85,9 +117,10 @@ impl NodeLogic for RegisterCSVTableNode {
         let table: CSVTable = context.evaluate_pin("table").await?;
         let table_name: String = context.evaluate_pin("table_name").await?;
 
-        let cached_session = session.load(context).await?;
-
-        table.register_with_datafusion(&cached_session.ctx, &table_name)?;
+        let cached_session = session.load_lazy(context).await?;
+        cached_session
+            .defer_mount(Arc::new(CsvTableMount { table, table_name }))
+            .await;
 
         context.activate_exec_pin("exec_out").await?;
         Ok(())

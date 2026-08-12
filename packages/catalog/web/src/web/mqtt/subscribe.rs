@@ -184,7 +184,7 @@ impl NodeLogic for MqttSubscribeNode {
         let mut has_topic_pin = false;
         let mut typed_pin_count: usize = 0;
 
-        for (_, pin) in ref_node_pins.iter() {
+        for pin in ref_node_pins.values() {
             if pin.pin_type != PinType::Output || pin.data_type == VariableType::Execution {
                 continue;
             }
@@ -268,7 +268,7 @@ impl NodeLogic for MqttSubscribeNode {
 
                     if single_string {
                         let pins = &ctx.node.pins;
-                        for (_, pin) in pins.iter() {
+                        for pin in pins.values() {
                             if pin.pin_type == PinType::Output
                                 && pin.data_type == VariableType::String
                                 && pin.name != "payload"

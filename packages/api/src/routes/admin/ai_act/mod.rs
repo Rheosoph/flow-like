@@ -297,24 +297,24 @@ async fn load_inventory_items(
         })
         .collect();
 
-    if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase()) {
-        if !search.is_empty() {
-            items.retain(|item| {
-                item.app_id.to_lowercase().contains(&search)
-                    || item
-                        .app_name
-                        .as_ref()
-                        .map(|name| name.to_lowercase().contains(&search))
-                        .unwrap_or(false)
-            });
-        }
+    if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase())
+        && !search.is_empty()
+    {
+        items.retain(|item| {
+            item.app_id.to_lowercase().contains(&search)
+                || item
+                    .app_name
+                    .as_ref()
+                    .map(|name| name.to_lowercase().contains(&search))
+                    .unwrap_or(false)
+        });
     }
 
-    if let Some(risk) = query.risk.as_deref() {
-        if parse_risk(risk).is_some() {
-            let risk = risk.to_uppercase();
-            items.retain(|item| item.risk_category == risk);
-        }
+    if let Some(risk) = query.risk.as_deref()
+        && parse_risk(risk).is_some()
+    {
+        let risk = risk.to_uppercase();
+        items.retain(|item| item.risk_category == risk);
     }
 
     if let Some(status) = query.status.as_deref() {
@@ -489,14 +489,13 @@ pub async fn get_inventory_detail(
     // resulting signals also drive the questionnaire prefill + classification.
     let sub = user.sub()?;
     let mut signals = crate::routes::app::ai_act::signals::Signals::default();
-    if let Ok(app) = state.master_app(&sub, &app_id, &state).await {
-        if let Ok(scanned) =
+    if let Ok(app) = state.master_app(&sub, &app_id, &state).await
+        && let Ok(scanned) =
             crate::routes::app::ai_act::board_scan::scan_app_signals(&state, &sub, &app_id, &app)
                 .await
-        {
-            let _ = reconcile::reconcile_app_models(&state, &app_id, &scanned).await;
-            signals = scanned;
-        }
+    {
+        let _ = reconcile::reconcile_app_models(&state, &app_id, &scanned).await;
+        signals = scanned;
     }
 
     let assessment = ai_act_assessment::Entity::find()
@@ -511,7 +510,7 @@ pub async fn get_inventory_detail(
         .all(&state.db)
         .await?;
 
-    let names = load_app_names(&state, &[app_id.clone()]).await;
+    let names = load_app_names(&state, std::slice::from_ref(&app_id)).await;
 
     let has_assessment = assessment.is_some();
     let answers = assessment
@@ -648,13 +647,12 @@ pub async fn put_inventory_assessment(
 
     // Recompute signals so the stored classification reflects current reality.
     let mut signals = crate::routes::app::ai_act::signals::Signals::default();
-    if let Ok(app) = state.master_app(&sub, &app_id, &state).await {
-        if let Ok(scanned) =
+    if let Ok(app) = state.master_app(&sub, &app_id, &state).await
+        && let Ok(scanned) =
             crate::routes::app::ai_act::board_scan::scan_app_signals(&state, &sub, &app_id, &app)
                 .await
-        {
-            signals = scanned;
-        }
+    {
+        signals = scanned;
     }
 
     let classification =

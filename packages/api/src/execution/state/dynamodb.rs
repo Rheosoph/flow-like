@@ -108,7 +108,7 @@ impl DynamoDbStateStore {
             .or_else(|| {
                 store_ref
                     .strip_prefix("s3://")
-                    .and_then(|s| s.splitn(2, '/').nth(1))
+                    .and_then(|s| s.split_once('/').map(|x| x.1))
             })
             .unwrap_or(store_ref);
         let path = Path::from(path_str);
@@ -139,7 +139,7 @@ impl DynamoDbStateStore {
 
         let existing: Vec<_> = tables.table_names().iter().collect();
 
-        if !existing.iter().any(|t| *t == &self.runs_table) {
+        if !existing.contains(&&self.runs_table) {
             self.client
                 .create_table()
                 .table_name(&self.runs_table)
@@ -217,7 +217,7 @@ impl DynamoDbStateStore {
                 .ok(); // Ignore error if TTL already enabled
         }
 
-        if !existing.iter().any(|t| *t == &self.events_table) {
+        if !existing.contains(&&self.events_table) {
             self.client
                 .create_table()
                 .table_name(&self.events_table)
@@ -368,7 +368,7 @@ fn item_to_run(
     let get_s = |k: &str| -> Result<String, StateStoreError> {
         item.get(k)
             .and_then(|v| v.as_s().ok())
-            .map(|s| s.clone())
+            .cloned()
             .ok_or_else(|| StateStoreError::Serialization(format!("Missing {k}")))
     };
     let get_n = |k: &str| -> Result<i64, StateStoreError> {
@@ -479,7 +479,7 @@ fn item_to_event(
     let get_s = |k: &str| -> Result<String, StateStoreError> {
         item.get(k)
             .and_then(|v| v.as_s().ok())
-            .map(|s| s.clone())
+            .cloned()
             .ok_or_else(|| StateStoreError::Serialization(format!("Missing {k}")))
     };
     let get_n = |k: &str| -> Result<i64, StateStoreError> {
@@ -663,17 +663,17 @@ impl ExecutionStateStore for DynamoDbStateStore {
             .scan_index_forward(false)
             .limit(limit);
 
-        if let Some(cursor) = cursor {
-            if let Some(record) = self.get_run(cursor).await? {
-                let mut key = HashMap::new();
-                key.insert("id".into(), AttributeValue::S(cursor.to_string()));
-                key.insert("appId".into(), AttributeValue::S(app_id.to_string()));
-                key.insert(
-                    "createdAt".into(),
-                    AttributeValue::N(record.created_at.to_string()),
-                );
-                query = query.set_exclusive_start_key(Some(key));
-            }
+        if let Some(cursor) = cursor
+            && let Some(record) = self.get_run(cursor).await?
+        {
+            let mut key = HashMap::new();
+            key.insert("id".into(), AttributeValue::S(cursor.to_string()));
+            key.insert("appId".into(), AttributeValue::S(app_id.to_string()));
+            key.insert(
+                "createdAt".into(),
+                AttributeValue::N(record.created_at.to_string()),
+            );
+            query = query.set_exclusive_start_key(Some(key));
         }
 
         let result = query
@@ -820,11 +820,11 @@ impl ExecutionStateStore for DynamoDbStateStore {
             .await
             .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
-        if let Some(items) = result.items {
-            if let Some(item) = items.first() {
-                let (event, _) = item_to_event(item)?;
-                return Ok(event.sequence);
-            }
+        if let Some(items) = result.items
+            && let Some(item) = items.first()
+        {
+            let (event, _) = item_to_event(item)?;
+            return Ok(event.sequence);
         }
 
         Ok(0)

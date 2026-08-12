@@ -131,11 +131,11 @@ pub async fn board_summaries(
         let pages = pages_by_board.remove(board_id).unwrap_or_default();
 
         // Fast path: serve from the DB cache.
-        if let Some(row) = cached.remove(board_id) {
-            if let Some(summary) = summary_from_row(&row, pages.clone()) {
-                summaries.push(summary);
-                continue;
-            }
+        if let Some(row) = cached.remove(board_id)
+            && let Some(summary) = summary_from_row(&row, pages.clone())
+        {
+            summaries.push(summary);
+            continue;
         }
 
         // Backwards-compatible fallback: load from S3, compute, and patch the DB.

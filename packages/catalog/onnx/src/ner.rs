@@ -234,8 +234,12 @@ pub fn merge_entities(
                 }
                 // Add single-token entity
                 if let Some(etype) = label.entity_type() {
-                    let text =
-                        reconstruct_text(&[token.clone()], char_start, char_end, original_text);
+                    let text = reconstruct_text(
+                        std::slice::from_ref(token),
+                        char_start,
+                        char_end,
+                        original_text,
+                    );
                     entities.push(NamedEntity {
                         text,
                         entity_type: etype.to_string(),

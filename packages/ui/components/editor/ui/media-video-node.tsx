@@ -13,6 +13,7 @@ import { PlateElement, useEditorMounted, withHOC } from "platejs/react";
 
 import { cn } from "../../../lib/utils";
 
+import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
 import { Caption, CaptionTextarea } from "./caption";
 import {
 	Resizable,
@@ -36,6 +37,7 @@ export const VideoElement = withHOC(
 			urlParsers: [parseTwitterUrl, parseVideoUrl],
 		});
 		const width = useResizableValue("width");
+		const resolvedUrl = useEditorAssetUrl(unsafeUrl);
 
 		const isEditorMounted = useEditorMounted();
 
@@ -98,7 +100,7 @@ export const VideoElement = withHOC(
 								<div ref={handleRef}>
 									<ReactPlayer
 										height="100%"
-										src={unsafeUrl}
+										src={resolvedUrl}
 										width="100%"
 										controls
 									/>

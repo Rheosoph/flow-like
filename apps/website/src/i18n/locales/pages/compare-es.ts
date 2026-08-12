@@ -1,6 +1,7 @@
 export const esCompare = {
 	// Meta
-	"compare.meta.title": "Flow-Like vs Alternativas | Datos, AI, Automatización & Apps",
+	"compare.meta.title":
+		"Flow-Like vs Alternativas | Datos, AI, Automatización & Apps",
 	"compare.meta.description":
 		"Compara Flow-Like en automatización de workflows, capas de datos enterprise, AI agents, BI y construcción de apps. Una plataforma gobernada para soluciones de empresa.",
 
@@ -29,7 +30,8 @@ export const esCompare = {
 	"compare.category.enterprise_data": "Plataformas de Datos Empresariales",
 	"compare.category.enterprise_data.desc":
 		"Plataformas basadas en ontologías y ERPs sobre modelos de datos empresariales propietarios. Potentes para grandes organizaciones, pero lentas de adoptar, caras y atadas a un único proveedor.",
-	"compare.category.enterprise_automation": "Suites de Automatización Empresarial",
+	"compare.category.enterprise_automation":
+		"Suites de Automatización Empresarial",
 	"compare.category.enterprise_automation.desc":
 		"Suites de procesos y workflows construidas alrededor de CRM, service management o agentes de IA. Fuertes para flujos específicos, pero atadas a SaaS, con licenciamiento pesado y poca portabilidad.",
 	"compare.category.rpa": "Robotic Process Automation",
@@ -122,17 +124,22 @@ export const esCompare = {
 	"compare.matrix.plot.axis.production_scale.low": "Se rompe al escalar",
 	"compare.matrix.plot.axis.production_scale.high": "Replay y alto volumen",
 	"compare.matrix.plot.axis.customer_distribution": "Distribución al Cliente",
-	"compare.matrix.plot.axis.customer_distribution.low": "Solo herramientas internas en el navegador",
-	"compare.matrix.plot.axis.customer_distribution.high": "Escritorio, móvil, sin conexión",
+	"compare.matrix.plot.axis.customer_distribution.low":
+		"Solo herramientas internas en el navegador",
+	"compare.matrix.plot.axis.customer_distribution.high":
+		"Escritorio, móvil, sin conexión",
 	"compare.matrix.plot.axis.ai_native": "Profundidad IA-Nativa",
 	"compare.matrix.plot.axis.ai_native.low": "IA superpuesta",
 	"compare.matrix.plot.axis.ai_native.high": "Agentes + data-native",
 	"compare.matrix.plot.axis.agent_safety": "Seguridad y Confianza de Agentes",
-	"compare.matrix.plot.axis.agent_safety.low": "Sin sandbox, estado en archivos",
+	"compare.matrix.plot.axis.agent_safety.low":
+		"Sin sandbox, estado en archivos",
 	"compare.matrix.plot.axis.agent_safety.high": "Sandboxed + transaccional",
-	"compare.matrix.plot.axis.production_readiness": "Preparación para Producción",
+	"compare.matrix.plot.axis.production_readiness":
+		"Preparación para Producción",
 	"compare.matrix.plot.axis.production_readiness.low": "Nivel prototipo",
-	"compare.matrix.plot.axis.production_readiness.high": "Compilado y reproducible",
+	"compare.matrix.plot.axis.production_readiness.high":
+		"Compilado y reproducible",
 
 	// Category Overview
 	"compare.overview.tagline": "De un vistazo",

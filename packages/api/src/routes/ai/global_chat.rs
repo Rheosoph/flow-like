@@ -273,7 +273,7 @@ async fn finish_run_rows(db: &DatabaseConnection, run_id: &str) {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or_default();
-    if sample % 20 == 0 {
+    if sample.is_multiple_of(20) {
         let now = chrono::Utc::now().timestamp();
         if let Err(error) = GlobalChatToolCall::delete_many()
             .filter(global_chat_tool_call::Column::ExpiresAt.lt(now))

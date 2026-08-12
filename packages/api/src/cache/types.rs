@@ -13,6 +13,15 @@ use std::fmt::Debug;
 /// re-derived per backend.
 pub const APP_SCOPE_USER_ID: &str = "";
 
+/// Fixed 32-hex fingerprint of one storage-key segment.
+///
+/// Hashing is what makes the layout delimiter-proof: a value containing `#` cannot
+/// impersonate another entry, and every segment has a known width, so aggregates
+/// (namespace, user) are contiguous string ranges.
+pub fn segment_hash(value: &str) -> String {
+    blake3::hash(value.as_bytes()).to_hex()[..32].to_string()
+}
+
 /// Fully qualified identity of one cache entry.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CacheKey {
@@ -20,15 +29,22 @@ pub struct CacheKey {
     pub scope: CacheScope,
     /// The owning user for `CacheScope::User`, [`APP_SCOPE_USER_ID`] otherwise.
     pub user_id: String,
+    /// Optional grouping for bulk invalidation; empty means unnamespaced.
+    pub namespace: String,
     pub key: String,
 }
 
 impl CacheKey {
-    pub fn app(app_id: impl Into<String>, key: impl Into<String>) -> Self {
+    pub fn app(
+        app_id: impl Into<String>,
+        namespace: impl Into<String>,
+        key: impl Into<String>,
+    ) -> Self {
         Self {
             app_id: app_id.into(),
             scope: CacheScope::App,
             user_id: APP_SCOPE_USER_ID.to_string(),
+            namespace: namespace.into(),
             key: key.into(),
         }
     }
@@ -36,31 +52,41 @@ impl CacheKey {
     pub fn user(
         app_id: impl Into<String>,
         user_id: impl Into<String>,
+        namespace: impl Into<String>,
         key: impl Into<String>,
     ) -> Self {
         Self {
             app_id: app_id.into(),
             scope: CacheScope::User,
             user_id: user_id.into(),
+            namespace: namespace.into(),
             key: key.into(),
         }
     }
 
-    /// Stable, collision-free composite used by the key/value backends.
+    /// Storage key used by the key/value backends, scoped under the app partition:
+    /// `e#<scope>#h(user)#h(namespace)#h(key)`.
     ///
-    /// Segments are length-prefixed rather than merely delimited so that a key containing
-    /// the delimiter cannot impersonate another entry.
-    pub fn composite(&self) -> String {
-        let scope = self.scope.as_str();
+    /// The shape is what makes bulk invalidation cheap everywhere: every entry of one
+    /// namespace — and every chunk item DynamoDB appends *below* an entry's key — shares
+    /// the literal prefix [`CacheKey::namespace_sort_prefix`], so "delete a namespace"
+    /// is a contiguous range query (DynamoDB `begins_with`) or a plain string prefix
+    /// match (Redis), never a parse or an escape.
+    pub fn sort_key(&self) -> String {
         format!(
-            "{}:{}:{}:{}:{}:{}:{}",
-            self.app_id.len(),
-            self.app_id,
-            scope,
-            self.user_id.len(),
-            self.user_id,
-            self.key.len(),
-            self.key
+            "{}{}",
+            Self::namespace_sort_prefix(self.scope, &self.user_id, &self.namespace),
+            segment_hash(&self.key)
+        )
+    }
+
+    /// Prefix shared by every entry in one `(scope, user, namespace)` partition slice.
+    pub fn namespace_sort_prefix(scope: CacheScope, user_id: &str, namespace: &str) -> String {
+        format!(
+            "e#{}#{}#{}#",
+            scope.as_str(),
+            segment_hash(user_id),
+            segment_hash(namespace)
         )
     }
 }
@@ -180,6 +206,20 @@ pub trait CacheStore: Send + Sync + Debug {
     /// Delete an entry. Returns whether something was actually removed.
     async fn delete(&self, key: &CacheKey) -> Result<bool, CacheStoreError>;
 
+    /// Delete every entry in one `(app, scope, user, namespace)` partition slice,
+    /// regardless of TTL — including entries that never expire. Returns how many
+    /// entries were removed.
+    ///
+    /// `namespace` must not be empty: unnamespaced entries are deliberately not bulk
+    /// deletable, and wiping a whole scope is `delete_app`'s job.
+    async fn delete_namespace(
+        &self,
+        app_id: &str,
+        scope: CacheScope,
+        user_id: &str,
+        namespace: &str,
+    ) -> Result<i64, CacheStoreError>;
+
     /// Delete every entry belonging to an app (used when an app is torn down).
     async fn delete_app(&self, app_id: &str) -> Result<i64, CacheStoreError>;
 
@@ -208,9 +248,11 @@ impl Default for CacheLimits {
     fn default() -> Self {
         Self {
             max_key_bytes: 512,
-            // Comfortably under the 400 KB DynamoDB item limit once the key, scope and
-            // timestamps are accounted for.
-            max_value_bytes: 256 * 1024,
+            // Deliberately small: the cache is for hot metadata and memoized lookups,
+            // not payload storage. Every backend can hold a value this size — Postgres
+            // and Redis natively, DynamoDB by splitting it across chunk items (its item
+            // ceiling is 400 KB). Larger data belongs in the app's object storage.
+            max_value_bytes: 1024 * 1024,
             max_ttl_seconds: 30 * 24 * 60 * 60,
             default_ttl_seconds: 0,
         }
@@ -250,11 +292,13 @@ impl CacheLimits {
     }
 
     pub fn validate_value(&self, value: &Value) -> Result<(), CacheStoreError> {
-        let encoded = serde_json::to_vec(value)
-            .map_err(|e| CacheStoreError::Serialization(e.to_string()))?;
+        let encoded =
+            serde_json::to_vec(value).map_err(|e| CacheStoreError::Serialization(e.to_string()))?;
         if encoded.len() > self.max_value_bytes {
             return Err(CacheStoreError::InvalidInput(format!(
-                "Cache value is {} bytes, exceeding the {} byte limit",
+                "Cache value is {} bytes, exceeding the {} byte cache limit. The cache is \
+                 for small, hot values — write large payloads to the app's storage \
+                 (S3-backed) instead and cache the path or a summary.",
                 encoded.len(),
                 self.max_value_bytes
             )));
@@ -302,23 +346,64 @@ mod tests {
     use super::*;
 
     #[test]
-    fn composite_keys_cannot_be_forged_across_segments() {
-        // Without length prefixes, an app id of "a" plus key "b:c" would collide with
-        // app id "a:b" plus key "c".
-        let left = CacheKey::app("a", "b:c");
-        let right = CacheKey::app("a:b", "c");
-        assert_ne!(left.composite(), right.composite());
+    fn sort_keys_cannot_be_forged_across_segments() {
+        // Hashing each segment means a key containing the delimiter — or text that
+        // mimics another entry's whole layout — still lands in its own slot.
+        assert_ne!(
+            CacheKey::app("a", "ns", "b#c").sort_key(),
+            CacheKey::app("a", "ns#b", "c").sort_key()
+        );
+        let mimic = CacheKey::app("a", "ns", "e#app#deadbeef#deadbeef#deadbeef").sort_key();
+        assert_ne!(mimic, CacheKey::app("a", "ns", "x").sort_key());
     }
 
     #[test]
-    fn scope_and_user_participate_in_identity() {
+    fn scope_user_and_namespace_participate_in_identity() {
         assert_ne!(
-            CacheKey::app("app", "k").composite(),
-            CacheKey::user("app", "someone", "k").composite()
+            CacheKey::app("app", "", "k").sort_key(),
+            CacheKey::user("app", "someone", "", "k").sort_key()
         );
         assert_ne!(
-            CacheKey::user("app", "alice", "k").composite(),
-            CacheKey::user("app", "bob", "k").composite()
+            CacheKey::user("app", "alice", "", "k").sort_key(),
+            CacheKey::user("app", "bob", "", "k").sort_key()
+        );
+        assert_ne!(
+            CacheKey::app("app", "ns-a", "k").sort_key(),
+            CacheKey::app("app", "ns-b", "k").sort_key()
+        );
+    }
+
+    #[test]
+    fn namespace_prefix_ranges_exactly_one_namespace() {
+        use flow_like_types::cache::CacheScope;
+
+        let prefix = CacheKey::namespace_sort_prefix(CacheScope::App, "", "reports");
+
+        let inside = CacheKey::app("app", "reports", "daily").sort_key();
+        assert!(inside.starts_with(&prefix));
+
+        // A different namespace, the same key text, or a namespace that is a textual
+        // prefix of ours must all fall outside the range.
+        assert!(
+            !CacheKey::app("app", "billing", "daily")
+                .sort_key()
+                .starts_with(&prefix)
+        );
+        assert!(
+            !CacheKey::app("app", "report", "daily")
+                .sort_key()
+                .starts_with(&prefix)
+        );
+        assert!(
+            !CacheKey::app("app", "", "reports/daily")
+                .sort_key()
+                .starts_with(&prefix)
+        );
+        assert!(
+            !CacheKey::user("app", "alice", "reports", "daily")
+                .sort_key()
+                .starts_with(&prefix),
+            "user-scoped entries must not fall into the app-scope range"
         );
     }
 
@@ -353,7 +438,10 @@ mod tests {
             Some(3_600 * 1_000),
             "omitting a TTL should adopt the deployment default"
         );
-        assert_eq!(limits.resolve_expiry(Some(60), 1_000).unwrap(), Some(61_000));
+        assert_eq!(
+            limits.resolve_expiry(Some(60), 1_000).unwrap(),
+            Some(61_000)
+        );
     }
 
     #[test]

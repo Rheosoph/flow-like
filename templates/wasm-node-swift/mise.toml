@@ -18,7 +18,7 @@ ADAPTER="wasi_snapshot_preview1.reactor.wasm"
 if [ ! -f "$ADAPTER" ]; then
     echo "Downloading WASI preview1 reactor adapter..."
     curl -fsSL -o "$ADAPTER" \
-        "https://github.com/bytecodealliance/wasmtime/releases/download/v29.0.1/wasi_snapshot_preview1.reactor.wasm"
+        "https://github.com/bytecodealliance/wasmtime/releases/download/v47.0.3/wasi_snapshot_preview1.reactor.wasm"
 fi
 
 swift package resolve

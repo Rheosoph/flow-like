@@ -233,18 +233,18 @@ fn register_copilot_run(request_id: Option<&str>) -> (CancellationToken, ActiveC
         .map(str::trim)
         .filter(|request_id| !request_id.is_empty())
         .map(str::to_string);
-    if let Some(request_id) = request_id.as_ref() {
-        if let Some(previous) = ACTIVE_COPILOT_RUNS.insert(
+    if let Some(request_id) = request_id.as_ref()
+        && let Some(previous) = ACTIVE_COPILOT_RUNS.insert(
             request_id.clone(),
             ActiveCopilotRun {
                 generation,
                 cancellation: cancellation.clone(),
             },
-        ) {
-            // Request ids are expected to be unique. If a caller reuses one, stop the stale run
-            // before replacing it so a late completion cannot keep mutating the same board.
-            previous.cancellation.cancel();
-        }
+        )
+    {
+        // Request ids are expected to be unique. If a caller reuses one, stop the stale run
+        // before replacing it so a late completion cannot keep mutating the same board.
+        previous.cancellation.cancel();
     }
     (
         cancellation.clone(),
@@ -1332,7 +1332,7 @@ pub async fn flowpilot_resolve_board_edit_job(
         BoardEditJobPhase::Failed
     };
     record.job.updated_at_ms = wall_clock_ms();
-    record.job.error = (!dismissed).then(|| disposition.message);
+    record.job.error = (!dismissed).then_some(disposition.message);
     if dismissed {
         record.board_commands.clear();
     }
@@ -6399,7 +6399,7 @@ async fn copilot_sdk_chat_internal(
                             // Kept for older clients while the detailed report uses terminal_status.
                             "result_status": terminal_status,
                             "result_summary": summarize_tool_result(result_content, error_message.as_deref()),
-                            "result_preview": result_content.map(|content| preview_tool_result(content)),
+                            "result_preview": result_content.map(preview_tool_result),
                             // Full text for compiler-receipt evidence; previews truncate large
                             // commit results and corrupt the captured authored source. Redaction
                             // still applies — only truncation is lifted.
@@ -10349,10 +10349,8 @@ fn workflow_tool_preflight_with_args(
     }
 
     let typed_operation = is_typed_ir_operation_tool(tool_name);
-    if typed_operation {
-        if let Some(module_count) = typed_ir_module_count_hint(tool_name, args) {
-            state.typed_expected_modules = state.typed_expected_modules.max(module_count);
-        }
+    if typed_operation && let Some(module_count) = typed_ir_module_count_hint(tool_name, args) {
+        state.typed_expected_modules = state.typed_expected_modules.max(module_count);
     }
     let typed_loop_active =
         state.mutation_path == Some(WorkflowMutationPath::TypedIr) || typed_operation;
@@ -12206,7 +12204,7 @@ fn workflow_tool_record_with_outcome(
         if response_draft_id.is_some()
             && parsed
                 .as_ref()
-                .is_some_and(|value| typed_ir_result_proves_retained_draft(value))
+                .is_some_and(typed_ir_result_proves_retained_draft)
         {
             state.typed_draft_retained = true;
         }
@@ -12393,17 +12391,16 @@ fn workflow_tool_abort(state: &Arc<StdMutex<WorkflowToolLoopState>>, tool_name: 
         }
         return;
     }
-    if tool_name == "commit_flowscript" {
-        if let Ok(mut state) = state.lock()
-            && state.edit_in_flight
-            && state.last_status.as_deref() == Some("valid")
-        {
-            // A transport/worker abort does not invalidate the host-checked source revision.
-            // Preserve its status so the bounded idempotent commit retry path remains available.
-            state.edit_in_flight = false;
-            state.in_flight_flowscript = None;
-            return;
-        }
+    if tool_name == "commit_flowscript"
+        && let Ok(mut state) = state.lock()
+        && state.edit_in_flight
+        && state.last_status.as_deref() == Some("valid")
+    {
+        // A transport/worker abort does not invalidate the host-checked source revision.
+        // Preserve its status so the bounded idempotent commit retry path remains available.
+        state.edit_in_flight = false;
+        state.in_flight_flowscript = None;
+        return;
     }
     if !is_order_sensitive_workflow_tool(tool_name) {
         return;
@@ -14145,14 +14142,13 @@ async fn run_external_agent_invocation(
         None => None,
     };
 
-    if let Some(path) = &invocation.final_output_path {
-        if invocation.backend == FlowPilotAgentBackendKind::Codex
-            && let Ok(text) = std::fs::read_to_string(path)
-            && !text.trim().is_empty()
-        {
-            final_text.clear();
-            append_bounded_text(&mut final_text, &text, EXTERNAL_AGENT_TEXT_MAX_BYTES);
-        }
+    if let Some(path) = &invocation.final_output_path
+        && invocation.backend == FlowPilotAgentBackendKind::Codex
+        && let Ok(text) = std::fs::read_to_string(path)
+        && !text.trim().is_empty()
+    {
+        final_text.clear();
+        append_bounded_text(&mut final_text, &text, EXTERNAL_AGENT_TEXT_MAX_BYTES);
     }
 
     if final_text.trim().is_empty() {
@@ -16143,7 +16139,7 @@ fn build_flowpilot_agent_surface(
     }
 
     let flowscript_recovery = workflow_edit_request
-        .then(|| board_arc.as_deref())
+        .then_some(board_arc.as_deref())
         .flatten()
         .and_then(|board| {
             retained_flow_ir_draft_store_for_board(board)
@@ -16157,7 +16153,7 @@ fn build_flowpilot_agent_surface(
     }
 
     let workflow_manifest = workflow_edit_request
-        .then(|| board_arc.as_deref())
+        .then_some(board_arc.as_deref())
         .flatten()
         .and_then(|board| {
             let retained = flowscript_recovery

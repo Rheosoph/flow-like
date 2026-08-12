@@ -40,7 +40,23 @@ impl RedisCacheStore {
     }
 
     fn entry_key(key: &CacheKey) -> String {
-        format!("{KEY_PREFIX}{}", key.composite())
+        format!("{KEY_PREFIX}{}:{}", key.app_id, key.sort_key())
+    }
+
+    /// Every Redis key of one `(app, scope, user, namespace)` slice starts with this,
+    /// because the sort key hashes its segments into fixed-width blocks — so namespace
+    /// invalidation is a literal `starts_with`, no parsing and no glob escaping.
+    fn namespace_key_prefix(
+        app_id: &str,
+        scope: flow_like_types::cache::CacheScope,
+        user_id: &str,
+        namespace: &str,
+    ) -> String {
+        format!(
+            "{KEY_PREFIX}{}:{}",
+            app_id,
+            CacheKey::namespace_sort_prefix(scope, user_id, namespace)
+        )
     }
 
     fn app_index_key(app_id: &str) -> String {
@@ -52,7 +68,59 @@ impl RedisCacheStore {
     fn ttl_seconds(expires_at: Option<i64>, now_ms: i64) -> Option<u64> {
         expires_at.map(|expires| (((expires - now_ms) + 999) / 1_000).max(1) as u64)
     }
+
+    /// One `SSCAN` page of an index set.
+    ///
+    /// Cursor-based on purpose: a busy app's index can hold many members, and a single
+    /// `SMEMBERS` would block single-threaded Redis (and every other cache request on
+    /// this shared connection) for the whole materialization.
+    async fn sscan_page(
+        conn: &mut MultiplexedConnection,
+        index_key: &str,
+        cursor: u64,
+    ) -> Result<(u64, Vec<String>), CacheStoreError> {
+        redis::cmd("SSCAN")
+            .arg(index_key)
+            .arg(cursor)
+            .arg("COUNT")
+            .arg(SCAN_BATCH)
+            .query_async(&mut *conn)
+            .await
+            .map_err(|e| CacheStoreError::Database(e.to_string()))
+    }
 }
+
+/// Members handled per `SSCAN`/`SCAN` page.
+const SCAN_BATCH: usize = 500;
+
+/// Atomic "insert if nothing live" honouring the *stored* expiry, not just Redis's.
+///
+/// TTLs are rounded up to whole seconds on write, so for up to a second an entry can be
+/// physically present while its stored `expires_at` has already lapsed. A plain
+/// `SET NX` refuses to write in that window although the trait contract says a lapsed
+/// entry does not count as present — `get_or_set` would then burn its retries in
+/// milliseconds and surface a spurious conflict.
+///
+/// KEYS[1] = entry key, ARGV[1] = payload, ARGV[2] = now in epoch ms,
+/// ARGV[3] = TTL in seconds or "" for no expiry. Returns 1 when this call wrote.
+const TRY_INSERT_SCRIPT: &str = r#"
+local cur = redis.call('GET', KEYS[1])
+if cur then
+  local ok, rec = pcall(cjson.decode, cur)
+  if ok and rec ~= nil then
+    local exp = rec['expires_at']
+    if type(exp) ~= 'number' or exp > tonumber(ARGV[2]) then
+      return 0
+    end
+  end
+end
+if ARGV[3] ~= '' then
+  redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[3]))
+else
+  redis.call('SET', KEYS[1], ARGV[1])
+end
+return 1
+"#;
 
 #[async_trait]
 impl CacheStore for RedisCacheStore {
@@ -147,22 +215,25 @@ impl CacheStore for RedisCacheStore {
         let redis_key = Self::entry_key(&entry.key);
         let index_key = Self::app_index_key(&entry.key.app_id);
 
-        // `SET key value NX [EX ttl]` is atomic and returns nil when the key already
-        // holds a value. Expired keys are gone as far as Redis is concerned, so NX
-        // succeeds on them without any extra handling.
-        let mut command = redis::cmd("SET");
-        command.arg(&redis_key).arg(&payload).arg("NX");
-        if let Some(ttl) = Self::ttl_seconds(entry.expires_at, now_ms) {
-            command.arg("EX").arg(ttl);
-        }
+        // A Lua script rather than `SET NX`: the script honours the *stored* expiry, so
+        // an entry whose lifetime lapsed but which Redis has not physically evicted yet
+        // (TTLs are rounded up to whole seconds) still counts as absent, exactly as the
+        // trait contract requires.
+        let ttl_arg = Self::ttl_seconds(entry.expires_at, now_ms)
+            .map(|ttl| ttl.to_string())
+            .unwrap_or_default();
 
         let mut conn = self.conn.lock().await;
-        let outcome: Option<String> = command
-            .query_async(&mut *conn)
+        let wrote: i64 = redis::Script::new(TRY_INSERT_SCRIPT)
+            .key(&redis_key)
+            .arg(&payload)
+            .arg(now_ms)
+            .arg(ttl_arg)
+            .invoke_async(&mut *conn)
             .await
             .map_err(|e| CacheStoreError::Database(e.to_string()))?;
 
-        if outcome.is_none() {
+        if wrote == 0 {
             return Ok(None);
         }
 
@@ -191,27 +262,81 @@ impl CacheStore for RedisCacheStore {
         Ok(removed > 0)
     }
 
+    async fn delete_namespace(
+        &self,
+        app_id: &str,
+        scope: flow_like_types::cache::CacheScope,
+        user_id: &str,
+        namespace: &str,
+    ) -> Result<i64, CacheStoreError> {
+        if namespace.is_empty() {
+            return Err(CacheStoreError::InvalidInput(
+                "Namespace invalidation requires a non-empty namespace".to_string(),
+            ));
+        }
+
+        // The per-app index names every key this app has written, so no keyspace SCAN
+        // is needed; SSCAN keeps each round trip small.
+        let prefix = Self::namespace_key_prefix(app_id, scope, user_id, namespace);
+        let index_key = Self::app_index_key(app_id);
+        let mut conn = self.conn.lock().await;
+
+        let mut removed = 0i64;
+        let mut cursor = 0u64;
+        loop {
+            let (next, members) = Self::sscan_page(&mut conn, &index_key, cursor).await?;
+
+            let matching: Vec<String> = members
+                .into_iter()
+                .filter(|member| member.starts_with(&prefix))
+                .collect();
+
+            if !matching.is_empty() {
+                // DEL counts only keys that still existed; expired members are pruned
+                // from the index all the same.
+                let deleted: i64 = conn
+                    .del(matching.clone())
+                    .await
+                    .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+                removed += deleted;
+                let _: i64 = conn
+                    .srem(&index_key, matching)
+                    .await
+                    .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+            }
+
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        Ok(removed)
+    }
+
     async fn delete_app(&self, app_id: &str) -> Result<i64, CacheStoreError> {
         let index_key = Self::app_index_key(app_id);
         let mut conn = self.conn.lock().await;
 
-        let members: Vec<String> = conn
-            .smembers(&index_key)
-            .await
-            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+        let mut removed = 0i64;
+        let mut cursor = 0u64;
+        loop {
+            let (next, members) = Self::sscan_page(&mut conn, &index_key, cursor).await?;
 
-        if members.is_empty() {
-            let _: i64 = conn
-                .del(&index_key)
-                .await
-                .map_err(|e| CacheStoreError::Database(e.to_string()))?;
-            return Ok(0);
+            if !members.is_empty() {
+                let deleted: i64 = conn
+                    .del(members)
+                    .await
+                    .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+                removed += deleted;
+            }
+
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
         }
 
-        let removed: i64 = conn
-            .del(members)
-            .await
-            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
         let _: i64 = conn
             .del(&index_key)
             .await
@@ -221,15 +346,99 @@ impl CacheStore for RedisCacheStore {
     }
 
     async fn delete_expired(&self) -> Result<i64, CacheStoreError> {
-        // Redis already evicted the entries themselves. Nothing to reclaim here; the
-        // per-app index is pruned opportunistically on the next `delete_app`.
-        Ok(0)
+        // Redis evicts the entries themselves, but nothing else removes their members
+        // from the per-app index sets — without this sweep a busy app's index grows
+        // without bound. Walk every index, check which members still exist, and drop
+        // the dead ones. Returns the number of members reclaimed.
+        let mut conn = self.conn.lock().await;
+
+        let mut index_keys: Vec<String> = Vec::new();
+        let mut cursor = 0u64;
+        loop {
+            let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
+                .arg(cursor)
+                .arg("MATCH")
+                .arg(format!("{APP_INDEX_PREFIX}*"))
+                .arg("COUNT")
+                .arg(SCAN_BATCH)
+                .query_async(&mut *conn)
+                .await
+                .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+            index_keys.extend(keys);
+            cursor = next;
+            if cursor == 0 {
+                break;
+            }
+        }
+
+        let mut pruned = 0i64;
+        for index_key in index_keys {
+            let mut cursor = 0u64;
+            loop {
+                let (next, members) = Self::sscan_page(&mut conn, &index_key, cursor).await?;
+
+                if !members.is_empty() {
+                    let mut pipe = redis::pipe();
+                    for member in &members {
+                        pipe.exists(member);
+                    }
+                    let alive: Vec<bool> = pipe
+                        .query_async(&mut *conn)
+                        .await
+                        .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+
+                    let dead: Vec<String> = members
+                        .into_iter()
+                        .zip(alive)
+                        .filter(|(_, alive)| !alive)
+                        .map(|(member, _)| member)
+                        .collect();
+
+                    if !dead.is_empty() {
+                        let dropped: i64 = conn
+                            .srem(&index_key, dead)
+                            .await
+                            .map_err(|e| CacheStoreError::Database(e.to_string()))?;
+                        pruned += dropped;
+                    }
+                }
+
+                cursor = next;
+                if cursor == 0 {
+                    break;
+                }
+            }
+        }
+
+        Ok(pruned)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn namespace_prefix_covers_exactly_its_entries() {
+        use flow_like_types::cache::CacheScope;
+
+        let entry = RedisCacheStore::entry_key(&CacheKey::app("app-1", "reports", "daily"));
+
+        let own = RedisCacheStore::namespace_key_prefix("app-1", CacheScope::App, "", "reports");
+        assert!(entry.starts_with(&own));
+
+        let other_ns =
+            RedisCacheStore::namespace_key_prefix("app-1", CacheScope::App, "", "billing");
+        assert!(!entry.starts_with(&other_ns));
+
+        let other_app =
+            RedisCacheStore::namespace_key_prefix("app-2", CacheScope::App, "", "reports");
+        assert!(!entry.starts_with(&other_app));
+
+        let user_scope =
+            RedisCacheStore::namespace_key_prefix("app-1", CacheScope::User, "alice", "reports");
+        assert!(!entry.starts_with(&user_scope));
+    }
 
     #[test]
     fn ttl_rounds_up_and_never_reaches_zero() {

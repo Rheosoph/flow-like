@@ -81,10 +81,7 @@ import { DependencyConfiguration } from "./dependency";
 import { EmbeddingConfiguration } from "./embedding";
 import { LLMConfiguration } from "./llm";
 import { MetaConfiguration } from "./meta";
-import {
-	HuggingFaceModelImporter,
-	MlxAssetsConfiguration,
-} from "./mlx-assets";
+import { HuggingFaceModelImporter, MlxAssetsConfiguration } from "./mlx-assets";
 import {
 	STTConfiguration,
 	type SttAssetDraft,
@@ -829,16 +826,13 @@ export default function Page() {
 				return;
 			}
 
-			const targetMode: BitMode =
-				imported.kind === "vlm" ? "vlm" : "local-llm";
+			const targetMode: BitMode = imported.kind === "vlm" ? "vlm" : "local-llm";
 			if (mode !== targetMode) {
 				skipNextModeResetRef.current = true;
 				setMode(targetMode);
 			}
 			importedGgufDownloadRef.current = null;
-			setBit((current) =>
-				applyHuggingFaceMlxImportToBit(current, imported),
-			);
+			setBit((current) => applyHuggingFaceMlxImportToBit(current, imported));
 			setMlxAssets(
 				createHuggingFaceMlxAssetBits(imported, getDefaultMlxAssetBit),
 			);

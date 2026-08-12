@@ -379,7 +379,9 @@ export default function TemplatesPage() {
 											align="end"
 											onClick={(event) => event.stopPropagation()}
 										>
-											<DropdownMenuItem onClick={() => openTemplate(templateId)}>
+											<DropdownMenuItem
+												onClick={() => openTemplate(templateId)}
+											>
 												<Edit className="w-4 h-4 mr-2" />
 												Edit
 											</DropdownMenuItem>

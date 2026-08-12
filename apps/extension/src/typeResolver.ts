@@ -100,12 +100,12 @@ function splitTopLevel(text: string, separator: string): string[] {
 		if (inString) {
 			if (ch === "\\" && i + 1 < text.length) {
 				i++;
-			} else if (ch === "\"") {
+			} else if (ch === '"') {
 				inString = false;
 			}
 			continue;
 		}
-		if (ch === "\"") {
+		if (ch === '"') {
 			inString = true;
 		} else if (ch === "<" || ch === "(" || ch === "[") {
 			depth++;

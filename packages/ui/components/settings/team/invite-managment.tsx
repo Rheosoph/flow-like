@@ -53,12 +53,19 @@ import {
 	EmptyState,
 	Input,
 	Label,
+	Select,
+	SelectContent,
+	SelectItem,
+	SelectTrigger,
+	SelectValue,
 	Separator,
 	Textarea,
 	useBackend,
 	useHub,
+	useInvalidateInfiniteInvoke,
 	useInvoke,
 } from "../../../";
+import { apiErrorMessage } from "../../../lib/api-error";
 import {
 	userAvatarUrl,
 	userDisplayName,
@@ -83,6 +90,7 @@ export function InviteUserDialog({
 	trigger,
 }: Readonly<{ appId: string; trigger: ReactNode }>) {
 	const backend = useBackend();
+	const invalidateInfinite = useInvalidateInfiniteInvoke();
 	const [message, setMessage] = useState("");
 	const [invitee, setInvitee] = useState("");
 	const inviteeSearch = useDebounce(invitee.trim(), 350);
@@ -200,6 +208,12 @@ export function InviteUserDialog({
 																		user.id,
 																		message,
 																	);
+																	// Surface the new invitation in the people
+																	// list without waiting for a manual refresh.
+																	await invalidateInfinite(
+																		backend.teamState.getAppInvites,
+																		[appId],
+																	);
 																	toast.success(
 																		`Invitation sent to ${displayName}!`,
 																	);
@@ -209,7 +223,10 @@ export function InviteUserDialog({
 																} catch (error) {
 																	console.error(error);
 																	toast.error(
-																		"Failed to send invite. Please try again.",
+																		apiErrorMessage(
+																			error,
+																			"Failed to send invite. Please try again.",
+																		),
 																	);
 																}
 															}}
@@ -266,6 +283,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 	const [showCreateLinkDialog, setShowCreateLinkDialog] = useState(false);
 	const [newLinkName, setNewLinkName] = useState("");
 	const [newLinkMaxUses, setNewLinkMaxUses] = useState<string>("");
+	const [newLinkExpiry, setNewLinkExpiry] = useState<string>("168");
 	const { hub } = useHub();
 
 	const host = hub?.app ?? "app.flow-like.com";
@@ -286,13 +304,29 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 			maxUses = -1; // Allow unlimited uses if not specified
 		}
 
-		await backend.teamState.createInviteLink(appId, newLinkName, maxUses);
+		const expiresInHours = Number.parseInt(newLinkExpiry);
+		await backend.teamState.createInviteLink(
+			appId,
+			newLinkName,
+			maxUses,
+			Number.isNaN(expiresInHours) || expiresInHours <= 0
+				? undefined
+				: expiresInHours,
+		);
 		setNewLinkName("");
 		setNewLinkMaxUses("");
+		setNewLinkExpiry("168");
 		setShowCreateLinkDialog(false);
 		toast.success("New invite link created!");
 		await links.refetch();
-	}, [appId, newLinkName, newLinkMaxUses, backend, links.refetch]);
+	}, [
+		appId,
+		newLinkName,
+		newLinkMaxUses,
+		newLinkExpiry,
+		backend,
+		links.refetch,
+	]);
 
 	const deleteInviteLink = useCallback(
 		async (id: string) => {
@@ -396,6 +430,30 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 											empty for unlimited access.
 										</p>
 									</div>
+
+									<div className="space-y-2">
+										<Label htmlFor="linkExpiry" className="text-sm font-medium">
+											Expires After
+										</Label>
+										<Select
+											value={newLinkExpiry}
+											onValueChange={setNewLinkExpiry}
+										>
+											<SelectTrigger id="linkExpiry">
+												<SelectValue placeholder="Select expiry" />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectItem value="24">1 day</SelectItem>
+												<SelectItem value="168">7 days</SelectItem>
+												<SelectItem value="720">30 days</SelectItem>
+												<SelectItem value="never">Never</SelectItem>
+											</SelectContent>
+										</Select>
+										<p className="text-xs text-muted-foreground">
+											Expired links stop working but stay listed until you
+											delete them.
+										</p>
+									</div>
 								</div>
 
 								<DialogFooter className="gap-2 sm:gap-0">
@@ -405,6 +463,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 											setShowCreateLinkDialog(false);
 											setNewLinkName("");
 											setNewLinkMaxUses("");
+											setNewLinkExpiry("168");
 										}}
 									>
 										Cancel

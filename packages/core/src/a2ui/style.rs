@@ -337,17 +337,15 @@ impl Shadow {
             .first()
             .filter(|token| is_shadow_length(token))
             .cloned()
-            .map(|token| {
+            .inspect(|token| {
                 tokens.remove(0);
-                token
             });
         let spread = tokens
             .first()
             .filter(|token| is_shadow_length(token))
             .cloned()
-            .map(|token| {
+            .inspect(|token| {
                 tokens.remove(0);
-                token
             });
         let color = (!tokens.is_empty()).then(|| tokens.join(" "));
 

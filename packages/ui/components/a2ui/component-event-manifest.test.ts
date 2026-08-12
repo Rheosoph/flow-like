@@ -16,6 +16,7 @@ describe("component event manifest", () => {
 			button: ["click"],
 			feedback: ["submit"],
 			textField: ["change", "input", "submit", "focus", "blur"],
+			richText: ["change", "blur", "imageUploaded", "imageUploadError"],
 			select: ["change", "open", "close"],
 			slider: ["change", "input"],
 			checkbox: ["change"],
@@ -107,7 +108,12 @@ describe("component event manifest", () => {
 			}
 		}
 
-		for (const type of ["table", "nivoChart", "plotlyChart"] as const) {
+		for (const type of [
+			"table",
+			"nivoChart",
+			"plotlyChart",
+			"richText",
+		] as const) {
 			for (const definition of getComponentEventDefinitions(component(type))) {
 				expect(definition.legacyFallback).toBe(false);
 				expect(definition.wildcardFallback).toBe(false);

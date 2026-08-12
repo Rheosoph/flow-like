@@ -271,6 +271,8 @@ impl Modify for SecurityAddon {
         crate::routes::app::team::manage_join_request::accept_join_request,
         crate::routes::app::team::manage_join_request::reject_join_request,
         crate::routes::app::team::invite_user::invite_user,
+        crate::routes::app::team::invites::list_app_invites,
+        crate::routes::app::team::invites::revoke_invite,
         crate::routes::app::team::purchase::purchase,
         crate::routes::app::team::remove_user::remove_user,
         // App connection routes (app-to-app access)
@@ -362,6 +364,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::cache::cache_entry_exists,
         crate::routes::app::cache::write_cache_entry,
         crate::routes::app::cache::delete_cache_entry,
+        crate::routes::app::cache::delete_cache_namespace,
         // Data routes
         crate::routes::app::data::upload_files::upload_files,
         crate::routes::app::data::upload_files::upload_user_files,
@@ -400,6 +403,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::db::drop_columns::drop_columns,
         crate::routes::app::db::build_index::build_index,
         crate::routes::app::db::drop_index::drop_index,
+        crate::routes::app::db::drop_table::drop_table,
         crate::routes::app::db::optimize::optimize_table,
         crate::routes::app::db::presign_db_access::presign_db_access,
         crate::routes::app::db::presign_db_access::presign_project_db_access,
@@ -584,6 +588,7 @@ impl Modify for SecurityAddon {
         crate::routes::app::cache::WriteCacheRequest,
         crate::routes::app::cache::WriteCacheResponse,
         crate::routes::app::cache::DeleteCacheResponse,
+        crate::routes::app::cache::DeleteNamespaceResponse,
         crate::routes::admin::cache::SweepCacheResponse,
         // OAuth schemas
         crate::routes::oauth::TokenExchangeRequest,

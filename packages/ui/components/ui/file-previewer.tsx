@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import { cn } from "../../lib";
 import { AudioPreview } from "./audio-preview";
 import { MonacoFileEditor } from "./monaco-file-editor";
 import { TextEditor } from "./text-editor";
@@ -72,6 +73,114 @@ export function canPreview(file: string, filename?: string) {
 	);
 }
 
+/**
+ * PDF open parameters for the built-in viewers. Chrome cuts the fragment at the
+ * second `#`, so every parameter has to sit behind a single one — `#page=2&#view=FitH`
+ * silently drops the view.
+ */
+export function pdfViewerFragment(page?: number) {
+	const params = ["toolbar=1", "view=FitH"];
+	if (page && page > 0) params.unshift(`page=${Math.trunc(page)}`);
+	return `#${params.join("&")}`;
+}
+
+type PdfSource = { src: string; state: "loading" | "blob" | "direct" };
+
+/**
+ * Re-types PDF bytes locally before handing them to the viewer.
+ *
+ * Nothing stamps a content type on upload, so signed storage URLs answer with
+ * `binary/octet-stream`, and every browser hands anything that is not
+ * `application/pdf` — or that carries `Content-Disposition: attachment` — to the
+ * download manager instead of rendering it in the frame. A failed fetch (CORS,
+ * custom asset protocols) falls back to the raw URL, so sources that render
+ * today keep rendering.
+ */
+export function usePdfSource(url: string): PdfSource {
+	const [source, setSource] = useState<PdfSource>({
+		src: "",
+		state: "loading",
+	});
+
+	useEffect(() => {
+		let cancelled = false;
+		let objectUrl: string | null = null;
+		setSource({ src: "", state: "loading" });
+
+		const load = async () => {
+			try {
+				const response = await fetch(url);
+				if (!response.ok) {
+					throw new Error(`Failed to fetch PDF (${response.status})`);
+				}
+				const blob = await response.blob();
+				if (cancelled) return;
+
+				const pdfBlob =
+					blob.type === "application/pdf"
+						? blob
+						: new Blob([blob], { type: "application/pdf" });
+				objectUrl = URL.createObjectURL(pdfBlob);
+				setSource({ src: objectUrl, state: "blob" });
+			} catch (error) {
+				if (cancelled) return;
+				console.warn("PDF preview fell back to the direct URL:", error);
+				setSource({ src: url, state: "direct" });
+			}
+		};
+
+		void load();
+
+		return () => {
+			cancelled = true;
+			if (objectUrl) URL.revokeObjectURL(objectUrl);
+		};
+	}, [url]);
+
+	return source;
+}
+
+export function PdfFrame({
+	url,
+	page,
+	filename,
+	className,
+	loading,
+}: Readonly<{
+	url: string;
+	page?: number;
+	filename?: string;
+	className?: string;
+	loading?: "lazy" | "eager";
+}>) {
+	const { src, state } = usePdfSource(url);
+
+	if (state === "loading") {
+		return (
+			<div className="flex h-full w-full items-center justify-center p-4 text-sm text-muted-foreground">
+				Loading PDF preview...
+			</div>
+		);
+	}
+
+	return (
+		<iframe
+			src={`${src.split("#")[0]}${pdfViewerFragment(page)}`}
+			className={cn("w-full h-full border-0 max-h-full max-w-full", className)}
+			title={`PDF Preview: ${rawFileName(url, filename)}`}
+			loading={loading}
+		>
+			<p>
+				Your browser cannot display the PDF.{" "}
+				<a href={url} target="_blank" rel="noopener noreferrer">
+					Download the PDF
+				</a>{" "}
+				instead.
+			</p>
+		</iframe>
+	);
+}
+
 export function FilePreviewer({
 	url,
 	page,
@@ -88,8 +197,6 @@ export function FilePreviewer({
 	onSave?: (content: string) => Promise<void>;
 }>) {
 	const [content, setContent] = useState<string>("");
-	const [pdfPreviewUrl, setPdfPreviewUrl] = useState("");
-	const [pdfPreviewError, setPdfPreviewError] = useState<string | null>(null);
 
 	const previewContent = useCallback(async () => {
 		const response = await fetch(url);
@@ -105,56 +212,6 @@ export function FilePreviewer({
 		}
 	}, [filename, previewContent, url]);
 
-	useEffect(() => {
-		if (!isPdf(url, filename)) {
-			setPdfPreviewUrl("");
-			setPdfPreviewError(null);
-			return;
-		}
-
-		let cancelled = false;
-		let objectUrl: string | null = null;
-
-		setPdfPreviewUrl("");
-		setPdfPreviewError(null);
-
-		const loadPdf = async () => {
-			try {
-				const response = await fetch(url);
-				if (!response.ok) {
-					throw new Error("Failed to fetch PDF");
-				}
-
-				const blob = await response.blob();
-				const pdfBlob =
-					blob.type === "application/pdf"
-						? blob
-						: new Blob([blob], { type: "application/pdf" });
-				objectUrl = URL.createObjectURL(pdfBlob);
-
-				if (cancelled) {
-					URL.revokeObjectURL(objectUrl);
-					return;
-				}
-
-				setPdfPreviewUrl(objectUrl);
-			} catch (error) {
-				if (cancelled) return;
-				console.error("Failed to load PDF preview:", error);
-				setPdfPreviewError("Failed to load PDF preview");
-			}
-		};
-
-		void loadPdf();
-
-		return () => {
-			cancelled = true;
-			if (objectUrl) {
-				URL.revokeObjectURL(objectUrl);
-			}
-		};
-	}, [filename, url]);
-
 	if (!canPreview(url, filename)) {
 		return (
 			<div className="text-red-500">File type not supported for preview</div>
@@ -162,35 +219,9 @@ export function FilePreviewer({
 	}
 
 	if (isPdf(url, filename)) {
-		const pageUrl = page
-			? `#page=${page}&#toolbar=1&#view=FitH`
-			: "#toolbar=1&#view=FitH";
-
-		if (pdfPreviewError) {
-			return <div className="text-red-500">{pdfPreviewError}</div>;
-		}
-
-		if (!pdfPreviewUrl) {
-			return (
-				<div className="text-muted-foreground">Loading PDF preview...</div>
-			);
-		}
-
 		return (
 			<div className="w-full h-full flex flex-col">
-				<iframe
-					src={`${pdfPreviewUrl}${pageUrl}`}
-					className="w-full h-full border-0 max-h-full max-w-full"
-					title={`PDF Preview: ${rawFileName(url, filename)}`}
-				>
-					<p>
-						Your browser cannot display the PDF.{" "}
-						<a href={url} target="_blank" rel="noopener noreferrer">
-							Download the PDF
-						</a>{" "}
-						instead.
-					</p>
-				</iframe>
+				<PdfFrame url={url} page={page} filename={filename} />
 			</div>
 		);
 	}

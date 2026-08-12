@@ -137,7 +137,7 @@ impl NodeLogic for UdpReceiveNode {
         let mut has_sender_addr_pin = false;
         let mut typed_pin_count: usize = 0;
 
-        for (_, pin) in ref_node_pins.iter() {
+        for pin in ref_node_pins.values() {
             if pin.pin_type != PinType::Output || pin.data_type == VariableType::Execution {
                 continue;
             }

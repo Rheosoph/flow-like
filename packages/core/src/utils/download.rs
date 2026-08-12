@@ -73,7 +73,7 @@ async fn publish_progress(
     path: &Path,
 ) -> flow_like_types::Result<()> {
     let event = InterComEvent::with_type(
-        format!("download:{}", &bit.hash),
+        format!("download:{}", bit.hash),
         BitDownloadEvent {
             hash: bit.hash.to_string(),
             max: bit.size.unwrap_or(0),
@@ -199,7 +199,7 @@ async fn process_download_bit(
         let err = remote_size.unwrap_err();
         println!(
             "Error getting remote size for {}: {}. Falling back to cached files if available.",
-            &url, err
+            url, err
         );
         let _rem = remove_download(bit, &app_state).await;
         let _ = async_fs::remove_file(&temp_path).await;
@@ -268,7 +268,7 @@ async fn process_download_bit(
             feed_hasher_with_existing(&temp_path, &mut hasher).await?;
             println!(
                 "Resuming download: {} to {} ({} bytes already present)",
-                &url,
+                url,
                 temp_path.display(),
                 partial_size
             );
@@ -277,7 +277,7 @@ async fn process_download_bit(
         let _ = async_fs::remove_file(&temp_path).await;
     }
 
-    println!("Downloading: {} to {}", &url, store_path);
+    println!("Downloading: {} to {}", url, store_path);
 
     // now use range header to resume download
     let mut headers = reqwest::header::HeaderMap::new();

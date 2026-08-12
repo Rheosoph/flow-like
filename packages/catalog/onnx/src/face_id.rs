@@ -1548,12 +1548,8 @@ impl NodeLogic for LoadFaceAnalyzerNode {
             let analyzer_ref = analyzer_cache_key(&specs, config, &ep_info.active_providers);
             let (cell, mut slot_guard) =
                 NodeFaceAnalyzer::get_or_insert_slot(context, &analyzer_ref).await?;
-            if let Err(error) = cell
-                .get_or_try_init(|| build_face_analyzer(context, &cache_dir, &specs, config))
-                .await
-            {
-                return Err(error);
-            }
+            cell.get_or_try_init(|| build_face_analyzer(context, &cache_dir, &specs, config))
+                .await?;
 
             let still_registered = context
                 .cache

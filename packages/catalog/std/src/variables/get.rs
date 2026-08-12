@@ -105,7 +105,7 @@ impl NodeLogic for GetVariable {
             }
         };
 
-        let expected_name = format!("Get {}", &var_ref_variable.name);
+        let expected_name = format!("Get {}", var_ref_variable.name);
 
         // Check if anything changed using read_only_node to avoid borrow issues
         let value_pin = read_only_node.get_pin_by_name("value_ref");

@@ -1,9 +1,11 @@
 //! Periodic removal of expired cache entries.
 //!
-//! Only the Postgres backend needs this — Redis and DynamoDB evict on their own and
-//! report zero reclaimed entries. Long-running deployments run the ticker; serverless
-//! deployments drive the same work through `POST /maintenance/run` with the
-//! `cache_cleanup` job, or `POST /admin/cache/sweep` for an ad-hoc run.
+//! Postgres needs this to reclaim expired rows (it has no native TTL). Redis evicts
+//! entries natively but not their members in the per-app index sets — its sweep prunes
+//! those, or the indexes grow without bound. Only DynamoDB is fully self-cleaning.
+//! Long-running deployments run the ticker; serverless deployments drive the same work
+//! through `POST /maintenance/run` with the `cache_cleanup` job, or
+//! `POST /admin/cache/sweep` for an ad-hoc run.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -50,10 +52,13 @@ pub fn spawn_cache_sweeper(
         return None;
     }
 
-    if store.backend_name() != "postgres" {
+    // DynamoDB reclaims entries and chunks via its native TTL and keeps no index of
+    // its own; postgres needs expired rows deleted and redis needs its per-app index
+    // sets pruned of members whose entries Redis already evicted.
+    if store.backend_name() == "dynamodb" {
         tracing::info!(
             backend = store.backend_name(),
-            "Cache backend expires entries natively; not spawning the cache sweeper"
+            "Cache backend cleans up after itself; not spawning the cache sweeper"
         );
         return None;
     }

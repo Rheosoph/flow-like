@@ -224,7 +224,7 @@ impl NodeLogic for RegisterBigQueryNode {
             row_limit,
         )?;
 
-        let cached_session = session.load(context).await?;
+        let cached_session = session.load_lazy(context).await?;
 
         #[cfg(feature = "bigquery")]
         {

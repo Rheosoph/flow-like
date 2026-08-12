@@ -115,7 +115,16 @@ export function useStoreData(
 		}
 
 		try {
-			await auth.signinRedirect();
+			// Carry the current location through the OAuth round trip so the
+			// web callback can land the user back here (no-op on desktop).
+			await auth.signinRedirect({
+				url_state:
+					typeof window === "undefined"
+						? undefined
+						: window.location.pathname +
+							window.location.search +
+							window.location.hash,
+			});
 		} catch (error) {
 			console.error("Failed to start sign in:", error);
 			toast.error("Failed to start sign in. Please try again.");

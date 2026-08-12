@@ -5,7 +5,7 @@
 use crate::ml::{GridSearchEntry, GridSearchResult, NodeMLModel, ParameterSpec};
 #[cfg(feature = "execute")]
 use crate::ml::{
-    MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, values_to_array1_target,
+    MAX_ML_PREDICTION_RECORDS, MLModel, ModelWithMeta, PersistedEnsemble, values_to_array1_target,
     values_to_array2_f64,
 };
 use flow_like::flow::{
@@ -24,15 +24,90 @@ use flow_like_types::{Result, Value, async_trait, json::json};
 #[cfg(feature = "execute")]
 use linfa::DatasetBase;
 #[cfg(feature = "execute")]
+use linfa::composing::MultiClassModel;
+#[cfg(feature = "execute")]
 use linfa::dataset::Records;
+#[cfg(feature = "execute")]
+use linfa::prelude::Pr;
 #[cfg(feature = "execute")]
 use linfa::traits::{Fit, Predict};
 #[cfg(feature = "execute")]
 use linfa_bayes::GaussianNb;
 #[cfg(feature = "execute")]
+use linfa_ensemble::RandomForestParams;
+#[cfg(feature = "execute")]
+use linfa_logistic::{LogisticRegression, MultiLogisticRegression};
+#[cfg(feature = "execute")]
+use linfa_svm::Svm;
+#[cfg(feature = "execute")]
 use linfa_trees::DecisionTree as LinfaDecisionTree;
+// linfa 0.8 is built against rand 0.8, so the RNG handed to it cannot come from
+// `flow_like_types::rand` (0.9) — the `Rng` traits are different types.
+#[cfg(feature = "execute")]
+use rand_xoshiro::Xoshiro256Plus;
+#[cfg(feature = "execute")]
+use rand_xoshiro::rand_core::SeedableRng;
 #[cfg(feature = "execute")]
 use std::collections::{HashMap, HashSet};
+
+/// Kernel width shared with the standalone SVM node so a tuned SVM matches what that node trains.
+#[cfg(feature = "execute")]
+const GAUSSIAN_KERNEL_EPS: f64 = 30.0;
+
+/// Model families this node can tune.
+///
+/// These are [`MLModel::kind`] strings, which is what makes the Auto Classifier's `best_model_type`
+/// output directly feedable into this node's `model_type` input.
+#[cfg(feature = "execute")]
+const TUNABLE_MODELS: [&str; 5] = [
+    "DecisionTree",
+    "GaussianNaiveBayes",
+    "LogisticRegression",
+    "RandomForest",
+    "SVMMultiClass",
+];
+
+/// Parameter names a model family actually consumes.
+///
+/// The Parameter Grid pin is seeded once from whichever model type was selected when the node was
+/// created and is deliberately never rewritten (that would clobber hand-edited grids). Without
+/// this check, switching Model Type afterwards would leave the previous model's parameters in
+/// place, and the search would silently score N identical configurations.
+#[cfg(feature = "execute")]
+fn known_params(model_type: &str) -> &'static [&'static str] {
+    match model_type {
+        "DecisionTree" => &["max_depth", "min_weight_split"],
+        "LogisticRegression" => &["alpha"],
+        "RandomForest" => &[
+            "ensemble_size",
+            "max_depth",
+            "min_weight_split",
+            "bootstrap_proportion",
+            "feature_proportion",
+        ],
+        _ => &[],
+    }
+}
+
+/// Default parameter grid for a model family, used to seed the Parameter Grid pin.
+fn default_param_grid(model_type: &str) -> Value {
+    match model_type {
+        "DecisionTree" => json!([
+            {"name": "max_depth", "values": [5, 10, 15, 20]},
+            {"name": "min_weight_split", "values": [1.0, 2.0, 5.0]}
+        ]),
+        "LogisticRegression" => json!([
+            {"name": "alpha", "values": [0.0, 0.1, 1.0, 10.0]}
+        ]),
+        "RandomForest" => json!([
+            {"name": "ensemble_size", "values": [50, 100, 200]},
+            {"name": "max_depth", "values": [5, 10, 15]}
+        ]),
+        // Neither Gaussian Naive Bayes nor the OvA SVM wrapper exposes a parameter worth sweeping
+        // through this node, so they are evaluated as a single configuration.
+        _ => json!([]),
+    }
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -50,10 +125,11 @@ impl NodeLogic for GridSearchNode {
         let mut node = Node::new(
             "ai_ml_tuning_grid_search",
             "Grid Search",
-            "Exhaustive search over parameter combinations with cross-validation. Returns the best parameters found.",
+            "Exhaustive search over parameter combinations with cross-validation. Returns the best parameters found. Model Type accepts the same names the Auto Classifier reports as its best model, so the two nodes chain directly.",
             "AI/ML/Tuning",
         );
         node.add_icon("/flow/icons/chart-network.svg");
+        node.set_version(2);
 
         node.set_scores(
             NodeScores::new()
@@ -81,7 +157,18 @@ impl NodeLogic for GridSearchNode {
         )
         .set_options(
             PinOptions::new()
-                .set_valid_values(vec!["NaiveBayes".to_string(), "DecisionTree".to_string()])
+                .set_valid_values(
+                    [
+                        "DecisionTree",
+                        "GaussianNaiveBayes",
+                        "LogisticRegression",
+                        "RandomForest",
+                        "SVMMultiClass",
+                    ]
+                    .iter()
+                    .map(|name| name.to_string())
+                    .collect(),
+                )
                 .build(),
         )
         .set_default_value(Some(json!("DecisionTree")));
@@ -145,10 +232,37 @@ impl NodeLogic for GridSearchNode {
         let source: String = context.evaluate_pin("source").await?;
         let param_grid: Vec<ParameterSpec> = context.evaluate_pin("param_grid").await?;
 
-        let cv_folds = cv_folds as usize;
+        // Checked before the cast: a negative value would wrap to usize::MAX and sail past the
+        // guard, then blow up in Vec::with_capacity.
         if cv_folds < 2 {
-            return Err(flow_like_types::anyhow!("CV folds must be at least 2"));
+            return Err(flow_like_types::anyhow!(
+                "CV folds must be at least 2, got {cv_folds}"
+            ));
         }
+        let cv_folds = cv_folds as usize;
+        if !TUNABLE_MODELS.contains(&model_type.as_str()) {
+            return Err(flow_like_types::anyhow!(
+                "Unknown model type: `{model_type}`. Supported: {}",
+                TUNABLE_MODELS.join(", ")
+            ));
+        }
+
+        // An empty grid means "use the defaults for this model type", which keeps the node correct
+        // when Model Type is switched after the pin was first seeded.
+        let param_grid: Vec<ParameterSpec> = if param_grid.is_empty() {
+            let defaults: Vec<ParameterSpec> =
+                flow_like_types::json::from_value(default_param_grid(&model_type))
+                    .unwrap_or_default();
+            if !defaults.is_empty() {
+                context.log_message(
+                    &format!("Parameter Grid is empty, using the default grid for {model_type}"),
+                    LogLevel::Info,
+                );
+            }
+            defaults
+        } else {
+            param_grid
+        };
 
         let start_time = Instant::now();
 
@@ -209,6 +323,37 @@ impl NodeLogic for GridSearchNode {
             LogLevel::Info,
         );
 
+        // A spec with no values contributes nothing to the cartesian product and collapses it to
+        // zero combinations, which would leave `best_idx` indexing an empty vector.
+        if let Some(empty) = param_grid.iter().find(|spec| spec.values.is_empty()) {
+            return Err(flow_like_types::anyhow!(
+                "Parameter `{}` in the Parameter Grid has no values to try. Give it at least one value or remove it.",
+                empty.name
+            ));
+        }
+
+        // Catches the grid left over from a previously selected Model Type, which would otherwise
+        // score the same configuration repeatedly and report it as a tuned result.
+        let accepted = known_params(&model_type);
+        let unknown: Vec<&str> = param_grid
+            .iter()
+            .map(|spec| spec.name.as_str())
+            .filter(|name| !accepted.contains(name))
+            .collect();
+        if !unknown.is_empty() {
+            return Err(flow_like_types::anyhow!(
+                "{model_type} does not use these Parameter Grid entries: {}. {}",
+                unknown.join(", "),
+                if accepted.is_empty() {
+                    format!(
+                        "{model_type} has no tunable parameters here, so clear the Parameter Grid."
+                    )
+                } else {
+                    format!("It accepts: {}.", accepted.join(", "))
+                }
+            ));
+        }
+
         // Generate parameter combinations
         let param_combinations = generate_param_combinations(&param_grid);
         context.log_message(
@@ -225,6 +370,13 @@ impl NodeLogic for GridSearchNode {
 
         // Shuffle indices for CV
         let n_samples = records.nsamples();
+        // With fewer rows than folds, fold_size is 0: every fold but the last scores an empty
+        // validation set as 0.0 and the last one trains on an empty split.
+        if n_samples < cv_folds {
+            return Err(flow_like_types::anyhow!(
+                "Cannot run {cv_folds}-fold cross-validation on {n_samples} rows. Reduce CV Folds or supply more training data."
+            ));
+        }
         let mut indices: Vec<usize> = (0..n_samples).collect();
         {
             let mut rng = rand::rng();
@@ -268,43 +420,8 @@ impl NodeLogic for GridSearchNode {
                 let val_targets: Vec<usize> =
                     val_indices.iter().map(|&i| records.targets()[i]).collect();
 
-                // Train and evaluate
-                let score = match model_type.as_str() {
-                    "NaiveBayes" => {
-                        let model = GaussianNb::params().fit(&train_ds)?;
-                        let val_ds = DatasetBase::from(val_records);
-                        let predictions = model.predict(&val_ds);
-                        compute_accuracy(&predictions, &val_targets)
-                    }
-                    "DecisionTree" => {
-                        let max_depth = params
-                            .get("max_depth")
-                            .and_then(|v| v.as_i64())
-                            .map(|v| v as usize);
-                        let min_weight = params
-                            .get("min_weight_split")
-                            .and_then(|v| v.as_f64())
-                            .unwrap_or(1.0) as f32;
-
-                        let mut tree_params = LinfaDecisionTree::params();
-                        if let Some(depth) = max_depth {
-                            tree_params = tree_params.max_depth(Some(depth));
-                        }
-                        tree_params = tree_params.min_weight_split(min_weight);
-
-                        let model = tree_params.fit(&train_ds)?;
-                        let val_ds = DatasetBase::from(val_records);
-                        let predictions = model.predict(&val_ds);
-                        compute_accuracy(&predictions, &val_targets)
-                    }
-                    _ => {
-                        return Err(flow_like_types::anyhow!(
-                            "Unknown model type: {}",
-                            model_type
-                        ));
-                    }
-                };
-
+                let score =
+                    fit_and_score(&model_type, params, &train_ds, val_records, &val_targets)?;
                 fold_scores.push(score);
             }
 
@@ -346,38 +463,7 @@ impl NodeLogic for GridSearchNode {
         let best_params = param_combinations[best_idx].clone();
 
         // Train final model with best params on full data
-        let final_model = match model_type.as_str() {
-            "NaiveBayes" => {
-                let model = GaussianNb::params().fit(&records)?;
-                MLModel::GaussianNaiveBayes(ModelWithMeta {
-                    model,
-                    classes: classes.clone(),
-                })
-            }
-            "DecisionTree" => {
-                let max_depth = best_params
-                    .get("max_depth")
-                    .and_then(|v| v.as_i64())
-                    .map(|v| v as usize);
-                let min_weight = best_params
-                    .get("min_weight_split")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(1.0) as f32;
-
-                let mut tree_params = LinfaDecisionTree::params();
-                if let Some(depth) = max_depth {
-                    tree_params = tree_params.max_depth(Some(depth));
-                }
-                tree_params = tree_params.min_weight_split(min_weight);
-
-                let model = tree_params.fit(&records)?;
-                MLModel::DecisionTree(ModelWithMeta {
-                    model,
-                    classes: classes.clone(),
-                })
-            }
-            _ => return Err(flow_like_types::anyhow!("Unknown model type")),
-        };
+        let final_model = fit_final_model(&model_type, &best_params, &records, classes.clone())?;
 
         let result = GridSearchResult {
             results: all_results,
@@ -429,25 +515,20 @@ impl NodeLogic for GridSearchNode {
             .and_then(|json| json.as_str().map(ToOwned::to_owned))
             .unwrap_or_default();
 
-        // Add parameter grid pin based on model type
+        // The pin is seeded once with the grid for whichever model type was selected at the time.
+        // It is deliberately never re-seeded here: rewriting a pin's default on every board parse
+        // would clobber a hand-edited grid, and dropping and re-adding the pin would break any
+        // connection into it. Instead `run` substitutes the model's default grid when the pin is
+        // left empty, so switching Model Type still does the right thing.
         if node.get_pin_by_name("param_grid").is_none() {
-            let default_grid = match model_type.as_str() {
-                "DecisionTree" => json!([
-                    {"name": "max_depth", "values": [5, 10, 15, 20]},
-                    {"name": "min_weight_split", "values": [1.0, 2.0, 5.0]}
-                ]),
-                "NaiveBayes" => json!([]),
-                _ => json!([]),
-            };
-
             node.add_input_pin(
                 "param_grid",
                 "Parameter Grid",
-                "Parameters to search over",
+                "Parameters to search over. Leave empty to use the default grid for the selected Model Type.",
                 VariableType::Struct,
             )
             .set_schema::<Vec<ParameterSpec>>()
-            .set_default_value(Some(default_grid));
+            .set_default_value(Some(default_param_grid(&model_type)));
         }
 
         // Add database pins if needed
@@ -479,8 +560,217 @@ impl NodeLogic for GridSearchNode {
                     VariableType::String,
                 );
             }
+        } else {
+            node.error = Some("Datasource Not Implemented".to_string());
         }
     }
+}
+
+/// A classification dataset in the shape every tuner branch consumes.
+#[cfg(feature = "execute")]
+type ClassificationDataset = DatasetBase<ndarray::Array2<f64>, ndarray::Array1<usize>>;
+
+/// Number of distinct class ids in a target array.
+#[cfg(feature = "execute")]
+fn distinct_class_count(targets: &ndarray::Array1<usize>) -> usize {
+    targets.iter().copied().collect::<HashSet<usize>>().len()
+}
+
+/// Decision tree parameters from a grid combination, falling back to linfa's defaults.
+#[cfg(feature = "execute")]
+fn tree_params_from(
+    params: &HashMap<String, Value>,
+) -> linfa_trees::DecisionTreeParams<f64, usize> {
+    let mut tree_params = LinfaDecisionTree::params();
+    if let Some(depth) = params.get("max_depth").and_then(|v| v.as_i64()) {
+        tree_params = tree_params.max_depth(Some(depth as usize));
+    }
+    let min_weight = params
+        .get("min_weight_split")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(1.0) as f32;
+    tree_params.min_weight_split(min_weight)
+}
+
+/// Fits one model family on `train_ds` and scores it against the held-out fold.
+///
+/// `model_type` is an [`MLModel::kind`] string; every branch here must have a matching branch in
+/// [`fit_final_model`], otherwise a combination could win the search and then fail to retrain.
+#[cfg(feature = "execute")]
+fn fit_and_score(
+    model_type: &str,
+    params: &HashMap<String, Value>,
+    train_ds: &ClassificationDataset,
+    val_records: ndarray::Array2<f64>,
+    val_targets: &[usize],
+) -> Result<f64> {
+    let predictions: ndarray::Array1<usize> = match model_type {
+        "GaussianNaiveBayes" => {
+            let model = GaussianNb::params().fit(train_ds)?;
+            model.predict(&DatasetBase::from(val_records))
+        }
+        "DecisionTree" => {
+            let model = tree_params_from(params).fit(train_ds)?;
+            model.predict(&DatasetBase::from(val_records))
+        }
+        "LogisticRegression" => {
+            let alpha = params.get("alpha").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            if distinct_class_count(train_ds.targets()) > 2 {
+                let model = MultiLogisticRegression::<f64>::default()
+                    .alpha(alpha)
+                    .fit(train_ds)
+                    .map_err(|err| {
+                        flow_like_types::anyhow!(
+                            "Multinomial Logistic Regression fit failed: {err}"
+                        )
+                    })?;
+                model.predict(&val_records)
+            } else {
+                let model = LogisticRegression::<f64>::default()
+                    .alpha(alpha)
+                    .fit(train_ds)
+                    .map_err(|err| {
+                        flow_like_types::anyhow!("Logistic Regression fit failed: {err}")
+                    })?;
+                model.predict(&val_records)
+            }
+        }
+        "RandomForest" => {
+            let model = forest_params_from(params, train_ds.records().ncols())
+                .fit(train_ds)
+                .map_err(|err| flow_like_types::anyhow!("Random Forest fit failed: {err}"))?;
+            model.predict(&val_records)
+        }
+        "SVMMultiClass" => {
+            let svm_models = fit_one_vs_all_svm(train_ds)?;
+            MultiClassModel::from_iter(svm_models).predict(&DatasetBase::from(val_records))
+        }
+        other => {
+            return Err(flow_like_types::anyhow!(
+                "Unknown model type: `{other}`. Supported: {}",
+                TUNABLE_MODELS.join(", ")
+            ));
+        }
+    };
+    Ok(compute_accuracy(&predictions, val_targets))
+}
+
+/// Random forest parameters from a grid combination.
+///
+/// `feature_proportion` must be greater than zero, so the standard sqrt(p) default is materialised
+/// here once the feature count is known.
+#[cfg(feature = "execute")]
+fn forest_params_from(
+    params: &HashMap<String, Value>,
+    n_features: usize,
+) -> linfa_ensemble::EnsembleLearnerParams<
+    linfa_trees::DecisionTreeParams<f64, usize>,
+    Xoshiro256Plus,
+> {
+    let ensemble_size = params
+        .get("ensemble_size")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(100)
+        .max(1) as usize;
+    let bootstrap = params
+        .get("bootstrap_proportion")
+        .and_then(|v| v.as_f64())
+        .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1.0)
+        .unwrap_or(0.7);
+    let feature_proportion = params
+        .get("feature_proportion")
+        .and_then(|v| v.as_f64())
+        .filter(|v| v.is_finite() && *v > 0.0 && *v <= 1.0)
+        .unwrap_or_else(|| {
+            ((n_features.max(1) as f64).sqrt() / n_features.max(1) as f64)
+                .clamp(f64::MIN_POSITIVE, 1.0)
+        });
+
+    // Tuning must be reproducible across runs, so the forest RNG is seeded rather than threaded.
+    RandomForestParams::new_fixed_rng(tree_params_from(params), Xoshiro256Plus::seed_from_u64(42))
+        .ensemble_size(ensemble_size)
+        .bootstrap_proportion(bootstrap)
+        .feature_proportion(feature_proportion)
+}
+
+/// Fits the one-vs-all SVM ensemble the SVM classifier node produces.
+#[cfg(feature = "execute")]
+fn fit_one_vs_all_svm(dataset: &ClassificationDataset) -> Result<Vec<(usize, Svm<f64, Pr>)>> {
+    let params = Svm::<_, Pr>::params().gaussian_kernel(GAUSSIAN_KERNEL_EPS);
+    dataset
+        .one_vs_all()?
+        .into_iter()
+        .map(|(label, binary)| {
+            params
+                .fit(&binary)
+                .map(|model| (label, model))
+                .map_err(|err| flow_like_types::anyhow!("SVM fit failed for class {label}: {err}"))
+        })
+        .collect()
+}
+
+/// Retrains the winning configuration on the full dataset.
+#[cfg(feature = "execute")]
+fn fit_final_model(
+    model_type: &str,
+    params: &HashMap<String, Value>,
+    records: &ClassificationDataset,
+    classes: Option<HashMap<usize, String>>,
+) -> Result<MLModel> {
+    Ok(match model_type {
+        "GaussianNaiveBayes" => MLModel::GaussianNaiveBayes(ModelWithMeta {
+            model: GaussianNb::params().fit(records)?,
+            classes,
+        }),
+        "DecisionTree" => MLModel::DecisionTree(ModelWithMeta {
+            model: tree_params_from(params).fit(records)?,
+            classes,
+        }),
+        "LogisticRegression" => {
+            let alpha = params.get("alpha").and_then(|v| v.as_f64()).unwrap_or(1.0);
+            if distinct_class_count(records.targets()) > 2 {
+                MLModel::MultinomialLogisticRegression(ModelWithMeta {
+                    model: MultiLogisticRegression::<f64>::default()
+                        .alpha(alpha)
+                        .fit(records)
+                        .map_err(|err| {
+                            flow_like_types::anyhow!(
+                                "Multinomial Logistic Regression fit failed: {err}"
+                            )
+                        })?,
+                    classes,
+                })
+            } else {
+                MLModel::LogisticRegression(ModelWithMeta {
+                    model: LogisticRegression::<f64>::default()
+                        .alpha(alpha)
+                        .fit(records)
+                        .map_err(|err| {
+                            flow_like_types::anyhow!("Logistic Regression fit failed: {err}")
+                        })?,
+                    classes,
+                })
+            }
+        }
+        "RandomForest" => MLModel::RandomForest(ModelWithMeta {
+            model: PersistedEnsemble(
+                forest_params_from(params, records.records().ncols())
+                    .fit(records)
+                    .map_err(|err| flow_like_types::anyhow!("Random Forest fit failed: {err}"))?,
+            ),
+            classes,
+        }),
+        "SVMMultiClass" => MLModel::SVMMultiClass(ModelWithMeta {
+            model: fit_one_vs_all_svm(records)?,
+            classes,
+        }),
+        other => {
+            return Err(flow_like_types::anyhow!(
+                "Unknown model type: `{other}`. Supported: {}",
+                TUNABLE_MODELS.join(", ")
+            ));
+        }
+    })
 }
 
 #[cfg(feature = "execute")]

@@ -286,34 +286,34 @@ fn array_value_to_json(
                 JsonValue::Null
             }
         }
-        DataType::Timestamp(unit, _) => match unit {
+        DataType::Timestamp(unit, timezone) => match unit {
             TimeUnit::Second => {
                 let arr = array
                     .as_any()
                     .downcast_ref::<TimestampSecondArray>()
                     .unwrap();
-                timestamp_to_json(arr.value(idx), *unit)
+                timestamp_to_json(arr.value(idx), *unit, timezone.as_deref())
             }
             TimeUnit::Millisecond => {
                 let arr = array
                     .as_any()
                     .downcast_ref::<TimestampMillisecondArray>()
                     .unwrap();
-                timestamp_to_json(arr.value(idx), *unit)
+                timestamp_to_json(arr.value(idx), *unit, timezone.as_deref())
             }
             TimeUnit::Microsecond => {
                 let arr = array
                     .as_any()
                     .downcast_ref::<TimestampMicrosecondArray>()
                     .unwrap();
-                timestamp_to_json(arr.value(idx), *unit)
+                timestamp_to_json(arr.value(idx), *unit, timezone.as_deref())
             }
             TimeUnit::Nanosecond => {
                 let arr = array
                     .as_any()
                     .downcast_ref::<TimestampNanosecondArray>()
                     .unwrap();
-                timestamp_to_json(arr.value(idx), *unit)
+                timestamp_to_json(arr.value(idx), *unit, timezone.as_deref())
             }
         },
         _ => {
@@ -355,30 +355,44 @@ fn decimal_string_to_json(raw: String) -> Value {
 fn timestamp_to_json(
     value: i64,
     unit: flow_like_storage::datafusion::arrow::datatypes::TimeUnit,
+    timezone: Option<&str>,
 ) -> Value {
     use flow_like_storage::datafusion::arrow::datatypes::TimeUnit;
 
-    let (seconds, nanoseconds, format) = match unit {
-        TimeUnit::Second => (value, 0, "%Y-%m-%dT%H:%M:%S"),
+    let (seconds, nanoseconds, naive_format, seconds_format) = match unit {
+        TimeUnit::Second => (value, 0, "%Y-%m-%dT%H:%M:%S", chrono::SecondsFormat::Secs),
         TimeUnit::Millisecond => (
             value.div_euclid(1_000),
             (value.rem_euclid(1_000) * 1_000_000) as u32,
             "%Y-%m-%dT%H:%M:%S%.3f",
+            chrono::SecondsFormat::Millis,
         ),
         TimeUnit::Microsecond => (
             value.div_euclid(1_000_000),
             (value.rem_euclid(1_000_000) * 1_000) as u32,
             "%Y-%m-%dT%H:%M:%S%.6f",
+            chrono::SecondsFormat::Micros,
         ),
         TimeUnit::Nanosecond => (
             value.div_euclid(1_000_000_000),
             value.rem_euclid(1_000_000_000) as u32,
             "%Y-%m-%dT%H:%M:%S%.9f",
+            chrono::SecondsFormat::Nanos,
         ),
     };
 
     chrono::DateTime::from_timestamp(seconds, nanoseconds)
-        .map(|dt| Value::String(dt.format(format).to_string()))
+        .map(|dt| {
+            // Arrow timestamps with timezone metadata are physical instants. Normalize their JSON
+            // representation to UTC RFC3339 so it can flow directly into a FlowLike Date pin.
+            // Preserve the historical suffix-less representation for timezone-less wall clocks.
+            let rendered = if timezone.is_some() {
+                dt.to_rfc3339_opts(seconds_format, true)
+            } else {
+                dt.format(naive_format).to_string()
+            };
+            Value::String(rendered)
+        })
         .unwrap_or(Value::Null)
 }
 
@@ -542,6 +556,22 @@ mod tests {
         let array = Date32Array::from(vec![18628]); // 2021-01-01
         let value = array_value_to_json(&array, 0).unwrap();
         assert_eq!(value, json!("2021-01-01"));
+    }
+
+    #[tokio::test]
+    async fn timestamp_json_preserves_utc_awareness_without_changing_legacy_wall_clocks() {
+        let value = 1_609_459_200_123_i64; // 2021-01-01T00:00:00.123Z
+        let utc = TimestampMillisecondArray::from(vec![value]).with_timezone("UTC");
+        let legacy = TimestampMillisecondArray::from(vec![value]);
+
+        assert_eq!(
+            array_value_to_json(&utc, 0).unwrap(),
+            json!("2021-01-01T00:00:00.123Z")
+        );
+        assert_eq!(
+            array_value_to_json(&legacy, 0).unwrap(),
+            json!("2021-01-01T00:00:00.123")
+        );
     }
 
     #[tokio::test]

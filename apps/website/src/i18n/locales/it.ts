@@ -121,7 +121,6 @@ export const it = {
 	"design.feature3.desc":
 		"Lo stesso flusso gira in locale, staging, produzione — senza riscritture.",
 
-
 	// Portability
 	"portability.tagline": "Automazione ovunque",
 	"portability.headline": "Costruisci una volta, esegui ovunque",
@@ -687,7 +686,6 @@ export const it = {
 	"usecases.learnmore": "Scopri di più",
 
 	"design.headline.highlight": "visivamente",
-
 
 	"portability.headline.start": "Inizia",
 	"portability.headline.offline": "offline",

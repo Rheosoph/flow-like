@@ -1,6 +1,4 @@
 "use client";
-import { invoke } from "@tauri-apps/api/core";
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import type { IHub, UseQueryResult } from "@flow-like/flow-like-ui";
 import {
 	Bit,
@@ -25,6 +23,8 @@ import type { IBit } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
 import { IBitTypes } from "@flow-like/flow-like-ui/lib/schema/bit/bit";
 import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
+import { invoke } from "@tauri-apps/api/core";
+import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { ArrowBigRight, CloudDownload, Loader2, LogIn } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -191,7 +191,9 @@ export default function Onboarding() {
 							profileId: firstProfileId,
 						});
 						await invalidate("get_profiles");
-						router.replace("/");
+						// Re-check: a deep link (e.g. /join) may have navigated away
+						// during the awaits above — don't drag the user back to home.
+						if (!cancelled) router.replace("/");
 						return;
 					}
 				}

@@ -56,6 +56,7 @@ pub mod llm_model;
 pub mod llm_usage_tracking;
 pub mod membership;
 pub mod meta;
+pub mod mutation_lock;
 pub mod node;
 pub mod notification;
 pub mod page;

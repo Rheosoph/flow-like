@@ -1,5 +1,5 @@
 use flow_like::flow::{
-    execution::context::ExecutionContext,
+    execution::{LogLevel, context::ExecutionContext},
     node::{Node, NodeLogic},
     pin::ValueType,
     variable::VariableType,
@@ -26,9 +26,12 @@ impl RemoteOntologyActionRequestNode {
 
 #[cfg(feature = "execute")]
 async fn fail(context: &mut ExecutionContext, error: impl ToString) -> flow_like_types::Result<()> {
-    context
-        .set_pin_value("error_message", json!(error.to_string()))
-        .await?;
+    let error = error.to_string();
+    context.log_message(
+        &format!("Remote ontology action failed: {error}"),
+        LogLevel::Error,
+    );
+    context.set_pin_value("error_message", json!(error)).await?;
     context.activate_exec_pin("error").await?;
     Ok(())
 }

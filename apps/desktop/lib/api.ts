@@ -419,12 +419,49 @@ if (API_STATS_ENABLED && typeof window !== "undefined") {
 		__apiCallStats.clear();
 }
 
+/**
+ * A conditional read: `notModified` says the server confirmed the caller's cached copy is
+ * current and deliberately sent no body, so `data` is absent without that being a failure.
+ */
+export interface IConditionalResponse<T> {
+	readonly notModified: boolean;
+	readonly data?: T;
+	readonly etag?: string;
+}
+
+/**
+ * The desktop talks to the API through the Tauri HTTP plugin, which has no HTTP cache of its
+ * own — a revalidation only becomes a 304 if the request carries the tag explicitly. Payloads
+ * that a device already stores locally (pages above all) use this to confirm freshness without
+ * re-transferring the whole document.
+ */
+export async function fetcherConditional<T>(
+	profile: IProfile,
+	path: string,
+	options: RequestInit | undefined,
+	auth: AuthContextProps | undefined,
+	etag?: string,
+): Promise<IConditionalResponse<T>> {
+	return requestJson<T>(profile, path, options, auth, etag);
+}
+
 export async function fetcher<T>(
 	profile: IProfile,
 	path: string,
 	options?: RequestInit,
 	auth?: AuthContextProps,
 ): Promise<T> {
+	const { data } = await requestJson<T>(profile, path, options, auth);
+	return data as T;
+}
+
+async function requestJson<T>(
+	profile: IProfile,
+	path: string,
+	options?: RequestInit,
+	auth?: AuthContextProps,
+	ifNoneMatch?: string,
+): Promise<IConditionalResponse<T>> {
 	ensureProtectedAppRouteAuth(path, auth, methodOf(options));
 	if (API_STATS_ENABLED) {
 		const statKey = normalizeApiPath(methodOf(options), path);
@@ -433,6 +470,9 @@ export async function fetcher<T>(
 	const headers: HeadersInit = {};
 	if (auth?.user?.access_token) {
 		headers["Authorization"] = `Bearer ${auth?.user?.access_token}`;
+	}
+	if (ifNoneMatch) {
+		headers["If-None-Match"] = ifNoneMatch;
 	}
 
 	// Check network status before attempting request
@@ -462,6 +502,14 @@ export async function fetcher<T>(
 			});
 		}
 
+		const responseEtag = response.headers.get("etag") ?? undefined;
+
+		// Only a caller that offered a tag can interpret a 304; without one it would be an
+		// unexpected empty success, so it keeps falling through to the error path below.
+		if (response.status === 304 && ifNoneMatch) {
+			return { notModified: true, etag: responseEtag ?? ifNoneMatch };
+		}
+
 		if (!response.ok) {
 			if (response.status === 401 && auth) {
 				requestSilentRenew(auth, "after 401");
@@ -473,15 +521,17 @@ export async function fetcher<T>(
 		}
 
 		const text = await response.text();
-		if (!text) return undefined as T;
+		if (!text) return { notModified: false, etag: responseEtag };
 		const json = tryParseJSON<T>(text);
-		if (json === null) return text as T;
+		if (json === null) {
+			return { notModified: false, data: text as T, etag: responseEtag };
+		}
 		if (API_STATS_ENABLED) {
 			console.groupCollapsed(`API Request: ${path}`);
 			console.dir(json, { depth: null });
 			console.groupEnd();
 		}
-		return json;
+		return { notModified: false, data: json, etag: responseEtag };
 	} catch (error) {
 		if (error instanceof ApiResponseError) throw error;
 		console.groupCollapsed(`API Request: ${path}`);

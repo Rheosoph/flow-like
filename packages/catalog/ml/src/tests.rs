@@ -465,6 +465,130 @@ mod execute_tests {
         }
     }
 
+    /// Every persisted model must survive BOTH serialization paths. The binary path is the one at
+    /// risk: `MLModel` is an internally tagged enum and the payload goes through MessagePack, which
+    /// encodes structs as arrays by default — a combination that breaks tag lookup on the way back.
+    /// Nested tagged enums (Frank & Hall carries its own `#[serde(tag = "base")]`) are the case most
+    /// likely to fail, so it is pinned here explicitly rather than assumed.
+    #[test]
+    fn test_frank_hall_roundtrips_through_both_formats() {
+        use flow_like_ordinal::FrankHallParams;
+        use linfa::error::Error as LinfaError;
+        use linfa_trees::DecisionTree as LinfaDecisionTree;
+
+        // Four rows, three ordered levels, cleanly separable on one feature.
+        let records = Array2::from_shape_vec((6, 1), vec![0.0, 0.5, 2.0, 2.5, 4.0, 4.5]).unwrap();
+        let targets = ndarray::Array1::from(vec![0usize, 0, 1, 1, 2, 2]);
+        let dataset = linfa::DatasetBase::new(records, targets);
+
+        let fitted =
+            FrankHallParams::<_, LinfaError>::new(LinfaDecisionTree::<f64, bool>::params())
+                .n_levels(3)
+                .fit(&dataset)
+                .expect("Frank & Hall fit failed");
+
+        let ml_model = MLModel::OrdinalFrankHall(ModelWithMeta {
+            model: crate::ml::FrankHallModel::DecisionTree(fitted),
+            classes: None,
+        });
+
+        // Predictions before, to compare against. Matching the variant alone would pass even if
+        // every fitted tree came back empty.
+        let probe = Array2::from_shape_vec((3, 1), vec![0.25, 2.25, 4.25]).unwrap();
+        let expected = match &ml_model {
+            MLModel::OrdinalFrankHall(model) => model.model.predict_levels(&probe),
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            expected.to_vec(),
+            vec![0, 1, 2],
+            "fit did not separate the levels"
+        );
+
+        for (format, restored) in [
+            (
+                "JSON",
+                json::from_slice::<MLModel>(&ml_model.to_json_vec().expect("JSON serialize"))
+                    .expect("JSON round-trip"),
+            ),
+            (
+                "binary",
+                MLModel::from_fory_slice(&ml_model.to_fory_vec().expect("binary serialize"))
+                    .expect("binary round-trip"),
+            ),
+        ] {
+            match restored {
+                MLModel::OrdinalFrankHall(model) => {
+                    assert_eq!(model.model.n_classes(), 3, "{format}: level count lost");
+                    assert_eq!(
+                        model.model.predict_levels(&probe).to_vec(),
+                        expected.to_vec(),
+                        "{format}: predictions changed across the round-trip"
+                    );
+                }
+                other => panic!("{format}: expected OrdinalFrankHall, got {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_svm_fory_roundtrip() {
+        let data = Array2::from_shape_vec(
+            (9, 2),
+            vec![
+                0.0, 0.0, 0.1, 0.0, 0.0, 0.1, 5.0, 5.0, 5.1, 5.0, 5.0, 5.1, 10.0, 0.0, 10.1, 0.0,
+                10.0, 0.1,
+            ],
+        )
+        .unwrap();
+        let targets = Array1::from(vec![0usize, 0, 0, 1, 1, 1, 2, 2, 2]);
+        let dataset = linfa::DatasetBase::from(data).with_targets(targets);
+        let params = Svm::<_, Pr>::params().gaussian_kernel(30.0);
+        let svm_models = dataset
+            .one_vs_all()
+            .unwrap()
+            .into_iter()
+            .map(|(label, dataset)| (label, params.fit(&dataset).unwrap()))
+            .collect::<Vec<_>>();
+
+        let mut classes = HashMap::new();
+        classes.insert(0, "a".to_string());
+        classes.insert(1, "b".to_string());
+        classes.insert(2, "c".to_string());
+
+        let ml_model = MLModel::SVMMultiClass(ModelWithMeta {
+            model: svm_models,
+            classes: Some(classes),
+        });
+
+        let fory_bytes = ml_model.to_fory_vec().unwrap();
+        assert!(!fory_bytes.is_empty());
+
+        let restored = MLModel::from_fory_slice(&fory_bytes).unwrap();
+        match restored {
+            MLModel::SVMMultiClass(_) => {}
+            other => panic!("Expected SVMMultiClass model, got {other}"),
+        }
+    }
+
+    #[test]
+    fn test_from_fory_slice_rejects_json_instead_of_defaulting() {
+        // Fory treats bit 0 of the leading byte as a null marker, and `{` (0x7B) has it set,
+        // so JSON used to decode into an all-default wrapper reported as "version: 0".
+        for input in [
+            &br#"{"model_ref":"h12a5fbkujvy7w2otit56hlg"}"#[..],
+            &br#"{"type":"SVMMultiClass","model":[[0,{"alpha":[1.0]}]]}"#[..],
+        ] {
+            let err = MLModel::from_fory_slice(input).unwrap_err().to_string();
+            assert!(
+                err.contains("Not a valid .flmodel") && err.contains("JSON"),
+                "expected an actionable JSON error, got: {err}"
+            );
+        }
+
+        assert!(MLModel::from_fory_slice(&[]).is_err());
+    }
+
     #[test]
     fn test_fory_is_smaller_than_json() {
         let data = Array2::from_shape_vec((100, 10), (0..1000).map(|i| i as f64 * 0.01).collect())

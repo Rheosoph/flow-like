@@ -1,0 +1,24 @@
+---
+title: "Auto Ordinal Node"
+description: "Auto Ordinal Flow-Like node: Automatically finds the best model for a target whose levels are ORDERED (1 < 2 < ..."
+sidebar:
+  label: "Auto Ordinal"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Auto Ordinal, Auto Ordinal node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Tuning, ml, ai_ml_tuning_auto_ordinal, AI, Tuning, pins, schemas, security rating"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/ML/Tuning"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Auto Ordinal Node\",\"name\":\"Auto Ordinal\",\"description\":\"Auto Ordinal Flow-Like node: Automatically finds the best model for a target whose levels are ORDERED (1 < 2 < ...\",\"url\":\"https://docs.flow-like.com/nodes/ai/ml/tuning/ai-ml-tuning-auto-ordinal/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/ML/Tuning\",\"keywords\":\"Auto Ordinal, Auto Ordinal node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Tuning, ml, ai_ml_tuning_auto_ordinal, AI, Tuning, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Auto Ordinal\",\"description\":\"Automatically finds the best model for a target whose levels are ORDERED (1 < 2 < ... < 5, or low < medium < high). Cross-validates the ordinal families - Proportional Odds and Ordered Probit, the all-threshold model and its support-vector form, Ordinal Ridge, Continuation Ratio and Adjacent Category, plus an optional rank-consistent neural family that is off by default because it costs far more than all the others combined - on identical folds, ranks them by an ordinal metric that knows how far a miss was, then retrains the winner on the full data. Use this rather than Auto Classifier, which resolves the target without its order and ranks by accuracy or macro-F1, scoring a five-level miss exactly like a one-level one. Every candidate here is a gradient or a least-squares fit on the raw columns, so scale your features with the Fit Feature Scaler node first: unscaled columns change which family wins, not just how fast it converges.\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
+---
+
+import { NodeReference } from "../../../../../../components/node-docs/NodeReference";
+import { nodesBySlug } from "../../../../../../generated/catalog-nodes";
+
+<NodeReference node={nodesBySlug["nodes/ai/ml/tuning/ai-ml-tuning-auto-ordinal"]} />

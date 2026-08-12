@@ -1,0 +1,24 @@
+---
+title: "Train Ordinal Model (Proportional Odds) Node"
+description: "Train Ordinal Model (Proportional Odds) Flow-Like node: Fit/Train a proportional-odds model on a target whose levels are ORDERED (1 < 2 < ..."
+sidebar:
+  label: "Train Ordinal Model (Proportional Odds)"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Train Ordinal Model (Proportional Odds), Train Ordinal Model (Proportional Odds) node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Ordinal, ml, fit_ordinal_logistic, AI, Ordinal, pins, schemas, security rating"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/ML/Ordinal"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Train Ordinal Model (Proportional Odds) Node\",\"name\":\"Train Ordinal Model (Proportional Odds)\",\"description\":\"Train Ordinal Model (Proportional Odds) Flow-Like node: Fit/Train a proportional-odds model on a target whose levels are ORDERED (1 < 2 < ...\",\"url\":\"https://docs.flow-like.com/nodes/ai/ml/ordinal/fit-ordinal-logistic/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/ML/Ordinal\",\"keywords\":\"Train Ordinal Model (Proportional Odds), Train Ordinal Model (Proportional Odds) node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Ordinal, ml, fit_ordinal_logistic, AI, Ordinal, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Train Ordinal Model (Proportional Odds)\",\"description\":\"Fit/Train a proportional-odds model on a target whose levels are ORDERED (1 < 2 < ... < 5, or low < medium < high). Use this instead of a classifier, which treats the levels as unrelated names and so counts predicting `low` for `high` as no worse than predicting `medium`. Use it instead of a regressor, which treats the levels as real numbers and so invents distances the levels do not carry (`high` is not exactly twice `medium`). The model learns one coefficient vector plus ordered cut points, which keeps predictions monotone in the score and, under the default loss, yields calibrated per-level probabilities. Link Function, Loss and Margin widen it to the whole threshold-model family, up to support vector ordinal regression, while Free Features relaxes the shared coefficient into one slope per cut point. Scale your features first with the Fit Feature Scaler node: this is a gradient fit, and unscaled columns make it converge slowly or not at all.\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
+---
+
+import { NodeReference } from "../../../../../../components/node-docs/NodeReference";
+import { nodesBySlug } from "../../../../../../generated/catalog-nodes";
+
+<NodeReference node={nodesBySlug["nodes/ai/ml/ordinal/fit-ordinal-logistic"]} />

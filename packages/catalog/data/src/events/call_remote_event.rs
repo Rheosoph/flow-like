@@ -328,7 +328,7 @@ fn is_file_route(meta: &EventMeta, method: &str, path: &str) -> bool {
     method.eq_ignore_ascii_case("GET") && meta.rest_files.iter().any(|file| file.path == path)
 }
 
-fn selected_route<'a>(meta: &'a EventMeta, selection: &str) -> Option<(String, String)> {
+fn selected_route(meta: &EventMeta, selection: &str) -> Option<(String, String)> {
     for route in &meta.rest_routes {
         if route_label(&route.method, &route.path) == selection {
             return Some((route.method.clone(), route.path.clone()));

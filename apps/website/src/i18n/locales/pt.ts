@@ -122,7 +122,6 @@ export const pt = {
 	"design.feature3.desc":
 		"O mesmo fluxo roda em local, staging, produção — sem reescritas.",
 
-
 	// Portability
 	"portability.tagline": "Automação em qualquer lugar",
 	"portability.headline": "Construa uma vez, execute em qualquer lugar",
@@ -686,7 +685,6 @@ export const pt = {
 	"usecases.learnmore": "Saiba mais",
 
 	"design.headline.highlight": "visualmente",
-
 
 	"portability.headline.start": "Comece",
 	"portability.headline.offline": "offline",

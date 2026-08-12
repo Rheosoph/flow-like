@@ -1,4 +1,4 @@
-use crate::data::datafusion::session::DataFusionSession;
+use crate::data::datafusion::session::{CachedDataFusionSession, DataFusionSession, DeferredMount};
 use crate::data::db::vector::NodeDBConnection;
 use flow_like::flow::{
     execution::context::ExecutionContext,
@@ -8,6 +8,66 @@ use flow_like::flow::{
 use flow_like_storage::datafusion::common::TableReference;
 use flow_like_types::{async_trait, json::json};
 use std::sync::Arc;
+
+/// Flushing the Lance database and building its DataFusion adapter are deferred to the
+/// first query. Data written to the database between this node and the first query is
+/// therefore included — the flush happens at materialization time.
+struct LanceTableMount {
+    database: NodeDBConnection,
+    table_name: String,
+}
+
+#[async_trait]
+impl DeferredMount for LanceTableMount {
+    fn describe(&self) -> String {
+        if self.table_name.is_empty() {
+            "a Lance table (name taken from the database)".to_string()
+        } else {
+            format!("Lance table '{}'", self.table_name)
+        }
+    }
+
+    fn dedupe_key(&self) -> Option<String> {
+        // An empty name is resolved from the database only at mount time, so there is
+        // nothing safe to dedupe on.
+        (!self.table_name.is_empty()).then(|| format!("table:{}", self.table_name))
+    }
+
+    async fn mount(
+        &self,
+        session: &CachedDataFusionSession,
+        context: &mut ExecutionContext,
+    ) -> flow_like_types::Result<()> {
+        let (cached_db, generation) = self.database.load_with_generation(context).await?;
+        cached_db.ensure_flushed().await?;
+        let db_guard = cached_db.db.read().await;
+        let inner = db_guard.inner();
+
+        let table_name = if self.table_name.is_empty() {
+            inner.table_name().to_string()
+        } else {
+            self.table_name.clone()
+        };
+
+        let df_adapter = inner.to_datafusion().await?;
+        drop(db_guard);
+
+        // Retry-safe: a previous partially-failed run of this mount may already have
+        // registered the name.
+        let _ = session
+            .ctx
+            .deregister_table(TableReference::bare(table_name.clone()));
+        session.ctx.register_table(
+            TableReference::bare(table_name.clone()),
+            Arc::new(df_adapter),
+        )?;
+        session
+            .track_lance_table(table_name, self.database.clone(), generation)
+            .await;
+
+        Ok(())
+    }
+}
 
 #[crate::register_node]
 #[derive(Default)]
@@ -85,26 +145,14 @@ impl NodeLogic for RegisterLanceTableNode {
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
         let database: NodeDBConnection = context.evaluate_pin("database").await?;
-        let mut table_name: String = context.evaluate_pin("table_name").await?;
+        let table_name: String = context.evaluate_pin("table_name").await?;
 
-        let cached_session = session.load(context).await?;
-        let (cached_db, generation) = database.load_with_generation(context).await?;
-        cached_db.ensure_flushed().await?;
-        let db_guard = cached_db.db.read().await;
-        let inner = db_guard.inner();
-
-        if table_name.is_empty() {
-            table_name = inner.table_name().to_string();
-        }
-
-        let df_adapter = inner.to_datafusion().await?;
-
-        cached_session.ctx.register_table(
-            TableReference::bare(table_name.clone()),
-            Arc::new(df_adapter),
-        )?;
+        let cached_session = session.load_lazy(context).await?;
         cached_session
-            .track_lance_table(table_name, database, generation)
+            .defer_mount(Arc::new(LanceTableMount {
+                database,
+                table_name,
+            }))
             .await;
 
         context.activate_exec_pin("exec_out").await?;

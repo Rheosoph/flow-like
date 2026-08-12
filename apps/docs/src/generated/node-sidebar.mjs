@@ -845,12 +845,36 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/ml/classification"
               },
               {
+                "label": "Fit Novelty Detection (One-Class SVM)",
+                "slug": "nodes/ai/ml/classification/fit-one-class-svm"
+              },
+              {
+                "label": "Train Classifier (AdaBoost)",
+                "slug": "nodes/ai/ml/classification/fit-adaboost"
+              },
+              {
                 "label": "Train Classifier (Decision Tree)",
                 "slug": "nodes/ai/ml/classification/fit-decision-tree"
               },
               {
+                "label": "Train Classifier (K-Nearest Neighbours)",
+                "slug": "nodes/ai/ml/classification/fit-knn-classifier"
+              },
+              {
+                "label": "Train Classifier (Logistic Regression)",
+                "slug": "nodes/ai/ml/classification/fit-logistic-regression"
+              },
+              {
+                "label": "Train Classifier (Multinomial Naive Bayes)",
+                "slug": "nodes/ai/ml/classification/fit-multinomial-naive-bayes"
+              },
+              {
                 "label": "Train Classifier (Naive Bayes)",
                 "slug": "nodes/ai/ml/classification/fit-naive-bayes"
+              },
+              {
+                "label": "Train Classifier (Random Forest)",
+                "slug": "nodes/ai/ml/classification/fit-random-forest"
               },
               {
                 "label": "Train Classifier (SVM)",
@@ -865,6 +889,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Overview",
                 "slug": "nodes/ai/ml/clustering"
+              },
+              {
+                "label": "Fit Clustering (Gaussian Mixture)",
+                "slug": "nodes/ai/ml/clustering/fit-gaussian-mixture"
               },
               {
                 "label": "Train Clustering (DBSCAN)",
@@ -923,8 +951,16 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/ml/metrics/ml-eval-confusion-matrix"
               },
               {
+                "label": "ROC-AUC & Log Loss",
+                "slug": "nodes/ai/ml/metrics/ml-roc-auc"
+              },
+              {
                 "label": "Regression Metrics",
                 "slug": "nodes/ai/ml/metrics/ml-eval-regression"
+              },
+              {
+                "label": "Silhouette Score",
+                "slug": "nodes/ai/ml/metrics/ml-silhouette-score"
               }
             ]
           },
@@ -935,6 +971,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Overview",
                 "slug": "nodes/ai/ml/model-info"
+              },
+              {
+                "label": "Feature Importance",
+                "slug": "nodes/ai/ml/model-info/ml-feature-importance"
               },
               {
                 "label": "Get Centroids",
@@ -1051,6 +1091,10 @@ export const generatedNodeSidebar = [
                   {
                     "label": "Named Entity Recognition",
                     "slug": "nodes/ai/ml/onnx/nlp/onnx-ner"
+                  },
+                  {
+                    "label": "Zero-Shot NER (GLiNER)",
+                    "slug": "nodes/ai/ml/onnx/nlp/onnx-gliner"
                   }
                 ]
               },
@@ -1145,6 +1189,66 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Ordinal",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ai/ml/ordinal"
+              },
+              {
+                "label": "Ordinal Metrics",
+                "slug": "nodes/ai/ml/ordinal/ml-ordinal-metrics"
+              },
+              {
+                "label": "Train Ordinal Model (Adjacent Category)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-adjacent-category"
+              },
+              {
+                "label": "Train Ordinal Model (Continuation Ratio)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-continuation-ratio"
+              },
+              {
+                "label": "Train Ordinal Model (Frank & Hall)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-frank-hall"
+              },
+              {
+                "label": "Train Ordinal Model (Neural CORAL/CORN)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-neural"
+              },
+              {
+                "label": "Train Ordinal Model (Proportional Odds)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-logistic"
+              },
+              {
+                "label": "Train Ordinal Model (Ridge)",
+                "slug": "nodes/ai/ml/ordinal/fit-ordinal-ridge"
+              }
+            ]
+          },
+          {
+            "label": "Preprocessing",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ai/ml/preprocessing"
+              },
+              {
+                "label": "Apply Transform",
+                "slug": "nodes/ai/ml/preprocessing/ml-apply-transform"
+              },
+              {
+                "label": "Fit Feature Scaler",
+                "slug": "nodes/ai/ml/preprocessing/fit-feature-scaler"
+              },
+              {
+                "label": "Fit TF-IDF Vectorizer",
+                "slug": "nodes/ai/ml/preprocessing/fit-tfidf-vectorizer"
+              }
+            ]
+          },
+          {
             "label": "Reduction",
             "collapsed": true,
             "items": [
@@ -1173,6 +1277,22 @@ export const generatedNodeSidebar = [
               {
                 "label": "Train Regression (Linear)",
                 "slug": "nodes/ai/ml/regression/fit-linear-regression"
+              },
+              {
+                "label": "Train Regressor (GLM / Tweedie)",
+                "slug": "nodes/ai/ml/regression/fit-glm"
+              },
+              {
+                "label": "Train Regressor (K-Nearest Neighbours)",
+                "slug": "nodes/ai/ml/regression/fit-knn-regressor"
+              },
+              {
+                "label": "Train Regressor (Ridge/Lasso/ElasticNet)",
+                "slug": "nodes/ai/ml/regression/fit-elastic-net"
+              },
+              {
+                "label": "Train Regressor (SVM)",
+                "slug": "nodes/ai/ml/regression/fit-svm-regression"
               }
             ]
           },
@@ -1203,8 +1323,16 @@ export const generatedNodeSidebar = [
                 "slug": "nodes/ai/ml/tuning/ai-ml-tuning-auto-classifier"
               },
               {
+                "label": "Auto Ordinal",
+                "slug": "nodes/ai/ml/tuning/ai-ml-tuning-auto-ordinal"
+              },
+              {
                 "label": "Grid Search",
                 "slug": "nodes/ai/ml/tuning/ai-ml-tuning-grid-search"
+              },
+              {
+                "label": "Ordinal Grid Search",
+                "slug": "nodes/ai/ml/tuning/ai-ml-tuning-ordinal-grid-search"
               }
             ]
           },
@@ -2679,6 +2807,44 @@ export const generatedNodeSidebar = [
         ]
       },
       {
+        "label": "Cache",
+        "collapsed": true,
+        "items": [
+          {
+            "label": "Overview",
+            "slug": "nodes/data/cache"
+          },
+          {
+            "label": "Delete Cache Entry",
+            "slug": "nodes/data/cache/cache-delete"
+          },
+          {
+            "label": "Get or Write Cache",
+            "slug": "nodes/data/cache/cache-get-or-write"
+          },
+          {
+            "label": "Has Cache Entry",
+            "slug": "nodes/data/cache/cache-has"
+          },
+          {
+            "label": "Invalidate Cache Namespace",
+            "slug": "nodes/data/cache/cache-invalidate-namespace"
+          },
+          {
+            "label": "Open Cache",
+            "slug": "nodes/data/cache/cache-open"
+          },
+          {
+            "label": "Read Cache",
+            "slug": "nodes/data/cache/cache-read"
+          },
+          {
+            "label": "Write Cache",
+            "slug": "nodes/data/cache/cache-write"
+          }
+        ]
+      },
+      {
         "label": "DataFusion",
         "collapsed": true,
         "items": [
@@ -2845,6 +3011,10 @@ export const generatedNodeSidebar = [
             ]
           },
           {
+            "label": "Cached SQL Query",
+            "slug": "nodes/data/datafusion/df-sql-query-cached"
+          },
+          {
             "label": "Create DataFusion Session",
             "slug": "nodes/data/datafusion/df-create-session"
           },
@@ -2859,6 +3029,10 @@ export const generatedNodeSidebar = [
           {
             "label": "Mount Parquet",
             "slug": "nodes/data/datafusion/df-mount-parquet"
+          },
+          {
+            "label": "Register Excel (DataFusion)",
+            "slug": "nodes/data/datafusion/df-register-excel"
           },
           {
             "label": "Register Lance Table",
@@ -2893,6 +3067,10 @@ export const generatedNodeSidebar = [
               {
                 "label": "Delete",
                 "slug": "nodes/data/database/delete/filter-delete-local-db"
+              },
+              {
+                "label": "Drop Table",
+                "slug": "nodes/data/database/delete/drop-table-local-db"
               },
               {
                 "label": "Purge",
@@ -4997,6 +5175,10 @@ export const generatedNodeSidebar = [
             "slug": "nodes/document/pdf/pdf-compress"
           },
           {
+            "label": "Create PDF from Markdown",
+            "slug": "nodes/document/pdf/pdf-create-from-markdown"
+          },
+          {
             "label": "Decrypt PDF",
             "slug": "nodes/document/pdf/pdf-decrypt"
           },
@@ -6063,12 +6245,20 @@ export const generatedNodeSidebar = [
             "slug": "nodes/ui/container/a2ui-push-to-container"
           },
           {
+            "label": "Query Widget",
+            "slug": "nodes/ui/container/a2ui-widget-query"
+          },
+          {
             "label": "Remove From Container",
             "slug": "nodes/ui/container/a2ui-remove-from-container"
           },
           {
             "label": "Set Widget Text",
             "slug": "nodes/ui/container/a2ui-widget-set-text"
+          },
+          {
+            "label": "Update Widget Inputs",
+            "slug": "nodes/ui/container/a2ui-widget-update-inputs"
           }
         ]
       },
@@ -6335,6 +6525,20 @@ export const generatedNodeSidebar = [
               {
                 "label": "Get Tooltip Content",
                 "slug": "nodes/ui/elements/get/a2ui-get-tooltip-content"
+              }
+            ]
+          },
+          {
+            "label": "Graph",
+            "collapsed": true,
+            "items": [
+              {
+                "label": "Overview",
+                "slug": "nodes/ui/elements/graph"
+              },
+              {
+                "label": "Update Graph",
+                "slug": "nodes/ui/elements/graph/a2ui-update-graph"
               }
             ]
           },
@@ -7435,6 +7639,18 @@ export const generatedNodeSidebar = [
           {
             "label": "HTML to Markdown",
             "slug": "nodes/utils/markdown/utils-md-html-to-md"
+          },
+          {
+            "label": "Markdown to HTML",
+            "slug": "nodes/utils/markdown/utils-md-md-to-html"
+          },
+          {
+            "label": "Rich Text to HTML",
+            "slug": "nodes/utils/markdown/utils-md-plate-to-html"
+          },
+          {
+            "label": "Rich Text to Markdown",
+            "slug": "nodes/utils/markdown/utils-md-plate-to-md"
           }
         ]
       },

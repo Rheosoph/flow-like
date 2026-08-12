@@ -48,6 +48,8 @@ export {
 	IExecutionStage,
 	IExecutionMode,
 	type ILayer,
+	type ILayerCache,
+	ILayerCacheScope,
 	ILayerType,
 	ILogLevel,
 	type ISystemTime,

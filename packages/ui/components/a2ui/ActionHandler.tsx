@@ -31,6 +31,7 @@ import {
 import { useExecutionServiceOptional } from "../../state/execution-service-context";
 import { useRouteDialogSafe } from "./RouteDialogProvider";
 import { resolveEventActions } from "./event-handlers";
+import { useElementStorage } from "./hooks/use-element-storage";
 import {
 	resolveWidgetInstanceEventRoute,
 	useWidgetInstance,
@@ -300,6 +301,12 @@ export function ActionProvider({
 }: ActionProviderProps) {
 	const pathname = usePathname();
 	const backend = useBackend();
+	// Page state was addressed by pathname, but every app page in the runtime lives at `/use`:
+	// one bucket held the state of all of them, and a board's `setPageState` — which names a
+	// real page id — never matched the current page and so never reached the live state. A page
+	// surface is identified by its page id, which is what boards address, so use that. Surfaces
+	// that are not pages (chat widgets, previews) keep the route as their scope.
+	const pageStateId = surfaceId || pathname || "default";
 	const routeDialog = useRouteDialogSafe();
 	const [globalState, setGlobalStateMap] = useState<Record<string, unknown>>(
 		{},
@@ -312,25 +319,49 @@ export function ActionProvider({
 	const openDialog = openDialogProp ?? routeDialog?.openDialog;
 	const closeDialog = closeDialogProp ?? routeDialog?.closeDialog;
 
-	// In-memory storage for element values (current page only)
+	// What the surface's inputs are currently holding, and what `_elements` carries into a
+	// workflow. Backed by storage so a surface that comes back from cache and the payload its
+	// workflows receive describe the same screen.
 	const elementValuesRef = useRef<Record<string, unknown>>({});
+	const { storeElementValue, restoreSurfaceValues } = useElementStorage(appId);
+
+	useEffect(() => {
+		if (!appId || !surfaceId) return;
+		let cancelled = false;
+
+		void restoreSurfaceValues(surfaceId)
+			.then((restored) => {
+				if (cancelled) return;
+				// Anything the user has already touched on this mount is newer than what was
+				// stored, so restoration fills gaps rather than overwriting.
+				elementValuesRef.current = {
+					...restored,
+					...elementValuesRef.current,
+				};
+			})
+			.catch(() => undefined);
+
+		return () => {
+			cancelled = true;
+		};
+	}, [appId, surfaceId, restoreSurfaceValues]);
 
 	// Getter for element values (used by useExecuteAction)
 	const getElementValues = useCallback(() => {
-		console.log(
-			"[ActionHandler] getElementValues called, current values:",
-			elementValuesRef.current,
-		);
 		return elementValuesRef.current;
 	}, []);
 
 	// Imperative setter for element values that bypasses the change-action
 	// wrapper. Used by micro widgets to mirror their `value:changed` state
 	// under the "{instanceId}/values" elements-payload key.
-	const setElementValue = useCallback((elementId: string, value: unknown) => {
-		if (!elementId) return;
-		elementValuesRef.current[elementId] = value;
-	}, []);
+	const setElementValue = useCallback(
+		(elementId: string, value: unknown) => {
+			if (!elementId) return;
+			elementValuesRef.current[elementId] = value;
+			storeElementValue(elementId, value);
+		},
+		[storeElementValue],
+	);
 
 	// Ref-counted set of components that are currently triggering an async action.
 	// Components consume this to render a loading state for the duration of their action.
@@ -431,20 +462,14 @@ export function ActionProvider({
 					? context.value
 					: context.checked;
 
-				console.log("[ActionHandler] Storing element value:", {
-					elementId,
-					value,
-					surfaceId: message.surfaceId,
-				});
-
-				// Store in memory
 				elementValuesRef.current[elementId] = value;
+				storeElementValue(elementId, value);
 			}
 
 			// Forward to original handler
 			onAction?.(message);
 		},
-		[onAction],
+		[onAction, storeElementValue],
 	);
 
 	// Load persisted state from IndexedDB on mount
@@ -463,7 +488,7 @@ export function ActionProvider({
 				}
 
 				// Load page state for current page
-				const pageId = pathname || "default";
+				const pageId = pageStateId;
 				const persistedPage = await pageLocalState.getAll(appId, pageId);
 				if (Object.keys(persistedPage).length > 0) {
 					pageStateRef.current[pageId] = persistedPage;
@@ -477,13 +502,13 @@ export function ActionProvider({
 		};
 
 		loadPersistedState();
-	}, [appId, pathname]);
+	}, [appId, pageStateId]);
 
-	// Load page state when pathname changes
+	// Load page state when the surface changes
 	useEffect(() => {
 		if (!appId || !isStateLoaded) return;
 
-		const pageId = pathname || "default";
+		const pageId = pageStateId;
 
 		// Check if we already have this page's state in memory
 		if (pageStateRef.current[pageId]) {
@@ -505,7 +530,7 @@ export function ActionProvider({
 		};
 
 		loadPageState();
-	}, [appId, pathname, isStateLoaded]);
+	}, [appId, pageStateId, isStateLoaded]);
 
 	const setGlobalState = useCallback(
 		(key: string, value: unknown) => {
@@ -527,7 +552,7 @@ export function ActionProvider({
 
 	const setPageState = useCallback(
 		(key: string, value: unknown) => {
-			const pageId = pathname || "default";
+			const pageId = pageStateId;
 			if (!pageStateRef.current[pageId]) {
 				pageStateRef.current[pageId] = {};
 			}
@@ -541,11 +566,11 @@ export function ActionProvider({
 					.catch((err) => console.error("Failed to persist page state:", err));
 			}
 		},
-		[pathname, appId],
+		[pageStateId, appId],
 	);
 
 	const clearPageState = useCallback(() => {
-		const pageId = pathname || "default";
+		const pageId = pageStateId;
 		pageStateRef.current[pageId] = {};
 		setPageStateLocal({});
 
@@ -555,7 +580,7 @@ export function ActionProvider({
 				.clearPage(appId, pageId)
 				.catch((err) => console.error("Failed to clear page state:", err));
 		}
-	}, [pathname, appId]);
+	}, [pageStateId, appId]);
 
 	// Wrap onA2UIMessage to handle state updates
 	const handleA2UIMessage = useCallback(
@@ -572,7 +597,7 @@ export function ActionProvider({
 						key: string;
 						value: unknown;
 					};
-					const currentPageId = pathname || "default";
+					const currentPageId = pageStateId;
 					// Only apply if it's for the current page
 					if (pageId === currentPageId) {
 						setPageState(key, value);
@@ -599,7 +624,7 @@ export function ActionProvider({
 				case "clearPageState": {
 					const { pageId } = message as { pageId: string };
 					pageStateRef.current[pageId] = {};
-					if (pageId === (pathname || "default")) {
+					if (pageId === pageStateId) {
 						setPageStateLocal({});
 					}
 					// Also clear from IndexedDB
@@ -629,7 +654,7 @@ export function ActionProvider({
 					onA2UIMessage?.(message);
 			}
 		},
-		[onA2UIMessage, pathname, appId, setGlobalState, setPageState],
+		[onA2UIMessage, pageStateId, appId, setGlobalState, setPageState],
 	);
 
 	return (
@@ -1687,6 +1712,14 @@ export function useExecuteAction() {
 						break;
 					}
 					default:
+						// Streaming surfaces (A2UIInterface) legitimately forward their own action
+						// names to the server, so this stays a forward rather than a rejection.
+						// On a page nothing consumes it, which used to make a mis-wired action
+						// indistinguishable from a working one — hence the explicit warning.
+						console.warn(
+							`[A2UI] Action "${name}" is not a built-in action; nothing will run unless this surface handles it server-side. Built-in actions: workflow_event (context.nodeId), widget_event (context.actionId), navigate_page, external_link, navigate_app_config, navigate_app_overview, submit_feedback.`,
+							{ surfaceId, triggeringComponentId, context },
+						);
 						if (onAction) {
 							onAction({
 								type: "userAction",

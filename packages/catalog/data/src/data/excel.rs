@@ -19,6 +19,8 @@ use crate::data::path::FlowPath;
 pub mod copy_worksheet;
 pub mod get_row;
 pub mod get_sheet_names;
+#[cfg(feature = "execute")]
+pub mod grid;
 pub mod insert_column;
 pub mod insert_row;
 pub mod loop_rows;
@@ -26,6 +28,11 @@ pub mod new_worksheet;
 pub mod read_cell;
 pub mod remove_column;
 pub mod remove_row;
+#[cfg(feature = "execute")]
+pub mod sheet_compressor;
+#[cfg(feature = "execute")]
+pub mod styles;
+pub mod table_detect;
 pub mod try_extract_tables;
 pub mod try_extract_tables_ai;
 pub mod write_cell;
@@ -76,6 +83,16 @@ fn is_bool_str(s: &str) -> Option<bool> {
 #[inline]
 fn is_nullish(s: &str) -> bool {
     matches!(s.trim(), "" | "null" | "NULL" | "NaN" | "N/A" | "na" | "Na")
+}
+
+/// "00420"-style values parse as integers but would lose their leading zeros.
+#[inline]
+fn has_leading_zero(s: &str) -> bool {
+    let t = s.trim().trim_start_matches(['+', '-']);
+    t.len() > 1
+        && t.starts_with('0')
+        && !t.starts_with("0.")
+        && t.chars().all(|c| c.is_ascii_digit())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -238,11 +255,30 @@ impl std::fmt::Display for Cell {
     }
 }
 
+fn cell_to_json(cell: &Cell) -> JsonValue {
+    match cell {
+        Cell::Null => JsonValue::Null,
+        Cell::Bool(b) => JsonValue::Bool(*b),
+        Cell::Int(i) => JsonValue::Number((*i).into()),
+        Cell::Float(f) => flow_like_types::json::Number::from_f64(*f)
+            .map(JsonValue::Number)
+            .unwrap_or(JsonValue::Null),
+        Cell::Str(s) => JsonValue::String(s.to_string()),
+        Cell::Date { iso, .. } => JsonValue::String(iso.to_string()),
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub struct CSVTable {
     /// Optional name/identifier for this table
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// Optional title text found above the table in the source sheet
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Optional A1 range the table was extracted from (e.g. "A3:F42")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub range: Option<String>,
     headers: Arc<[Arc<str>]>,
     rows: Vec<Box<[Cell]>>,
     source: Option<FlowPath>,
@@ -269,6 +305,8 @@ impl CSVTable {
 
         Self {
             name: None,
+            title: None,
+            range: None,
             headers,
             rows,
             source,
@@ -283,6 +321,14 @@ impl CSVTable {
         self.rows
             .iter()
             .map(|row| row.iter().map(|cell| cell.to_string()).collect())
+            .collect()
+    }
+
+    /// Rows as typed JSON values (dates as their ISO string form).
+    pub fn rows_as_values(&self) -> Vec<Vec<JsonValue>> {
+        self.rows
+            .iter()
+            .map(|row| row.iter().map(cell_to_json).collect())
             .collect()
     }
 
@@ -334,6 +380,10 @@ impl CSVTable {
                             kind = merge_kind(kind, ColKind::Bool);
                         } else if parse_date_string(s).is_some() {
                             kind = merge_kind(kind, ColKind::Date);
+                        } else if has_leading_zero(s) {
+                            // "00420"-style identifiers must stay strings
+                            kind = ColKind::Utf8;
+                            coercible = false;
                         } else if s.parse::<i64>().is_ok() {
                             kind = merge_kind(kind, ColKind::Int);
                         } else if s.parse::<f64>().is_ok() {

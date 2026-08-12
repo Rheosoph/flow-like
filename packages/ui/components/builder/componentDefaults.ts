@@ -252,6 +252,15 @@ export const COMPONENT_DEFAULT_PROPS: Record<
 		disabled: bool(false),
 		required: bool(false),
 	},
+	richText: {
+		value: str(""),
+		label: str("Document"),
+		placeholder: str("Start writing..."),
+		uploadScope: str("app"),
+		minHeight: str("16rem"),
+		disabled: bool(false),
+		readOnly: bool(false),
+	},
 	select: {
 		value: str(""),
 		options: options([

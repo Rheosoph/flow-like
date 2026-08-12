@@ -1,4 +1,5 @@
 export * from "./flow-board";
+export * from "./board-sync-recovery";
 export * from "./flow-history";
 export * from "./flow-preview";
 export * from "./flow-node-shell";

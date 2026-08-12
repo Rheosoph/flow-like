@@ -3,6 +3,7 @@ use crate::{
     entity::{
         app, invitation, membership, meta,
         sea_orm_active_enums::{NotificationType, Visibility},
+        user,
     },
     error::ApiError,
     middleware::jwt::AppUser,
@@ -63,7 +64,7 @@ pub async fn invite_user(
             user.sub()?,
             app_id
         );
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::bad_request("You cannot invite yourself"));
     }
 
     let txn = state.db.begin().await?;
@@ -116,7 +117,7 @@ pub async fn invite_user(
             params.sub,
             app_id
         );
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::conflict("User is already a member of this app"));
     }
 
     if max_prototype > 0
@@ -140,6 +141,24 @@ pub async fn invite_user(
         }
     }
 
+    // Invitation.user_id is a foreign key to User; a sub with no row (typo'd id
+    // or a never-signed-in user from an API-key/PAT caller) would fail the
+    // insert with an opaque 500. Surface a clean 404 instead.
+    let invitee_exists = user::Entity::find_by_id(params.sub.clone())
+        .one(&txn)
+        .await?
+        .is_some();
+
+    if !invitee_exists {
+        tracing::warn!(
+            "User {} is trying to invite unknown user {} to app {}",
+            user.sub()?,
+            params.sub,
+            app_id
+        );
+        return Err(ApiError::not_found("User not found"));
+    }
+
     let existing_invite = invitation::Entity::find()
         .filter(invitation::Column::AppId.eq(app_id.clone()))
         .filter(invitation::Column::UserId.eq(params.sub.clone()))
@@ -153,7 +172,9 @@ pub async fn invite_user(
             params.sub,
             app_id
         );
-        return Err(ApiError::FORBIDDEN);
+        return Err(ApiError::conflict(
+            "This user already has a pending invitation",
+        ));
     }
 
     let invitation = invitation::ActiveModel {
@@ -185,7 +206,7 @@ pub async fn invite_user(
             title: format!("You've been invited to {}", app_name),
             description: Some("Open your invitations to accept or decline.".to_string()),
             icon: Some("mail".to_string()),
-            link: Some("/invites".to_string()),
+            link: Some("/notifications".to_string()),
             image: None,
             notification_type: NotificationType::System,
             source_run_id: None,

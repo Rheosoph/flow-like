@@ -10,7 +10,8 @@
 	--website-content-edge: max(
 		var(--website-content-gutter),
 		calc(
-			(100vw - var(--website-content-max)) / 2 +
+			(100vw - var(--website-content-max)) /
+			2 +
 			var(--website-content-gutter)
 		)
 	);

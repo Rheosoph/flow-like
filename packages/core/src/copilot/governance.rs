@@ -229,10 +229,10 @@ impl GovernanceCopilot {
 /// a suggestion carrying the raw text as a note so the reviewer still sees it.
 fn parse_suggestion(text: &str) -> GovernanceSuggestion {
     let candidate = extract_json_object(text);
-    if let Some(candidate) = candidate {
-        if let Ok(parsed) = serde_json::from_str::<GovernanceSuggestion>(&candidate) {
-            return parsed;
-        }
+    if let Some(candidate) = candidate
+        && let Ok(parsed) = serde_json::from_str::<GovernanceSuggestion>(&candidate)
+    {
+        return parsed;
     }
     GovernanceSuggestion {
         purpose: String::new(),

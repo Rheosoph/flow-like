@@ -591,7 +591,7 @@ pub(crate) async fn persist_pending_flow_ir_commit(
         if let Some(claim) = pending_claim_from_board(&board, &scope_key, token, now_ms) {
             if let Some((commands, replacement_mode)) = local_payload.as_ref() {
                 let digest = pending_payload_digest(commands, *replacement_mode)
-                    .map_err(|error| ApiError::internal(error))?;
+                    .map_err(ApiError::internal)?;
                 if claim.payload_digest == digest && claim.replacement_mode == *replacement_mode {
                     return Ok(());
                 }
@@ -920,18 +920,18 @@ pub async fn apply_flow_ir_commit(
                 )));
             };
             let payload_digest = pending_payload_digest(&board_commands, replacement_mode)
-                .map_err(|error| ApiError::internal(error))?;
+                .map_err(ApiError::internal)?;
             (board_commands, replacement_mode, payload_digest, false)
         } else {
-            if receipts_pruned || pending_claims_pruned {
-                if let Err(error) = board.save(None).await {
-                    tracing::warn!(
-                        app_id,
-                        board_id,
-                        error = %error,
-                        "FlowScript review was unavailable and durable bookkeeping pruning could not be persisted"
-                    );
-                }
+            if (receipts_pruned || pending_claims_pruned)
+                && let Err(error) = board.save(None).await
+            {
+                tracing::warn!(
+                    app_id,
+                    board_id,
+                    error = %error,
+                    "FlowScript review was unavailable and durable bookkeeping pruning could not be persisted"
+                );
             }
             return Ok(Json(ApplyFlowIrCommitResult::empty(
                 "stale",

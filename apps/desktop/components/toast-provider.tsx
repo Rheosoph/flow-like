@@ -1,12 +1,12 @@
 "use client";
 
-import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
 import type { IIntercomEvent } from "@flow-like/flow-like-ui";
 import {
 	type ProgressToastData,
 	finishAllProgressToasts,
 	showProgressToast,
 } from "@flow-like/flow-like-ui";
+import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import { toast } from "sonner";
 

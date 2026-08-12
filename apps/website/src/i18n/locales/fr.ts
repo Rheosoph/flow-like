@@ -188,7 +188,6 @@ export const fr = {
 	"design.feature3.desc":
 		"Les snapshots input/output rendent trivial de trouver les différences.",
 
-
 	// Portability
 	"portability.tagline": "Full Lifecycle",
 	"portability.headline.start": "Commence",
@@ -671,7 +670,8 @@ export const fr = {
 	"v3.hero.tab.app": "App",
 
 	// ───── V3 §2: Solution Engineering ─────
-	"v3.se.headline": "Partez de votre modèle opérationnel, pas d'un autre outil.",
+	"v3.se.headline":
+		"Partez de votre modèle opérationnel, pas d'un autre outil.",
 	"v3.se.subheadline":
 		"Le Solution Engineering signifie une pile gouvernée pour les données, la logique, l'AI, l'automatisation et les apps utilisateur.",
 	"v3.se.slider.before": "Prolifération d'outils",

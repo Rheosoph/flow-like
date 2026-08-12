@@ -4,16 +4,16 @@ import { Maximize2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { cn } from "../../../lib";
 import { widgetSnapshotAttribute } from "../../../lib/widget-snapshot";
-import {
-	A2UIRenderer,
-	type A2UIServerMessage,
-	type Surface,
-	type SurfaceComponent,
-} from "../../a2ui";
+import { A2UIRenderer } from "../../a2ui/A2UIRenderer";
 import {
 	applyA2UIMessage,
 	normalizeA2UIWireMessage,
 } from "../../a2ui/apply-a2ui-message";
+import type {
+	A2UIServerMessage,
+	Surface,
+	SurfaceComponent,
+} from "../../a2ui/types";
 import { Dialog, DialogContent, DialogTitle } from "../../ui";
 import type { IChatWidget } from "./chat-db";
 

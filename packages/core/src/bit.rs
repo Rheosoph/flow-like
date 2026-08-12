@@ -896,7 +896,7 @@ impl Default for TtsModelParameters {
     }
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]
 pub enum SttModelType {
     WhisperTiny,
     WhisperTinyEn,
@@ -907,6 +907,7 @@ pub enum SttModelType {
     WhisperMedium,
     WhisperMediumEn,
     WhisperLargeV3,
+    #[default]
     WhisperLargeV3Turbo,
     DistilWhisperMediumEn,
     DistilWhisperLargeV2,
@@ -919,12 +920,6 @@ pub enum SttModelType {
     OlmoAsrLargeEnV2,
     Qwen3Asr17B,
     MoonshineBaseEn,
-}
-
-impl Default for SttModelType {
-    fn default() -> Self {
-        Self::WhisperLargeV3Turbo
-    }
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Clone, Debug, PartialEq, Eq, Default)]

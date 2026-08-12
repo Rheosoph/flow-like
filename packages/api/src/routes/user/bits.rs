@@ -540,13 +540,13 @@ fn merge_secret_params(parameters: &mut Value, secrets: HashMap<String, Value>) 
     let Some(provider) = parameters.get_mut("provider") else {
         return;
     };
-    if provider.get("params").is_none_or(|p| p.is_null()) {
-        if let Some(provider) = provider.as_object_mut() {
-            provider.insert(
-                "params".to_string(),
-                Value::Object(flow_like_types::json::Map::new()),
-            );
-        }
+    if provider.get("params").is_none_or(|p| p.is_null())
+        && let Some(provider) = provider.as_object_mut()
+    {
+        provider.insert(
+            "params".to_string(),
+            Value::Object(flow_like_types::json::Map::new()),
+        );
     }
     if let Some(params) = provider.get_mut("params").and_then(|p| p.as_object_mut()) {
         for (key, value) in secrets {

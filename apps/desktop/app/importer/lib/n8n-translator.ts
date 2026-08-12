@@ -5,6 +5,12 @@ import {
 	IValueType,
 	IVariableType,
 } from "@flow-like/flow-like-ui";
+import { MAPPING_DEFS } from "@flow-like/flow-like-ui/lib/importer/mappings";
+import type {
+	FlowDirectDef,
+	FlowLayerDef,
+	ParameterRule,
+} from "@flow-like/flow-like-ui/lib/importer/mappings/types";
 import {
 	type CatalogIndex,
 	addCommentToBoard,
@@ -30,12 +36,6 @@ import {
 	setPinDefault,
 	warn,
 } from "./board-builder";
-import { MAPPING_DEFS } from "@flow-like/flow-like-ui/lib/importer/mappings";
-import type {
-	FlowDirectDef,
-	FlowLayerDef,
-	ParameterRule,
-} from "@flow-like/flow-like-ui/lib/importer/mappings/types";
 import type {
 	N8nNode,
 	N8nWorkflow,

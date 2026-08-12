@@ -6,7 +6,7 @@ import type {
 	SubgraphEdge,
 	SubgraphNode,
 } from "../../../state/backend-state/graph-state";
-import { useComponentEventTrigger } from "../ActionHandler";
+import { useActionContext, useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
 import { resolveInlineStyle, resolveStyle } from "../StyleResolver";
@@ -44,6 +44,7 @@ export function A2UIOntologyGraph({
 	onAction,
 }: ComponentProps<OntologyGraphComponent>) {
 	const triggerEvent = useComponentEventTrigger(componentId);
+	const { appId: contextAppId, isPreviewMode } = useActionContext();
 	const ontologyId = useResolved<string>(component.ontologyId);
 	const overrideAppId = useResolved<string>(component.appId);
 	const rawLimit = useResolved<unknown>(component.limit);
@@ -60,9 +61,18 @@ export function A2UIOntologyGraph({
 		useResolved<boolean>(component.allowLimitChange) ?? true;
 	const showToolbar = useResolved<boolean>(component.showToolbar) ?? true;
 	const showLegend = useResolved<boolean>(component.showLegend) ?? true;
-	const height = useResolved<string>(component.height) ?? DEFAULT_HEIGHT;
+	// An empty bound height must not collapse the box to nothing.
+	const height = useResolved<string>(component.height) || DEFAULT_HEIGHT;
 
-	const targetAppId = overrideAppId ?? appId;
+	// Renderers that thread the owning project explicitly win; the surface's
+	// action context covers the ones that only provide it through the provider,
+	// such as the builder canvas.
+	const targetAppId = overrideAppId || appId || contextAppId;
+
+	// Read-only surfaces — the edit canvas, the admin page viewer — render live
+	// data, but ontology actions and legend style edits write straight through to
+	// the project, so they follow the same live/inert flag every action uses.
+	const allowWrites = isPreviewMode === true;
 
 	const handleNodeSelect = useCallback(
 		(node: SubgraphNode | null) => {
@@ -126,7 +136,7 @@ export function A2UIOntologyGraph({
 			style={{ height, ...resolveInlineStyle(style) }}
 		>
 			{!targetAppId ? (
-				<Placeholder message="No project context — set the appId property to pick the project that owns the ontology." />
+				<Placeholder message="No project context — open this surface inside a project, or bind the appId property to the project that owns the ontology." />
 			) : !ontologyId ? (
 				<Placeholder message="Select an ontology to display." />
 			) : (
@@ -140,9 +150,9 @@ export function A2UIOntologyGraph({
 						allowExpand={allowExpand}
 						allowSearch={allowSearch}
 						allowPaths={allowPaths}
-						allowActions={allowActions}
+						allowActions={allowActions && allowWrites}
 						allowCypher={allowCypher}
-						allowStyleEdit={allowStyleEdit}
+						allowStyleEdit={allowStyleEdit && allowWrites}
 						allowLimitChange={allowLimitChange}
 						showToolbar={showToolbar}
 						showLegend={showLegend}

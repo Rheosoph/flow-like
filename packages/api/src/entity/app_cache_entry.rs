@@ -8,18 +8,18 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(schema_name = "public", table_name = "AppCacheEntry")]
 pub struct Model {
     #[sea_orm(
+        column_name = "appId",
         primary_key,
         auto_increment = false,
-        column_name = "appId",
         column_type = "Text"
     )]
     pub app_id: String,
     #[sea_orm(primary_key, auto_increment = false)]
     pub scope: CacheScope,
     #[sea_orm(
+        column_name = "userId",
         primary_key,
         auto_increment = false,
-        column_name = "userId",
         column_type = "Text"
     )]
     pub user_id: String,
@@ -27,12 +27,14 @@ pub struct Model {
     pub key: String,
     #[sea_orm(column_type = "JsonBinary")]
     pub value: Json,
-    #[sea_orm(column_name = "expiresAt", nullable)]
+    #[sea_orm(column_name = "expiresAt")]
     pub expires_at: Option<DateTime>,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(primary_key, auto_increment = false, column_type = "Text")]
+    pub namespace: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

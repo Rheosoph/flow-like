@@ -1080,6 +1080,10 @@ fn schema_is_null(schema: &flow_like_types::Value) -> bool {
 
 fn schema_type_label(root: &flow_like_types::Value, schema: &flow_like_types::Value) -> String {
     if let Some(reference) = schema.get("$ref").and_then(flow_like_types::Value::as_str) {
+        let resolved = resolve_schema_node(root, schema);
+        if !std::ptr::eq(resolved, schema) && resolved.get("properties").is_none() {
+            return schema_type_label(root, resolved);
+        }
         return reference
             .rsplit('/')
             .next()
@@ -1111,7 +1115,7 @@ fn schema_type_label(root: &flow_like_types::Value, schema: &flow_like_types::Va
             .iter()
             .filter_map(flow_like_types::Value::as_str)
             .filter(|kind| *kind != "null")
-            .map(schema_scalar_type_label)
+            .map(|kind| schema_scalar_type_label(kind, schema))
             .collect::<Vec<_>>();
         labels.sort();
         labels.dedup();
@@ -1131,18 +1135,28 @@ fn schema_type_label(root: &flow_like_types::Value, schema: &flow_like_types::Va
                 .unwrap_or_else(|| "any".to_string());
             format!("{item}[]")
         }
-        Some(kind) => schema_scalar_type_label(kind),
+        Some(kind) => schema_scalar_type_label(kind, resolved),
         None if resolved.get("properties").is_some() => "Struct".to_string(),
         None => "any".to_string(),
     }
 }
 
-fn schema_scalar_type_label(kind: &str) -> String {
+fn schema_scalar_type_label(kind: &str, schema: &flow_like_types::Value) -> String {
     match kind {
         "integer" => "int",
         "number" => "float",
         "boolean" => "bool",
         "object" => "Struct",
+        "string"
+            if matches!(
+                schema
+                    .get("format")
+                    .and_then(flow_like_types::Value::as_str),
+                Some("date") | Some("date-time")
+            ) =>
+        {
+            "Date"
+        }
         "string" => "string",
         "null" => "null",
         other => other,
@@ -1392,6 +1406,30 @@ mod tests {
             companion_nodes: Vec::new(),
             capability_tags: Vec::new(),
         }
+    }
+
+    #[test]
+    fn compact_schema_summary_preserves_temporal_field_types() {
+        let schema = r##"{
+            "title":"AuditRow",
+            "type":"object",
+            "properties":{
+                "created_at":{"type":"string","format":"date-time"},
+                "event_dates":{"type":"array","items":{"type":"string","format":"date"}},
+                "label":{"type":"string"},
+                "observed_at":{"anyOf":[{"type":"null"},{"$ref":"#/$defs/UtcInstant"}]},
+                "updated_at":{"type":["string","null"],"format":"date-time"}
+            },
+            "required":["created_at"],
+            "$defs":{"UtcInstant":{"type":"string","format":"date-time"}}
+        }"##;
+
+        assert_eq!(
+            compact_schema_summary(Some(schema)).as_deref(),
+            Some(
+                "AuditRow { created_at: Date, event_dates?: Date[], label?: string, observed_at?: Date, updated_at?: Date }"
+            )
+        );
     }
 
     struct LiveOnlyProvider {

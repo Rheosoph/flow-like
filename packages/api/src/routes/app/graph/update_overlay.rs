@@ -335,12 +335,11 @@ pub async fn update_overlay(
     {
         tracing::warn!(%error, "Could not advance a prepared action board draft");
     }
-    if let Some((sub, removed)) = removed_action_events {
-        if let Err(error) =
+    if let Some((sub, removed)) = removed_action_events
+        && let Err(error) =
             super::actions::remove_action_events(&state, &sub, &app_id, &overlay_id, &removed).await
-        {
-            tracing::error!(%error, "Failed to clean up removed ontology action bindings");
-        }
+    {
+        tracing::error!(%error, "Failed to clean up removed ontology action bindings");
     }
 
     Ok(Json(super::list_overlays::def_to_overlay(def)))

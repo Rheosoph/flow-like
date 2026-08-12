@@ -12,6 +12,7 @@ interface CleanupOptions {
 	tempFilesMaxAgeDays?: number;
 	viewportMaxAgeDays?: number;
 	offlineSyncMaxAgeDays?: number;
+	offlineSyncArchiveMaxAgeDays?: number;
 }
 
 const DEFAULTS: Required<CleanupOptions> = {
@@ -20,6 +21,7 @@ const DEFAULTS: Required<CleanupOptions> = {
 	tempFilesMaxAgeDays: 7,
 	viewportMaxAgeDays: 30,
 	offlineSyncMaxAgeDays: 7,
+	offlineSyncArchiveMaxAgeDays: 30,
 };
 
 async function pruneOldChatMessages(maxAgeDays: number): Promise<number> {
@@ -101,6 +103,16 @@ async function pruneOldOfflineSync(maxAgeDays: number): Promise<number> {
 	return old.length;
 }
 
+/** Discarded batches keep their full payload, so the archive needs its own ceiling. */
+async function pruneOldOfflineSyncArchive(maxAgeDays: number): Promise<number> {
+	const cutoff = new Date(Date.now() - maxAgeDays * DAY_MS);
+	const old = await offlineSyncDB.discarded
+		.filter((entry) => entry.archivedAt < cutoff)
+		.primaryKeys();
+	if (old.length > 0) await offlineSyncDB.discarded.bulkDelete(old);
+	return old.length;
+}
+
 /**
  * Run periodic cleanup of all IndexedDB stores to prevent unbounded growth.
  * Safe to call on every app startup — operations are idempotent and fast
@@ -117,6 +129,7 @@ export async function runIDBCleanup(
 		pruneOldTempFiles(opts.tempFilesMaxAgeDays),
 		pruneOldViewports(opts.viewportMaxAgeDays),
 		pruneOldOfflineSync(opts.offlineSyncMaxAgeDays),
+		pruneOldOfflineSyncArchive(opts.offlineSyncArchiveMaxAgeDays),
 	]);
 
 	for (const result of results) {

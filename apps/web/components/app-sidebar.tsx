@@ -91,6 +91,7 @@ import { type ComponentType, useCallback, useMemo, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { fetcher } from "../lib/api";
+import { currentRelativeUrl } from "../lib/return-url";
 import { Shortcuts } from "./shortcuts";
 
 const data = {
@@ -1147,7 +1148,9 @@ export function NavUser({
 									}
 									try {
 										console.log("[Login] Starting signinRedirect...");
-										await auth.signinRedirect();
+										await auth.signinRedirect({
+											url_state: currentRelativeUrl(),
+										});
 										console.log("[Login] signinRedirect completed");
 									} catch (error) {
 										console.error("[Login] signinRedirect failed:", error);

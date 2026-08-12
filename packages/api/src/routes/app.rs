@@ -79,9 +79,22 @@ pub fn routes() -> Router<AppState> {
             "/{app_id}/cache",
             get(cache::read_cache_entry)
                 .put(cache::write_cache_entry)
-                .delete(cache::delete_cache_entry),
+                .delete(cache::delete_cache_entry)
+                // Cache values may exceed axum's 2 MB default body limit. The wire form
+                // can be larger than the stored compact form (escaped strings), so give
+                // it 2x headroom on top of the configured value ceiling.
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    crate::cache::CacheLimits::from_env()
+                        .max_value_bytes
+                        .saturating_mul(2)
+                        .saturating_add(64 * 1024),
+                )),
         )
         .route("/{app_id}/cache/exists", get(cache::cache_entry_exists))
+        .route(
+            "/{app_id}/cache/namespace",
+            axum::routing::delete(cache::delete_cache_namespace),
+        )
         .nest("/{app_id}/templates", template::routes())
         .nest("/{app_id}/widgets", widget::routes())
         .nest("/{app_id}/pages", page::routes())

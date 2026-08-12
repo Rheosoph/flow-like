@@ -781,7 +781,7 @@ pub async fn generate_tool_from_function(
     let mut has_data_pins = false;
     let mut payload_pin: Option<&Pin> = None;
 
-    for (_pin_id, pin) in node.pins.iter() {
+    for pin in node.pins.values() {
         // Skip execution pins and input pins
         if pin.data_type == VariableType::Execution || pin.pin_type != PinType::Output {
             continue;
@@ -912,7 +912,7 @@ pub async fn execute_tool_call(
     // Also set values on the referenced function's OUTPUT pins (shared storage
     // + override map) so that both override-aware and non-override code paths
     // resolve correctly regardless of old/new layer format.
-    for (_id, pin) in referenced_node.pins.iter() {
+    for pin in referenced_node.pins.values() {
         if pin.pin_type == PinType::Input || pin.data_type == VariableType::Execution {
             continue;
         }
@@ -1667,7 +1667,7 @@ pub async fn execute_agent_streaming(
                         "Failed to store evicted messages to memory (non-fatal): {}",
                         e
                     ),
-                    LogLevel::Warn,
+                    LogLevel::Error,
                 );
             }
         }
@@ -2172,7 +2172,7 @@ pub async fn execute_agent_streaming(
                             "Failed to store evicted messages to memory (non-fatal): {}",
                             e
                         ),
-                        LogLevel::Warn,
+                        LogLevel::Error,
                     );
                 }
             }
@@ -2386,7 +2386,7 @@ async fn handle_memory_tool_call(
         VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
+    use tokio::sync::RwLockReadGuard;
 
     type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
 
@@ -2533,10 +2533,7 @@ async fn handle_memory_tool_call(
                 "timestamp": now,
             });
 
-            {
-                let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
-                db.insert(vec![record]).await?;
-            }
+            cached_db.insert_from(context, vec![record]).await?;
 
             cached_db.ensure_flushed().await?;
 
@@ -2577,7 +2574,7 @@ async fn handle_memory_tool_call(
                     Err(e) => {
                         context.log_message(
                             &format!("Auto-compress failed (non-fatal): {}", e),
-                            LogLevel::Warn,
+                            LogLevel::Error,
                         );
                     }
                 }
@@ -2601,13 +2598,7 @@ async fn store_evicted_to_memory(
     agent: &Agent,
     evicted: &[rig::message::Message],
 ) -> flow_like_types::Result<()> {
-    use flow_like_storage::databases::vector::{
-        VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
-    };
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::RwLockWriteGuard;
-
-    type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
 
     let memory = agent
         .memory
@@ -2680,9 +2671,7 @@ async fn store_evicted_to_memory(
 
     let cached_db = memory.database.load(context).await?;
 
-    let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
-    db.insert(vec![record]).await?;
-    drop(db);
+    cached_db.insert_from(context, vec![record]).await?;
     cached_db.ensure_flushed().await?;
 
     context.log_message(
@@ -2708,7 +2697,7 @@ async fn run_memory_compress(
         VectorStore, buffered::BufferedVectorStore, lancedb::LanceDBVectorStore,
     };
     use std::time::{SystemTime, UNIX_EPOCH};
-    use tokio::sync::{RwLockReadGuard, RwLockWriteGuard};
+    use tokio::sync::RwLockReadGuard;
 
     type MemoryDB = BufferedVectorStore<LanceDBVectorStore>;
 
@@ -2825,9 +2814,7 @@ async fn run_memory_compress(
     });
 
     // Insert summary first, then delete old observations (safer ordering)
-    let mut db: RwLockWriteGuard<'_, MemoryDB> = cached_db.db.write().await;
-    db.insert(vec![summary_record]).await?;
-    drop(db);
+    cached_db.insert_from(context, vec![summary_record]).await?;
 
     cached_db.ensure_flushed().await?;
 

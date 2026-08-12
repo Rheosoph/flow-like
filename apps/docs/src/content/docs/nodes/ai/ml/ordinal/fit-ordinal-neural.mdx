@@ -1,0 +1,24 @@
+---
+title: "Train Ordinal Model (Neural CORAL/CORN) Node"
+description: "Train Ordinal Model (Neural CORAL/CORN) Flow-Like node: Fit/Train a NEURAL ordinal model on a target whose levels are ORDERED (1 < 2 < ..."
+sidebar:
+  label: "Train Ordinal Model (Neural CORAL/CORN)"
+head:
+  - tag: meta
+    attrs:
+      name: keywords
+      content: "Train Ordinal Model (Neural CORAL/CORN), Train Ordinal Model (Neural CORAL/CORN) node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Ordinal, ml, fit_ordinal_neural, AI, Ordinal, pins, schemas, security rating"
+  - tag: meta
+    attrs:
+      property: article:section
+      content: "AI/ML/Ordinal"
+  - tag: script
+    attrs:
+      type: application/ld+json
+    content: "{\"@context\":\"https://schema.org\",\"@type\":\"TechArticle\",\"headline\":\"Train Ordinal Model (Neural CORAL/CORN) Node\",\"name\":\"Train Ordinal Model (Neural CORAL/CORN)\",\"description\":\"Train Ordinal Model (Neural CORAL/CORN) Flow-Like node: Fit/Train a NEURAL ordinal model on a target whose levels are ORDERED (1 < 2 < ...\",\"url\":\"https://docs.flow-like.com/nodes/ai/ml/ordinal/fit-ordinal-neural/\",\"isPartOf\":{\"@type\":\"CollectionPage\",\"name\":\"Flow-Like Node Catalog\",\"url\":\"https://docs.flow-like.com/nodes/overview/\"},\"about\":\"AI/ML/Ordinal\",\"keywords\":\"Train Ordinal Model (Neural CORAL/CORN), Train Ordinal Model (Neural CORAL/CORN) node, Flow-Like node, Flow-Like node catalog, workflow automation node, AI/ML/Ordinal, ml, fit_ordinal_neural, AI, Ordinal, pins, schemas, security rating\",\"programmingLanguage\":\"Rust\",\"mainEntity\":{\"@type\":\"SoftwareSourceCode\",\"name\":\"Train Ordinal Model (Neural CORAL/CORN)\",\"description\":\"Fit/Train a NEURAL ordinal model on a target whose levels are ORDERED (1 < 2 < ... < 5, or low < medium < high). This is the only trainer in the catalog that is BOTH non-linear in the features AND yields calibrated, rank-consistent per-level probabilities: Frank & Hall is non-linear but votes with K-1 independent classifiers and therefore carries no probability model, while every other ordinal node here is linear in the features. A small network feeds one of two rank-consistent heads, CORAL or CORN, and both are built so that P(y > k) can never rise with k for ANY parameter values — so the level probabilities are non-negative and sum to 1 with nothing patched up afterwards. THE HONEST LIMIT: leave Hidden Layers EMPTY and CORAL becomes exactly Train Ordinal Model (Proportional Odds) with Loss = AllThreshold and Margin = Logistic, and CORN becomes exactly Train Ordinal Model (Continuation Ratio) — the same objective in the same parameters. The hidden layers are the entire contribution, so if your problem is linear in the features prefer those nodes: convex objective, no seed dependence, readable coefficients, better tested. Reach for this one when the level is genuinely not monotone in the features (a boundary that bends back on itself, which no linear ordinal model can represent at all). Two costs come with the network: it has far more parameters than a linear model and so needs far more rows — check the Architecture output — and the objective is not convex, so the Seed changes the fit. Scale your features first with the Fit Feature Scaler node; unscaled columns make this converge slowly or not at all.\",\"codeSampleType\":\"Flow-Like node\",\"runtimePlatform\":\"Flow-Like\",\"programmingLanguage\":\"Rust\"}}"
+---
+
+import { NodeReference } from "../../../../../../components/node-docs/NodeReference";
+import { nodesBySlug } from "../../../../../../generated/catalog-nodes";
+
+<NodeReference node={nodesBySlug["nodes/ai/ml/ordinal/fit-ordinal-neural"]} />

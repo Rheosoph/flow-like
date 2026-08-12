@@ -31,13 +31,13 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
+	type PushTargetPlatform,
 	canUseRemotePushForPlatform,
 	detectPushPlatform,
 	getPushDeviceId,
 	isRemotePushPreferenceEnabled,
 	loadRemotePushPlugin,
 	setRemotePushPreference,
-	type PushTargetPlatform,
 } from "../../../lib/remote-push";
 
 type PluginState = "loading" | "available" | "unavailable";
@@ -136,14 +136,17 @@ export default function NotificationsSettingsPage() {
 	const badge = statusBadge(status, localEnabled);
 	const deliveryEnabled =
 		localEnabled &&
-		Boolean(status?.registered && status.push_enabled && !status.invalidated_at);
+		Boolean(
+			status?.registered && status.push_enabled && !status.invalidated_at,
+		);
 	const switchDisabledReason = useMemo(() => {
 		if (saving) return "Saving push settings.";
 		if (loading) return "Checking push status.";
 		if (!isMobile) return "This device was not detected as iOS or Android.";
 		if (!pushConfig) return "Hub config has not loaded from this profile.";
 		if (!pushConfig.enabled) return "Push is disabled in the hub config.";
-		if (pushConfig.provider !== "fcm") return "Mobile push requires the FCM provider.";
+		if (pushConfig.provider !== "fcm")
+			return "Mobile push requires the FCM provider.";
 		if (pushConfig.allow_mobile !== true) {
 			return "Mobile push is not enabled in the hub config.";
 		}
@@ -249,10 +252,14 @@ export default function NotificationsSettingsPage() {
 				setLocalEnabled(enabled);
 				setStatus(nextStatus);
 				toast.success(
-					enabled ? "Push notifications enabled" : "Push notifications disabled",
+					enabled
+						? "Push notifications enabled"
+						: "Push notifications disabled",
 				);
 			} catch (error) {
-				toast.error(`Failed to update push notifications: ${errorMessage(error)}`);
+				toast.error(
+					`Failed to update push notifications: ${errorMessage(error)}`,
+				);
 			} finally {
 				setSaving(false);
 			}
@@ -302,9 +309,7 @@ export default function NotificationsSettingsPage() {
 								</div>
 								<Switch
 									checked={deliveryEnabled}
-									disabled={
-										switchDisabledReason !== null
-									}
+									disabled={switchDisabledReason !== null}
 									onCheckedChange={setEnabled}
 								/>
 							</div>
@@ -465,9 +470,7 @@ function StatusTile({
 			<div
 				className={cn(
 					"flex h-9 w-9 shrink-0 items-center justify-center rounded-md",
-					ok
-						? "bg-primary/10 text-primary"
-						: "bg-muted text-muted-foreground",
+					ok ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground",
 				)}
 			>
 				<Icon className="h-4 w-4" />

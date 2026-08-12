@@ -324,7 +324,7 @@ impl NodeLogic for ImapConnectNode {
             }
         };
         context.log_message(
-            &format!("-- connected to {}:{}", imap_addr.0, &imap_addr.1),
+            &format!("-- connected to {}:{}", imap_addr.0, imap_addr.1),
             flow_like::flow::execution::LogLevel::Debug,
         );
 
@@ -335,7 +335,7 @@ impl NodeLogic for ImapConnectNode {
         let imap_session = Arc::new(Mutex::new(imap_session));
 
         context.log_message(
-            &format!("-- logged in as {}", &username),
+            &format!("-- logged in as {}", username),
             flow_like::flow::execution::LogLevel::Debug,
         );
 

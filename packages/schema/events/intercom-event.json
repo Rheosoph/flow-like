@@ -1,44 +1,36 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "InterComEvent",
-  "type": "object",
-  "properties": {
-    "event_id": {
-      "type": "string"
-    },
-    "event_type": {
-      "type": "string"
-    },
-    "payload": true,
-    "timestamp": {
-      "$ref": "#/$defs/SystemTime"
-    }
-  },
-  "required": [
-    "event_id",
-    "event_type",
-    "payload",
-    "timestamp"
-  ],
-  "$defs": {
-    "SystemTime": {
-      "type": "object",
-      "properties": {
-        "secs_since_epoch": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0
-        },
-        "nanos_since_epoch": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0
-        }
-      },
-      "required": [
-        "secs_since_epoch",
-        "nanos_since_epoch"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "InterComEvent",
+	"type": "object",
+	"properties": {
+		"event_id": {
+			"type": "string"
+		},
+		"event_type": {
+			"type": "string"
+		},
+		"payload": true,
+		"timestamp": {
+			"$ref": "#/$defs/SystemTime"
+		}
+	},
+	"required": ["event_id", "event_type", "payload", "timestamp"],
+	"$defs": {
+		"SystemTime": {
+			"type": "object",
+			"properties": {
+				"secs_since_epoch": {
+					"type": "integer",
+					"format": "uint64",
+					"minimum": 0
+				},
+				"nanos_since_epoch": {
+					"type": "integer",
+					"format": "uint32",
+					"minimum": 0
+				}
+			},
+			"required": ["secs_since_epoch", "nanos_since_epoch"]
+		}
+	}
 }

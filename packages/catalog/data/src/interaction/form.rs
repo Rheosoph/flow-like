@@ -122,7 +122,7 @@ fn callback_form_pins(pins: &HashMap<String, Pin>) -> Vec<Pin> {
         .cloned()
         .collect::<Vec<_>>();
 
-    callback_pins.sort_by(|a, b| a.index.cmp(&b.index));
+    callback_pins.sort_by_key(|a| a.index);
     callback_pins
 }
 

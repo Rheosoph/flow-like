@@ -1,11 +1,11 @@
 "use client";
-import { useQuery } from "@tanstack/react-query";
 import {
 	CourseCatalog,
 	GlobalPermission,
 	useBackend,
 	useInvoke,
 } from "@flow-like/flow-like-ui";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { useMemo } from "react";
 import { useAuth } from "react-oidc-context";

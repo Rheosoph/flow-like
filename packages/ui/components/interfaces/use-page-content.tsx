@@ -14,13 +14,21 @@ import {
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../hooks/use-invoke";
 import { useNetworkStatus } from "../../hooks/use-network-status";
+import {
+	boardReadinessKey,
+	trackBoardReadiness,
+} from "../../lib/board-readiness";
 import { normalizeBoardVersion } from "../../lib/schema/flow/board-version";
 import type { IEvent } from "../../lib/schema/flow/event";
 import { useSetQueryParams } from "../../lib/set-query-params";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { useBackend } from "../../state/backend-state";
 import type { IBoardState } from "../../state/backend-state/board-state";
-import type { IPage, IPageState } from "../../state/backend-state/page-state";
+import type {
+	IGetPageOptions,
+	IPage,
+	IPageState,
+} from "../../state/backend-state/page-state";
 import type { IRouteMapping } from "../../state/backend-state/route-state";
 import type { ISettingsProfile } from "../../types";
 import { LoadingScreen } from "../ui/loading-screen";
@@ -28,9 +36,9 @@ import { Container } from "./container";
 import { Header } from "./header";
 import { InterfaceLoadError } from "./interface-load-error";
 import type {
-	IEventMapping,
 	ISidebarActions,
 	IToolBarActions,
+	IUseEventMapping,
 	IUseInterfaceProps,
 } from "./interfaces";
 import { NoDefaultInterface } from "./no-default";
@@ -58,7 +66,11 @@ export function pageLoadErrorMessage(error: unknown): string {
 }
 
 export interface UsePageContentProps {
-	eventConfig: IEventMapping;
+	/**
+	 * Only the runtime slice is read here. Taking the narrow type means `/use` can pass a
+	 * mapping that never references a configuration panel, and so never loads one.
+	 */
+	eventConfig: IUseEventMapping;
 	notFound?: ReactNode;
 	appId?: string | null;
 	routePath?: string | null;
@@ -71,31 +83,64 @@ export interface UsePageContentProps {
 }
 
 /**
- * Page files are indexed through their board on native clients. Wait for the
- * existing force-fresh board sync before asking the native backend for the
- * page so a fresh install cannot observe the board halfway through syncing.
+ * Reads the page while its board refreshes alongside it.
  *
- * A failed board sync must not prevent page-state's own local/remote fallback
- * from running (and web pages do not require a local board at all).
+ * The refresh exists for the *run*, not the render: a device that has only ever synced the
+ * board manifest needs the real board before it executes anything. Rendering needs only the
+ * page payload, so waiting for a full board download before even asking for the page charged
+ * every page open for a guarantee only execution consumes. The refresh is registered with
+ * `trackBoardReadiness`, and `PageInterface` waits on it before running a workflow.
  *
- * An event pinned to a board version reads that version's published page: the
- * current page file belongs to the draft board and may already have moved on.
+ * Page files are still indexed through their board on native clients, so a read that fails
+ * while the board is arriving gets the ordering it used to have: wait for the refresh, then
+ * try once more. A failed refresh must not prevent page-state's own local/remote fallback from
+ * running, and web pages do not require a local board at all.
+ *
+ * An event pinned to a board version reads that version's published page: the current page
+ * file belongs to the draft board and may already have moved on.
  */
-export async function loadPageAfterBoardSync(
+export async function loadPageWithBoardSync(
 	boardState: Pick<IBoardState, "getBoard">,
 	pageState: Pick<IPageState, "getPage">,
 	appId: string,
 	pageId: string,
 	boardId?: string,
 	boardVersion?: [number, number, number],
+	options?: IGetPageOptions,
 ): Promise<IPage> {
-	if (boardId) {
-		await boardState
-			.getBoard(appId, boardId, boardVersion, true)
-			.catch(() => undefined);
+	if (!boardId) {
+		return pageState.getPage(appId, pageId, boardId, boardVersion, options);
 	}
 
-	return pageState.getPage(appId, pageId, boardId, boardVersion);
+	const boardSync = trackBoardReadiness(
+		boardReadinessKey(appId, boardId, boardVersion),
+		() => boardState.getBoard(appId, boardId, boardVersion, true),
+	);
+
+	try {
+		return await pageState.getPage(
+			appId,
+			pageId,
+			boardId,
+			boardVersion,
+			options,
+		);
+	} catch (error) {
+		await boardSync;
+		try {
+			return await pageState.getPage(
+				appId,
+				pageId,
+				boardId,
+				boardVersion,
+				options,
+			);
+		} catch {
+			// The first failure is the one that describes why the page is unreadable; a retry
+			// against a board that just arrived can only restate it less precisely.
+			throw error;
+		}
+	}
 }
 
 export interface IStoreRedirectState {
@@ -604,14 +649,11 @@ export function UsePageContent({
 			(target.default_page_id && shouldWaitForPageBoardSync)
 		)
 			return;
-		backend.boardState
-			.getBoard(
-				appId,
-				target.board_id,
-				normalizeBoardVersion(target.board_version),
-				true,
-			)
-			.catch(() => {});
+		const version = normalizeBoardVersion(target.board_version);
+		void trackBoardReadiness(
+			boardReadinessKey(appId, target.board_id, version),
+			() => backend.boardState.getBoard(appId, target.board_id, version, true),
+		);
 	}, [appId, activeEvent, shouldWaitForPageBoardSync, backend.boardState]);
 
 	// --- Event switching ---
@@ -668,29 +710,46 @@ export function UsePageContent({
 			currentPage?.id === pageId ? currentPage : null,
 		);
 
+		// Identical content must keep its object identity: handing the interface a new object
+		// for an unchanged page rebuilds its surface and throws away whatever it had rendered.
+		const applyPage = (page: IPage) => {
+			setPageData((current) => (isEqual(current, page) ? current : page));
+			setPageError(null);
+		};
+
 		const loadPage = async () => {
 			try {
+				// A page one revision behind renders now and corrects itself when the refresh
+				// lands, which beats holding a blank screen for a round trip. A pinned version
+				// is immutable, so there is nothing to revalidate against.
+				const readOptions: IGetPageOptions | undefined = pageBoardVersion
+					? undefined
+					: {
+							revalidate: "background",
+							onRevalidated: (fresh) => {
+								if (!cancelled) applyPage(fresh);
+							},
+						};
+
 				const page = shouldWaitForPageBoardSync
-					? await loadPageAfterBoardSync(
+					? await loadPageWithBoardSync(
 							backend.boardState,
 							backend.pageState,
 							appId,
 							pageId,
 							pageBoardId,
 							pageBoardVersion,
+							readOptions,
 						)
 					: await backend.pageState.getPage(
 							appId,
 							pageId,
 							pageBoardId,
 							pageBoardVersion,
+							readOptions,
 						);
 				if (!cancelled) {
-					// A catalog refresh re-reads the same page. Handing the interface a
-					// new object identity for unchanged content rebuilds its surface and
-					// throws away whatever the running page had rendered.
-					setPageData((current) => (isEqual(current, page) ? current : page));
-					setPageError(null);
+					applyPage(page);
 				}
 			} catch (e) {
 				console.error("Failed to load page:", e);

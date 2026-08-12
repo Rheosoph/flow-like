@@ -1,7 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
-import { open } from "@tauri-apps/plugin-dialog";
 import {
 	Badge,
 	Button,
@@ -22,6 +20,8 @@ import {
 	type PackageSummary,
 	type PackageUpdate,
 } from "@flow-like/flow-like-ui/lib/schema/wasm";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
 	AlertTriangle,
 	Download,

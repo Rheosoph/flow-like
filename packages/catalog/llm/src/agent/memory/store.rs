@@ -153,10 +153,7 @@ impl NodeLogic for StoreMemoryNode {
         });
 
         let cached_db = config.database.load(context).await?;
-        {
-            let mut db = cached_db.db.write().await;
-            db.insert(vec![record]).await?;
-        }
+        cached_db.insert_from(context, vec![record]).await?;
 
         cached_db.ensure_flushed().await?;
 

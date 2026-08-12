@@ -54,6 +54,7 @@ pub use super::llm_model::Entity as LlmModel;
 pub use super::llm_usage_tracking::Entity as LlmUsageTracking;
 pub use super::membership::Entity as Membership;
 pub use super::meta::Entity as Meta;
+pub use super::mutation_lock::Entity as MutationLock;
 pub use super::node::Entity as Node;
 pub use super::notification::Entity as Notification;
 pub use super::page::Entity as Page;

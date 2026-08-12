@@ -88,7 +88,10 @@ describe("minScores", () => {
 			board({
 				nodes: {
 					a: node("a", { scores: scores({ security: 8 }) }),
-					r: node("reroute", { name: "reroute", scores: scores({ security: 1 }) }),
+					r: node("reroute", {
+						name: "reroute",
+						scores: scores({ security: 1 }),
+					}),
 				},
 			}),
 		);

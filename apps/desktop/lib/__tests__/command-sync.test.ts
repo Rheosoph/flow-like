@@ -1,6 +1,7 @@
 import type { IGenericCommand } from "@flow-like/flow-like-ui";
 import { describe, expect, test } from "vitest";
 import {
+	type CommandSyncQueueRow,
 	LAMBDA_SYNC_ENVELOPE_RESERVE_BYTES,
 	MAX_COMMAND_SYNC_BODY_BYTES,
 	MAX_LAMBDA_SYNC_PAYLOAD_BYTES,
@@ -12,6 +13,8 @@ import {
 	commandSyncHasPendingMutation,
 	evaluateBoardLineage,
 	evaluateCommandSyncRemoteIdentity,
+	selectDiscardableSyncRows,
+	summarizeBoardSyncQueue,
 	systemTimeToNanos,
 } from "../../components/tauri-provider/command-sync";
 
@@ -252,5 +255,127 @@ describe("commandSyncHasPendingMutation", () => {
 		expect(commandSyncHasPendingMutation({ blockedReason: "too large" })).toBe(
 			true,
 		);
+	});
+});
+
+const OWNER = {
+	remoteIdentityVersion: 1,
+	remoteProfileId: "profile-a",
+	remotePrincipalId: "user-a",
+	remoteHub: "hub-a",
+} as const;
+
+const queueRow = (
+	overrides: Partial<CommandSyncQueueRow> = {},
+): CommandSyncQueueRow => ({
+	commandId: "cmd-1",
+	createdAt: new Date("2026-01-01T00:00:00.000Z"),
+	chunks: [[commandOfSize(1, 10)]],
+	...OWNER,
+	...overrides,
+});
+
+describe("selectDiscardableSyncRows", () => {
+	test("takes undelivered batches and blocked payloads", () => {
+		const rows = [
+			queueRow({ commandId: "pending" }),
+			queueRow({
+				commandId: "blocked",
+				chunks: [],
+				blockedReason: "too large",
+			}),
+		];
+		expect(selectDiscardableSyncRows(rows).map((r) => r.commandId)).toEqual([
+			"pending",
+			"blocked",
+		]);
+	});
+
+	test("keeps FlowPilot delivery tombstones — deleting them can reopen a duplicate delivery", () => {
+		const rows = [
+			queueRow({
+				commandId: "flowpilot-tombstone",
+				chunks: [],
+				deferReceiptAckUntilNativeTerminal: true,
+				deferredReceiptAcks: ["flowpilot-board-edit:x:0"],
+			} as Partial<CommandSyncQueueRow>),
+			queueRow({ commandId: "drained", chunks: [] }),
+		];
+		expect(selectDiscardableSyncRows(rows)).toHaveLength(0);
+	});
+});
+
+describe("summarizeBoardSyncQueue", () => {
+	test("reports the profile mismatch that wedges the drain", () => {
+		const summary = summarizeBoardSyncQueue([queueRow()], {
+			remoteIdentityVersion: 1,
+			remoteProfileId: "profile-b",
+			remotePrincipalId: "user-a",
+			remoteHub: "hub-a",
+		});
+		expect(summary.pendingBatches).toBe(1);
+		expect(summary.ownershipMismatch).toContain("different remote profile");
+		expect(summary.entries[0].ownershipMismatch).toContain(
+			"different remote profile",
+		);
+	});
+
+	test("a matching identity leaves ownership unflagged", () => {
+		const summary = summarizeBoardSyncQueue([queueRow()], { ...OWNER });
+		expect(summary.ownershipMismatch).toBeUndefined();
+		expect(summary.entries[0].ownershipMismatch).toBeUndefined();
+	});
+
+	test("legacy rows have no provable owner and are reported as such", () => {
+		const summary = summarizeBoardSyncQueue(
+			[queueRow({ remoteIdentityVersion: undefined })],
+			{ ...OWNER },
+		);
+		expect(summary.ownershipMismatch).toContain("no provable owner");
+	});
+
+	test("blocked and partially delivered batches are counted separately", () => {
+		const summary = summarizeBoardSyncQueue(
+			[
+				queueRow({ commandId: "a", chunks: [], blockedReason: "too large" }),
+				queueRow({ commandId: "b", chunkOffset: 2 }),
+				queueRow({ commandId: "c", pendingReceiptAck: "key:0" }),
+			],
+			{ ...OWNER },
+		);
+		expect(summary.pendingBatches).toBe(3);
+		expect(summary.blockedBatches).toBe(1);
+		expect(summary.partiallyDeliveredBatches).toBe(2);
+	});
+
+	test("tombstone-only queues look clean", () => {
+		const summary = summarizeBoardSyncQueue([queueRow({ chunks: [] })], {
+			...OWNER,
+		});
+		expect(summary.pendingBatches).toBe(0);
+		expect(summary.entries).toEqual([]);
+	});
+
+	test("command counts span every queued chunk", () => {
+		const summary = summarizeBoardSyncQueue(
+			[
+				queueRow({
+					chunks: [
+						[commandOfSize(1, 10), commandOfSize(2, 10)],
+						[commandOfSize(3, 10)],
+					],
+				}),
+			],
+			{ ...OWNER },
+		);
+		expect(summary.entries[0].commandCount).toBe(3);
+	});
+});
+
+describe("board lineage after a server reset", () => {
+	test("clearing the lineage lets a freshly fetched snapshot apply again", () => {
+		const remoteNs = 1_000;
+		expect(evaluateBoardLineage(remoteNs, 5_000).apply).toBe(false);
+		expect(evaluateBoardLineage(remoteNs, undefined).apply).toBe(true);
 	});
 });

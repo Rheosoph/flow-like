@@ -342,6 +342,13 @@ const COMPONENT_DEFINITIONS: ComponentDefinition[] = [
 		description: "Text input",
 	},
 	{
+		type: "richText",
+		label: "Rich Text",
+		icon: Type,
+		category: "Interactive",
+		description: "Formatted document editor with image uploads",
+	},
+	{
 		type: "select",
 		label: "Select",
 		icon: List,

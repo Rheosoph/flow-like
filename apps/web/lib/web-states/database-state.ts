@@ -3,6 +3,7 @@ import {
 	type IAddColumnPayload,
 	type ICreateTableResult,
 	type IDatabaseSchemaField,
+	type IDropTableResult,
 	type IIndexConfig,
 	IIndexType,
 	type IQueryTablePayload,
@@ -275,6 +276,17 @@ export class WebDatabaseState implements IDatabaseState {
 		await apiPut(
 			`apps/${appId}/db/${tableName}/columns${this.scopeQuery(userScoped)}`,
 			{ column, nullable },
+			this.backend.auth,
+		);
+	}
+
+	async dropTable(
+		appId: string,
+		tableName: string,
+		userScoped?: boolean,
+	): Promise<IDropTableResult> {
+		return apiDelete<IDropTableResult>(
+			`apps/${appId}/db/${tableName}/table${this.scopeQuery(userScoped)}`,
 			this.backend.auth,
 		);
 	}

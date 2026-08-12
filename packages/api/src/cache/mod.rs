@@ -39,7 +39,8 @@
 //!
 //! # Limits, enforced identically for every backend
 //! CACHE_MAX_KEY_BYTES=512
-//! CACHE_MAX_VALUE_BYTES=262144
+//! CACHE_MAX_VALUE_BYTES=1048576  # larger data belongs in app storage, not the cache;
+//!                                # DynamoDB stores values above ~300 KB as chunked items
 //! CACHE_MAX_TTL_SECONDS=2592000
 //! CACHE_DEFAULT_TTL_SECONDS=0    # 0 keeps entries until they are deleted
 //! ```

@@ -90,85 +90,24 @@ impl NodeLogic for GetModelInfoNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> Result<()> {
-        use crate::ml::MLModel;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let node_model: NodeMLModel = context.evaluate_pin("model").await?;
         let model_arc = node_model.get_model(context).await?;
         let model = model_arc.lock().await;
 
-        let info = match &*model {
-            MLModel::KMeans(kmeans) => {
-                let n_clusters = kmeans.model.centroids().nrows();
-                ModelInfo {
-                    model_type: "KMeans".to_string(),
-                    description: format!("KMeans clustering with {} clusters", n_clusters),
-                    n_classes: Some(n_clusters),
-                    class_names: None,
-                }
-            }
-            MLModel::LinearRegression(_) => ModelInfo {
-                model_type: "LinearRegression".to_string(),
-                description: "Linear regression model".to_string(),
-                n_classes: None,
-                class_names: None,
-            },
-            MLModel::SVMMultiClass(svm) => {
-                let n_classes = svm.model.len();
-                let class_names = svm.classes.as_ref().map(|c| {
-                    let mut names: Vec<_> = c.iter().collect();
-                    names.sort_by_key(|(id, _)| *id);
-                    names.into_iter().map(|(_, name)| name.clone()).collect()
-                });
-                ModelInfo {
-                    model_type: "SVMMultiClass".to_string(),
-                    description: format!(
-                        "SVM multi-class classifier with {} classes (One-vs-All)",
-                        n_classes
-                    ),
-                    n_classes: Some(n_classes),
-                    class_names,
-                }
-            }
-            MLModel::GaussianNaiveBayes(nb) => {
-                let class_names = nb.classes.as_ref().map(|c| {
-                    let mut names: Vec<_> = c.iter().collect();
-                    names.sort_by_key(|(id, _)| *id);
-                    names.into_iter().map(|(_, name)| name.clone()).collect()
-                });
-                let n_classes = nb.classes.as_ref().map(|c| c.len());
-                ModelInfo {
-                    model_type: "GaussianNaiveBayes".to_string(),
-                    description: format!(
-                        "Gaussian Naive Bayes classifier{}",
-                        n_classes
-                            .map(|n| format!(" with {} classes", n))
-                            .unwrap_or_default()
-                    ),
-                    n_classes,
-                    class_names,
-                }
-            }
-            MLModel::DecisionTree(tree) => {
-                let class_names = tree.classes.as_ref().map(|c| {
-                    let mut names: Vec<_> = c.iter().collect();
-                    names.sort_by_key(|(id, _)| *id);
-                    names.into_iter().map(|(_, name)| name.clone()).collect()
-                });
-                let n_classes = tree.classes.as_ref().map(|c| c.len());
-                ModelInfo {
-                    model_type: "DecisionTree".to_string(),
-                    description: format!(
-                        "Decision Tree classifier{}",
-                        n_classes
-                            .map(|n| format!(" with {} classes", n))
-                            .unwrap_or_default()
-                    ),
-                    n_classes,
-                    class_names,
-                }
-            }
+        let n_classes = model.cardinality();
+        let info = ModelInfo {
+            model_type: model.kind().to_string(),
+            description: format!(
+                "{}{}",
+                model.label(),
+                n_classes
+                    .map(|n| format!(" with {} classes", n))
+                    .unwrap_or_default()
+            ),
+            n_classes,
+            class_names: model.class_names(),
         };
 
         context.log_message(&format!("Model info: {:?}", info), LogLevel::Debug);

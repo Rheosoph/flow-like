@@ -4,9 +4,7 @@ use crate::{
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
     routes::user::{
-        identity::{
-            RankableUser, SearchTerm, escape_like_pattern, is_idp_handle, score_candidate,
-        },
+        identity::{RankableUser, SearchTerm, escape_like_pattern, is_idp_handle, score_candidate},
         sign_avatar,
     },
     state::AppState,

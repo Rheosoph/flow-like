@@ -2,8 +2,8 @@ import react from "@astrojs/react";
 import starlight from "@astrojs/starlight";
 import tailwindcss from "@tailwindcss/vite";
 
-import { generatedNodeSidebar } from "./src/generated/node-sidebar.mjs";
 import { defineConfig, passthroughImageService } from "astro/config";
+import { generatedNodeSidebar } from "./src/generated/node-sidebar.mjs";
 // https://astro.build/config
 export default defineConfig({
 	site: "https://docs.flow-like.com",
@@ -225,7 +225,21 @@ posthog.init('${process.env.PUBLIC_POSTHOG_KEY || ""}', { api_host:'https://eu.i
 										},
 										{
 											label: "Machine Learning",
-											slug: "topics/datascience/ml",
+											collapsed: true,
+											items: [
+												{
+													label: "Overview & Model Choice",
+													slug: "topics/datascience/ml",
+												},
+												{
+													label: "Advanced Configuration",
+													slug: "topics/datascience/ml-configuration",
+												},
+												{
+													label: "Auto Training",
+													slug: "topics/datascience/ml-auto-training",
+												},
+											],
 										},
 										{
 											label: "Data Visualization",

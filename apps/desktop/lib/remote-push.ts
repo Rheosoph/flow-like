@@ -1,5 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
 import type { IPushNotificationsConfig } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
 import { isAndroidDevice, isIOSDevice, isTauriRuntime } from "./platform";
 
 export type PushTargetPlatform = "IOS" | "ANDROID" | "DESKTOP";
@@ -157,7 +157,9 @@ export function isRemotePushPreferenceEnabled(): boolean {
 	if (typeof window === "undefined") {
 		return true;
 	}
-	return window.localStorage.getItem(REMOTE_PUSH_ENABLED_STORAGE_KEY) !== "false";
+	return (
+		window.localStorage.getItem(REMOTE_PUSH_ENABLED_STORAGE_KEY) !== "false"
+	);
 }
 
 export function setRemotePushPreference(enabled: boolean): void {

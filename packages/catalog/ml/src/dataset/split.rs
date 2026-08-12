@@ -8,8 +8,6 @@ use flow_like_catalog_core::NodeDBConnection;
 #[cfg(feature = "execute")]
 use flow_like_storage::arrow_utils::record_batch_to_value;
 #[cfg(feature = "execute")]
-use flow_like_storage::databases::vector::VectorStore;
-#[cfg(feature = "execute")]
 use flow_like_storage::lancedb::query::ExecutableQuery;
 #[cfg(feature = "execute")]
 use flow_like_types::rand::{self, Rng};
@@ -142,10 +140,10 @@ impl NodeLogic for SplitDatasetNode {
             }
 
             if !train_items.is_empty() {
-                train.db.write().await.insert(train_items).await?;
+                train.insert_from(context, train_items).await?;
             }
             if !test_items.is_empty() {
-                test.db.write().await.insert(test_items).await?;
+                test.insert_from(context, test_items).await?;
             }
         }
 

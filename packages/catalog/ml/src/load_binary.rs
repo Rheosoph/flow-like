@@ -89,11 +89,14 @@ impl NodeLogic for LoadMLModelBinaryNode {
         context.deactivate_exec_pin("exec_out").await?;
         let path: FlowPath = context.evaluate_pin("path").await?;
 
+        // mirror the extension Save Model (Binary) writes, so the same path works on both nodes
+        let path = path.set_extension(context, "flmodel").await?;
+
         // deserialize model from Fory binary
         let bytes = path.get(context, false).await?;
         let ml_model = MLModel::from_fory_slice(&bytes)?;
         context.log_message(
-            &format!("Loaded Machine Learning Model (Binary): {}", &ml_model),
+            &format!("Loaded Machine Learning Model (Binary): {}", ml_model),
             LogLevel::Debug,
         );
 

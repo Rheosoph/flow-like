@@ -1,159 +1,131 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "SttModelParameters",
-  "type": "object",
-  "properties": {
-    "model_type": {
-      "$ref": "#/$defs/SttModelType",
-      "default": "WhisperLargeV3Turbo"
-    },
-    "provider": {
-      "$ref": "#/$defs/ModelProvider",
-      "default": {
-        "provider_name": "local:any-speech-to-text",
-        "model_id": null,
-        "version": null,
-        "params": null
-      }
-    },
-    "default_language": {
-      "type": [
-        "string",
-        "null"
-      ],
-      "default": null
-    },
-    "languages": {
-      "type": "array",
-      "items": {
-        "type": "string"
-      },
-      "default": []
-    },
-    "runtime": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SttRuntimePreference"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": "Auto"
-    },
-    "dtype": {
-      "anyOf": [
-        {
-          "$ref": "#/$defs/SttDTypePreference"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": "Auto"
-    },
-    "assets": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/SttAssetRef"
-      },
-      "default": []
-    }
-  },
-  "$defs": {
-    "SttModelType": {
-      "type": "string",
-      "enum": [
-        "WhisperTiny",
-        "WhisperTinyEn",
-        "WhisperBase",
-        "WhisperBaseEn",
-        "WhisperSmall",
-        "WhisperSmallEn",
-        "WhisperMedium",
-        "WhisperMediumEn",
-        "WhisperLargeV3",
-        "WhisperLargeV3Turbo",
-        "DistilWhisperMediumEn",
-        "DistilWhisperLargeV2",
-        "DistilWhisperLargeV3",
-        "OlmoAsrTinyEn",
-        "OlmoAsrBaseEn",
-        "OlmoAsrSmallEn",
-        "OlmoAsrMediumEn",
-        "OlmoAsrLargeEn",
-        "OlmoAsrLargeEnV2",
-        "Qwen3Asr17B",
-        "MoonshineBaseEn"
-      ]
-    },
-    "ModelProvider": {
-      "type": "object",
-      "properties": {
-        "provider_name": {
-          "type": "string"
-        },
-        "model_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "version": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "params": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": true
-        }
-      },
-      "required": [
-        "provider_name"
-      ]
-    },
-    "SttRuntimePreference": {
-      "type": "string",
-      "enum": [
-        "Auto",
-        "Cpu",
-        "Metal",
-        "Cuda",
-        "Accelerate"
-      ]
-    },
-    "SttDTypePreference": {
-      "type": "string",
-      "enum": [
-        "Auto",
-        "F32",
-        "F16",
-        "BF16"
-      ]
-    },
-    "SttAssetRef": {
-      "type": "object",
-      "properties": {
-        "bit": {
-          "type": "string"
-        },
-        "relative_path": {
-          "type": "string"
-        },
-        "required": {
-          "type": "boolean",
-          "default": true
-        }
-      },
-      "required": [
-        "bit",
-        "relative_path"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "SttModelParameters",
+	"type": "object",
+	"properties": {
+		"model_type": {
+			"$ref": "#/$defs/SttModelType",
+			"default": "WhisperLargeV3Turbo"
+		},
+		"provider": {
+			"$ref": "#/$defs/ModelProvider",
+			"default": {
+				"provider_name": "local:any-speech-to-text",
+				"model_id": null,
+				"version": null,
+				"params": null
+			}
+		},
+		"default_language": {
+			"type": ["string", "null"],
+			"default": null
+		},
+		"languages": {
+			"type": "array",
+			"items": {
+				"type": "string"
+			},
+			"default": []
+		},
+		"runtime": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/SttRuntimePreference"
+				},
+				{
+					"type": "null"
+				}
+			],
+			"default": "Auto"
+		},
+		"dtype": {
+			"anyOf": [
+				{
+					"$ref": "#/$defs/SttDTypePreference"
+				},
+				{
+					"type": "null"
+				}
+			],
+			"default": "Auto"
+		},
+		"assets": {
+			"type": "array",
+			"items": {
+				"$ref": "#/$defs/SttAssetRef"
+			},
+			"default": []
+		}
+	},
+	"$defs": {
+		"SttModelType": {
+			"type": "string",
+			"enum": [
+				"WhisperTiny",
+				"WhisperTinyEn",
+				"WhisperBase",
+				"WhisperBaseEn",
+				"WhisperSmall",
+				"WhisperSmallEn",
+				"WhisperMedium",
+				"WhisperMediumEn",
+				"WhisperLargeV3",
+				"WhisperLargeV3Turbo",
+				"DistilWhisperMediumEn",
+				"DistilWhisperLargeV2",
+				"DistilWhisperLargeV3",
+				"OlmoAsrTinyEn",
+				"OlmoAsrBaseEn",
+				"OlmoAsrSmallEn",
+				"OlmoAsrMediumEn",
+				"OlmoAsrLargeEn",
+				"OlmoAsrLargeEnV2",
+				"Qwen3Asr17B",
+				"MoonshineBaseEn"
+			]
+		},
+		"ModelProvider": {
+			"type": "object",
+			"properties": {
+				"provider_name": {
+					"type": "string"
+				},
+				"model_id": {
+					"type": ["string", "null"]
+				},
+				"version": {
+					"type": ["string", "null"]
+				},
+				"params": {
+					"type": ["object", "null"],
+					"additionalProperties": true
+				}
+			},
+			"required": ["provider_name"]
+		},
+		"SttRuntimePreference": {
+			"type": "string",
+			"enum": ["Auto", "Cpu", "Metal", "Cuda", "Accelerate"]
+		},
+		"SttDTypePreference": {
+			"type": "string",
+			"enum": ["Auto", "F32", "F16", "BF16"]
+		},
+		"SttAssetRef": {
+			"type": "object",
+			"properties": {
+				"bit": {
+					"type": "string"
+				},
+				"relative_path": {
+					"type": "string"
+				},
+				"required": {
+					"type": "boolean",
+					"default": true
+				}
+			},
+			"required": ["bit", "relative_path"]
+		}
+	}
 }

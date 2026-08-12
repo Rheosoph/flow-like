@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 
-import { createId } from "@paralleldrive/cuid2";
 import {
 	type IApiKeyState,
 	type IApiState,
@@ -43,10 +42,14 @@ import {
 	useInvoke,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
-import type { ICommandSync } from "@flow-like/flow-like-ui/lib";
-import Dexie, { type EntityTable } from "dexie";
+import type {
+	ICommandSync,
+	ICommandSyncArchive,
+} from "@flow-like/flow-like-ui/lib";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
 import type { IAnalyticsState } from "@flow-like/flow-like-ui/state/backend-state/analytics-state";
+import { createId } from "@paralleldrive/cuid2";
+import Dexie, { type EntityTable } from "dexie";
 import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { appsDB } from "../lib/apps-db";
@@ -62,11 +65,11 @@ import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
 import type { CommandSyncRemoteIdentity } from "./tauri-provider/command-sync";
 import { DatabaseState } from "./tauri-provider/db-state";
-import { QueryState } from "./tauri-provider/query-state";
 import { EventState } from "./tauri-provider/event-state";
 import { GraphState } from "./tauri-provider/graph-state";
 import { HelperState } from "./tauri-provider/helper-state";
 import { PageState } from "./tauri-provider/page-state";
+import { QueryState } from "./tauri-provider/query-state";
 import { RegistryState } from "./tauri-provider/registry-state";
 import { RoleState } from "./tauri-provider/role-state";
 import { RouteState } from "./tauri-provider/route-state";
@@ -515,6 +518,60 @@ export class TauriBackend implements IBackendState {
 		await offlineSyncDB.commands.delete(commandId);
 	}
 
+	/**
+	 * Move queued batches out of the outbox as part of an explicit server-authoritative reset.
+	 *
+	 * Archive and delete share one transaction: a crash between them would either lose the only
+	 * copy of an undelivered edit or leave it queued and still wedging the board.
+	 */
+	async archiveOfflineSyncCommands(
+		appId: string,
+		boardId: string,
+		commandIds: readonly string[],
+		archiveReason: string,
+	): Promise<number> {
+		if (commandIds.length === 0) return 0;
+		const archivedAt = new Date();
+		let archived = 0;
+		await offlineSyncDB.transaction(
+			"rw",
+			offlineSyncDB.commands,
+			offlineSyncDB.discarded,
+			async () => {
+				for (const commandId of commandIds) {
+					const existing = await offlineSyncDB.commands.get(commandId);
+					if (
+						!existing ||
+						existing.appId !== appId ||
+						existing.boardId !== boardId
+					)
+						continue;
+					await offlineSyncDB.discarded.put({
+						...existing,
+						archiveId: `${commandId}${archivedAt.getTime()}`,
+						archivedAt,
+						archiveReason,
+					});
+					await offlineSyncDB.commands.delete(commandId);
+					archived += 1;
+				}
+			},
+		);
+		return archived;
+	}
+
+	async listOfflineSyncArchive(
+		appId: string,
+		boardId: string,
+	): Promise<ICommandSyncArchive[]> {
+		const entries = await offlineSyncDB.discarded
+			.where({ appId: appId, boardId: boardId })
+			.toArray();
+		return entries.toSorted(
+			(a, b) => a.archivedAt.getTime() - b.archivedAt.getTime(),
+		);
+	}
+
 	async getBoardLineage(
 		appId: string,
 		boardId: string,
@@ -545,6 +602,17 @@ export class TauriBackend implements IBackendState {
 				recordedAt: new Date(),
 			});
 		});
+	}
+
+	/**
+	 * Forget the last applied revision for one board.
+	 *
+	 * `recordBoardLineage` only moves forward, so a lineage stamped from a clock-skewed local
+	 * board refuses every real server revision afterwards. A server-authoritative reset must
+	 * clear it, or the snapshot it just fetched is rejected by the next background sync.
+	 */
+	async clearBoardLineage(appId: string, boardId: string): Promise<void> {
+		await boardLineageDB.lineage.delete(boardLineageKey(appId, boardId));
 	}
 
 	async uploadSignedUrl(

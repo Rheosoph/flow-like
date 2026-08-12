@@ -70,6 +70,41 @@ export interface ICheckFlowScriptReconcileResponse {
 	diagnostics: string[];
 }
 
+/** One queued batch, described well enough for a user to decide whether to discard it. */
+export interface IBoardSyncQueueEntry {
+	commandId: string;
+	createdAt: string;
+	commandCount: number;
+	/** The server already accepted part of this batch. */
+	partiallyDelivered: boolean;
+	blockedReason?: string;
+	failedAttempts?: number;
+	lastFailureStatus?: number;
+	lastFailureMessage?: string;
+	/** Why this batch cannot drain through the currently signed-in account/Hub. */
+	ownershipMismatch?: string;
+	remoteProfileId?: string;
+	remoteHub?: string;
+}
+
+export interface IBoardSyncStatus {
+	/** False on backends without an offline queue — the UI hides itself entirely. */
+	supported: boolean;
+	pendingBatches: number;
+	blockedBatches: number;
+	partiallyDeliveredBatches: number;
+	/** Set when at least one queued batch belongs to another account, profile or Hub. */
+	ownershipMismatch?: string;
+	entries: IBoardSyncQueueEntry[];
+}
+
+export interface IBoardServerResetResult {
+	board: IBoard;
+	discardedBatches: number;
+	/** Batches pushed to the server before anything was discarded. */
+	pushedBatches: number;
+}
+
 export interface IBoardState {
 	getBoards(appId: string): Promise<IBoard[]>;
 	getCatalog(appId: string): Promise<INode[]>;
@@ -97,6 +132,29 @@ export interface IBoardState {
 	getOpenBoards(): Promise<[string, string, string][]>;
 	getBoardSettings(): Promise<IConnectionMode>;
 	ensureAppPackagesInstalledForExecution?(appId: string): Promise<void>;
+
+	/** Undelivered local edits for one board. Absent on backends without an offline queue. */
+	getBoardSyncStatus?(
+		appId: string,
+		boardId: string,
+	): Promise<IBoardSyncStatus>;
+	retryOfflineSync?(
+		appId: string,
+		boardId: string,
+	): Promise<{ pushedBatches: number; remainingBatches: number }>;
+	/**
+	 * Take the server's board as authoritative.
+	 *
+	 * Delivers whatever the queue can still deliver first. Batches the server refuses are only
+	 * dropped with `discardQueuedEdits`; without it this rejects rather than destroying an edit.
+	 */
+	resetBoardFromServer?(
+		appId: string,
+		boardId: string,
+		options: { discardQueuedEdits: boolean },
+	): Promise<IBoardServerResetResult>;
+	/** Batches removed by earlier resets, for export before they are pruned. */
+	exportBoardSyncArchive?(appId: string, boardId: string): Promise<unknown[]>;
 
 	executeBoard(
 		appId: string,

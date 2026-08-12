@@ -630,7 +630,7 @@ fn redact_inline_secret_values(text: &str) -> String {
         // Only redact a marker that behaves like a field/variable assignment. A mention such as
         // "password reset" stays visible because it has no nearby `=` or `:` delimiter.
         let search_end = text[marker_end..]
-            .find(|character: char| matches!(character, '\n' | ',' | ';'))
+            .find(['\n', ',', ';'])
             .map(|offset| marker_end + offset)
             .unwrap_or(text.len());
         let assignment_window = &text[marker_end..search_end];
@@ -697,7 +697,7 @@ fn redact_inline_secret_values(text: &str) -> String {
             }
         } else {
             value_end += text[value_start..]
-                .find(|character: char| matches!(character, '\n' | ',' | ';' | ')' | '}'))
+                .find(['\n', ',', ';', ')', '}'])
                 .unwrap_or(text.len() - value_start);
         }
 

@@ -18,6 +18,7 @@ import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
 import { TooltipProvider } from "@flow-like/flow-like-ui/components/ui/tooltip";
 import { GlobalUpgradeDialog } from "@flow-like/flow-like-ui/components/upgrade/upgrade-dialog";
 import { useNetworkStatus } from "@flow-like/flow-like-ui/hooks/use-network-status";
+import { purgeLegacyPageSurfaceCache } from "@flow-like/flow-like-ui/lib/page-surface-cache";
 import { isWebkitLite } from "@flow-like/flow-like-ui/lib/platform";
 import {
 	cleanupLegacyQueryCacheBlob,
@@ -34,6 +35,7 @@ import { IOSWebviewHardening } from "../components/ios-webview-hardening";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
+import { PendingInviteRedeemer } from "../components/pending-invite-redeemer";
 import { RpaPermissionProvider } from "../components/rpa";
 import { RuntimeVariablesProviderComponent } from "../components/runtime-variables-provider";
 import { SpotlightWrapper } from "../components/spotlight-wrapper";
@@ -79,11 +81,13 @@ function NetworkAwareProvider({ children }: { children: React.ReactNode }) {
 	}, []);
 
 	useEffect(() => {
-		// Off the critical path: sweep expired persisted queries and drop the
-		// legacy whole-client cache blob (12MB) from the old persister.
+		// Off the critical path: sweep expired persisted queries, drop the legacy
+		// whole-client cache blob (12MB) from the old persister, and remove page
+		// surfaces written under the scheme that had no eviction at all.
 		const handle = window.setTimeout(() => {
 			void queryPersister.persisterGc();
 			void cleanupLegacyQueryCacheBlob();
+			void purgeLegacyPageSurfaceCache();
 		}, 5000);
 		return () => window.clearTimeout(handle);
 	}, []);
@@ -134,6 +138,7 @@ export function Providers({
 										<OAuthCallbackHandler>
 											<OAuthExecutionProvider>
 												<DesktopAuthProvider>
+													<PendingInviteRedeemer />
 													<NotificationProvider />
 													<RuntimeVariablesProviderComponent>
 														<ExecutionServiceProvider>

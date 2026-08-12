@@ -1105,6 +1105,7 @@ pub fn run() {
             functions::app::tables::db_add_column,
             functions::app::tables::db_alter_column,
             functions::app::tables::db_drop_index,
+            functions::app::tables::db_drop_table,
             functions::app::graph::graph_list_overlays,
             functions::app::graph::graph_list_imports,
             functions::app::graph::graph_create_overlay,

@@ -183,17 +183,17 @@ pub async fn list_scores(
         .collect();
 
     // Search filter (app id or name, case-insensitive).
-    if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase()) {
-        if !search.is_empty() {
-            items.retain(|item| {
-                item.app_id.to_lowercase().contains(&search)
-                    || item
-                        .app_name
-                        .as_ref()
-                        .map(|n| n.to_lowercase().contains(&search))
-                        .unwrap_or(false)
-            });
-        }
+    if let Some(search) = query.search.as_ref().map(|s| s.trim().to_lowercase())
+        && !search.is_empty()
+    {
+        items.retain(|item| {
+            item.app_id.to_lowercase().contains(&search)
+                || item
+                    .app_name
+                    .as_ref()
+                    .map(|n| n.to_lowercase().contains(&search))
+                    .unwrap_or(false)
+        });
     }
 
     // Category / threshold filter.

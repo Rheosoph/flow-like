@@ -74,7 +74,7 @@ export function PackageUsersContainer({
 				profile.data!.hub_profile,
 				`registry/package/${packageId}/users/${userId}`,
 				{
-					method: "PUT",
+					method: "PATCH",
 					headers: { "Content-Type": "application/json" },
 					body: JSON.stringify(request),
 				},

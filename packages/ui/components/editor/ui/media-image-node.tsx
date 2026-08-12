@@ -10,6 +10,7 @@ import { PlateElement, withHOC } from "platejs/react";
 
 import { cn } from "../../../lib/utils";
 
+import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
 import { Caption, CaptionTextarea } from "./caption";
 import { MediaToolbar } from "./media-toolbar";
 import {
@@ -23,6 +24,7 @@ export const ImageElement = withHOC(
 	function ImageElement(props: PlateElementProps<TImageElement>) {
 		const { align = "center", focused, readOnly, selected } = useMediaState();
 		const width = useResizableValue("width");
+		const src = useEditorAssetUrl(props.element.url);
 
 		const { isDragging, handleRef } = useDraggable({
 			element: props.element,
@@ -52,6 +54,7 @@ export const ImageElement = withHOC(
 									isDragging && "opacity-50",
 								)}
 								alt={props.attributes.alt as string | undefined}
+								src={src}
 							/>
 							<ResizeHandle
 								className={mediaResizeHandleVariants({

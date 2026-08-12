@@ -187,7 +187,6 @@ export const es = {
 	"design.feature3.desc":
 		"Snapshots de input/output hacen trivial encontrar diferencias.",
 
-
 	// Portability
 	"portability.tagline": "Full Lifecycle",
 	"portability.headline.start": "Empieza",

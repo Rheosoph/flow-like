@@ -562,7 +562,7 @@ async fn create_message_handler_context(
     let mut has_payload_pin = false;
     let mut typed_pin_count: usize = 0;
 
-    for (_, pin) in ref_node_pins.iter() {
+    for pin in ref_node_pins.values() {
         if pin.pin_type != PinType::Output || pin.data_type == VariableType::Execution {
             continue;
         }

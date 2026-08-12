@@ -1672,34 +1672,33 @@ fn compile_steps_with_offset(
                         }
                     }
 
-                    if has_local_tail {
-                        if let Some(continuation) = continuation
-                            && exec_outputs
-                                .iter()
-                                .any(|pin| pin.name.eq_ignore_ascii_case(continuation))
-                        {
-                            let continuation_key = normalize_symbol(continuation);
-                            // Data outputs authored inside the selected execution arm are in scope
-                            // for the following tail because that tail is lowered into this arm.
-                            let mut tail_context = compiled_arm_contexts
-                                .remove(&continuation_key)
-                                .unwrap_or_else(|| context.clone());
-                            tail_context.diagnostics.clear();
-                            let tail = compile_steps_with_offset(
-                                &steps[index + 1..],
-                                returns,
-                                path,
-                                &mut tail_context,
-                                outer_continuation,
-                                index + 1 + index_offset,
-                            );
-                            context.diagnostics.append(&mut tail_context.diagnostics);
-                            compiled_arms
-                                .entry(continuation_key)
-                                .or_default()
-                                .stmts
-                                .extend(tail.stmts);
-                        }
+                    if has_local_tail
+                        && let Some(continuation) = continuation
+                        && exec_outputs
+                            .iter()
+                            .any(|pin| pin.name.eq_ignore_ascii_case(continuation))
+                    {
+                        let continuation_key = normalize_symbol(continuation);
+                        // Data outputs authored inside the selected execution arm are in scope
+                        // for the following tail because that tail is lowered into this arm.
+                        let mut tail_context = compiled_arm_contexts
+                            .remove(&continuation_key)
+                            .unwrap_or_else(|| context.clone());
+                        tail_context.diagnostics.clear();
+                        let tail = compile_steps_with_offset(
+                            &steps[index + 1..],
+                            returns,
+                            path,
+                            &mut tail_context,
+                            outer_continuation,
+                            index + 1 + index_offset,
+                        );
+                        context.diagnostics.append(&mut tail_context.diagnostics);
+                        compiled_arms
+                            .entry(continuation_key)
+                            .or_default()
+                            .stmts
+                            .extend(tail.stmts);
                     }
                     let arms = exec_outputs
                         .iter()
@@ -2100,7 +2099,7 @@ fn compile_catalog_call(
         args.iter().find_map(|argument| {
             (argument.pin.eq_ignore_ascii_case(config_pin)
                 && matches!(argument.value, FlowIrValue::Literal { .. }))
-            .then(|| match &argument.value {
+            .then_some(match &argument.value {
                 FlowIrValue::Literal {
                     value: FlowIrLiteral::String(template),
                 } => Some(template.as_str()),
@@ -3226,7 +3225,13 @@ fn interface_to_ast(interface: &FlowIrInterface) -> InterfaceDecl {
             .map(|field| {
                 let mut element_type = field.value_type.clone();
                 element_type.container = FlowIrContainer::Normal;
-                let label = type_label(&element_type);
+                // `type_label` is the diagnostic/IR spelling (for example `date`), while
+                // FlowScript's built-in temporal type is case-sensitive and spelled `Date`.
+                let label = if element_type.data_type == FlowIrDataType::Date {
+                    "Date".to_string()
+                } else {
+                    type_label(&element_type)
+                };
                 let element = InterfaceType::Named(if label == "struct" {
                     "Struct".to_string()
                 } else {
@@ -3730,10 +3735,10 @@ pub fn plan_flow_capabilities(
                 {
                     return None;
                 }
-                let score = exact_node_type
-                    .is_some()
-                    .then_some(i32::MAX)
-                    .unwrap_or_else(|| {
+                let score = if exact_node_type.is_some() {
+                    i32::MAX
+                } else {
+                    {
                         if semantic_anchors.is_empty() {
                             semantic_score
                         } else {
@@ -3742,7 +3747,8 @@ pub fn plan_flow_capabilities(
                             // `digest` intent versus an exact `sha256` catalog name).
                             semantic_score.max(1)
                         }
-                    });
+                    }
+                };
                 (score > 0 || requirement.intent.trim().is_empty()).then_some((score, metadata))
             })
             .collect::<Vec<_>>();
@@ -5713,6 +5719,45 @@ mod tests {
                 .iter()
                 .any(|diagnostic| { diagnostic.code == "IR_RETURN_MISSING" })
         );
+    }
+
+    #[test]
+    fn interface_date_fields_render_with_the_flowscript_date_type() {
+        let compiled = compile_flow_ir(
+            &FlowIrProgram {
+                interfaces: vec![FlowIrInterface {
+                    name: "AuditEntry".to_string(),
+                    fields: vec![
+                        FlowIrInterfaceField {
+                            name: "createdAt".to_string(),
+                            value_type: FlowIrType::scalar(FlowIrDataType::Date),
+                            optional: false,
+                            default: None,
+                        },
+                        FlowIrInterfaceField {
+                            name: "previousRuns".to_string(),
+                            value_type: FlowIrType {
+                                data_type: FlowIrDataType::Date,
+                                container: FlowIrContainer::Array,
+                                interface: None,
+                            },
+                            optional: true,
+                            default: None,
+                        },
+                    ],
+                }],
+                ..Default::default()
+            },
+            &[],
+        );
+
+        assert!(
+            compiled.diagnostics.is_empty(),
+            "{:?}",
+            compiled.diagnostics
+        );
+        assert!(compiled.flowscript.contains("createdAt: Date;"));
+        assert!(compiled.flowscript.contains("previousRuns?: Date[];"));
     }
 
     #[test]

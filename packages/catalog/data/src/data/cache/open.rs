@@ -49,7 +49,7 @@ impl NodeLogic for OpenCacheNode {
         node.add_input_pin(
             "namespace",
             "Namespace",
-            "Optional prefix so short keys from different flows cannot collide",
+            "Optional group name. Entries sharing a namespace can be removed together with the Invalidate Cache Namespace node, and short keys from different flows cannot collide.",
             VariableType::String,
         )
         .set_default_value(Some(json!("")));

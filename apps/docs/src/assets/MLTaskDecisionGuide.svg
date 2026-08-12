@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="720" viewBox="0 0 1440 720" overflow="hidden" role="img" aria-labelledby="ml-task-title ml-task-desc">
+  <title id="ml-task-title">Flow-Like machine learning task decision guide</title>
+  <desc id="ml-task-desc">Start by asking what the target looks like. Unordered labels lead to classification, ordered levels to ordinal learning, a continuous number to regression, no target to clustering, and only normal examples to novelty detection.</desc>
+  <defs>
+    <linearGradient id="ml-task-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#101216"/>
+      <stop offset="1" stop-color="#17191f"/>
+    </linearGradient>
+    <pattern id="ml-task-grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <circle cx="1.5" cy="1.5" r="1.5" fill="#343944" opacity=".42"/>
+    </pattern>
+    <marker id="ml-task-arrow-coral" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#ff7656"/>
+    </marker>
+    <marker id="ml-task-arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#a78bfa"/>
+    </marker>
+    <marker id="ml-task-arrow-emerald" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0 10 5 0 10z" fill="#34d399"/>
+    </marker>
+    <style>
+      text{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.kicker{fill:#ff8a68;font-size:15px;font-weight:750;letter-spacing:2.4px}.heading{fill:#f7f8fa;font-size:34px;font-weight:720;letter-spacing:-.7px}.sub{fill:#a7adb8;font-size:17px}.prompt-kicker{fill:#ff9b82;font-size:13px;font-weight:800;letter-spacing:1.8px}.prompt{fill:#f7f8fa;font-size:30px;font-weight:740;letter-spacing:-.35px}.signal-label{font-size:11px;font-weight:800;letter-spacing:1.4px}.signal{font-size:18px;font-weight:720}.task{fill:#f7f8fa;font-size:26px;font-weight:760;letter-spacing:-.3px}.task-small{fill:#f7f8fa;font-size:23px;font-weight:760;letter-spacing:-.25px}.note{fill:#979eaa;font-size:14px}.footer{fill:#d8dbe1;font-size:17px;font-weight:650}
+    </style>
+  </defs>
+
+  <rect width="1440" height="720" rx="28" fill="#101216"/>
+  <rect width="1440" height="720" rx="28" fill="url(#ml-task-bg)"/>
+  <rect width="1440" height="720" rx="28" fill="url(#ml-task-grid)"/>
+
+  <rect x="64" y="46" width="306" height="34" rx="17" fill="#ff6b4a" opacity=".12" stroke="#ff7656" stroke-opacity=".48"/>
+  <circle cx="84" cy="63" r="5" fill="#ff7656"/>
+  <text x="99" y="69" class="kicker">ML TASK DECISION GUIDE</text>
+  <text x="64" y="124" class="heading">Choose the task your target describes</text>
+  <text x="64" y="157" class="sub">Start with the outcome column—not the algorithm catalog.</text>
+
+  <g>
+    <rect x="404" y="182" width="632" height="148" rx="32" fill="none" stroke="#ff7656" stroke-width="10" opacity=".06"/>
+    <rect x="410" y="188" width="620" height="136" rx="26" fill="#1d1c24" stroke="#ff7656" stroke-width="2"/>
+    <circle cx="464" cy="256" r="28" fill="#ff7656" opacity=".12" stroke="#ff7656" stroke-opacity=".65"/>
+    <circle cx="464" cy="256" r="15" fill="none" stroke="#ff7656" stroke-width="3"/>
+    <circle cx="464" cy="256" r="5" fill="#ff7656"/>
+    <text x="510" y="232" class="prompt-kicker">START HERE</text>
+    <text x="510" y="270" class="prompt">What does the target look like?</text>
+    <text x="510" y="298" class="sub">Its shape tells you which learning problem you actually have.</text>
+  </g>
+
+  <path d="M712 324V360M178 360H1246" fill="none" stroke="#59606d" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="712" cy="360" r="14" fill="#ff7656" opacity=".1"/>
+  <circle cx="712" cy="360" r="6" fill="#ff7656"/>
+  <path d="M178 360V400" fill="none" stroke="#ff7656" stroke-width="3" stroke-linecap="round" marker-end="url(#ml-task-arrow-coral)"/>
+  <path d="M445 360V400" fill="none" stroke="#a78bfa" stroke-width="3" stroke-linecap="round" marker-end="url(#ml-task-arrow-violet)"/>
+  <path d="M712 360V400" fill="none" stroke="#34d399" stroke-width="3" stroke-linecap="round" marker-end="url(#ml-task-arrow-emerald)"/>
+  <path d="M979 360V400" fill="none" stroke="#a78bfa" stroke-width="3" stroke-linecap="round" marker-end="url(#ml-task-arrow-violet)"/>
+  <path d="M1246 360V400" fill="none" stroke="#ff7656" stroke-width="3" stroke-linecap="round" marker-end="url(#ml-task-arrow-coral)"/>
+
+  <g>
+    <rect x="54" y="424" width="248" height="202" rx="24" fill="#191c22" stroke="#5b3d36" stroke-width="2"/>
+    <rect x="76" y="446" width="204" height="52" rx="13" fill="#2b211f" stroke="#6b443b"/>
+    <text x="178" y="464" text-anchor="middle" class="signal-label" fill="#ff9b82">TARGET</text>
+    <text x="178" y="487" text-anchor="middle" class="signal" fill="#f2c1b5">Unordered labels</text>
+    <path d="M178 507V520" stroke="#ff7656" stroke-width="2.5" stroke-linecap="round" marker-end="url(#ml-task-arrow-coral)"/>
+    <text x="178" y="556" text-anchor="middle" class="task">Classification</text>
+    <text x="178" y="585" text-anchor="middle" class="note">Names whose order</text>
+    <text x="178" y="604" text-anchor="middle" class="note">changes nothing</text>
+  </g>
+
+  <g>
+    <rect x="321" y="424" width="248" height="202" rx="24" fill="#191c22" stroke="#4f4766" stroke-width="2"/>
+    <rect x="343" y="446" width="204" height="52" rx="13" fill="#282534" stroke="#62577f"/>
+    <text x="445" y="464" text-anchor="middle" class="signal-label" fill="#c4b5fd">TARGET</text>
+    <text x="445" y="487" text-anchor="middle" class="signal" fill="#d9d0ff">Ordered levels</text>
+    <path d="M445 507V520" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round" marker-end="url(#ml-task-arrow-violet)"/>
+    <text x="445" y="556" text-anchor="middle" class="task">Ordinal</text>
+    <text x="445" y="585" text-anchor="middle" class="note">Distance between</text>
+    <text x="445" y="604" text-anchor="middle" class="note">ranks matters</text>
+  </g>
+
+  <g>
+    <rect x="588" y="424" width="248" height="202" rx="24" fill="#191c22" stroke="#365d50" stroke-width="2"/>
+    <rect x="610" y="446" width="204" height="52" rx="13" fill="#202b28" stroke="#42705f"/>
+    <text x="712" y="464" text-anchor="middle" class="signal-label" fill="#6ee7b7">TARGET</text>
+    <text x="712" y="487" text-anchor="middle" class="signal" fill="#b9f4dd">Continuous number</text>
+    <path d="M712 507V520" stroke="#34d399" stroke-width="2.5" stroke-linecap="round" marker-end="url(#ml-task-arrow-emerald)"/>
+    <text x="712" y="556" text-anchor="middle" class="task">Regression</text>
+    <text x="712" y="585" text-anchor="middle" class="note">Differences carry</text>
+    <text x="712" y="604" text-anchor="middle" class="note">numeric meaning</text>
+  </g>
+
+  <g>
+    <rect x="855" y="424" width="248" height="202" rx="24" fill="#191c22" stroke="#4f4766" stroke-width="2"/>
+    <rect x="877" y="446" width="204" height="52" rx="13" fill="#282534" stroke="#62577f"/>
+    <text x="979" y="464" text-anchor="middle" class="signal-label" fill="#c4b5fd">TARGET</text>
+    <text x="979" y="487" text-anchor="middle" class="signal" fill="#d9d0ff">No target</text>
+    <path d="M979 507V520" stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round" marker-end="url(#ml-task-arrow-violet)"/>
+    <text x="979" y="556" text-anchor="middle" class="task">Clustering</text>
+    <text x="979" y="585" text-anchor="middle" class="note">Discover groups without</text>
+    <text x="979" y="604" text-anchor="middle" class="note">a known outcome</text>
+  </g>
+
+  <g>
+    <rect x="1122" y="424" width="248" height="202" rx="24" fill="#191c22" stroke="#5b3d36" stroke-width="2"/>
+    <rect x="1144" y="446" width="204" height="52" rx="13" fill="#2b211f" stroke="#6b443b"/>
+    <text x="1246" y="464" text-anchor="middle" class="signal-label" fill="#ff9b82">TARGET</text>
+    <text x="1246" y="487" text-anchor="middle" class="signal" fill="#f2c1b5">Only normal examples</text>
+    <path d="M1246 507V520" stroke="#ff7656" stroke-width="2.5" stroke-linecap="round" marker-end="url(#ml-task-arrow-coral)"/>
+    <text x="1246" y="556" text-anchor="middle" class="task-small">Novelty detection</text>
+    <text x="1246" y="585" text-anchor="middle" class="note">Learn normal, then</text>
+    <text x="1246" y="604" text-anchor="middle" class="note">flag the unusual</text>
+  </g>
+
+  <circle cx="501" cy="674" r="5" fill="#ff7656"/>
+  <text x="720" y="680" text-anchor="middle" class="footer">Choose the task before you choose the model.</text>
+</svg>

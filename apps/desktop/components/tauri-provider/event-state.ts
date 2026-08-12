@@ -306,27 +306,34 @@ export class EventState implements IEventState {
 					this.backend.auth,
 				);
 				const localById = new Map(events.map((event) => [event.id, event]));
+				const toPersist = remoteData.filter(
+					(event) => !isLocalEventNewer(localById.get(event.id), event),
+				);
 
-				for (const event of remoteData) {
-					if (isLocalEventNewer(localById.get(event.id), event)) continue;
-
-					try {
-						await invoke("upsert_event", {
-							appId: appId,
-							event: event,
-							enforceId: true,
-							offline: isOffline,
-						});
-					} catch (error) {
-						// The fetched snapshot is still usable for Remote execution and UI
-						// resolution. A local cache write (for example before its board has
-						// downloaded) must not turn a successful refresh into "Event not found".
-						console.warn(
-							`[EventSync] Failed to persist remote event ${event.id} locally:`,
-							error,
-						);
-					}
-				}
+				// The fetched snapshot is already usable for Remote execution and UI resolution,
+				// and `getEvent` reaches the server on its own when a local copy is missing. The
+				// cache writes are one IPC round trip per event, so running them ahead of the
+				// caller made every app open wait on work nothing was blocked by.
+				this.backend.backgroundTaskHandler(
+					Promise.allSettled(
+						toPersist.map((event) =>
+							invoke("upsert_event", {
+								appId: appId,
+								event: event,
+								enforceId: true,
+								offline: isOffline,
+							}).catch((error) => {
+								// A local write can fail for reasons the refresh does not share (a
+								// board that has not downloaded yet), and must not turn a successful
+								// refresh into "Event not found".
+								console.warn(
+									`[EventSync] Failed to persist remote event ${event.id} locally:`,
+									error,
+								);
+							}),
+						),
+					).then(() => undefined),
+				);
 
 				this.remoteEventFailures.delete(appId);
 				return mergeLocalAndRemoteEvents(events, remoteData);

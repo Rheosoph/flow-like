@@ -190,7 +190,6 @@ export const de = {
 	"design.feature3.desc":
 		"Input/Output Snapshots machen Abweichungen trivial zu finden.",
 
-
 	// Portability
 	"portability.tagline": "Full Lifecycle",
 	"portability.headline.start": "Start",
@@ -651,7 +650,8 @@ export const de = {
 		"Flow-Like — Open-Source-Unternehmensplattform für Daten, AI, Automation & Apps",
 
 	// ───── V3 §1: Hero ─────
-	"v3.hero.badge": "Die Unternehmensplattform für Daten, AI, Automation und Apps",
+	"v3.hero.badge":
+		"Die Unternehmensplattform für Daten, AI, Automation und Apps",
 	"v3.hero.headline":
 		"Eine Plattform für Unternehmensdaten, AI, Automation und Apps.",
 	"v3.hero.subtitle":
@@ -673,7 +673,8 @@ export const de = {
 	"v3.hero.tab.app": "App",
 
 	// ───── V3 §2: Solution Engineering ─────
-	"v3.se.headline": "Starte mit deinem Betriebsmodell, nicht mit dem nächsten Tool.",
+	"v3.se.headline":
+		"Starte mit deinem Betriebsmodell, nicht mit dem nächsten Tool.",
 	"v3.se.subheadline":
 		"Solution Engineering bedeutet: ein gesteuerter Stack für Daten, Logik, AI, Automation und nutzernahe Apps.",
 	"v3.se.slider.before": "Tool-Wildwuchs",

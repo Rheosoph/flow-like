@@ -30,17 +30,27 @@ impl UpdateGraph {
 }
 
 fn add_nodes_pin(node: &mut Node) {
-    node.add_input_pin("nodes", "Nodes", "Array of graph nodes", VariableType::Struct)
-        .set_value_type(flow_like::flow::pin::ValueType::Array)
-        .set_schema::<GraphNodeInput>()
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+    node.add_input_pin(
+        "nodes",
+        "Nodes",
+        "Array of graph nodes",
+        VariableType::Struct,
+    )
+    .set_value_type(flow_like::flow::pin::ValueType::Array)
+    .set_schema::<GraphNodeInput>()
+    .set_options(PinOptions::new().set_enforce_schema(false).build());
 }
 
 fn add_edges_pin(node: &mut Node) {
-    node.add_input_pin("edges", "Edges", "Array of graph edges", VariableType::Struct)
-        .set_value_type(flow_like::flow::pin::ValueType::Array)
-        .set_schema::<GraphEdgeInput>()
-        .set_options(PinOptions::new().set_enforce_schema(false).build());
+    node.add_input_pin(
+        "edges",
+        "Edges",
+        "Array of graph edges",
+        VariableType::Struct,
+    )
+    .set_value_type(flow_like::flow::pin::ValueType::Array)
+    .set_schema::<GraphEdgeInput>()
+    .set_options(PinOptions::new().set_enforce_schema(false).build());
 }
 
 fn add_label_styles_pin(node: &mut Node) {

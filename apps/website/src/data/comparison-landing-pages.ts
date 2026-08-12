@@ -201,21 +201,71 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Both can be useful in one stack when Zapier remains the cloud integration edge.",
 		],
 		axes: [
-			axis("Automation reach", 4, 5, "Zapier has broad hosted app coverage; Flow-Like focuses on owned workflows and runtime portability."),
-			axis("App/UI delivery", 5, 2, "Zapier includes Interfaces and Tables, while Flow-Like treats app UI as a first-class runtime surface."),
-			axis("AI agents", 5, 5, "Zapier Agents are hosted AI teammates; Flow-Like has native agents that can use tools, data, APIs, flows, and MCP servers."),
-			axis("Local/self-host control", 5, 1, "Zapier is cloud-first; Flow-Like is designed to run where you choose."),
-			axis("Data-heavy execution", 5, 2, "Flow-Like's object-store model is better suited to file-heavy or offline processes."),
+			axis(
+				"Automation reach",
+				4,
+				5,
+				"Zapier has broad hosted app coverage; Flow-Like focuses on owned workflows and runtime portability.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				2,
+				"Zapier includes Interfaces and Tables, while Flow-Like treats app UI as a first-class runtime surface.",
+			),
+			axis(
+				"AI agents",
+				5,
+				5,
+				"Zapier Agents are hosted AI teammates; Flow-Like has native agents that can use tools, data, APIs, flows, and MCP servers.",
+			),
+			axis(
+				"Local/self-host control",
+				5,
+				1,
+				"Zapier is cloud-first; Flow-Like is designed to run where you choose.",
+			),
+			axis(
+				"Data-heavy execution",
+				5,
+				2,
+				"Flow-Like's object-store model is better suited to file-heavy or offline processes.",
+			),
 		],
 		facts: [
-			fact("Builder model", "Zapier's editor shows Zap workflows as a flow diagram with trigger and action steps.", source("Zapier visual editor", "https://help.zapier.com/hc/en-us/articles/16722578092429-Use-the-editor-to-build-and-view-your-Zap-workflows")),
-			fact("AI capability", "Zapier Agents connect to business data and perform tasks across 9,000+ apps.", source("Zapier Agents", "https://zapier.com/agents")),
-			fact("Hosting model", "Zapier's public materials describe a hosted automation platform; no customer-run Zapier runtime is documented.", source("Zapier product overview", "https://zapier.com/")),
-			flowFact("AI agents", "Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.", "Zapier Agents are hosted AI teammates connected to Zapier's app ecosystem.", flowLikeAgents),
-			flowFact("Runtime ownership", "Runs on customer-controlled infrastructure with local/offline and self-hosting paths.", "Zapier is positioned as a hosted automation platform; a customer-run Zapier runtime is not documented."),
+			fact(
+				"Builder model",
+				"Zapier's editor shows Zap workflows as a flow diagram with trigger and action steps.",
+				source(
+					"Zapier visual editor",
+					"https://help.zapier.com/hc/en-us/articles/16722578092429-Use-the-editor-to-build-and-view-your-Zap-workflows",
+				),
+			),
+			fact(
+				"AI capability",
+				"Zapier Agents connect to business data and perform tasks across 9,000+ apps.",
+				source("Zapier Agents", "https://zapier.com/agents"),
+			),
+			fact(
+				"Hosting model",
+				"Zapier's public materials describe a hosted automation platform; no customer-run Zapier runtime is documented.",
+				source("Zapier product overview", "https://zapier.com/"),
+			),
+			flowFact(
+				"AI agents",
+				"Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.",
+				"Zapier Agents are hosted AI teammates connected to Zapier's app ecosystem.",
+				flowLikeAgents,
+			),
+			flowFact(
+				"Runtime ownership",
+				"Runs on customer-controlled infrastructure with local/offline and self-hosting paths.",
+				"Zapier is positioned as a hosted automation platform; a customer-run Zapier runtime is not documented.",
+			),
 		],
 		prose: {
-			heading: "Zapier is cloud automation first; Flow-Like is owned workflow infrastructure first.",
+			heading:
+				"Zapier is cloud automation first; Flow-Like is owned workflow infrastructure first.",
 			body: [
 				"Zapier is optimized for speed: pick a trigger, add hosted actions, connect common SaaS tools, and let Zapier operate the workflow. That is valuable for go-to-market, support, and operations teams that need lightweight automation without maintaining infrastructure.",
 				"Flow-Like is aimed at a different center of gravity. It combines visual workflows, typed execution, data and file handling, AI nodes, and app UI in a runtime that can run locally, on a server, or in a self-hosted environment. That matters when a workflow becomes a regulated process, customer-facing app, offline field tool, or high-volume internal system.",
@@ -240,13 +290,21 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Yes. Zapier can trigger or notify around a Flow-Like process, while Flow-Like handles the owned workflow, data, app, and runtime concerns.",
 		),
 		sources: [
-			source("Zapier visual editor", "https://help.zapier.com/hc/en-us/articles/16722578092429-Use-the-editor-to-build-and-view-your-Zap-workflows"),
+			source(
+				"Zapier visual editor",
+				"https://help.zapier.com/hc/en-us/articles/16722578092429-Use-the-editor-to-build-and-view-your-Zap-workflows",
+			),
 			source("Zapier Agents", "https://zapier.com/agents"),
 			flowLikeAgents,
 			flowLikeSource,
 			flowLikeSelfHost,
 		],
-		keywords: ["Flow-Like vs Zapier", "Zapier alternative", "self-hosted Zapier alternative", "local-first automation"],
+		keywords: [
+			"Flow-Like vs Zapier",
+			"Zapier alternative",
+			"self-hosted Zapier alternative",
+			"local-first automation",
+		],
 	},
 	{
 		slug: "flow-like-vs-n8n",
@@ -270,21 +328,71 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Both are credible self-hosted automation choices; the difference is runtime scope.",
 		],
 		axes: [
-			axis("Visual workflow depth", 5, 5, "Both products center on visual workflow composition."),
-			axis("App/UI delivery", 5, 2, "n8n builds workflows; Flow-Like also builds end-user interfaces around them."),
-			axis("AI agents", 5, 5, "n8n documents AI Agent nodes; Flow-Like has native agents that can use tools, data, APIs, flows, and MCP servers."),
-			axis("Local/offline execution", 5, 2, "n8n can self-host, but end-user offline app execution is not its core model."),
-			axis("Typed/data-heavy runtime", 5, 3, "Flow-Like emphasizes typed flows and object storage; n8n focuses on integration payloads."),
+			axis(
+				"Visual workflow depth",
+				5,
+				5,
+				"Both products center on visual workflow composition.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				2,
+				"n8n builds workflows; Flow-Like also builds end-user interfaces around them.",
+			),
+			axis(
+				"AI agents",
+				5,
+				5,
+				"n8n documents AI Agent nodes; Flow-Like has native agents that can use tools, data, APIs, flows, and MCP servers.",
+			),
+			axis(
+				"Local/offline execution",
+				5,
+				2,
+				"n8n can self-host, but end-user offline app execution is not its core model.",
+			),
+			axis(
+				"Typed/data-heavy runtime",
+				5,
+				3,
+				"Flow-Like emphasizes typed flows and object storage; n8n focuses on integration payloads.",
+			),
 		],
 		facts: [
-			fact("Product model", "n8n describes itself as a fair-code workflow automation tool that combines AI capabilities with business process automation.", source("n8n docs", "https://docs.n8n.io/")),
-			fact("Self-hosting", "n8n documents Docker Compose and server setups for self-hosting.", source("n8n Docker Compose", "https://docs.n8n.io/hosting/installation/server-setups/docker-compose/")),
-			fact("AI workflows", "n8n docs include Advanced AI, RAG, AI Agent nodes, tools, and LangChain concepts.", source("n8n Advanced AI", "https://docs.n8n.io/advanced-ai/")),
-			flowFact("AI agents", "Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.", "n8n documents AI Agent nodes, tools, RAG, and LangChain concepts.", flowLikeAgents),
-			flowFact("Runtime ownership", "Flow-Like is a Rust-powered visual workflow platform that runs on hardware you choose.", "n8n supports self-hosting, but the app UI and offline execution model are not its primary runtime surface."),
+			fact(
+				"Product model",
+				"n8n describes itself as a fair-code workflow automation tool that combines AI capabilities with business process automation.",
+				source("n8n docs", "https://docs.n8n.io/"),
+			),
+			fact(
+				"Self-hosting",
+				"n8n documents Docker Compose and server setups for self-hosting.",
+				source(
+					"n8n Docker Compose",
+					"https://docs.n8n.io/hosting/installation/server-setups/docker-compose/",
+				),
+			),
+			fact(
+				"AI workflows",
+				"n8n docs include Advanced AI, RAG, AI Agent nodes, tools, and LangChain concepts.",
+				source("n8n Advanced AI", "https://docs.n8n.io/advanced-ai/"),
+			),
+			flowFact(
+				"AI agents",
+				"Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.",
+				"n8n documents AI Agent nodes, tools, RAG, and LangChain concepts.",
+				flowLikeAgents,
+			),
+			flowFact(
+				"Runtime ownership",
+				"Flow-Like is a Rust-powered visual workflow platform that runs on hardware you choose.",
+				"n8n supports self-hosting, but the app UI and offline execution model are not its primary runtime surface.",
+			),
 		],
 		prose: {
-			heading: "n8n is a flexible automation workbench; Flow-Like is a workflow-plus-app runtime.",
+			heading:
+				"n8n is a flexible automation workbench; Flow-Like is a workflow-plus-app runtime.",
 			body: [
 				"n8n is a practical fit for teams that want visual API automation, webhooks, scheduling, and AI workflow nodes in a self-hosted or cloud-managed tool. It is especially useful when the output is another system action rather than an end-user app.",
 				"Flow-Like takes a broader platform approach. The same project can contain workflow logic, data handling, AI steps, storage, UI, and local execution. That makes it more appropriate when the automation is not just glue but the core of a business application or operational product.",
@@ -310,12 +418,20 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 		),
 		sources: [
 			source("n8n docs", "https://docs.n8n.io/"),
-			source("n8n Docker Compose", "https://docs.n8n.io/hosting/installation/server-setups/docker-compose/"),
+			source(
+				"n8n Docker Compose",
+				"https://docs.n8n.io/hosting/installation/server-setups/docker-compose/",
+			),
 			source("n8n Advanced AI", "https://docs.n8n.io/advanced-ai/"),
 			flowLikeAgents,
 			flowLikeSource,
 		],
-		keywords: ["Flow-Like vs n8n", "n8n alternative", "self-hosted workflow automation", "open workflow automation"],
+		keywords: [
+			"Flow-Like vs n8n",
+			"n8n alternative",
+			"self-hosted workflow automation",
+			"open workflow automation",
+		],
 	},
 	{
 		slug: "flow-like-vs-make",
@@ -339,21 +455,68 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Make can orchestrate SaaS edges while Flow-Like owns the governed core process.",
 		],
 		axes: [
-			axis("Connector ecosystem", 4, 5, "Make advertises thousands of pre-built app integrations."),
-			axis("App/UI delivery", 5, 2, "Make scenarios are not full custom application packages."),
-			axis("AI automation", 5, 4, "Make documents AI agents and AI modules; Flow-Like has native agents, tools, data access, flow calls, and MCP integration."),
-			axis("Self-host/local control", 5, 1, "Make is positioned as a cloud platform; Flow-Like supports customer-controlled execution."),
-			axis("Operational data handling", 5, 3, "Flow-Like is better suited to local/object-store file workflows."),
+			axis(
+				"Connector ecosystem",
+				4,
+				5,
+				"Make advertises thousands of pre-built app integrations.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				2,
+				"Make scenarios are not full custom application packages.",
+			),
+			axis(
+				"AI automation",
+				5,
+				4,
+				"Make documents AI agents and AI modules; Flow-Like has native agents, tools, data access, flow calls, and MCP integration.",
+			),
+			axis(
+				"Self-host/local control",
+				5,
+				1,
+				"Make is positioned as a cloud platform; Flow-Like supports customer-controlled execution.",
+			),
+			axis(
+				"Operational data handling",
+				5,
+				3,
+				"Flow-Like is better suited to local/object-store file workflows.",
+			),
 		],
 		facts: [
-			fact("Builder model", "Make describes a visual-first no-code platform with drag-and-drop modules.", source("Make product overview", "https://www.make.com/en/product")),
-			fact("AI agents", "Make documents AI Agents that work across workflows and apps.", source("Make product overview", "https://www.make.com/en/product")),
-			fact("Connector coverage", "Make advertises 3,000+ pre-built apps on its product page.", source("Make product overview", "https://www.make.com/en/product")),
-			flowFact("AI agents", "Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.", "Make documents AI agents and AI modules inside Make's hosted automation platform.", flowLikeAgents),
-			flowFact("Runtime ownership", "Flow-Like runs where the team chooses instead of forcing a cloud-only runtime.", "Make is presented as a hosted visual automation platform."),
+			fact(
+				"Builder model",
+				"Make describes a visual-first no-code platform with drag-and-drop modules.",
+				source("Make product overview", "https://www.make.com/en/product"),
+			),
+			fact(
+				"AI agents",
+				"Make documents AI Agents that work across workflows and apps.",
+				source("Make product overview", "https://www.make.com/en/product"),
+			),
+			fact(
+				"Connector coverage",
+				"Make advertises 3,000+ pre-built apps on its product page.",
+				source("Make product overview", "https://www.make.com/en/product"),
+			),
+			flowFact(
+				"AI agents",
+				"Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.",
+				"Make documents AI agents and AI modules inside Make's hosted automation platform.",
+				flowLikeAgents,
+			),
+			flowFact(
+				"Runtime ownership",
+				"Flow-Like runs where the team chooses instead of forcing a cloud-only runtime.",
+				"Make is presented as a hosted visual automation platform.",
+			),
 		],
 		prose: {
-			heading: "Make is visual cloud orchestration; Flow-Like is portable operational software.",
+			heading:
+				"Make is visual cloud orchestration; Flow-Like is portable operational software.",
 			body: [
 				"Make is useful when teams want to model scenarios visually and connect SaaS systems without writing much code. Its value is strongest at the integration edge: marketing ops, sales ops, support routing, lead handling, and similar cloud-centric work.",
 				"Flow-Like is more appropriate when the process is the product. It lets teams model typed workflows, handle files and data, add AI, and present the result through an app interface that can run locally, self-hosted, or offline.",
@@ -377,8 +540,18 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"owned, portable automation that needs app UI, local/offline execution, and infrastructure control",
 			"Yes. Make can remain a hosted integration surface and Flow-Like can run the governed workflow or app behind it.",
 		),
-		sources: [source("Make product overview", "https://www.make.com/en/product"), flowLikeAgents, flowLikeSource, flowLikeSelfHost],
-		keywords: ["Flow-Like vs Make", "Make alternative", "visual automation platform", "AI automation"],
+		sources: [
+			source("Make product overview", "https://www.make.com/en/product"),
+			flowLikeAgents,
+			flowLikeSource,
+			flowLikeSelfHost,
+		],
+		keywords: [
+			"Flow-Like vs Make",
+			"Make alternative",
+			"visual automation platform",
+			"AI automation",
+		],
 	},
 	{
 		slug: "flow-like-vs-retool",
@@ -402,22 +575,78 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Both can serve enterprise teams; the architectural center differs.",
 		],
 		axes: [
-			axis("Internal app building", 5, 5, "Both build internal apps. Flow-Like builds workflow-backed pages and A2UI screens; Retool specializes in internal web and mobile apps."),
-			axis("App-builder operations", 4, 5, "Retool has the edge for mature browser/mobile internal-tool administration and conventions."),
-			axis("Workflow runtime", 5, 3, "Retool has Workflows; Flow-Like centers the app around the workflow engine."),
-			axis("AI agents", 5, 4, "Retool Agents automate human work; Flow-Like has native agent nodes, tools, MCP integration, and typed workflow execution."),
-			axis("Self-host control", 5, 4, "Retool documents self-hosted deployments; Flow-Like is designed around local and self-hosted control."),
-			axis("Offline/local execution", 5, 2, "Retool has mobile/offline cases; Flow-Like treats local execution as a core runtime property."),
+			axis(
+				"Internal app building",
+				5,
+				5,
+				"Both build internal apps. Flow-Like builds workflow-backed pages and A2UI screens; Retool specializes in internal web and mobile apps.",
+			),
+			axis(
+				"App-builder operations",
+				4,
+				5,
+				"Retool has the edge for mature browser/mobile internal-tool administration and conventions.",
+			),
+			axis(
+				"Workflow runtime",
+				5,
+				3,
+				"Retool has Workflows; Flow-Like centers the app around the workflow engine.",
+			),
+			axis(
+				"AI agents",
+				5,
+				4,
+				"Retool Agents automate human work; Flow-Like has native agent nodes, tools, MCP integration, and typed workflow execution.",
+			),
+			axis(
+				"Self-host control",
+				5,
+				4,
+				"Retool documents self-hosted deployments; Flow-Like is designed around local and self-hosted control.",
+			),
+			axis(
+				"Offline/local execution",
+				5,
+				2,
+				"Retool has mobile/offline cases; Flow-Like treats local execution as a core runtime property.",
+			),
 		],
 		facts: [
-			fact("App building", "Retool docs describe building web and native mobile apps, plus classic drag-and-drop apps.", source("Retool docs", "https://docs.retool.com/")),
-			fact("Agents", "Retool Agents encode business processes, connect systems of record, include humans, and take actions.", source("Retool Agents docs", "https://docs.retool.com/agents")),
-			fact("Self-hosting", "Retool documents Retool-managed and self-managed self-hosted deployments.", source("Retool self-hosted deployments", "https://docs.retool.com/self-hosted")),
-			flowFact("Workflow UI", "Flow-Like's A2UI system builds dashboards, admin panels, forms, and data viewers connected to workflows.", "Retool builds apps and agents in the Retool platform rather than a local-first workflow project.", flowLikeA2ui),
-			flowFact("AI agents", "Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.", "Retool Agents are part of Retool's internal app and automation platform.", flowLikeAgents),
+			fact(
+				"App building",
+				"Retool docs describe building web and native mobile apps, plus classic drag-and-drop apps.",
+				source("Retool docs", "https://docs.retool.com/"),
+			),
+			fact(
+				"Agents",
+				"Retool Agents encode business processes, connect systems of record, include humans, and take actions.",
+				source("Retool Agents docs", "https://docs.retool.com/agents"),
+			),
+			fact(
+				"Self-hosting",
+				"Retool documents Retool-managed and self-managed self-hosted deployments.",
+				source(
+					"Retool self-hosted deployments",
+					"https://docs.retool.com/self-hosted",
+				),
+			),
+			flowFact(
+				"Workflow UI",
+				"Flow-Like's A2UI system builds dashboards, admin panels, forms, and data viewers connected to workflows.",
+				"Retool builds apps and agents in the Retool platform rather than a local-first workflow project.",
+				flowLikeA2ui,
+			),
+			flowFact(
+				"AI agents",
+				"Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.",
+				"Retool Agents are part of Retool's internal app and automation platform.",
+				flowLikeAgents,
+			),
 		],
 		prose: {
-			heading: "Retool starts from the app screen; Flow-Like starts from the workflow runtime.",
+			heading:
+				"Retool starts from the app screen; Flow-Like starts from the workflow runtime.",
 			body: [
 				"Retool is a strong choice when the product requirement is a secure internal UI over databases and APIs. It gives teams a mature app builder, enterprise administration, self-hosted options, workflows, mobile apps, and AI-agent capabilities.",
 				"Flow-Like is a better fit when the core asset is the workflow itself: typed steps, files, AI, execution traces, local operation, and UI all in one package. That matters for field operations, regulated data workflows, offline-capable tools, and apps that should not depend on a single hosted app-builder runtime.",
@@ -444,11 +673,19 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 		sources: [
 			source("Retool docs", "https://docs.retool.com/"),
 			source("Retool Agents docs", "https://docs.retool.com/agents"),
-			source("Retool self-hosted deployments", "https://docs.retool.com/self-hosted"),
+			source(
+				"Retool self-hosted deployments",
+				"https://docs.retool.com/self-hosted",
+			),
 			flowLikeA2ui,
 			flowLikeAgents,
 		],
-		keywords: ["Flow-Like vs Retool", "Retool alternative", "internal app builder", "workflow app platform"],
+		keywords: [
+			"Flow-Like vs Retool",
+			"Retool alternative",
+			"internal app builder",
+			"workflow app platform",
+		],
 	},
 	{
 		slug: "flow-like-vs-power-apps",
@@ -472,22 +709,83 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Power Apps has mature mobile/offline patterns tied to Dataverse.",
 		],
 		axes: [
-			axis("Business app building", 5, 5, "Both can build business apps. Power Apps is Microsoft-native; Flow-Like packages app UI with typed workflow execution."),
-			axis("Microsoft-native app model", 3, 5, "Power Apps has the edge when Dataverse, Dynamics, Microsoft 365, and Power Platform administration are the center."),
-			axis("Workflow runtime", 5, 4, "Power Platform includes automation; Flow-Like centers typed workflow execution in the same project."),
-			axis("AI assistance/agents", 5, 4, "Microsoft is adding agent creation; Flow-Like has native AI agents, tool use, and model workflows."),
-			axis("Vendor portability", 5, 2, "Power Apps apps and Dataverse metadata remain Power Platform artifacts."),
-			axis("Self-host/local control", 5, 1, "Power Apps is cloud/service-centered; Flow-Like is designed for owned runtime control."),
+			axis(
+				"Business app building",
+				5,
+				5,
+				"Both can build business apps. Power Apps is Microsoft-native; Flow-Like packages app UI with typed workflow execution.",
+			),
+			axis(
+				"Microsoft-native app model",
+				3,
+				5,
+				"Power Apps has the edge when Dataverse, Dynamics, Microsoft 365, and Power Platform administration are the center.",
+			),
+			axis(
+				"Workflow runtime",
+				5,
+				4,
+				"Power Platform includes automation; Flow-Like centers typed workflow execution in the same project.",
+			),
+			axis(
+				"AI assistance/agents",
+				5,
+				4,
+				"Microsoft is adding agent creation; Flow-Like has native AI agents, tool use, and model workflows.",
+			),
+			axis(
+				"Vendor portability",
+				5,
+				2,
+				"Power Apps apps and Dataverse metadata remain Power Platform artifacts.",
+			),
+			axis(
+				"Self-host/local control",
+				5,
+				1,
+				"Power Apps is cloud/service-centered; Flow-Like is designed for owned runtime control.",
+			),
 		],
 		facts: [
-			fact("App types", "Microsoft documents canvas and model-driven apps in Power Apps.", source("Power Apps overview", "https://learn.microsoft.com/en-us/power-apps/powerapps-overview")),
-			fact("Mobile use", "Power Apps apps can run in browser or on mobile devices.", source("Power Apps overview", "https://learn.microsoft.com/en-us/power-apps/powerapps-overview")),
-			fact("Developer extensibility", "Microsoft documents custom connectors, Dataverse logic, JavaScript, plug-ins, and Azure Functions extensions.", source("Power Apps overview", "https://learn.microsoft.com/en-us/power-apps/powerapps-overview")),
-			flowFact("Business app UI", "Flow-Like's A2UI system builds dashboards, admin panels, forms, data viewers, reports, and control centers connected to workflows.", "Power Apps builds canvas and model-driven business apps inside Microsoft Power Platform.", flowLikeA2ui),
-			flowFact("Runtime ownership", "Flow-Like is designed to run on hardware and infrastructure the team controls.", "Power Apps runs inside Microsoft Power Platform and Dataverse environments."),
+			fact(
+				"App types",
+				"Microsoft documents canvas and model-driven apps in Power Apps.",
+				source(
+					"Power Apps overview",
+					"https://learn.microsoft.com/en-us/power-apps/powerapps-overview",
+				),
+			),
+			fact(
+				"Mobile use",
+				"Power Apps apps can run in browser or on mobile devices.",
+				source(
+					"Power Apps overview",
+					"https://learn.microsoft.com/en-us/power-apps/powerapps-overview",
+				),
+			),
+			fact(
+				"Developer extensibility",
+				"Microsoft documents custom connectors, Dataverse logic, JavaScript, plug-ins, and Azure Functions extensions.",
+				source(
+					"Power Apps overview",
+					"https://learn.microsoft.com/en-us/power-apps/powerapps-overview",
+				),
+			),
+			flowFact(
+				"Business app UI",
+				"Flow-Like's A2UI system builds dashboards, admin panels, forms, data viewers, reports, and control centers connected to workflows.",
+				"Power Apps builds canvas and model-driven business apps inside Microsoft Power Platform.",
+				flowLikeA2ui,
+			),
+			flowFact(
+				"Runtime ownership",
+				"Flow-Like is designed to run on hardware and infrastructure the team controls.",
+				"Power Apps runs inside Microsoft Power Platform and Dataverse environments.",
+			),
 		],
 		prose: {
-			heading: "Power Apps is Microsoft platform depth; Flow-Like is workflow runtime portability.",
+			heading:
+				"Power Apps is Microsoft platform depth; Flow-Like is workflow runtime portability.",
 			body: [
 				"Power Apps makes sense when the business data, identity, governance, and licensing strategy already live in Microsoft Power Platform. Its model-driven and canvas app paths are mature for department-level business apps.",
 				"Flow-Like fits teams that want the app, workflow, AI, and data runtime to remain portable. It is not trying to replace Dataverse inside Microsoft-first organizations; it is aimed at cases where the process must run locally, self-hosted, offline, or without binding the application model to one SaaS ecosystem.",
@@ -511,8 +809,22 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"portable workflow apps, self-hosted execution, and local/offline data workflows beyond one vendor ecosystem",
 			"Yes. Power Apps can call Flow-Like services, and Flow-Like can process data or run workflows outside the Power Platform runtime.",
 		),
-		sources: [source("Power Apps overview", "https://learn.microsoft.com/en-us/power-apps/powerapps-overview"), flowLikeA2ui, flowLikeAgents, flowLikeSource, flowLikeSelfHost],
-		keywords: ["Flow-Like vs Power Apps", "Power Apps alternative", "low-code app platform", "Dataverse alternative"],
+		sources: [
+			source(
+				"Power Apps overview",
+				"https://learn.microsoft.com/en-us/power-apps/powerapps-overview",
+			),
+			flowLikeA2ui,
+			flowLikeAgents,
+			flowLikeSource,
+			flowLikeSelfHost,
+		],
+		keywords: [
+			"Flow-Like vs Power Apps",
+			"Power Apps alternative",
+			"low-code app platform",
+			"Dataverse alternative",
+		],
 	},
 	{
 		slug: "flow-like-vs-appsmith",
@@ -536,22 +848,78 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Both reduce lock-in compared with SaaS-only internal app builders.",
 		],
 		axes: [
-			axis("Internal app building", 5, 5, "Both build internal apps, dashboards, and admin tools."),
-			axis("Open-source app-builder ecosystem", 4, 5, "Appsmith has the edge for open-source widget, JavaScript, Git, and internal-tool conventions."),
-			axis("Workflow execution", 5, 3, "Appsmith includes workflows; Flow-Like centers the product around typed workflow runtime."),
-			axis("AI agents", 5, 3, "Appsmith has AI/agent products; Flow-Like has native agent nodes, tool use, MCP integration, and workflow execution."),
-			axis("Offline/local execution", 5, 1, "Appsmith apps are server/browser oriented; Flow-Like emphasizes local execution."),
-			axis("File/data workflows", 5, 3, "Flow-Like is better suited to object-store-backed workflow data."),
+			axis(
+				"Internal app building",
+				5,
+				5,
+				"Both build internal apps, dashboards, and admin tools.",
+			),
+			axis(
+				"Open-source app-builder ecosystem",
+				4,
+				5,
+				"Appsmith has the edge for open-source widget, JavaScript, Git, and internal-tool conventions.",
+			),
+			axis(
+				"Workflow execution",
+				5,
+				3,
+				"Appsmith includes workflows; Flow-Like centers the product around typed workflow runtime.",
+			),
+			axis(
+				"AI agents",
+				5,
+				3,
+				"Appsmith has AI/agent products; Flow-Like has native agent nodes, tool use, MCP integration, and workflow execution.",
+			),
+			axis(
+				"Offline/local execution",
+				5,
+				1,
+				"Appsmith apps are server/browser oriented; Flow-Like emphasizes local execution.",
+			),
+			axis(
+				"File/data workflows",
+				5,
+				3,
+				"Flow-Like is better suited to object-store-backed workflow data.",
+			),
 		],
 		facts: [
-			fact("App model", "Appsmith is described as an open-source developer tool for internal applications with drag-and-drop widgets, datasources, queries, and JavaScript.", source("Appsmith introduction", "https://docs.appsmith.com/")),
-			fact("Self-hosting", "Appsmith documents Docker installation and private-server deployment paths.", source("Appsmith Docker install", "https://docs.appsmith.com/getting-started/setup/installation-guides/docker")),
-			fact("Governance", "Appsmith docs include granular access control, Git versioning, SCIM, embedding, and audit logs.", source("Appsmith docs", "https://docs.appsmith.com/")),
-			flowFact("Workflow UI", "Flow-Like A2UI builds forms, dashboards, admin panels, and data viewers connected to workflows.", "Appsmith builds internal app UIs on a server/browser runtime with queries and JavaScript.", flowLikeA2ui),
-			flowFact("AI agents", "Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.", "Appsmith AI capabilities are attached to Appsmith's internal app platform.", flowLikeAgents),
+			fact(
+				"App model",
+				"Appsmith is described as an open-source developer tool for internal applications with drag-and-drop widgets, datasources, queries, and JavaScript.",
+				source("Appsmith introduction", "https://docs.appsmith.com/"),
+			),
+			fact(
+				"Self-hosting",
+				"Appsmith documents Docker installation and private-server deployment paths.",
+				source(
+					"Appsmith Docker install",
+					"https://docs.appsmith.com/getting-started/setup/installation-guides/docker",
+				),
+			),
+			fact(
+				"Governance",
+				"Appsmith docs include granular access control, Git versioning, SCIM, embedding, and audit logs.",
+				source("Appsmith docs", "https://docs.appsmith.com/"),
+			),
+			flowFact(
+				"Workflow UI",
+				"Flow-Like A2UI builds forms, dashboards, admin panels, and data viewers connected to workflows.",
+				"Appsmith builds internal app UIs on a server/browser runtime with queries and JavaScript.",
+				flowLikeA2ui,
+			),
+			flowFact(
+				"AI agents",
+				"Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.",
+				"Appsmith AI capabilities are attached to Appsmith's internal app platform.",
+				flowLikeAgents,
+			),
 		],
 		prose: {
-			heading: "Appsmith is an open internal-tool builder; Flow-Like is a workflow application runtime.",
+			heading:
+				"Appsmith is an open internal-tool builder; Flow-Like is a workflow application runtime.",
 			body: [
 				"Appsmith is a good choice for internal tools where the main work is UI, data-source queries, and JavaScript glue. It is open-source, self-hostable, and familiar to teams that want fast CRUD and admin surfaces.",
 				"Flow-Like is a better match when the interface is one part of a deeper workflow system. If users need to run typed automations, process files, use AI, keep execution traces, and deploy locally or offline, Flow-Like keeps those concerns in one project.",
@@ -577,11 +945,19 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 		),
 		sources: [
 			source("Appsmith introduction", "https://docs.appsmith.com/"),
-			source("Appsmith Docker install", "https://docs.appsmith.com/getting-started/setup/installation-guides/docker"),
+			source(
+				"Appsmith Docker install",
+				"https://docs.appsmith.com/getting-started/setup/installation-guides/docker",
+			),
 			flowLikeA2ui,
 			flowLikeAgents,
 		],
-		keywords: ["Flow-Like vs Appsmith", "Appsmith alternative", "open source internal tools", "self-hosted app builder"],
+		keywords: [
+			"Flow-Like vs Appsmith",
+			"Appsmith alternative",
+			"open source internal tools",
+			"self-hosted app builder",
+		],
 	},
 	{
 		slug: "flow-like-vs-power-bi",
@@ -605,26 +981,108 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Flow-Like has the edge when analytics need to become executable workflow apps.",
 		],
 		axes: [
-			axis("Dashboards/reporting", 5, 5, "Both can create dashboards and reports. Flow-Like includes BI dashboards, SQL analytics, embedded analytics, charts, and workflow actions."),
-			axis("Datasource catalog/querying", 5, 5, "Flow-Like has an internal datasource library, visual querying, and DataFusion SQL; Power BI has mature connector and modeling UX."),
-			axis("Microsoft BI governance", 4, 5, "Power BI has the edge for Microsoft semantic models, report distribution, workspaces, Fabric alignment, and tenant administration."),
-			axis("Operational workflows", 5, 1, "Flow-Like executes business workflows; Power BI mainly reports and embeds analytics."),
-			axis("App delivery", 5, 2, "Power BI embeds reports; Flow-Like builds workflow-backed apps."),
-			axis("AI assistance", 5, 3, "Power BI has Copilot for analytics assistance; Flow-Like has native AI agents that can act inside workflows."),
-			axis("Local/self-host control", 5, 2, "Power BI has Report Server/on-prem reporting options; Flow-Like controls the workflow runtime."),
+			axis(
+				"Dashboards/reporting",
+				5,
+				5,
+				"Both can create dashboards and reports. Flow-Like includes BI dashboards, SQL analytics, embedded analytics, charts, and workflow actions.",
+			),
+			axis(
+				"Datasource catalog/querying",
+				5,
+				5,
+				"Flow-Like has an internal datasource library, visual querying, and DataFusion SQL; Power BI has mature connector and modeling UX.",
+			),
+			axis(
+				"Microsoft BI governance",
+				4,
+				5,
+				"Power BI has the edge for Microsoft semantic models, report distribution, workspaces, Fabric alignment, and tenant administration.",
+			),
+			axis(
+				"Operational workflows",
+				5,
+				1,
+				"Flow-Like executes business workflows; Power BI mainly reports and embeds analytics.",
+			),
+			axis(
+				"App delivery",
+				5,
+				2,
+				"Power BI embeds reports; Flow-Like builds workflow-backed apps.",
+			),
+			axis(
+				"AI assistance",
+				5,
+				3,
+				"Power BI has Copilot for analytics assistance; Flow-Like has native AI agents that can act inside workflows.",
+			),
+			axis(
+				"Local/self-host control",
+				5,
+				2,
+				"Power BI has Report Server/on-prem reporting options; Flow-Like controls the workflow runtime.",
+			),
 		],
 		facts: [
-			fact("Analytics platform", "Microsoft describes Power BI as a business analytics platform for connecting, visualizing, and sharing data.", source("Power BI overview", "https://learn.microsoft.com/en-us/power-bi/fundamentals/power-bi-overview")),
-			fact("Embedded analytics", "Power BI embedded analytics can embed reports, dashboards, and tiles in applications and websites.", source("Power BI embedded analytics", "https://learn.microsoft.com/en-us/power-bi/developer/embedded/embedded-analytics-power-bi")),
-			fact("On-premises reporting", "Microsoft documents Power BI Report Server for on-premises reporting.", source("Power BI overview", "https://learn.microsoft.com/en-us/power-bi/fundamentals/power-bi-overview")),
-			flowFact("BI toolkit", "Flow-Like documents a complete BI toolkit for connecting data sources, querying with SQL, building interactive dashboards, embedded analytics, self-service analytics, and automated reports.", "Power BI is a Microsoft BI platform for reports, dashboards, semantic models, and embedded analytics.", flowLikeBi),
-			flowFact("Datasource catalog", "Flow-Like includes an internal datasource library and visual data explorer, plus DataFusion SQL for querying multiple internal and external data sources through one interface.", "Power BI has data connectors, semantic models, reports, dashboards, and embedded analytics.", flowLikeDataExplorer),
-			flowFact("Dashboard UI", "Flow-Like Pages and A2UI can build dashboards, reports, charts, tables, forms, and workflow-triggering app screens.", "Power BI is primarily an analytics and embedded reporting platform.", flowLikePages),
-			flowFact("Charting", "Flow-Like includes Nivo and Plotly charts for interactive dashboards inside A2UI.", "Power BI provides BI-native visuals, reports, dashboards, and embedded analytics.", flowLikeVisualization),
-			flowFact("AI agents", "Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.", "Power BI Copilot focuses on analytics assistance inside the Microsoft BI ecosystem.", flowLikeAgents),
+			fact(
+				"Analytics platform",
+				"Microsoft describes Power BI as a business analytics platform for connecting, visualizing, and sharing data.",
+				source(
+					"Power BI overview",
+					"https://learn.microsoft.com/en-us/power-bi/fundamentals/power-bi-overview",
+				),
+			),
+			fact(
+				"Embedded analytics",
+				"Power BI embedded analytics can embed reports, dashboards, and tiles in applications and websites.",
+				source(
+					"Power BI embedded analytics",
+					"https://learn.microsoft.com/en-us/power-bi/developer/embedded/embedded-analytics-power-bi",
+				),
+			),
+			fact(
+				"On-premises reporting",
+				"Microsoft documents Power BI Report Server for on-premises reporting.",
+				source(
+					"Power BI overview",
+					"https://learn.microsoft.com/en-us/power-bi/fundamentals/power-bi-overview",
+				),
+			),
+			flowFact(
+				"BI toolkit",
+				"Flow-Like documents a complete BI toolkit for connecting data sources, querying with SQL, building interactive dashboards, embedded analytics, self-service analytics, and automated reports.",
+				"Power BI is a Microsoft BI platform for reports, dashboards, semantic models, and embedded analytics.",
+				flowLikeBi,
+			),
+			flowFact(
+				"Datasource catalog",
+				"Flow-Like includes an internal datasource library and visual data explorer, plus DataFusion SQL for querying multiple internal and external data sources through one interface.",
+				"Power BI has data connectors, semantic models, reports, dashboards, and embedded analytics.",
+				flowLikeDataExplorer,
+			),
+			flowFact(
+				"Dashboard UI",
+				"Flow-Like Pages and A2UI can build dashboards, reports, charts, tables, forms, and workflow-triggering app screens.",
+				"Power BI is primarily an analytics and embedded reporting platform.",
+				flowLikePages,
+			),
+			flowFact(
+				"Charting",
+				"Flow-Like includes Nivo and Plotly charts for interactive dashboards inside A2UI.",
+				"Power BI provides BI-native visuals, reports, dashboards, and embedded analytics.",
+				flowLikeVisualization,
+			),
+			flowFact(
+				"AI agents",
+				"Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.",
+				"Power BI Copilot focuses on analytics assistance inside the Microsoft BI ecosystem.",
+				flowLikeAgents,
+			),
 		],
 		prose: {
-			heading: "Power BI governs BI assets; Flow-Like turns dashboard screens into operational apps.",
+			heading:
+				"Power BI governs BI assets; Flow-Like turns dashboard screens into operational apps.",
 			body: [
 				"Flow-Like can create BI dashboards and reports: its docs cover an internal datasource library, visual querying, DataFusion SQL, self-service analytics, embedded analytics, automated reports, charts, tables, KPI cards, forms, and workflow actions. For many custom dashboard and automated reporting use cases, Flow-Like can replace a traditional BI tool.",
 				"Power BI remains the better category fit when the deliverable is a Microsoft-governed semantic model, report catalog, embedded BI program, or tenant-managed analytics layer. Flow-Like is stronger when the dashboard is part of an executable application: run workflows, transform files, ask AI agents, trigger approvals, or continue working locally and self-hosted.",
@@ -650,8 +1108,14 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Yes. Power BI can stay the analytics layer and Flow-Like can run workflows, data preparation, AI actions, or app workflows around it.",
 		),
 		sources: [
-			source("Power BI overview", "https://learn.microsoft.com/en-us/power-bi/fundamentals/power-bi-overview"),
-			source("Power BI embedded analytics", "https://learn.microsoft.com/en-us/power-bi/developer/embedded/embedded-analytics-power-bi"),
+			source(
+				"Power BI overview",
+				"https://learn.microsoft.com/en-us/power-bi/fundamentals/power-bi-overview",
+			),
+			source(
+				"Power BI embedded analytics",
+				"https://learn.microsoft.com/en-us/power-bi/developer/embedded/embedded-analytics-power-bi",
+			),
 			flowLikeBi,
 			flowLikeDataExplorer,
 			flowLikeDataFusion,
@@ -660,7 +1124,12 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			flowLikeAgents,
 			flowLikeSource,
 		],
-		keywords: ["Flow-Like vs Power BI", "Power BI alternative", "BI workflow automation", "operational analytics"],
+		keywords: [
+			"Flow-Like vs Power BI",
+			"Power BI alternative",
+			"BI workflow automation",
+			"operational analytics",
+		],
 	},
 	{
 		slug: "flow-like-vs-tableau",
@@ -684,26 +1153,108 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Flow-Like has the edge when the analytical output becomes workflow and app execution.",
 		],
 		axes: [
-			axis("Dashboards/reporting", 5, 5, "Both can create dashboards and reports. Flow-Like includes BI dashboards, SQL analytics, embedded analytics, charts, and workflow actions."),
-			axis("Datasource catalog/querying", 5, 5, "Flow-Like has an internal datasource library, visual querying, and DataFusion SQL; Tableau has mature BI connections and data preparation paths."),
-			axis("BI exploration/governance", 4, 5, "Tableau is stronger for mature visual exploration, BI governance, and analytics administration."),
-			axis("Workflow execution", 5, 1, "Flow-Like executes workflows; Tableau centers analytics assets."),
-			axis("App delivery", 5, 2, "Tableau embeds analytics; Flow-Like builds workflow-backed applications."),
-			axis("AI assistance", 5, 3, "Tableau Agent assists analysis; Flow-Like has native AI agents that can act inside workflows."),
-			axis("Deployment control", 5, 3, "Tableau Server supports self-hosted analytics; Flow-Like controls the workflow runtime."),
+			axis(
+				"Dashboards/reporting",
+				5,
+				5,
+				"Both can create dashboards and reports. Flow-Like includes BI dashboards, SQL analytics, embedded analytics, charts, and workflow actions.",
+			),
+			axis(
+				"Datasource catalog/querying",
+				5,
+				5,
+				"Flow-Like has an internal datasource library, visual querying, and DataFusion SQL; Tableau has mature BI connections and data preparation paths.",
+			),
+			axis(
+				"BI exploration/governance",
+				4,
+				5,
+				"Tableau is stronger for mature visual exploration, BI governance, and analytics administration.",
+			),
+			axis(
+				"Workflow execution",
+				5,
+				1,
+				"Flow-Like executes workflows; Tableau centers analytics assets.",
+			),
+			axis(
+				"App delivery",
+				5,
+				2,
+				"Tableau embeds analytics; Flow-Like builds workflow-backed applications.",
+			),
+			axis(
+				"AI assistance",
+				5,
+				3,
+				"Tableau Agent assists analysis; Flow-Like has native AI agents that can act inside workflows.",
+			),
+			axis(
+				"Deployment control",
+				5,
+				3,
+				"Tableau Server supports self-hosted analytics; Flow-Like controls the workflow runtime.",
+			),
 		],
 		facts: [
-			fact("Analytics portfolio", "Tableau describes Desktop, Server, Cloud, and Tableau Next across agentic analytics.", source("Tableau product overview", "https://www.tableau.com/products/tableau")),
-			fact("Tableau Agent", "Tableau Agent helps explore data, create visualizations, create and explain calculations, and uncover insights.", source("Tableau Agent help", "https://help.tableau.com/current/pro/desktop/en-us/desktop_einstein.htm")),
-			fact("Embedding", "Tableau Embedding API supports embedded analytics with authentication patterns.", source("Tableau Embedding API", "https://help.tableau.com/current/api/embedding_api/en-us/docs/embedding_api_auth.html")),
-			flowFact("BI toolkit", "Flow-Like documents a complete BI toolkit for connecting data sources, querying with SQL, building interactive dashboards, embedded analytics, self-service analytics, and automated reports.", "Tableau is a BI platform for visual analytics, dashboards, exploration, and embedded analytics.", flowLikeBi),
-			flowFact("Datasource catalog", "Flow-Like includes an internal datasource library and visual data explorer, plus DataFusion SQL for querying multiple internal and external data sources through one interface.", "Tableau has mature data connections, visual analytics, dashboards, and embedded analytics.", flowLikeDataExplorer),
-			flowFact("Dashboard UI", "Flow-Like Pages and A2UI can build dashboards, reports, charts, tables, forms, and workflow-triggering app screens.", "Tableau is primarily an analytics, dashboard, and embedded BI platform.", flowLikePages),
-			flowFact("Charting", "Flow-Like includes Nivo and Plotly charts for interactive dashboards inside A2UI.", "Tableau provides BI-native visual analytics and embedded analytics.", flowLikeVisualization),
-			flowFact("AI agents", "Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.", "Tableau Agent focuses on analytics assistance and visual exploration.", flowLikeAgents),
+			fact(
+				"Analytics portfolio",
+				"Tableau describes Desktop, Server, Cloud, and Tableau Next across agentic analytics.",
+				source(
+					"Tableau product overview",
+					"https://www.tableau.com/products/tableau",
+				),
+			),
+			fact(
+				"Tableau Agent",
+				"Tableau Agent helps explore data, create visualizations, create and explain calculations, and uncover insights.",
+				source(
+					"Tableau Agent help",
+					"https://help.tableau.com/current/pro/desktop/en-us/desktop_einstein.htm",
+				),
+			),
+			fact(
+				"Embedding",
+				"Tableau Embedding API supports embedded analytics with authentication patterns.",
+				source(
+					"Tableau Embedding API",
+					"https://help.tableau.com/current/api/embedding_api/en-us/docs/embedding_api_auth.html",
+				),
+			),
+			flowFact(
+				"BI toolkit",
+				"Flow-Like documents a complete BI toolkit for connecting data sources, querying with SQL, building interactive dashboards, embedded analytics, self-service analytics, and automated reports.",
+				"Tableau is a BI platform for visual analytics, dashboards, exploration, and embedded analytics.",
+				flowLikeBi,
+			),
+			flowFact(
+				"Datasource catalog",
+				"Flow-Like includes an internal datasource library and visual data explorer, plus DataFusion SQL for querying multiple internal and external data sources through one interface.",
+				"Tableau has mature data connections, visual analytics, dashboards, and embedded analytics.",
+				flowLikeDataExplorer,
+			),
+			flowFact(
+				"Dashboard UI",
+				"Flow-Like Pages and A2UI can build dashboards, reports, charts, tables, forms, and workflow-triggering app screens.",
+				"Tableau is primarily an analytics, dashboard, and embedded BI platform.",
+				flowLikePages,
+			),
+			flowFact(
+				"Charting",
+				"Flow-Like includes Nivo and Plotly charts for interactive dashboards inside A2UI.",
+				"Tableau provides BI-native visual analytics and embedded analytics.",
+				flowLikeVisualization,
+			),
+			flowFact(
+				"AI agents",
+				"Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.",
+				"Tableau Agent focuses on analytics assistance and visual exploration.",
+				flowLikeAgents,
+			),
 		],
 		prose: {
-			heading: "Tableau is a mature BI exploration platform; Flow-Like is dashboard UI plus workflow execution.",
+			heading:
+				"Tableau is a mature BI exploration platform; Flow-Like is dashboard UI plus workflow execution.",
 			body: [
 				"Flow-Like can build BI dashboards and reports with an internal datasource library, visual querying, DataFusion SQL, self-service analytics, embedded analytics, charts, tables, forms, and workflow actions. For many custom dashboard and automated reporting use cases, Flow-Like can replace a traditional BI tool.",
 				"Tableau is usually the better category fit for governed visual analytics, exploratory BI, embedded analytics, and analytics administration. Flow-Like is better when the output is not only a chart but an operation: a form, approval, data transformation, AI decision, file workflow, or customer-facing application.",
@@ -729,9 +1280,18 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Yes. Tableau can deliver dashboards and Flow-Like can run the workflow or application layer that acts on the insights.",
 		),
 		sources: [
-			source("Tableau product overview", "https://www.tableau.com/products/tableau"),
-			source("Tableau Agent help", "https://help.tableau.com/current/pro/desktop/en-us/desktop_einstein.htm"),
-			source("Tableau Embedding API", "https://help.tableau.com/current/api/embedding_api/en-us/docs/embedding_api_auth.html"),
+			source(
+				"Tableau product overview",
+				"https://www.tableau.com/products/tableau",
+			),
+			source(
+				"Tableau Agent help",
+				"https://help.tableau.com/current/pro/desktop/en-us/desktop_einstein.htm",
+			),
+			source(
+				"Tableau Embedding API",
+				"https://help.tableau.com/current/api/embedding_api/en-us/docs/embedding_api_auth.html",
+			),
 			flowLikeBi,
 			flowLikeDataExplorer,
 			flowLikeDataFusion,
@@ -740,7 +1300,12 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			flowLikeAgents,
 			flowLikeSource,
 		],
-		keywords: ["Flow-Like vs Tableau", "Tableau alternative", "agentic analytics workflow", "BI action layer"],
+		keywords: [
+			"Flow-Like vs Tableau",
+			"Tableau alternative",
+			"agentic analytics workflow",
+			"BI action layer",
+		],
 	},
 	{
 		slug: "flow-like-vs-airflow",
@@ -764,23 +1329,89 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Flow-Like has the edge for business-facing visual workflows and apps.",
 		],
 		axes: [
-			axis("Pipeline orchestration", 5, 5, "Both can orchestrate data pipelines; Flow-Like does it through typed visual workflows, while Airflow does it through Python DAGs."),
-			axis("Python execution", 5, 5, "Flow-Like ships a Python interpreter node; Airflow DAGs and tasks are authored in Python."),
-			axis("Scheduled DAG operations", 4, 5, "Airflow has the edge for Python DAG scheduling, backfills, and engineering-owned batch operations."),
-			axis("Visual authoring", 5, 1, "Airflow DAGs are code-defined; Flow-Like is visual and typed."),
-			axis("App/UI delivery", 5, 1, "Airflow's UI is operational; Flow-Like builds end-user app surfaces."),
-			axis("Data/file runtime", 5, 4, "Airflow orchestrates external systems; Flow-Like owns more of the workflow data layer."),
-			axis("Business-user accessibility", 5, 2, "Flow-Like is built for visual solution engineering, not only Python DAG authors."),
+			axis(
+				"Pipeline orchestration",
+				5,
+				5,
+				"Both can orchestrate data pipelines; Flow-Like does it through typed visual workflows, while Airflow does it through Python DAGs.",
+			),
+			axis(
+				"Python execution",
+				5,
+				5,
+				"Flow-Like ships a Python interpreter node; Airflow DAGs and tasks are authored in Python.",
+			),
+			axis(
+				"Scheduled DAG operations",
+				4,
+				5,
+				"Airflow has the edge for Python DAG scheduling, backfills, and engineering-owned batch operations.",
+			),
+			axis(
+				"Visual authoring",
+				5,
+				1,
+				"Airflow DAGs are code-defined; Flow-Like is visual and typed.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				1,
+				"Airflow's UI is operational; Flow-Like builds end-user app surfaces.",
+			),
+			axis(
+				"Data/file runtime",
+				5,
+				4,
+				"Airflow orchestrates external systems; Flow-Like owns more of the workflow data layer.",
+			),
+			axis(
+				"Business-user accessibility",
+				5,
+				2,
+				"Flow-Like is built for visual solution engineering, not only Python DAG authors.",
+			),
 		],
 		facts: [
-			fact("DAG model", "Airflow DAGs are authored in Python and define workflows as directed acyclic graphs.", source("Airflow DAGs", "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dags.html")),
-			fact("Backfill/replay style", "Airflow documents backfills and reruns over data intervals rather than app-level workflow replay.", source("Airflow backfill", "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/backfill.html")),
-			fact("Executors", "Airflow documents executors for running tasks across local or distributed worker infrastructure.", source("Airflow executors", "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/executor/index.html")),
-			flowFact("Python interpreter", "Flow-Like ships a Python Interpreter node for executing inline Python in a secure WASM sandbox with inputs, packages, workspace support, and runtime limits.", "Airflow DAGs are authored as Python code and operated through Airflow's scheduler and executor model.", flowLikePythonInterpreter),
-			flowFact("Authoring model", "Flow-Like provides typed visual workflows with app and local execution surfaces.", "Airflow workflows are engineering-owned DAGs written and deployed as code."),
+			fact(
+				"DAG model",
+				"Airflow DAGs are authored in Python and define workflows as directed acyclic graphs.",
+				source(
+					"Airflow DAGs",
+					"https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dags.html",
+				),
+			),
+			fact(
+				"Backfill/replay style",
+				"Airflow documents backfills and reruns over data intervals rather than app-level workflow replay.",
+				source(
+					"Airflow backfill",
+					"https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/backfill.html",
+				),
+			),
+			fact(
+				"Executors",
+				"Airflow documents executors for running tasks across local or distributed worker infrastructure.",
+				source(
+					"Airflow executors",
+					"https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/executor/index.html",
+				),
+			),
+			flowFact(
+				"Python interpreter",
+				"Flow-Like ships a Python Interpreter node for executing inline Python in a secure WASM sandbox with inputs, packages, workspace support, and runtime limits.",
+				"Airflow DAGs are authored as Python code and operated through Airflow's scheduler and executor model.",
+				flowLikePythonInterpreter,
+			),
+			flowFact(
+				"Authoring model",
+				"Flow-Like provides typed visual workflows with app and local execution surfaces.",
+				"Airflow workflows are engineering-owned DAGs written and deployed as code.",
+			),
 		],
 		prose: {
-			heading: "Airflow is developer orchestration; Flow-Like is visual operational software.",
+			heading:
+				"Airflow is developer orchestration; Flow-Like is visual operational software.",
 			body: [
 				"Airflow is a strong category fit for data teams that need Airflow-native Python DAG scheduling, backfills, worker operations, and integrations with warehouses, Spark, Kubernetes, or object stores. It is infrastructure for engineers.",
 				"Flow-Like also executes Python through its Python interpreter node, so this is not a Python versus no-Python comparison. Flow-Like fits when orchestration needs to be accessible as a visual workflow, tied to app UI, and run locally or self-hosted. It is less about replacing every data engineering DAG and more about giving operational teams a typed runtime for workflow apps.",
@@ -805,13 +1436,27 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Yes. Airflow can run backend data DAGs and Flow-Like can handle app-facing operational workflows or local execution.",
 		),
 		sources: [
-			source("Airflow DAGs", "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dags.html"),
-			source("Airflow backfill", "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/backfill.html"),
-			source("Airflow executors", "https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/executor/index.html"),
+			source(
+				"Airflow DAGs",
+				"https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/dags.html",
+			),
+			source(
+				"Airflow backfill",
+				"https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/backfill.html",
+			),
+			source(
+				"Airflow executors",
+				"https://airflow.apache.org/docs/apache-airflow/stable/core-concepts/executor/index.html",
+			),
 			flowLikePythonInterpreter,
 			flowLikeSource,
 		],
-		keywords: ["Flow-Like vs Airflow", "Airflow alternative", "visual data orchestration", "workflow app runtime"],
+		keywords: [
+			"Flow-Like vs Airflow",
+			"Airflow alternative",
+			"visual data orchestration",
+			"workflow app runtime",
+		],
 	},
 	{
 		slug: "flow-like-vs-temporal",
@@ -835,21 +1480,69 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"The choice depends on whether developers or solution teams own the workflow surface.",
 		],
 		axes: [
-			axis("Workflow state", 5, 5, "Both can track workflow execution state; Flow-Like stores running workflow state and events, while Temporal stores event histories."),
-			axis("Event-history replay", 3, 5, "Temporal has the edge when deterministic replay of code-defined services is the core requirement."),
-			axis("Visual authoring", 5, 1, "Temporal workflows are SDK code; Flow-Like workflows are visual and typed."),
-			axis("App/UI delivery", 5, 1, "Temporal does not build end-user app screens."),
-			axis("AI/data/file integration", 5, 2, "Flow-Like includes AI/data/app surfaces; Temporal coordinates application code."),
-			axis("Self-host/runtime control", 5, 5, "Both can be run under customer control, with different operational models."),
+			axis(
+				"Workflow state",
+				5,
+				5,
+				"Both can track workflow execution state; Flow-Like stores running workflow state and events, while Temporal stores event histories.",
+			),
+			axis(
+				"Event-history replay",
+				3,
+				5,
+				"Temporal has the edge when deterministic replay of code-defined services is the core requirement.",
+			),
+			axis(
+				"Visual authoring",
+				5,
+				1,
+				"Temporal workflows are SDK code; Flow-Like workflows are visual and typed.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				1,
+				"Temporal does not build end-user app screens.",
+			),
+			axis(
+				"AI/data/file integration",
+				5,
+				2,
+				"Flow-Like includes AI/data/app surfaces; Temporal coordinates application code.",
+			),
+			axis(
+				"Self-host/runtime control",
+				5,
+				5,
+				"Both can be run under customer control, with different operational models.",
+			),
 		],
 		facts: [
-			fact("Workflow model", "Temporal workflows are defined in general-purpose language code and run as workflow executions.", source("Temporal workflows", "https://docs.temporal.io/workflows")),
-			fact("Replay model", "Temporal uses Event History as the source of truth and replays workflow code to rebuild state.", source("Temporal workflows", "https://docs.temporal.io/workflows")),
-			fact("Long-running resilience", "Temporal workflows can run for years and recreate pre-failure state after crashes.", source("Temporal workflows", "https://docs.temporal.io/workflows")),
-			flowFact("Execution state", "Flow-Like self-hosting docs describe an execution state store that tracks running workflows and their events.", "Temporal workflows are SDK-defined backend application code with event-history replay.", flowLikeExecutionState),
+			fact(
+				"Workflow model",
+				"Temporal workflows are defined in general-purpose language code and run as workflow executions.",
+				source("Temporal workflows", "https://docs.temporal.io/workflows"),
+			),
+			fact(
+				"Replay model",
+				"Temporal uses Event History as the source of truth and replays workflow code to rebuild state.",
+				source("Temporal workflows", "https://docs.temporal.io/workflows"),
+			),
+			fact(
+				"Long-running resilience",
+				"Temporal workflows can run for years and recreate pre-failure state after crashes.",
+				source("Temporal workflows", "https://docs.temporal.io/workflows"),
+			),
+			flowFact(
+				"Execution state",
+				"Flow-Like self-hosting docs describe an execution state store that tracks running workflows and their events.",
+				"Temporal workflows are SDK-defined backend application code with event-history replay.",
+				flowLikeExecutionState,
+			),
 		],
 		prose: {
-			heading: "Temporal is infrastructure for developers; Flow-Like is a product surface for workflow applications.",
+			heading:
+				"Temporal is infrastructure for developers; Flow-Like is a product surface for workflow applications.",
 			body: [
 				"Temporal is usually the stronger category fit when a backend engineering team needs durable, code-defined workflows with event-history-backed state. It is infrastructure that developers embed into services.",
 				"Flow-Like tracks execution state and events, and it can model checkpoint/resume patterns. Temporal still has the edge when deterministic event-history replay is the central technical requirement. Flow-Like is stronger when the workflow should be visually modeled, packaged with UI, and run in local or self-hosted environments.",
@@ -873,8 +1566,18 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"visual workflow apps with local execution, data/file handling, AI nodes, and business-user interfaces",
 			"Yes. Temporal can power backend durability and Flow-Like can provide visual workflows and application interfaces around it.",
 		),
-		sources: [source("Temporal workflows", "https://docs.temporal.io/workflows"), flowLikeExecutionState, flowLikeSource, flowLikeSelfHost],
-		keywords: ["Flow-Like vs Temporal", "Temporal alternative", "durable execution", "visual workflow app"],
+		sources: [
+			source("Temporal workflows", "https://docs.temporal.io/workflows"),
+			flowLikeExecutionState,
+			flowLikeSource,
+			flowLikeSelfHost,
+		],
+		keywords: [
+			"Flow-Like vs Temporal",
+			"Temporal alternative",
+			"durable execution",
+			"visual workflow app",
+		],
 	},
 	{
 		slug: "flow-like-vs-servicenow",
@@ -898,22 +1601,83 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"ServiceNow is a system of record; Flow-Like is a deployable workflow app runtime.",
 		],
 		axes: [
-			axis("Workflow app runtime", 5, 5, "Both can build workflow applications; Flow-Like is portable and local-first, while ServiceNow is Now Platform-centered."),
-			axis("Service-management suite", 3, 5, "ServiceNow has the edge for IT, HR, CRM, service records, and standardized enterprise workflows."),
-			axis("App/UI delivery", 5, 4, "Both build apps; ServiceNow apps remain inside Now Platform."),
-			axis("AI agents", 5, 5, "Both support agentic workflows; ServiceNow agents are Now Platform-centered, while Flow-Like agents can call flows, tools, APIs, data, and MCP servers."),
-			axis("Portability", 5, 2, "Flow-Like projects are designed for portability; ServiceNow logic lives in Now Platform."),
-			axis("Local/offline execution", 5, 1, "ServiceNow is service/platform centered; Flow-Like supports local/offline runtime use cases."),
+			axis(
+				"Workflow app runtime",
+				5,
+				5,
+				"Both can build workflow applications; Flow-Like is portable and local-first, while ServiceNow is Now Platform-centered.",
+			),
+			axis(
+				"Service-management suite",
+				3,
+				5,
+				"ServiceNow has the edge for IT, HR, CRM, service records, and standardized enterprise workflows.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				4,
+				"Both build apps; ServiceNow apps remain inside Now Platform.",
+			),
+			axis(
+				"AI agents",
+				5,
+				5,
+				"Both support agentic workflows; ServiceNow agents are Now Platform-centered, while Flow-Like agents can call flows, tools, APIs, data, and MCP servers.",
+			),
+			axis(
+				"Portability",
+				5,
+				2,
+				"Flow-Like projects are designed for portability; ServiceNow logic lives in Now Platform.",
+			),
+			axis(
+				"Local/offline execution",
+				5,
+				1,
+				"ServiceNow is service/platform centered; Flow-Like supports local/offline runtime use cases.",
+			),
 		],
 		facts: [
-			fact("App Engine", "ServiceNow describes App Engine as a way to build new business workflow applications.", source("ServiceNow application development", "https://www.servicenow.com/products/application-development.html")),
-			fact("Low-code tools", "ServiceNow describes App Engine Studio as a low-code environment for creating apps.", source("ServiceNow application development", "https://www.servicenow.com/products/application-development.html")),
-			fact("AI Agents", "ServiceNow documents AI Agent Orchestrator and AI Agent Studio for building and coordinating agents.", source("ServiceNow AI Agents", "https://www.servicenow.com/products/ai-agents.html")),
-			flowFact("AI agents", "Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.", "ServiceNow AI agents are built and coordinated inside the Now Platform.", flowLikeAgents),
-			flowFact("Runtime ownership", "Flow-Like is designed around portable visual workflows and customer-controlled runtime deployment.", "ServiceNow workflows and apps live inside the Now Platform model."),
+			fact(
+				"App Engine",
+				"ServiceNow describes App Engine as a way to build new business workflow applications.",
+				source(
+					"ServiceNow application development",
+					"https://www.servicenow.com/products/application-development.html",
+				),
+			),
+			fact(
+				"Low-code tools",
+				"ServiceNow describes App Engine Studio as a low-code environment for creating apps.",
+				source(
+					"ServiceNow application development",
+					"https://www.servicenow.com/products/application-development.html",
+				),
+			),
+			fact(
+				"AI Agents",
+				"ServiceNow documents AI Agent Orchestrator and AI Agent Studio for building and coordinating agents.",
+				source(
+					"ServiceNow AI Agents",
+					"https://www.servicenow.com/products/ai-agents.html",
+				),
+			),
+			flowFact(
+				"AI agents",
+				"Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.",
+				"ServiceNow AI agents are built and coordinated inside the Now Platform.",
+				flowLikeAgents,
+			),
+			flowFact(
+				"Runtime ownership",
+				"Flow-Like is designed around portable visual workflows and customer-controlled runtime deployment.",
+				"ServiceNow workflows and apps live inside the Now Platform model.",
+			),
 		],
 		prose: {
-			heading: "ServiceNow is a platform suite; Flow-Like is a portable workflow-app engine.",
+			heading:
+				"ServiceNow is a platform suite; Flow-Like is a portable workflow-app engine.",
 			body: [
 				"ServiceNow is compelling when the enterprise already runs service management, IT operations, HR, risk, or CRM workflows in the Now Platform. Its strength is platform breadth, governance, and specialized workflow applications.",
 				"Flow-Like is a better fit when the team wants a smaller, portable unit of software: a typed workflow plus data handling, AI, and UI that can be self-hosted or run locally without adopting a broad enterprise SaaS platform as the system of record.",
@@ -938,12 +1702,23 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Yes. ServiceNow can remain the system of record and Flow-Like can process specialized workflows or local jobs around it.",
 		),
 		sources: [
-			source("ServiceNow application development", "https://www.servicenow.com/products/application-development.html"),
-			source("ServiceNow AI Agents", "https://www.servicenow.com/products/ai-agents.html"),
+			source(
+				"ServiceNow application development",
+				"https://www.servicenow.com/products/application-development.html",
+			),
+			source(
+				"ServiceNow AI Agents",
+				"https://www.servicenow.com/products/ai-agents.html",
+			),
 			flowLikeAgents,
 			flowLikeSource,
 		],
-		keywords: ["Flow-Like vs ServiceNow", "ServiceNow alternative", "enterprise workflow platform", "AI agent workflow"],
+		keywords: [
+			"Flow-Like vs ServiceNow",
+			"ServiceNow alternative",
+			"enterprise workflow platform",
+			"AI agent workflow",
+		],
 	},
 	{
 		slug: "flow-like-vs-salesforce",
@@ -967,22 +1742,83 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Salesforce can be the customer system of record while Flow-Like runs specialist operations.",
 		],
 		axes: [
-			axis("Workflow app runtime", 5, 5, "Both can build workflow applications; Salesforce is CRM-centered, while Flow-Like is vendor-neutral and portable."),
-			axis("CRM workflow depth", 3, 5, "Salesforce has the edge when the workflow is built around CRM, Customer 360, and related clouds."),
-			axis("App/UI delivery", 5, 4, "Both support app experiences; Salesforce apps remain platform-centered."),
-			axis("AI agents", 5, 5, "Both support AI agents; Agentforce is CRM/platform-centered, while Flow-Like agents can call flows, tools, APIs, data, and MCP servers."),
-			axis("Vendor-neutral portability", 5, 1, "Salesforce workflows and apps are Salesforce platform artifacts."),
-			axis("Local/offline execution", 5, 2, "Salesforce is cloud/platform centered; Flow-Like emphasizes local runtime control."),
+			axis(
+				"Workflow app runtime",
+				5,
+				5,
+				"Both can build workflow applications; Salesforce is CRM-centered, while Flow-Like is vendor-neutral and portable.",
+			),
+			axis(
+				"CRM workflow depth",
+				3,
+				5,
+				"Salesforce has the edge when the workflow is built around CRM, Customer 360, and related clouds.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				4,
+				"Both support app experiences; Salesforce apps remain platform-centered.",
+			),
+			axis(
+				"AI agents",
+				5,
+				5,
+				"Both support AI agents; Agentforce is CRM/platform-centered, while Flow-Like agents can call flows, tools, APIs, data, and MCP servers.",
+			),
+			axis(
+				"Vendor-neutral portability",
+				5,
+				1,
+				"Salesforce workflows and apps are Salesforce platform artifacts.",
+			),
+			axis(
+				"Local/offline execution",
+				5,
+				2,
+				"Salesforce is cloud/platform centered; Flow-Like emphasizes local runtime control.",
+			),
 		],
 		facts: [
-			fact("Platform scope", "Salesforce positions Agentforce 360 Platform for customizing Agentforce and Customer 360.", source("Salesforce Agentforce", "https://www.salesforce.com/agentforce/")),
-			fact("Flow Automation", "Salesforce lists Flow Automation as a platform capability in the Agentforce 360 Platform navigation.", source("Salesforce Agentforce", "https://www.salesforce.com/agentforce/")),
-			fact("Agentforce", "Salesforce describes Agentforce as an AI agent platform for humans and agents working together.", source("Salesforce Agentforce", "https://www.salesforce.com/agentforce/")),
-			flowFact("AI agents", "Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.", "Agentforce is Salesforce's CRM and platform-centered AI agent system.", flowLikeAgents),
-			flowFact("Runtime ownership", "Flow-Like is not CRM-bound; it is a workflow/app runtime that can run on controlled infrastructure.", "Salesforce workflows and Agentforce capabilities are centered on Salesforce platform data and metadata."),
+			fact(
+				"Platform scope",
+				"Salesforce positions Agentforce 360 Platform for customizing Agentforce and Customer 360.",
+				source(
+					"Salesforce Agentforce",
+					"https://www.salesforce.com/agentforce/",
+				),
+			),
+			fact(
+				"Flow Automation",
+				"Salesforce lists Flow Automation as a platform capability in the Agentforce 360 Platform navigation.",
+				source(
+					"Salesforce Agentforce",
+					"https://www.salesforce.com/agentforce/",
+				),
+			),
+			fact(
+				"Agentforce",
+				"Salesforce describes Agentforce as an AI agent platform for humans and agents working together.",
+				source(
+					"Salesforce Agentforce",
+					"https://www.salesforce.com/agentforce/",
+				),
+			),
+			flowFact(
+				"AI agents",
+				"Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.",
+				"Agentforce is Salesforce's CRM and platform-centered AI agent system.",
+				flowLikeAgents,
+			),
+			flowFact(
+				"Runtime ownership",
+				"Flow-Like is not CRM-bound; it is a workflow/app runtime that can run on controlled infrastructure.",
+				"Salesforce workflows and Agentforce capabilities are centered on Salesforce platform data and metadata.",
+			),
 		],
 		prose: {
-			heading: "Salesforce is CRM-centered; Flow-Like is workflow-runtime centered.",
+			heading:
+				"Salesforce is CRM-centered; Flow-Like is workflow-runtime centered.",
 			body: [
 				"Salesforce is the natural choice when the operating model revolves around CRM objects, sales, service, marketing, commerce, Slack, Tableau, MuleSoft, and Agentforce. Its platform is broad and deeply integrated.",
 				"Flow-Like is the better fit when the workflow is not fundamentally a CRM extension. It can run near files, devices, internal systems, or self-hosted infrastructure and package the workflow with UI and AI without adopting a CRM platform as the runtime.",
@@ -1006,8 +1842,17 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"portable workflow apps and local/self-hosted execution outside a CRM-centered data model",
 			"Yes. Flow-Like can integrate with Salesforce data or APIs while keeping specialized workflow execution outside the CRM platform.",
 		),
-		sources: [source("Salesforce Agentforce", "https://www.salesforce.com/agentforce/"), flowLikeAgents, flowLikeSource],
-		keywords: ["Flow-Like vs Salesforce", "Salesforce alternative", "Agentforce alternative", "CRM workflow automation"],
+		sources: [
+			source("Salesforce Agentforce", "https://www.salesforce.com/agentforce/"),
+			flowLikeAgents,
+			flowLikeSource,
+		],
+		keywords: [
+			"Flow-Like vs Salesforce",
+			"Salesforce alternative",
+			"Agentforce alternative",
+			"CRM workflow automation",
+		],
 	},
 	{
 		slug: "flow-like-vs-uipath",
@@ -1031,22 +1876,75 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"RPA and Flow-Like workflows can complement each other for legacy systems.",
 		],
 		axes: [
-			axis("Desktop/RPA automation", 5, 5, "Both can automate desktop and browser work. Flow-Like ships mouse, keyboard, window, screenshot, OCR/barcode, and vision/template automation; UiPath has a broader enterprise RPA suite."),
-			axis("Robot orchestration", 3, 5, "UiPath has the edge for centrally managed attended and unattended robot estates."),
-			axis("Workflow app delivery", 5, 3, "UiPath has Apps; Flow-Like centers apps around the workflow runtime."),
-			axis("AI automation", 5, 5, "Both support AI automation; UiPath packages it for RPA estates, while Flow-Like embeds agents, tools, data, and workflows in one runtime."),
-			axis("Runtime portability", 5, 2, "UiPath automations depend on UiPath platform components."),
-			axis("Typed data workflows", 5, 3, "Flow-Like is better suited to typed workflow/data project ownership."),
+			axis(
+				"Desktop/RPA automation",
+				5,
+				5,
+				"Both can automate desktop and browser work. Flow-Like ships mouse, keyboard, window, screenshot, OCR/barcode, and vision/template automation; UiPath has a broader enterprise RPA suite.",
+			),
+			axis(
+				"Robot orchestration",
+				3,
+				5,
+				"UiPath has the edge for centrally managed attended and unattended robot estates.",
+			),
+			axis(
+				"Workflow app delivery",
+				5,
+				3,
+				"UiPath has Apps; Flow-Like centers apps around the workflow runtime.",
+			),
+			axis(
+				"AI automation",
+				5,
+				5,
+				"Both support AI automation; UiPath packages it for RPA estates, while Flow-Like embeds agents, tools, data, and workflows in one runtime.",
+			),
+			axis(
+				"Runtime portability",
+				5,
+				2,
+				"UiPath automations depend on UiPath platform components.",
+			),
+			axis(
+				"Typed data workflows",
+				5,
+				3,
+				"Flow-Like is better suited to typed workflow/data project ownership.",
+			),
 		],
 		facts: [
-			fact("Platform breadth", "UiPath lists products for robots, Orchestrator, Studio, Apps, Agent Builder, AI Center, and process mining.", source("UiPath product platform", "https://www.uipath.com/product")),
-			fact("Apps", "UiPath describes Apps as low-code automation-driven business apps.", source("UiPath product platform", "https://www.uipath.com/product")),
-			fact("Orchestration", "UiPath lists Orchestrator for managing automations centrally and remotely.", source("UiPath product platform", "https://www.uipath.com/product")),
-			flowFact("Desktop automation", "Flow-Like ships desktop/computer automation nodes for mouse, keyboard, screenshots, window inspection/control, OCR/barcode, browser automation, selectors, vision/template matching, and LLM-assisted repair.", "UiPath centers automation around RPA robots, Orchestrator, Studio, Apps, and automation-suite components.", flowLikeAutomationCatalog),
-			flowFact("AI agents", "Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.", "UiPath includes agent builder, AI Center, Autopilot, and related automation AI products.", flowLikeAgents),
+			fact(
+				"Platform breadth",
+				"UiPath lists products for robots, Orchestrator, Studio, Apps, Agent Builder, AI Center, and process mining.",
+				source("UiPath product platform", "https://www.uipath.com/product"),
+			),
+			fact(
+				"Apps",
+				"UiPath describes Apps as low-code automation-driven business apps.",
+				source("UiPath product platform", "https://www.uipath.com/product"),
+			),
+			fact(
+				"Orchestration",
+				"UiPath lists Orchestrator for managing automations centrally and remotely.",
+				source("UiPath product platform", "https://www.uipath.com/product"),
+			),
+			flowFact(
+				"Desktop automation",
+				"Flow-Like ships desktop/computer automation nodes for mouse, keyboard, screenshots, window inspection/control, OCR/barcode, browser automation, selectors, vision/template matching, and LLM-assisted repair.",
+				"UiPath centers automation around RPA robots, Orchestrator, Studio, Apps, and automation-suite components.",
+				flowLikeAutomationCatalog,
+			),
+			flowFact(
+				"AI agents",
+				"Flow-Like agents can use tools, query data, call APIs, run flows, and connect MCP servers.",
+				"UiPath includes agent builder, AI Center, Autopilot, and related automation AI products.",
+				flowLikeAgents,
+			),
 		],
 		prose: {
-			heading: "UiPath automates through robots; Flow-Like automates through typed workflow apps.",
+			heading:
+				"UiPath automates through robots; Flow-Like automates through typed workflow apps.",
 			body: [
 				"UiPath is usually the stronger category fit where RPA is the right abstraction: automating legacy screens, running robot fleets, managing attended and unattended automation, and governing a large automation program.",
 				"Flow-Like already ships desktop/RPA automation: mouse and keyboard actions, screenshots, window automation, OCR, barcode reading, browser automation, selectors, vision/template matching, and workflow logic around those inputs. UiPath is still ahead for mature robot orchestration. Flow-Like is stronger when the process can be modeled directly as a typed workflow and packaged with data, AI, and UI.",
@@ -1070,8 +1968,19 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"portable workflow applications with local/offline execution, data/file processing, and typed automation",
 			"Yes. UiPath can automate legacy screens and Flow-Like can orchestrate the larger workflow and app layer.",
 		),
-		sources: [source("UiPath product platform", "https://www.uipath.com/product"), flowLikeDesktopAutomation, flowLikeAutomationCatalog, flowLikeAgents, flowLikeSource],
-		keywords: ["Flow-Like vs UiPath", "UiPath alternative", "RPA alternative", "workflow app automation"],
+		sources: [
+			source("UiPath product platform", "https://www.uipath.com/product"),
+			flowLikeDesktopAutomation,
+			flowLikeAutomationCatalog,
+			flowLikeAgents,
+			flowLikeSource,
+		],
+		keywords: [
+			"Flow-Like vs UiPath",
+			"UiPath alternative",
+			"RPA alternative",
+			"workflow app automation",
+		],
 	},
 	{
 		slug: "flow-like-vs-langchain",
@@ -1095,23 +2004,89 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"LangChain can be embedded inside services; Flow-Like can expose workflows to users.",
 		],
 		axes: [
-			axis("Agent workflows", 5, 5, "Both can build agent workflows. Flow-Like maps agents, tools, memory, prompts, LLMs, retrievers, and vector stores into visual nodes."),
-			axis("Library-level composition", 4, 5, "LangChain has the edge when engineers need low-level prompt, tool, middleware, and provider abstractions directly in Python or TypeScript."),
-			axis("Visual workflow authoring", 5, 1, "LangChain is code-first; Flow-Like is visual."),
-			axis("App/UI delivery", 5, 1, "LangChain does not ship a native app builder."),
-			axis("Data/file workflow runtime", 5, 2, "LangChain relies on the surrounding app and infrastructure for state and files."),
-			axis("Governed execution surface", 5, 2, "Flow-Like provides product runtime surfaces; LangChain provides libraries and related services."),
+			axis(
+				"Agent workflows",
+				5,
+				5,
+				"Both can build agent workflows. Flow-Like maps agents, tools, memory, prompts, LLMs, retrievers, and vector stores into visual nodes.",
+			),
+			axis(
+				"Library-level composition",
+				4,
+				5,
+				"LangChain has the edge when engineers need low-level prompt, tool, middleware, and provider abstractions directly in Python or TypeScript.",
+			),
+			axis(
+				"Visual workflow authoring",
+				5,
+				1,
+				"LangChain is code-first; Flow-Like is visual.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				1,
+				"LangChain does not ship a native app builder.",
+			),
+			axis(
+				"Data/file workflow runtime",
+				5,
+				2,
+				"LangChain relies on the surrounding app and infrastructure for state and files.",
+			),
+			axis(
+				"Governed execution surface",
+				5,
+				2,
+				"Flow-Like provides product runtime surfaces; LangChain provides libraries and related services.",
+			),
 		],
 		facts: [
-			fact("Framework model", "LangChain provides create_agent as a configurable agent harness composed from model, tools, prompt, and middleware.", source("LangChain overview", "https://docs.langchain.com/oss/python/langchain/overview")),
-			fact("Provider abstraction", "LangChain standardizes interaction with different model providers.", source("LangChain overview", "https://docs.langchain.com/oss/python/langchain/overview")),
-			fact("Built on LangGraph", "LangChain agents are built on LangGraph for durable execution, human-in-the-loop, persistence, and related capabilities.", source("LangChain overview", "https://docs.langchain.com/oss/python/langchain/overview")),
-			flowFact("LangChain mapping", "Flow-Like maps LangChain chains, agents, tools, memory, prompts, LLMs, retrievers, vector stores, loaders, output parsers, and runnables to visual Flow-Like concepts.", "LangChain provides code libraries and related services rather than a built-in no-code app runtime.", flowLikeLangChain),
-			flowFact("SDK integration", "Flow-Like SDKs include LangChain-compatible wrappers for models, chains, agents, and RAG pipelines.", "LangChain remains the lower-level framework for direct code composition.", flowLikeSource),
-			flowFact("Product surface", "Flow-Like gives AI workflows a visual builder, typed runtime, and application surface.", "LangChain provides code libraries and related services rather than a built-in no-code app runtime."),
+			fact(
+				"Framework model",
+				"LangChain provides create_agent as a configurable agent harness composed from model, tools, prompt, and middleware.",
+				source(
+					"LangChain overview",
+					"https://docs.langchain.com/oss/python/langchain/overview",
+				),
+			),
+			fact(
+				"Provider abstraction",
+				"LangChain standardizes interaction with different model providers.",
+				source(
+					"LangChain overview",
+					"https://docs.langchain.com/oss/python/langchain/overview",
+				),
+			),
+			fact(
+				"Built on LangGraph",
+				"LangChain agents are built on LangGraph for durable execution, human-in-the-loop, persistence, and related capabilities.",
+				source(
+					"LangChain overview",
+					"https://docs.langchain.com/oss/python/langchain/overview",
+				),
+			),
+			flowFact(
+				"LangChain mapping",
+				"Flow-Like maps LangChain chains, agents, tools, memory, prompts, LLMs, retrievers, vector stores, loaders, output parsers, and runnables to visual Flow-Like concepts.",
+				"LangChain provides code libraries and related services rather than a built-in no-code app runtime.",
+				flowLikeLangChain,
+			),
+			flowFact(
+				"SDK integration",
+				"Flow-Like SDKs include LangChain-compatible wrappers for models, chains, agents, and RAG pipelines.",
+				"LangChain remains the lower-level framework for direct code composition.",
+				flowLikeSource,
+			),
+			flowFact(
+				"Product surface",
+				"Flow-Like gives AI workflows a visual builder, typed runtime, and application surface.",
+				"LangChain provides code libraries and related services rather than a built-in no-code app runtime.",
+			),
 		],
 		prose: {
-			heading: "LangChain is code for AI builders; Flow-Like is a product surface for AI workflows.",
+			heading:
+				"LangChain is code for AI builders; Flow-Like is a product surface for AI workflows.",
 			body: [
 				"LangChain is useful when engineers want to assemble custom agent logic inside an application. It gives library-level control and integrates with the broader LangGraph and LangSmith ecosystem.",
 				"Flow-Like can cover the same agent workflow concepts visually: agents, tools, memory, prompts, LLM calls, retrievers, vector stores, loaders, output parsing, and callable flows. Its advantage is when the AI workflow should be operated by more than the engineers who wrote it. Visual authoring, typed nodes, data handling, app UI, and local execution make the workflow easier to govern and deliver as a business tool.",
@@ -1135,8 +2110,21 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"AI-enabled workflow apps with visual authoring, data/file handling, UI, and controlled execution",
 			"Yes. LangChain can be used as a code-level AI component inside a broader Flow-Like workflow architecture.",
 		),
-		sources: [source("LangChain overview", "https://docs.langchain.com/oss/python/langchain/overview"), flowLikeLangChain, flowLikeAgents, flowLikeSource],
-		keywords: ["Flow-Like vs LangChain", "LangChain alternative", "AI workflow platform", "visual AI agents"],
+		sources: [
+			source(
+				"LangChain overview",
+				"https://docs.langchain.com/oss/python/langchain/overview",
+			),
+			flowLikeLangChain,
+			flowLikeAgents,
+			flowLikeSource,
+		],
+		keywords: [
+			"Flow-Like vs LangChain",
+			"LangChain alternative",
+			"AI workflow platform",
+			"visual AI agents",
+		],
 	},
 	{
 		slug: "flow-like-vs-dify",
@@ -1160,20 +2148,71 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Both are open-source oriented, but their scope differs.",
 		],
 		axes: [
-			axis("AI workflow focus", 5, 5, "Both can build AI workflows; Dify is more focused on LLM app delivery, while Flow-Like combines AI with broader automation."),
-			axis("General automation", 5, 3, "Flow-Like covers AI and non-AI workflows in one typed runtime."),
-			axis("App/UI delivery", 5, 3, "Dify publishes AI apps; Flow-Like targets broader app surfaces."),
-			axis("Local/offline execution", 5, 2, "Dify can self-host, but offline/local app execution is not its center."),
-			axis("Data/file workflows", 5, 3, "Flow-Like is stronger for file-heavy and operational data workflows."),
+			axis(
+				"AI workflow focus",
+				5,
+				5,
+				"Both can build AI workflows; Dify is more focused on LLM app delivery, while Flow-Like combines AI with broader automation.",
+			),
+			axis(
+				"General automation",
+				5,
+				3,
+				"Flow-Like covers AI and non-AI workflows in one typed runtime.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				3,
+				"Dify publishes AI apps; Flow-Like targets broader app surfaces.",
+			),
+			axis(
+				"Local/offline execution",
+				5,
+				2,
+				"Dify can self-host, but offline/local app execution is not its center.",
+			),
+			axis(
+				"Data/file workflows",
+				5,
+				3,
+				"Flow-Like is stronger for file-heavy and operational data workflows.",
+			),
 		],
 		facts: [
-			fact("AI platform", "Dify describes itself as an open-source platform for building agentic workflows.", source("Dify introduction", "https://docs.dify.ai/en/use-dify/getting-started/introduction")),
-			fact("Visual builder", "Dify says users can define processes visually, connect tools and data sources, and deploy AI applications.", source("Dify introduction", "https://docs.dify.ai/en/use-dify/getting-started/introduction")),
-			fact("Self-hosting", "Dify introduction links to self-hosting on a laptop or server.", source("Dify introduction", "https://docs.dify.ai/en/use-dify/getting-started/introduction")),
-			flowFact("Platform scope", "Flow-Like combines AI with typed workflows, data, UI, and local/self-hosted execution.", "Dify focuses on AI apps, chatflows, knowledge, and agentic workflows."),
+			fact(
+				"AI platform",
+				"Dify describes itself as an open-source platform for building agentic workflows.",
+				source(
+					"Dify introduction",
+					"https://docs.dify.ai/en/use-dify/getting-started/introduction",
+				),
+			),
+			fact(
+				"Visual builder",
+				"Dify says users can define processes visually, connect tools and data sources, and deploy AI applications.",
+				source(
+					"Dify introduction",
+					"https://docs.dify.ai/en/use-dify/getting-started/introduction",
+				),
+			),
+			fact(
+				"Self-hosting",
+				"Dify introduction links to self-hosting on a laptop or server.",
+				source(
+					"Dify introduction",
+					"https://docs.dify.ai/en/use-dify/getting-started/introduction",
+				),
+			),
+			flowFact(
+				"Platform scope",
+				"Flow-Like combines AI with typed workflows, data, UI, and local/self-hosted execution.",
+				"Dify focuses on AI apps, chatflows, knowledge, and agentic workflows.",
+			),
 		],
 		prose: {
-			heading: "Dify is focused AI workflow building; Flow-Like is broader operational workflow software.",
+			heading:
+				"Dify is focused AI workflow building; Flow-Like is broader operational workflow software.",
 			body: [
 				"Dify is a good fit for teams building AI apps, chatflows, agentic workflows, and knowledge-backed assistants. Its product model is directly aligned with LLM application development.",
 				"Flow-Like is a better fit when AI is only one part of the operational system. If the same app needs file processing, typed workflow logic, desktop/offline execution, or non-AI automation, Flow-Like keeps those requirements in the same runtime.",
@@ -1197,8 +2236,19 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"AI plus non-AI operational workflows that need data, files, UI, local execution, and deployment portability",
 			"Yes. Dify can be used for focused AI app flows and Flow-Like can orchestrate the broader workflow/app system around them.",
 		),
-		sources: [source("Dify introduction", "https://docs.dify.ai/en/use-dify/getting-started/introduction"), flowLikeSource],
-		keywords: ["Flow-Like vs Dify", "Dify alternative", "agentic workflow platform", "AI app workflow"],
+		sources: [
+			source(
+				"Dify introduction",
+				"https://docs.dify.ai/en/use-dify/getting-started/introduction",
+			),
+			flowLikeSource,
+		],
+		keywords: [
+			"Flow-Like vs Dify",
+			"Dify alternative",
+			"agentic workflow platform",
+			"AI app workflow",
+		],
 	},
 	{
 		slug: "flow-like-vs-power-automate",
@@ -1222,21 +2272,78 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"They can work together when Power Automate handles Microsoft-side events and Flow-Like owns private workflow apps.",
 		],
 		axes: [
-			axis("Microsoft tenant-native automation", 3, 5, "Power Automate has the edge for Microsoft 365, Dataverse, Teams, SharePoint, and Power Platform flows."),
-			axis("Desktop/RPA automation", 5, 5, "Both can automate desktop work. Flow-Like ships mouse, keyboard, window, screenshot, OCR/barcode, browser, and vision/template automation."),
-			axis("Power Platform RPA governance", 3, 5, "Power Automate has the edge for Microsoft-managed desktop flows, connector administration, tenant governance, and Power Platform operations."),
-			axis("App/workflow packaging", 5, 3, "Flow-Like packages workflows with UI and runtime; Power Automate usually remains a Power Platform flow."),
-			axis("Local/offline runtime", 5, 2, "Power Automate has desktop flows, but the platform is not a local-first portable workflow runtime."),
-			axis("Owned data/file workflows", 5, 3, "Flow-Like is stronger when files, object storage, local data, and execution traces are core assets."),
+			axis(
+				"Microsoft tenant-native automation",
+				3,
+				5,
+				"Power Automate has the edge for Microsoft 365, Dataverse, Teams, SharePoint, and Power Platform flows.",
+			),
+			axis(
+				"Desktop/RPA automation",
+				5,
+				5,
+				"Both can automate desktop work. Flow-Like ships mouse, keyboard, window, screenshot, OCR/barcode, browser, and vision/template automation.",
+			),
+			axis(
+				"Power Platform RPA governance",
+				3,
+				5,
+				"Power Automate has the edge for Microsoft-managed desktop flows, connector administration, tenant governance, and Power Platform operations.",
+			),
+			axis(
+				"App/workflow packaging",
+				5,
+				3,
+				"Flow-Like packages workflows with UI and runtime; Power Automate usually remains a Power Platform flow.",
+			),
+			axis(
+				"Local/offline runtime",
+				5,
+				2,
+				"Power Automate has desktop flows, but the platform is not a local-first portable workflow runtime.",
+			),
+			axis(
+				"Owned data/file workflows",
+				5,
+				3,
+				"Flow-Like is stronger when files, object storage, local data, and execution traces are core assets.",
+			),
 		],
 		facts: [
-			fact("Flow types", "Microsoft documents cloud flows, desktop flows, and generative actions in Power Automate.", source("Power Automate flow types", "https://learn.microsoft.com/en-us/power-automate/flow-types")),
-			fact("Desktop RPA", "Microsoft describes desktop flows as RPA for web, desktop, legacy applications, Excel files, folders, UI elements, images, and coordinates.", source("Power Automate desktop flows", "https://learn.microsoft.com/en-us/power-automate/desktop-flows/introduction")),
-			fact("Connector coverage", "Microsoft's Power Automate product page describes more than 1,000 API connectors and enterprise governance features.", source("Power Automate product page", "https://www.microsoft.com/en-us/power-platform/products/power-automate/")),
-			flowFact("Desktop automation", "Flow-Like ships desktop/computer automation nodes for mouse, keyboard, screenshots, window inspection/control, OCR/barcode, browser automation, selectors, vision/template matching, and LLM-assisted repair.", "Power Automate flows are Power Platform assets centered on Microsoft's cloud, desktop, and governance model.", flowLikeAutomationCatalog),
+			fact(
+				"Flow types",
+				"Microsoft documents cloud flows, desktop flows, and generative actions in Power Automate.",
+				source(
+					"Power Automate flow types",
+					"https://learn.microsoft.com/en-us/power-automate/flow-types",
+				),
+			),
+			fact(
+				"Desktop RPA",
+				"Microsoft describes desktop flows as RPA for web, desktop, legacy applications, Excel files, folders, UI elements, images, and coordinates.",
+				source(
+					"Power Automate desktop flows",
+					"https://learn.microsoft.com/en-us/power-automate/desktop-flows/introduction",
+				),
+			),
+			fact(
+				"Connector coverage",
+				"Microsoft's Power Automate product page describes more than 1,000 API connectors and enterprise governance features.",
+				source(
+					"Power Automate product page",
+					"https://www.microsoft.com/en-us/power-platform/products/power-automate/",
+				),
+			),
+			flowFact(
+				"Desktop automation",
+				"Flow-Like ships desktop/computer automation nodes for mouse, keyboard, screenshots, window inspection/control, OCR/barcode, browser automation, selectors, vision/template matching, and LLM-assisted repair.",
+				"Power Automate flows are Power Platform assets centered on Microsoft's cloud, desktop, and governance model.",
+				flowLikeAutomationCatalog,
+			),
 		],
 		prose: {
-			heading: "Power Automate is the Microsoft automation default; Flow-Like is the portable workflow-app runtime.",
+			heading:
+				"Power Automate is the Microsoft automation default; Flow-Like is the portable workflow-app runtime.",
 			body: [
 				"Power Automate is the better choice when the organization already runs on Microsoft 365, Teams, SharePoint, Dataverse, Dynamics, and Power Platform governance. It has stronger Microsoft-native connector operations, desktop-flow administration, and a familiar administrative model for Microsoft-first enterprises.",
 				"Flow-Like is the better choice when the automation itself must travel as a product. If the workflow needs typed visual execution, a custom app surface, offline or air-gapped operation, local files, object storage, and self-hosted runtime control, Flow-Like has the clearer architecture.",
@@ -1261,15 +2368,29 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Yes. Power Automate can remain the Microsoft integration and RPA layer, while Flow-Like handles portable workflow apps and private execution.",
 		),
 		sources: [
-			source("Power Automate flow types", "https://learn.microsoft.com/en-us/power-automate/flow-types"),
-			source("Power Automate desktop flows", "https://learn.microsoft.com/en-us/power-automate/desktop-flows/introduction"),
-			source("Power Automate product page", "https://www.microsoft.com/en-us/power-platform/products/power-automate/"),
+			source(
+				"Power Automate flow types",
+				"https://learn.microsoft.com/en-us/power-automate/flow-types",
+			),
+			source(
+				"Power Automate desktop flows",
+				"https://learn.microsoft.com/en-us/power-automate/desktop-flows/introduction",
+			),
+			source(
+				"Power Automate product page",
+				"https://www.microsoft.com/en-us/power-platform/products/power-automate/",
+			),
 			flowLikeDesktopAutomation,
 			flowLikeAutomationCatalog,
 			flowLikeSource,
 			flowLikeSelfHost,
 		],
-		keywords: ["Flow-Like vs Power Automate", "Power Automate alternative", "Microsoft workflow automation", "RPA workflow app"],
+		keywords: [
+			"Flow-Like vs Power Automate",
+			"Power Automate alternative",
+			"Microsoft workflow automation",
+			"RPA workflow app",
+		],
 	},
 	{
 		slug: "flow-like-vs-workato",
@@ -1293,20 +2414,71 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Workato can integrate systems while Flow-Like runs private workflow products.",
 		],
 		axes: [
-			axis("Enterprise iPaaS program", 4, 5, "Both can integrate applications; Workato has the edge for enterprise iPaaS programs, recipes, and business/IT governance."),
-			axis("Connector/governance model", 4, 5, "Workato has mature business/IT governance and connector extension patterns."),
-			axis("App/UI delivery", 5, 2, "Flow-Like builds workflow-backed apps; Workato is not primarily an app builder."),
-			axis("Local/offline execution", 5, 1, "Workato supports cloud and on-prem app integration, but it is not a local-first offline app runtime."),
-			axis("Workflow portability", 5, 2, "Flow-Like projects are designed around owned runtime portability; Workato recipes remain platform assets."),
+			axis(
+				"Enterprise iPaaS program",
+				4,
+				5,
+				"Both can integrate applications; Workato has the edge for enterprise iPaaS programs, recipes, and business/IT governance.",
+			),
+			axis(
+				"Connector/governance model",
+				4,
+				5,
+				"Workato has mature business/IT governance and connector extension patterns.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				2,
+				"Flow-Like builds workflow-backed apps; Workato is not primarily an app builder.",
+			),
+			axis(
+				"Local/offline execution",
+				5,
+				1,
+				"Workato supports cloud and on-prem app integration, but it is not a local-first offline app runtime.",
+			),
+			axis(
+				"Workflow portability",
+				5,
+				2,
+				"Flow-Like projects are designed around owned runtime portability; Workato recipes remain platform assets.",
+			),
 		],
 		facts: [
-			fact("Product model", "Workato documents workflow automation across cloud and on-premises apps.", source("What is Workato", "https://docs.workato.com/en/getting-started/what-is-workato.html")),
-			fact("Enterprise foundation", "Workato describes an enterprise-grade workflow automation platform for applications, data, and people.", source("What is Workato", "https://docs.workato.com/en/getting-started/what-is-workato.html")),
-			fact("Extensibility", "Workato documents REST connectors, Connector SDK, and public APIs for extending integrations and controlling recipes.", source("What is Workato", "https://docs.workato.com/en/getting-started/what-is-workato.html")),
-			flowFact("Runtime ownership", "Flow-Like packages visual workflows, data, AI, and UI into a runtime the team can control.", "Workato recipes and governance are centered on the Workato automation platform."),
+			fact(
+				"Product model",
+				"Workato documents workflow automation across cloud and on-premises apps.",
+				source(
+					"What is Workato",
+					"https://docs.workato.com/en/getting-started/what-is-workato.html",
+				),
+			),
+			fact(
+				"Enterprise foundation",
+				"Workato describes an enterprise-grade workflow automation platform for applications, data, and people.",
+				source(
+					"What is Workato",
+					"https://docs.workato.com/en/getting-started/what-is-workato.html",
+				),
+			),
+			fact(
+				"Extensibility",
+				"Workato documents REST connectors, Connector SDK, and public APIs for extending integrations and controlling recipes.",
+				source(
+					"What is Workato",
+					"https://docs.workato.com/en/getting-started/what-is-workato.html",
+				),
+			),
+			flowFact(
+				"Runtime ownership",
+				"Flow-Like packages visual workflows, data, AI, and UI into a runtime the team can control.",
+				"Workato recipes and governance are centered on the Workato automation platform.",
+			),
 		],
 		prose: {
-			heading: "Workato is enterprise integration automation; Flow-Like is owned workflow software.",
+			heading:
+				"Workato is enterprise integration automation; Flow-Like is owned workflow software.",
 			body: [
 				"Workato is the stronger choice for large organizations that need a governed iPaaS layer between Salesforce, NetSuite, Workday, ServiceNow, Slack, databases, and internal systems. It is built for business and IT teams to coordinate integrations with enterprise controls.",
 				"Flow-Like is the stronger choice when the automation becomes a deployable product. If users need app screens, local execution, offline operation, files, typed workflow state, and self-hosted deployment, Flow-Like gives more control over the runtime itself.",
@@ -1330,8 +2502,20 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"portable workflow applications with local/offline execution, app UI, typed data, files, and self-hosted runtime control",
 			"Yes. Workato can integrate enterprise systems and Flow-Like can own the workflow app or private execution layer.",
 		),
-		sources: [source("What is Workato", "https://docs.workato.com/en/getting-started/what-is-workato.html"), flowLikeSource, flowLikeSelfHost],
-		keywords: ["Flow-Like vs Workato", "Workato alternative", "enterprise iPaaS alternative", "workflow automation platform"],
+		sources: [
+			source(
+				"What is Workato",
+				"https://docs.workato.com/en/getting-started/what-is-workato.html",
+			),
+			flowLikeSource,
+			flowLikeSelfHost,
+		],
+		keywords: [
+			"Flow-Like vs Workato",
+			"Workato alternative",
+			"enterprise iPaaS alternative",
+			"workflow automation platform",
+		],
 	},
 	{
 		slug: "flow-like-vs-windmill",
@@ -1355,23 +2539,89 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Flow-Like has the edge on local/offline visual workflow apps and typed runtime packaging.",
 		],
 		axes: [
-			axis("Developer workflow platform", 4, 5, "Windmill is purpose-built for scripts, flows, endpoints, and code-first operations."),
-			axis("Python execution", 5, 5, "Flow-Like ships a Python interpreter node; Windmill also supports Python scripts."),
-			axis("Multi-language scripts", 4, 5, "Windmill has the edge for TypeScript, Python, Go, PHP, Bash, C#, SQL, Rust, and Docker-image script execution."),
-			axis("Visual typed workflow apps", 5, 3, "Flow-Like is stronger for typed visual workflow authoring connected directly to app UI."),
-			axis("Self-host control", 5, 5, "Both support self-hosting and customer-controlled infrastructure."),
-			axis("Local/offline execution", 5, 2, "Windmill is primarily a server/cloud workflow platform; Flow-Like is local-first."),
-			axis("File/data app runtime", 5, 3, "Flow-Like is stronger when files, object storage, UI, and workflow state are one product."),
+			axis(
+				"Developer workflow platform",
+				4,
+				5,
+				"Windmill is purpose-built for scripts, flows, endpoints, and code-first operations.",
+			),
+			axis(
+				"Python execution",
+				5,
+				5,
+				"Flow-Like ships a Python interpreter node; Windmill also supports Python scripts.",
+			),
+			axis(
+				"Multi-language scripts",
+				4,
+				5,
+				"Windmill has the edge for TypeScript, Python, Go, PHP, Bash, C#, SQL, Rust, and Docker-image script execution.",
+			),
+			axis(
+				"Visual typed workflow apps",
+				5,
+				3,
+				"Flow-Like is stronger for typed visual workflow authoring connected directly to app UI.",
+			),
+			axis(
+				"Self-host control",
+				5,
+				5,
+				"Both support self-hosting and customer-controlled infrastructure.",
+			),
+			axis(
+				"Local/offline execution",
+				5,
+				2,
+				"Windmill is primarily a server/cloud workflow platform; Flow-Like is local-first.",
+			),
+			axis(
+				"File/data app runtime",
+				5,
+				3,
+				"Flow-Like is stronger when files, object storage, UI, and workflow state are one product.",
+			),
 		],
 		facts: [
-			fact("Product model", "Windmill describes itself as an open-source workflow engine and developer platform for endpoints, workflows, and UIs.", source("Windmill getting started", "https://www.windmill.dev/docs/getting_started/how_to_use_windmill")),
-			fact("Languages", "Windmill supports TypeScript, Python, Go, PHP, Bash, C#, SQL, Rust, and Docker images.", source("Windmill getting started", "https://www.windmill.dev/docs/getting_started/how_to_use_windmill")),
-			fact("Self-hosting", "Windmill documents cloud and self-hosted deployment with Kubernetes Helm charts or Docker Compose.", source("Windmill getting started", "https://www.windmill.dev/docs/getting_started/how_to_use_windmill")),
-			flowFact("Python interpreter", "Flow-Like ships a Python Interpreter node for executing inline Python in a secure WASM sandbox with inputs, packages, workspace support, and runtime limits.", "Windmill supports Python plus several other script languages in a developer workflow platform.", flowLikePythonInterpreter),
-			flowFact("Visual runtime", "Flow-Like centers typed visual workflows, app surfaces, and local/self-hosted execution in one project.", "Windmill centers scripts, flows, endpoints, and internal tools in a developer platform."),
+			fact(
+				"Product model",
+				"Windmill describes itself as an open-source workflow engine and developer platform for endpoints, workflows, and UIs.",
+				source(
+					"Windmill getting started",
+					"https://www.windmill.dev/docs/getting_started/how_to_use_windmill",
+				),
+			),
+			fact(
+				"Languages",
+				"Windmill supports TypeScript, Python, Go, PHP, Bash, C#, SQL, Rust, and Docker images.",
+				source(
+					"Windmill getting started",
+					"https://www.windmill.dev/docs/getting_started/how_to_use_windmill",
+				),
+			),
+			fact(
+				"Self-hosting",
+				"Windmill documents cloud and self-hosted deployment with Kubernetes Helm charts or Docker Compose.",
+				source(
+					"Windmill getting started",
+					"https://www.windmill.dev/docs/getting_started/how_to_use_windmill",
+				),
+			),
+			flowFact(
+				"Python interpreter",
+				"Flow-Like ships a Python Interpreter node for executing inline Python in a secure WASM sandbox with inputs, packages, workspace support, and runtime limits.",
+				"Windmill supports Python plus several other script languages in a developer workflow platform.",
+				flowLikePythonInterpreter,
+			),
+			flowFact(
+				"Visual runtime",
+				"Flow-Like centers typed visual workflows, app surfaces, and local/self-hosted execution in one project.",
+				"Windmill centers scripts, flows, endpoints, and internal tools in a developer platform.",
+			),
 		],
 		prose: {
-			heading: "Windmill is code-forward workflow infrastructure; Flow-Like is visual workflow-app software.",
+			heading:
+				"Windmill is code-forward workflow infrastructure; Flow-Like is visual workflow-app software.",
 			body: [
 				"Windmill deserves a direct comparison because it overlaps strongly with workflows, internal tools, self-hosting, and developer operations. It is probably the better choice when a multi-language script service, endpoints, and code-first operations are the primary interface.",
 				"Flow-Like is stronger when the workflow is meant to be designed visually, validated through typed pins, shipped with UI, and run locally or offline. That makes it a better fit for solution engineering, field tools, file-heavy apps, and mixed technical/non-technical teams.",
@@ -1396,12 +2646,20 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Yes. Windmill can provide code-heavy services and Flow-Like can provide visual workflow apps or local/offline execution around them.",
 		),
 		sources: [
-			source("Windmill getting started", "https://www.windmill.dev/docs/getting_started/how_to_use_windmill"),
+			source(
+				"Windmill getting started",
+				"https://www.windmill.dev/docs/getting_started/how_to_use_windmill",
+			),
 			flowLikePythonInterpreter,
 			flowLikeSource,
 			flowLikeSelfHost,
 		],
-		keywords: ["Flow-Like vs Windmill", "Windmill alternative", "open source workflow apps", "self-hosted internal tools"],
+		keywords: [
+			"Flow-Like vs Windmill",
+			"Windmill alternative",
+			"open source workflow apps",
+			"self-hosted internal tools",
+		],
 	},
 	{
 		slug: "flow-like-vs-node-red",
@@ -1425,20 +2683,62 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Both can run close to devices; Flow-Like is broader as an app/workflow runtime.",
 		],
 		axes: [
-			axis("Edge/event flows", 4, 5, "Node-RED is purpose-built for lightweight event-driven and IoT flow programming."),
-			axis("Visual flow authoring", 5, 5, "Both have strong visual authoring, but their target workflows differ."),
-			axis("App/UI delivery", 5, 2, "Flow-Like builds workflow-backed apps; Node-RED's core is flow programming, not app packaging."),
-			axis("Typed governance", 5, 2, "Flow-Like is stronger for typed pins, data lineage, and governed execution traces."),
-			axis("Local/self-host execution", 5, 5, "Both can run on customer-controlled infrastructure and near devices."),
+			axis(
+				"Edge/event flows",
+				4,
+				5,
+				"Node-RED is purpose-built for lightweight event-driven and IoT flow programming.",
+			),
+			axis(
+				"Visual flow authoring",
+				5,
+				5,
+				"Both have strong visual authoring, but their target workflows differ.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				2,
+				"Flow-Like builds workflow-backed apps; Node-RED's core is flow programming, not app packaging.",
+			),
+			axis(
+				"Typed governance",
+				5,
+				2,
+				"Flow-Like is stronger for typed pins, data lineage, and governed execution traces.",
+			),
+			axis(
+				"Local/self-host execution",
+				5,
+				5,
+				"Both can run on customer-controlled infrastructure and near devices.",
+			),
 		],
 		facts: [
-			fact("Product model", "Node-RED describes itself as a flow-based programming tool and an OpenJS Foundation project.", source("Node-RED about", "https://nodered.org/about/")),
-			fact("Editor model", "Node-RED provides a browser-based flow editor for wiring nodes and deploying flows to the runtime.", source("Node-RED about", "https://nodered.org/about/")),
-			fact("Runtime and ecosystem", "Node-RED is built on Node.js, runs at the edge or in the cloud, and points to more than 5,000 community nodes.", source("Node-RED about", "https://nodered.org/about/")),
-			flowFact("Typed workflow apps", "Flow-Like adds typed visual workflows, app UI, AI nodes, data handling, and local/offline execution.", "Node-RED is a lightweight flow programming runtime with JSON-shareable flows."),
+			fact(
+				"Product model",
+				"Node-RED describes itself as a flow-based programming tool and an OpenJS Foundation project.",
+				source("Node-RED about", "https://nodered.org/about/"),
+			),
+			fact(
+				"Editor model",
+				"Node-RED provides a browser-based flow editor for wiring nodes and deploying flows to the runtime.",
+				source("Node-RED about", "https://nodered.org/about/"),
+			),
+			fact(
+				"Runtime and ecosystem",
+				"Node-RED is built on Node.js, runs at the edge or in the cloud, and points to more than 5,000 community nodes.",
+				source("Node-RED about", "https://nodered.org/about/"),
+			),
+			flowFact(
+				"Typed workflow apps",
+				"Flow-Like adds typed visual workflows, app UI, AI nodes, data handling, and local/offline execution.",
+				"Node-RED is a lightweight flow programming runtime with JSON-shareable flows.",
+			),
 		],
 		prose: {
-			heading: "Node-RED is excellent flow programming; Flow-Like is heavier workflow application software.",
+			heading:
+				"Node-RED is excellent flow programming; Flow-Like is heavier workflow application software.",
 			body: [
 				"Node-RED is the better choice for many edge, IoT, MQTT, prototyping, and lightweight event automation jobs. It is mature, simple, widely extended, and comfortable for engineers who want Node.js-oriented flow programming.",
 				"Flow-Like is the better choice when the workflow is closer to an application than a wiring diagram. Typed data flow, built-in app surfaces, AI nodes, file handling, local/offline operation, and lineage make it more suitable for governed operational software.",
@@ -1462,8 +2762,17 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"typed workflow apps with built-in UI, files, AI, data lineage, and local/offline deployment",
 			"Yes. Node-RED can route edge events or device messages into Flow-Like workflows, and Flow-Like can handle the app and business process layer.",
 		),
-		sources: [source("Node-RED about", "https://nodered.org/about/"), flowLikeSource, flowLikeA2ui],
-		keywords: ["Flow-Like vs Node-RED", "Node-RED alternative", "visual flow programming", "typed workflow app"],
+		sources: [
+			source("Node-RED about", "https://nodered.org/about/"),
+			flowLikeSource,
+			flowLikeA2ui,
+		],
+		keywords: [
+			"Flow-Like vs Node-RED",
+			"Node-RED alternative",
+			"visual flow programming",
+			"typed workflow app",
+		],
 	},
 	{
 		slug: "flow-like-vs-pipedream",
@@ -1487,23 +2796,83 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 			"Flow-Like has the edge on app delivery, local/offline execution, and owned workflow runtime.",
 		],
 		axes: [
-			axis("Developer integrations", 4, 5, "Both can integrate APIs and automate workflows; Pipedream has the edge for hosted developer integration speed."),
-			axis("Python code execution", 5, 5, "Flow-Like ships a Python interpreter node; Pipedream supports custom Python steps inside hosted workflows."),
-			axis("Hosted multi-language snippets", 4, 5, "Pipedream has the edge for hosted Node.js, Python, Go, and Bash workflow snippets; Flow-Like combines Python execution with SDK and custom-node extension paths."),
-			axis("App/UI delivery", 5, 1, "Flow-Like builds workflow-backed apps; Pipedream workflows are not a native app builder."),
-			axis("Self-host/local control", 5, 1, "Pipedream is a hosted serverless platform; Flow-Like can run locally or self-hosted."),
-			axis("Data/file workflow runtime", 5, 2, "Flow-Like is stronger when local files, object storage, and typed execution traces are core."),
+			axis(
+				"Developer integrations",
+				4,
+				5,
+				"Both can integrate APIs and automate workflows; Pipedream has the edge for hosted developer integration speed.",
+			),
+			axis(
+				"Python code execution",
+				5,
+				5,
+				"Flow-Like ships a Python interpreter node; Pipedream supports custom Python steps inside hosted workflows.",
+			),
+			axis(
+				"Hosted multi-language snippets",
+				4,
+				5,
+				"Pipedream has the edge for hosted Node.js, Python, Go, and Bash workflow snippets; Flow-Like combines Python execution with SDK and custom-node extension paths.",
+			),
+			axis(
+				"App/UI delivery",
+				5,
+				1,
+				"Flow-Like builds workflow-backed apps; Pipedream workflows are not a native app builder.",
+			),
+			axis(
+				"Self-host/local control",
+				5,
+				1,
+				"Pipedream is a hosted serverless platform; Flow-Like can run locally or self-hosted.",
+			),
+			axis(
+				"Data/file workflow runtime",
+				5,
+				2,
+				"Flow-Like is stronger when local files, object storage, and typed execution traces are core.",
+			),
 		],
 		facts: [
-			fact("Platform model", "Pipedream provides a toolkit for thousands of integrations and workflow automation.", source("Pipedream introduction", "https://pipedream.com/docs")),
-			fact("Runtime", "Pipedream documents a serverless runtime and workflow service with source-available triggers and actions.", source("Pipedream introduction", "https://pipedream.com/docs")),
-			fact("Workflow steps", "Pipedream workflows can use triggers, pre-built actions, and custom Node.js, Python, Go, or Bash code.", source("Pipedream workflows", "https://pipedream.com/docs/workflows/building-workflows")),
-			flowFact("Python interpreter", "Flow-Like ships a Python Interpreter node for executing inline Python in a secure WASM sandbox with inputs, packages, workspace support, and runtime limits.", "Pipedream workflows can include custom Node.js, Python, Go, or Bash code steps in a hosted serverless runtime.", flowLikePythonInterpreter),
-			flowFact("Extensibility", "Flow-Like supports SDKs, REST APIs, and a Rust custom node SDK for programmatic control and extension.", "Pipedream is optimized for hosted developer automation and inline serverless workflow code.", flowLikeSource),
-			flowFact("Runtime ownership", "Flow-Like provides visual workflows, app UI, files, AI, and local/self-hosted execution in one runtime.", "Pipedream is optimized for hosted developer automation and serverless workflow execution."),
+			fact(
+				"Platform model",
+				"Pipedream provides a toolkit for thousands of integrations and workflow automation.",
+				source("Pipedream introduction", "https://pipedream.com/docs"),
+			),
+			fact(
+				"Runtime",
+				"Pipedream documents a serverless runtime and workflow service with source-available triggers and actions.",
+				source("Pipedream introduction", "https://pipedream.com/docs"),
+			),
+			fact(
+				"Workflow steps",
+				"Pipedream workflows can use triggers, pre-built actions, and custom Node.js, Python, Go, or Bash code.",
+				source(
+					"Pipedream workflows",
+					"https://pipedream.com/docs/workflows/building-workflows",
+				),
+			),
+			flowFact(
+				"Python interpreter",
+				"Flow-Like ships a Python Interpreter node for executing inline Python in a secure WASM sandbox with inputs, packages, workspace support, and runtime limits.",
+				"Pipedream workflows can include custom Node.js, Python, Go, or Bash code steps in a hosted serverless runtime.",
+				flowLikePythonInterpreter,
+			),
+			flowFact(
+				"Extensibility",
+				"Flow-Like supports SDKs, REST APIs, and a Rust custom node SDK for programmatic control and extension.",
+				"Pipedream is optimized for hosted developer automation and inline serverless workflow code.",
+				flowLikeSource,
+			),
+			flowFact(
+				"Runtime ownership",
+				"Flow-Like provides visual workflows, app UI, files, AI, and local/self-hosted execution in one runtime.",
+				"Pipedream is optimized for hosted developer automation and serverless workflow execution.",
+			),
 		],
 		prose: {
-			heading: "Pipedream is fast developer automation; Flow-Like is workflow app infrastructure.",
+			heading:
+				"Pipedream is fast developer automation; Flow-Like is workflow app infrastructure.",
 			body: [
 				"Pipedream is the better tool when engineers want to wire APIs together, write hosted multi-language code steps, inspect events, and deploy serverless automation without managing infrastructure. It is direct and productive for developer-owned integrations.",
 				"Flow-Like is the better tool when the workflow must be delivered to users as an app, run near local files or private data, execute Python inside the workflow runtime, and keep typed execution, AI, storage, and governance in one owned system.",
@@ -1529,12 +2898,20 @@ export const comparisonLandingPages: ComparisonLandingPage[] = [
 		),
 		sources: [
 			source("Pipedream introduction", "https://pipedream.com/docs"),
-			source("Pipedream workflows", "https://pipedream.com/docs/workflows/building-workflows"),
+			source(
+				"Pipedream workflows",
+				"https://pipedream.com/docs/workflows/building-workflows",
+			),
 			flowLikePythonInterpreter,
 			flowLikeSource,
 			flowLikeSelfHost,
 		],
-		keywords: ["Flow-Like vs Pipedream", "Pipedream alternative", "developer automation", "serverless workflow alternative"],
+		keywords: [
+			"Flow-Like vs Pipedream",
+			"Pipedream alternative",
+			"developer automation",
+			"serverless workflow alternative",
+		],
 	},
 ];
 

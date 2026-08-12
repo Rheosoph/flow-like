@@ -1,9 +1,9 @@
-import { invoke } from "@tauri-apps/api/core";
 import {
 	type UseQueryResult,
 	useQuery,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
+import { invoke } from "@tauri-apps/api/core";
 
 export function useTauriInvoke<T>(
 	path: string,

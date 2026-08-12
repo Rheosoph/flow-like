@@ -25,8 +25,8 @@ use crate::{
     error::ApiError,
     execution::{
         ByteStream, DispatchRequest, ExecutionBackend, ExecutionJwtParams, TokenType,
-        fetch_profile_for_dispatch, is_jwt_configured, payload_storage, proxy_sse_response,
-        resolve_wasm_packages, sign_execution_jwt, update_run_on_completion,
+        completed_run_status, fetch_profile_for_dispatch, is_jwt_configured, payload_storage,
+        proxy_sse_response, resolve_wasm_packages, sign_execution_jwt, update_run_on_completion,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -568,15 +568,9 @@ fn proxy_lambda_sse_response(
                                             .unwrap_or(0) as i32;
                                         let status = parsed.get("payload")
                                             .and_then(|p| p.get("status"))
-                                            .and_then(|s| s.as_str())
-                                            .unwrap_or("Completed");
+                                            .and_then(|s| s.as_str());
 
-                                        let run_status = match status {
-                                            "Failed" => RunStatus::Failed,
-                                            "Cancelled" => RunStatus::Cancelled,
-                                            "Timeout" => RunStatus::Timeout,
-                                            _ => RunStatus::Completed,
-                                        };
+                                        let run_status = completed_run_status(status);
 
                                         if let Err(e) = update_run_on_completion(db.as_ref(), &run_id, run_status, log_level).await {
                                             tracing::error!(run_id = %run_id, error = %e, "Failed to update run on completion");

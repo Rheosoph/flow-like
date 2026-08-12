@@ -1,61 +1,52 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "MoveNodeCommand",
-  "type": "object",
-  "properties": {
-    "node_id": {
-      "type": "string"
-    },
-    "from_coordinates": {
-      "type": [
-        "array",
-        "null"
-      ],
-      "prefixItems": [
-        {
-          "type": "number",
-          "format": "float"
-        },
-        {
-          "type": "number",
-          "format": "float"
-        },
-        {
-          "type": "number",
-          "format": "float"
-        }
-      ],
-      "minItems": 3,
-      "maxItems": 3
-    },
-    "to_coordinates": {
-      "type": "array",
-      "prefixItems": [
-        {
-          "type": "number",
-          "format": "float"
-        },
-        {
-          "type": "number",
-          "format": "float"
-        },
-        {
-          "type": "number",
-          "format": "float"
-        }
-      ],
-      "minItems": 3,
-      "maxItems": 3
-    },
-    "current_layer": {
-      "type": [
-        "string",
-        "null"
-      ]
-    }
-  },
-  "required": [
-    "node_id",
-    "to_coordinates"
-  ]
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "MoveNodeCommand",
+	"type": "object",
+	"properties": {
+		"node_id": {
+			"type": "string"
+		},
+		"from_coordinates": {
+			"type": ["array", "null"],
+			"prefixItems": [
+				{
+					"type": "number",
+					"format": "float"
+				},
+				{
+					"type": "number",
+					"format": "float"
+				},
+				{
+					"type": "number",
+					"format": "float"
+				}
+			],
+			"minItems": 3,
+			"maxItems": 3
+		},
+		"to_coordinates": {
+			"type": "array",
+			"prefixItems": [
+				{
+					"type": "number",
+					"format": "float"
+				},
+				{
+					"type": "number",
+					"format": "float"
+				},
+				{
+					"type": "number",
+					"format": "float"
+				}
+			],
+			"minItems": 3,
+			"maxItems": 3
+		},
+		"current_layer": {
+			"type": ["string", "null"]
+		}
+	},
+	"required": ["node_id", "to_coordinates"]
 }

@@ -112,7 +112,7 @@ impl NodeLogic for SetVariable {
             }
         };
 
-        let expected_name = format!("Set {}", &var_ref_variable.name);
+        let expected_name = format!("Set {}", var_ref_variable.name);
 
         // Check if value_in pin needs updating
         let value_in = read_only_node.get_pin_by_name("value_in");

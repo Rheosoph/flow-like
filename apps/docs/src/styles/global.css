@@ -138,12 +138,9 @@ html {
 }
 
 body {
-	background:
-		radial-gradient(var(--sl-color-gray-6) 1px, transparent 1px),
+	background: radial-gradient(var(--sl-color-gray-6) 1px, transparent 1px),
 		linear-gradient(180deg, var(--sl-color-black), var(--sl-color-black));
-	background-size:
-		16px 16px,
-		auto;
+	background-size: 16px 16px, auto;
 	color: var(--sl-color-white);
 	letter-spacing: 0;
 }
@@ -160,11 +157,7 @@ a {
 body > .page > header.header,
 .page > header.header {
 	border-bottom: 1px solid var(--flx-hairline) !important;
-	background-color: color-mix(
-		in oklab,
-		var(--sl-color-black) 91%,
-		transparent
-	) !important;
+	background-color: color-mix(in oklab, var(--sl-color-black) 91%, transparent) !important;
 	box-shadow: 0 1px 0 color-mix(in oklab, black 32%, transparent);
 	backdrop-filter: blur(18px);
 	-webkit-backdrop-filter: blur(18px);
@@ -185,33 +178,17 @@ body > .page > header.header > .header,
 
 site-search button[data-open-modal] {
 	border-color: var(--flx-hairline-strong) !important;
-	background-color: color-mix(
-		in oklab,
-		var(--sl-color-black) 78%,
-		transparent
-	) !important;
+	background-color: color-mix(in oklab, var(--sl-color-black) 78%, transparent) !important;
 	box-shadow: 0 0 0 1px color-mix(in oklab, black 18%, transparent) inset;
 }
 
 site-search button[data-open-modal]:hover {
-	border-color: color-mix(
-		in oklab,
-		var(--sl-color-white) 20%,
-		transparent
-	) !important;
-	background-color: color-mix(
-		in oklab,
-		var(--sl-color-gray-6) 42%,
-		transparent
-	) !important;
+	border-color: color-mix(in oklab, var(--sl-color-white) 20%, transparent) !important;
+	background-color: color-mix(in oklab, var(--sl-color-gray-6) 42%, transparent) !important;
 }
 
 site-search button > kbd {
-	background-color: color-mix(
-		in oklab,
-		var(--sl-color-white) 5%,
-		transparent
-	) !important;
+	background-color: color-mix(in oklab, var(--sl-color-white) 5%, transparent) !important;
 	color: var(--sl-color-gray-2);
 }
 
@@ -225,11 +202,13 @@ site-search button > kbd {
 }
 
 .sidebar-pane {
-	border-inline-end: 1px solid color-mix(in oklab, var(--sl-color-gray-5) 75%, transparent);
+	border-inline-end: 1px solid
+		color-mix(in oklab, var(--sl-color-gray-5) 75%, transparent);
 }
 
 .right-sidebar {
-	border-inline-start: 1px solid color-mix(in oklab, var(--sl-color-gray-5) 65%, transparent);
+	border-inline-start: 1px solid
+		color-mix(in oklab, var(--sl-color-gray-5) 65%, transparent);
 }
 
 @media (min-width: 72rem) {
@@ -315,8 +294,7 @@ html:has(.node-doc) mobile-starlight-toc {
 	padding: 1.25rem;
 	border: 1px solid var(--sl-color-gray-5);
 	border-radius: 8px;
-	background:
-		linear-gradient(
+	background: linear-gradient(
 			135deg,
 			color-mix(in oklab, var(--sl-color-accent) 10%, transparent),
 			transparent 42%
@@ -325,8 +303,7 @@ html:has(.node-doc) mobile-starlight-toc {
 			180deg,
 			color-mix(in oklab, var(--sl-color-gray-6) 78%, transparent),
 			color-mix(in oklab, var(--sl-color-black) 92%, transparent)
-		),
-		var(--sl-color-black);
+		), var(--sl-color-black);
 }
 
 .node-doc-hero {
@@ -370,14 +347,18 @@ html:has(.node-doc) mobile-starlight-toc {
 	height: 4.5rem;
 	place-items: center;
 	overflow: hidden;
-	border: 1px solid color-mix(in oklab, var(--sl-color-accent) 24%, var(--sl-color-gray-5));
+	border: 1px solid
+		color-mix(in oklab, var(--sl-color-accent) 24%, var(--sl-color-gray-5));
 	border-radius: 8px;
-	background:
-		linear-gradient(135deg, color-mix(in oklab, var(--sl-color-accent) 12%, transparent), transparent),
-		color-mix(in oklab, var(--sl-color-gray-6) 70%, transparent);
+	background: linear-gradient(
+			135deg,
+			color-mix(in oklab, var(--sl-color-accent) 12%, transparent),
+			transparent
+		), color-mix(in oklab, var(--sl-color-gray-6) 70%, transparent);
 	color: var(--sl-color-accent-high);
 	font-weight: 800;
-	box-shadow: 0 14px 36px color-mix(in oklab, var(--sl-color-accent) 12%, transparent);
+	box-shadow: 0 14px 36px
+		color-mix(in oklab, var(--sl-color-accent) 12%, transparent);
 }
 
 .node-icon-frame img {
@@ -389,7 +370,8 @@ html:has(.node-doc) mobile-starlight-toc {
 }
 
 .node-icon-frame img[src$=".svg"] {
-	filter: brightness(0) saturate(100%) invert(54%) sepia(97%) saturate(2344%) hue-rotate(338deg) brightness(101%) contrast(101%);
+	filter: brightness(0) saturate(100%) invert(54%) sepia(97%) saturate(2344%)
+		hue-rotate(338deg) brightness(101%) contrast(101%);
 }
 
 .node-icon-frame span {
@@ -796,15 +778,14 @@ html:has(.node-doc) mobile-starlight-toc {
 	align-items: center;
 	gap: 0.4rem;
 	padding: 0.25rem 0.58rem;
-	border: 1px solid color-mix(in oklab, var(--pin-struct) 36%, var(--sl-color-gray-5));
+	border: 1px solid
+		color-mix(in oklab, var(--pin-struct) 36%, var(--sl-color-gray-5));
 	border-radius: 999px;
-	background:
-		linear-gradient(
+	background: linear-gradient(
 			135deg,
 			color-mix(in oklab, var(--pin-struct) 13%, transparent),
 			transparent 72%
-		),
-		color-mix(in oklab, var(--sl-color-gray-6) 76%, transparent);
+		), color-mix(in oklab, var(--sl-color-gray-6) 76%, transparent);
 	color: color-mix(in oklab, var(--pin-struct) 82%, var(--sl-color-white));
 	font: inherit;
 	font-size: 0.8rem;
@@ -842,24 +823,21 @@ html:has(.node-doc) mobile-starlight-toc {
 	gap: 0.75rem;
 	padding: 0.9rem;
 	overflow: auto;
-	border: 1px solid color-mix(in oklab, var(--pin-struct) 26%, var(--sl-color-gray-5));
+	border: 1px solid
+		color-mix(in oklab, var(--pin-struct) 26%, var(--sl-color-gray-5));
 	border-radius: 8px;
-	background:
-		linear-gradient(
+	background: linear-gradient(
 			135deg,
 			color-mix(in oklab, var(--pin-struct) 8%, transparent),
 			transparent 42%
-		),
-		color-mix(in oklab, var(--sl-color-black) 98%, var(--sl-color-gray-6));
-	box-shadow:
-		0 22px 56px color-mix(in oklab, var(--sl-color-black) 82%, transparent),
-		0 0 0 1px color-mix(in oklab, var(--sl-color-white) 5%, transparent) inset;
+		), color-mix(in oklab, var(--sl-color-black) 98%, var(--sl-color-gray-6));
+	box-shadow: 0 22px 56px
+		color-mix(in oklab, var(--sl-color-black) 82%, transparent), 0 0 0 1px
+		color-mix(in oklab, var(--sl-color-white) 5%, transparent) inset;
 	opacity: 0;
 	pointer-events: none;
 	transform: translateY(0.25rem);
-	transition:
-		opacity 140ms ease,
-		transform 140ms ease;
+	transition: opacity 140ms ease, transform 140ms ease;
 }
 
 .node-schema-preview:hover .node-schema-popover,
@@ -875,7 +853,8 @@ html:has(.node-doc) mobile-starlight-toc {
 	align-items: start;
 	justify-content: space-between;
 	padding-bottom: 0.7rem;
-	border-bottom: 1px solid color-mix(in oklab, var(--sl-color-white) 9%, transparent);
+	border-bottom: 1px solid
+		color-mix(in oklab, var(--sl-color-white) 9%, transparent);
 }
 
 .node-schema-popover-header > span:first-child {
@@ -1125,8 +1104,16 @@ html:has(.node-doc) mobile-starlight-toc {
 
 .node-card:hover,
 .node-category-card:hover {
-	border-color: color-mix(in oklab, var(--sl-color-accent) 45%, var(--sl-color-gray-5));
-	background: color-mix(in oklab, var(--sl-color-accent) 5%, var(--sl-color-gray-6));
+	border-color: color-mix(
+		in oklab,
+		var(--sl-color-accent) 45%,
+		var(--sl-color-gray-5)
+	);
+	background: color-mix(
+		in oklab,
+		var(--sl-color-accent) 5%,
+		var(--sl-color-gray-6)
+	);
 }
 
 .node-card-header {

@@ -154,7 +154,7 @@ pub fn humanize_email_local_part(email: &str) -> Option<String> {
     }
 
     let words = local
-        .split(|c: char| matches!(c, '.' | '_' | '-'))
+        .split(['.', '_', '-'])
         .filter(|part| !part.is_empty())
         .map(title_case_word)
         .collect::<Vec<_>>();
@@ -439,7 +439,10 @@ mod tests {
         assert!(SearchTerm::parse("f").is_none());
         assert!(SearchTerm::parse("   ").is_none());
         assert!(SearchTerm::parse("fe").is_some());
-        assert_eq!(SearchTerm::parse("  Felix  Schultz ").unwrap().raw, "Felix Schultz");
+        assert_eq!(
+            SearchTerm::parse("  Felix  Schultz ").unwrap().raw,
+            "Felix Schultz"
+        );
     }
 
     #[test]

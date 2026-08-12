@@ -204,7 +204,9 @@ model AppCacheEntry {
   scope CacheScope
   /// Empty string for app-scoped entries. A user id for user-scoped entries.
   userId String @default("")
-  key    String
+  /// Optional grouping for bulk invalidation; empty for unnamespaced entries.
+  namespace String @default("")
+  key       String
 
   value Json
 
@@ -215,7 +217,7 @@ model AppCacheEntry {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  @@id([appId, scope, userId, key])
+  @@id([appId, scope, userId, namespace, key])
   @@index([expiresAt])
   @@index([appId])
 }

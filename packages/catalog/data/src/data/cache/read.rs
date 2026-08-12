@@ -28,7 +28,7 @@ impl NodeLogic for ReadCacheNode {
             "Data/Cache",
         );
         node.add_icon("/flow/icons/database.svg");
-        node.set_version(1);
+        node.set_version(2);
 
         node.add_input_pin(
             "exec_in",
@@ -65,8 +65,8 @@ impl NodeLogic for ReadCacheNode {
         node.add_output_pin(
             "value",
             "Value",
-            "The cached value, or null on a miss",
-            VariableType::Struct,
+            "The cached value — whatever type was stored — or null on a miss",
+            VariableType::Generic,
         );
 
         node.set_scores(

@@ -31,16 +31,12 @@ static DAEMON_TASKS: Lazy<tokio::sync::Mutex<HashMap<String, DaemonHandle>>> =
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum DaemonRestartPolicy {
     Never,
+    #[default]
     OnFailure,
     Always,
-}
-
-impl Default for DaemonRestartPolicy {
-    fn default() -> Self {
-        Self::OnFailure
-    }
 }
 
 fn default_restart_policy() -> DaemonRestartPolicy {
@@ -466,7 +462,7 @@ async fn load_current_event(
 ) -> Result<Event> {
     let flow_like_state = TauriFlowLikeState::construct(app_handle).await?;
     let app = App::load(registration.app_id.clone(), flow_like_state).await?;
-    Ok(app.get_event(&registration.event_id, None).await?)
+    app.get_event(&registration.event_id, None).await
 }
 
 async fn latest_board_changed(

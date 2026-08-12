@@ -2157,7 +2157,7 @@
             "base": "bool",
             "container": "Normal"
           },
-          "optional": false,
+          "optional": true,
           "doc": "Whether the element should be visible"
         }
       ],
@@ -14458,7 +14458,7 @@
           },
           "optional": false,
           "doc": "Cache handle from the Open Cache node",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional prefix so unrelated flows in the same app cannot collide on short keys.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional grouping travelling alongside every key. Entries sharing a namespace\\ncan be invalidated together; unrelated flows also use it to keep short keys\\nfrom colliding.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
         },
         {
           "name": "key",
@@ -14485,6 +14485,144 @@
       "doc": "Removes a value from the app's cache."
     },
     {
+      "node_type": "cache_get_or_write",
+      "display": "cacheGetOrWrite",
+      "friendly": "Get or Write Cache",
+      "category": "Data/Cache",
+      "inputs": [
+        {
+          "name": "cache",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Cache handle from the Open Cache node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional grouping travelling alongside every key. Entries sharing a namespace\\ncan be invalidated together; unrelated flows also use it to keep short keys\\nfrom colliding.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
+        },
+        {
+          "name": "key",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "The key to read or claim"
+        },
+        {
+          "name": "fallback",
+          "ty": {
+            "base": "any",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Value to store when the key holds nothing live — any type"
+        },
+        {
+          "name": "ttl_seconds",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Seconds until a newly written entry expires. 0 keeps it until it is deleted."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "value",
+          "ty": {
+            "base": "any",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "The value now held under the key — whatever type was stored"
+        },
+        {
+          "name": "written",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "True when this run is the one that stored the fallback. Branch on this to do expensive work only once."
+        }
+      ],
+      "impure": true,
+      "doc": "Returns the cached value, or stores the fallback and returns that. Exactly one caller gets Written = true, even when several runs reach this node at the same moment. The cache is for small, hot values (about 1 MB max) — persist large data to the app's storage instead."
+    },
+    {
+      "node_type": "cache_has",
+      "display": "cacheHas",
+      "friendly": "Has Cache Entry",
+      "category": "Data/Cache",
+      "inputs": [
+        {
+          "name": "cache",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Cache handle from the Open Cache node",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional grouping travelling alongside every key. Entries sharing a namespace\\ncan be invalidated together; unrelated flows also use it to keep short keys\\nfrom colliding.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
+        },
+        {
+          "name": "key",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "The key to check"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "found",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "True when a live entry exists for this key"
+        }
+      ],
+      "impure": true,
+      "doc": "Checks whether a key holds a live value, without downloading the value. To decide whether to compute something, prefer Get or Write Cache — it has no gap between the check and the write."
+    },
+    {
+      "node_type": "cache_invalidate_namespace",
+      "display": "cacheInvalidateNamespace",
+      "friendly": "Invalidate Cache Namespace",
+      "category": "Data/Cache",
+      "inputs": [
+        {
+          "name": "cache",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Cache handle from the Open Cache node. Its namespace decides what is removed.",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional grouping travelling alongside every key. Entries sharing a namespace\\ncan be invalidated together; unrelated flows also use it to keep short keys\\nfrom colliding.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "deleted",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "How many entries were removed"
+        }
+      ],
+      "impure": true,
+      "doc": "Removes every entry in the cache handle's namespace in one call — including entries with no lifetime. The handle must carry a namespace; per-key removal is the Delete Cache node's job."
+    },
+    {
       "node_type": "cache_open",
       "display": "cacheOpen",
       "friendly": "Open Cache",
@@ -14506,7 +14644,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Optional prefix so short keys from different flows cannot collide"
+          "doc": "Optional group name. Entries sharing a namespace can be removed together with the Invalidate Cache Namespace node, and short keys from different flows cannot collide."
         }
       ],
       "outputs": [
@@ -14518,7 +14656,7 @@
           },
           "optional": false,
           "doc": "Cache handle for the Read, Write and Delete Cache nodes",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional prefix so unrelated flows in the same app cannot collide on short keys.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional grouping travelling alongside every key. Entries sharing a namespace\\ncan be invalidated together; unrelated flows also use it to keep short keys\\nfrom colliding.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
         }
       ],
       "impure": false,
@@ -14538,7 +14676,7 @@
           },
           "optional": false,
           "doc": "Cache handle from the Open Cache node",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional prefix so unrelated flows in the same app cannot collide on short keys.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional grouping travelling alongside every key. Entries sharing a namespace\\ncan be invalidated together; unrelated flows also use it to keep short keys\\nfrom colliding.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
         },
         {
           "name": "key",
@@ -14563,11 +14701,11 @@
         {
           "name": "value",
           "ty": {
-            "base": "Struct",
+            "base": "any",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "The cached value, or null on a miss"
+          "doc": "The cached value — whatever type was stored — or null on a miss"
         }
       ],
       "impure": true,
@@ -14587,7 +14725,7 @@
           },
           "optional": false,
           "doc": "Cache handle from the Open Cache node",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional prefix so unrelated flows in the same app cannot collide on short keys.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowCache\",\"description\":\"Handle produced by the Open Cache node and consumed by the read/write nodes.\",\"type\":\"object\",\"properties\":{\"scope\":{\"$ref\":\"#/$defs/CacheScope\"},\"namespace\":{\"description\":\"Optional grouping travelling alongside every key. Entries sharing a namespace\\ncan be invalidated together; unrelated flows also use it to keep short keys\\nfrom colliding.\",\"type\":\"string\",\"default\":\"\"}},\"required\":[\"scope\"],\"$defs\":{\"CacheScope\":{\"description\":\"Who a cache entry belongs to. Mirrors `flow_like_types::cache::CacheScope` on the\\nwire; kept as its own type so the pin dropdown can carry friendly labels.\",\"oneOf\":[{\"description\":\"Shared by everyone who can execute in the app.\",\"type\":\"string\",\"const\":\"app\"},{\"description\":\"Private to the user who triggered the run.\",\"type\":\"string\",\"const\":\"user\"}]}}}"
         },
         {
           "name": "key",
@@ -14601,11 +14739,11 @@
         {
           "name": "value",
           "ty": {
-            "base": "Struct",
+            "base": "any",
             "container": "Normal"
           },
           "optional": false,
-          "doc": "The value to store"
+          "doc": "The value to store — a struct, array, string, number or boolean"
         },
         {
           "name": "ttl_seconds",
@@ -14629,7 +14767,7 @@
         }
       ],
       "impure": true,
-      "doc": "Stores a value in the app's cache, optionally with a lifetime after which it disappears on its own."
+      "doc": "Stores a value in the app's cache, optionally with a lifetime after which it disappears on its own. The cache is for small, hot values (about 1 MB max) — persist large data to the app's storage instead."
     },
     {
       "node_type": "call_remote_api",
@@ -17212,7 +17350,7 @@
           },
           "optional": false,
           "doc": "CSV Table to loop",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"title\":{\"description\":\"Optional title text found above the table in the source sheet\",\"type\":[\"string\",\"null\"]},\"range\":{\"description\":\"Optional A1 range the table was extracted from (e.g. \\\"A3:F42\\\")\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         }
       ],
       "outputs": [
@@ -24850,8 +24988,8 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Extract Config",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"ExtractConfig\",\"type\":\"object\",\"properties\":{\"delimiter\":{\"description\":\"CSV delimiter (`,` or `;` typical)\",\"type\":\"integer\",\"format\":\"uint8\",\"minimum\":0,\"maximum\":255},\"crlf\":{\"description\":\"Use CRLF line endings (Excel-friendly) vs LF\",\"type\":\"boolean\"},\"bom\":{\"description\":\"Write UTF-8 BOM (Excel-friendly on Windows)\",\"type\":\"boolean\"},\"csv_injection_hardening\":{\"description\":\"Protect against CSV injection by prefixing a single quote to dangerous prefixes (=+-@)\",\"type\":\"boolean\"},\"empty_density_threshold\":{\"description\":\"Consider a row/col \\\"empty\\\" if non-empty density below this (0.0..1.0)\",\"type\":\"number\",\"format\":\"float\"},\"gap_break_rows\":{\"description\":\"Break between tables if we see >= this many consecutive empty rows\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"gap_break_cols\":{\"description\":\"Break between tables if we see >= this many consecutive empty cols\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"allow_internal_blank_rows\":{\"description\":\"Allow up to this many blank rows *inside* a table\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"allow_internal_blank_cols\":{\"description\":\"Allow up to this many blank cols *inside* a table\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"min_table_cells\":{\"description\":\"Minimum non-empty cell count for a rectangle to be considered a table\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"max_header_rows\":{\"description\":\"Max header rows to consider when flattening\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"max_left_header_cols\":{\"description\":\"Max left header columns to detect\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"header_joiner\":{\"description\":\"Joiner to flatten multi-row headers\",\"type\":\"string\"},\"drop_totals\":{\"description\":\"Drop totals rows matching regex (case-insensitive)\",\"type\":\"boolean\"},\"stitch_across_spacers\":{\"description\":\"Allow merging rectangles across large blank/merged \\\"spacer\\\" bands\",\"type\":\"boolean\"},\"stitch_type_sample_rows\":{\"description\":\"Sample size for type inference per column when stitching\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"stitch_min_type_match_ratio\":{\"description\":\"Minimum ratio of compatible column types to allow stitching (0.0..1.0)\",\"type\":\"number\",\"format\":\"float\"},\"stitch_min_col_overlap\":{\"description\":\"Minimum required column-overlap (intersection / union) to consider adjacency\",\"type\":\"number\",\"format\":\"float\"},\"group_similar_headers\":{\"description\":\"After extraction, merge non-adjacent tables if headers are very similar\",\"type\":\"boolean\"},\"header_merge_threshold\":{\"description\":\"Similarity threshold (0.0..1.0) to merge tables by header\",\"type\":\"number\",\"format\":\"double\"},\"schema_sample_rows\":{\"description\":\"How many rows to sample below header when validating schema\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"min_body_consistency\":{\"description\":\"Minimum fraction (0.0..1.0) of columns that must keep a consistent kind in body\",\"type\":\"number\",\"format\":\"float\"},\"enable_merges\":{\"description\":\"Enable merged cell processing (requires second parse with umya); disable to save memory/time on huge sheets\",\"type\":\"boolean\"},\"max_merge_map_cells\":{\"description\":\"Skip building merge map if total cells exceed this number (acts as safety valve)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"take_cells_on_extract\":{\"description\":\"Take (move) strings out of grid when building tables to avoid cloning large data\",\"type\":\"boolean\"},\"huge_cells_threshold\":{\"description\":\"If height*width exceeds this, switch to \\\"huge mode\\\" (auto-disable heavy features).\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"huge_cap_rows\":{\"description\":\"In huge mode, cap how many rows we materialize for the in-memory path (0 = unlimited).\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"huge_schema_sample_rows\":{\"description\":\"In huge mode, use a smaller sample for schema checks.\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"output_mode\":{\"description\":\"Choose output strategy for huge sheets (default stays InMemory).\",\"$ref\":\"#/$defs/OutputMode\"}},\"required\":[\"delimiter\",\"crlf\",\"bom\",\"csv_injection_hardening\",\"empty_density_threshold\",\"gap_break_rows\",\"gap_break_cols\",\"allow_internal_blank_rows\",\"allow_internal_blank_cols\",\"min_table_cells\",\"max_header_rows\",\"max_left_header_cols\",\"header_joiner\",\"drop_totals\",\"stitch_across_spacers\",\"stitch_type_sample_rows\",\"stitch_min_type_match_ratio\",\"stitch_min_col_overlap\",\"group_similar_headers\",\"header_merge_threshold\",\"schema_sample_rows\",\"min_body_consistency\",\"enable_merges\",\"max_merge_map_cells\",\"take_cells_on_extract\",\"huge_cells_threshold\",\"huge_cap_rows\",\"huge_schema_sample_rows\",\"output_mode\"],\"$defs\":{\"OutputMode\":{\"oneOf\":[{\"description\":\"Keep behavior: build Vec<Table> in memory\",\"type\":\"string\",\"const\":\"InMemory\"},{\"description\":\"Stream tables to CSV files (temp folder) instead of RAM\",\"type\":\"string\",\"const\":\"CsvFiles\"}]}}}"
+          "doc": "Table detection configuration",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"ExtractConfig\",\"type\":\"object\",\"properties\":{\"row_gap_tolerance\":{\"description\":\"Blank rows tolerated inside one table (more consecutive blanks split tables)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0,\"default\":1},\"col_gap_tolerance\":{\"description\":\"Blank columns tolerated inside one table\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0,\"default\":1},\"min_table_rows\":{\"description\":\"Minimum data rows for a region to count as a table\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0,\"default\":2},\"min_table_cells\":{\"description\":\"Minimum non-empty cells for a region to count as a table\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0,\"default\":4},\"min_density\":{\"description\":\"Minimum non-empty density (0.0\\u20131.0) of a region's bounding box\",\"type\":\"number\",\"format\":\"float\",\"default\":1.0000000149011612E-1},\"max_header_rows\":{\"description\":\"Maximum header rows to detect and flatten\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0,\"default\":3},\"header_joiner\":{\"description\":\"Joiner when flattening multi-row headers\",\"type\":\"string\",\"default\":\" / \"},\"drop_aggregate_rows\":{\"description\":\"Drop subtotal/total/aggregate rows from the data\",\"type\":\"boolean\",\"default\":true},\"use_defined_tables\":{\"description\":\"Use Excel defined tables (ListObjects) as authoritative when present\",\"type\":\"boolean\",\"default\":true},\"adaptive_segmentation\":{\"description\":\"Try several gap-tolerance segmentations and keep the best-scoring one\",\"type\":\"boolean\",\"default\":true}}}"
         }
       ],
       "outputs": [
@@ -24862,12 +25000,12 @@
             "container": "Array"
           },
           "optional": false,
-          "doc": "Extracted Vec<Table>",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
+          "doc": "Extracted tables (name, title, A1 range and typed rows)",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"title\":{\"description\":\"Optional title text found above the table in the source sheet\",\"type\":[\"string\",\"null\"]},\"range\":{\"description\":\"Optional A1 range the table was extracted from (e.g. \\\"A3:F42\\\")\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         }
       ],
       "impure": true,
-      "doc": "Extracts tables from an Excel worksheet"
+      "doc": "Detects and extracts all tables from Excel worksheets, handling titles, multi-row headers, merged cells, footnotes and multiple tables per sheet"
     },
     {
       "node_type": "data_excel_extract_tables_ai",
@@ -24911,7 +25049,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Optional guidance for the AI (e.g., 'The table starts at row 5', 'Skip rows with TOTAL')"
+          "doc": "Optional guidance for the AI (e.g., 'The table starts at row 5', 'Only rows highlighted green matter')"
         },
         {
           "name": "config",
@@ -24921,7 +25059,7 @@
           },
           "optional": true,
           "doc": "AI extraction configuration",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"AIExtractionConfig\",\"type\":\"object\",\"properties\":{\"sample_rows\":{\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"sample_cols\":{\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"include_statistics\":{\"type\":\"boolean\"},\"detect_merged_regions\":{\"type\":\"boolean\"}},\"required\":[\"sample_rows\",\"sample_cols\",\"include_statistics\",\"detect_merged_regions\"]}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"AIExtractionConfig\",\"type\":\"object\",\"properties\":{\"sample_rows\":{\"description\":\"Maximum rows rendered verbatim in the prompt (boundary rows are prioritized)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0,\"default\":80},\"sample_cols\":{\"description\":\"Maximum columns rendered per row\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0,\"default\":30},\"include_statistics\":{\"description\":\"Include per-column type profiles in the prompt\",\"type\":\"boolean\",\"default\":true},\"detect_merged_regions\":{\"description\":\"Include the merged-region list in the prompt\",\"type\":\"boolean\",\"default\":true},\"max_tool_turns\":{\"description\":\"Maximum tool-use turns per sheet before falling back to heuristics\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0,\"default\":6}}}"
         }
       ],
       "outputs": [
@@ -24933,7 +25071,7 @@
           },
           "optional": false,
           "doc": "Extracted tables",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"title\":{\"description\":\"Optional title text found above the table in the source sheet\",\"type\":[\"string\",\"null\"]},\"range\":{\"description\":\"Optional A1 range the table was extracted from (e.g. \\\"A3:F42\\\")\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
           "name": "reasoning",
@@ -24946,7 +25084,7 @@
         }
       ],
       "impure": true,
-      "doc": "Uses AI to intelligently extract tables from complex Excel worksheets with unusual layouts"
+      "doc": "Uses AI to locate tables in complex Excel worksheets (unusual layouts, multiple tables, multi-row headers, styling-based hints); extraction itself stays deterministic"
     },
     {
       "node_type": "data_gcp_provider",
@@ -41811,7 +41949,7 @@
           },
           "optional": false,
           "doc": "Query results as CSVTable for further processing",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"title\":{\"description\":\"Optional title text found above the table in the source sheet\",\"type\":[\"string\",\"null\"]},\"range\":{\"description\":\"Optional A1 range the table was extracted from (e.g. \\\"A3:F42\\\")\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
           "name": "row_count",
@@ -42217,7 +42355,7 @@
       ],
       "outputs": [],
       "impure": true,
-      "doc": "Mount CSV files from a FlowPath into a DataFusion session as a queryable table"
+      "doc": "Mount CSV files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely."
     },
     {
       "node_type": "df_mount_json",
@@ -42266,7 +42404,7 @@
       ],
       "outputs": [],
       "impure": true,
-      "doc": "Mount JSON (newline-delimited) files from a FlowPath into a DataFusion session as a queryable table"
+      "doc": "Mount JSON (newline-delimited) files from a FlowPath into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely."
     },
     {
       "node_type": "df_mount_parquet",
@@ -42315,7 +42453,7 @@
       ],
       "outputs": [],
       "impure": true,
-      "doc": "Mount Parquet files from a FlowPath prefix into a DataFusion session as a queryable table"
+      "doc": "Mount Parquet files from a FlowPath prefix into a DataFusion session as a queryable table. Listing and schema inference are deferred until a query actually uses the session, so cached queries can skip them entirely."
     },
     {
       "node_type": "df_register_athena",
@@ -42736,7 +42874,7 @@
           },
           "optional": false,
           "doc": "CSVTable to register (from Excel/CSV extraction nodes)",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"title\":{\"description\":\"Optional title text found above the table in the source sheet\",\"type\":[\"string\",\"null\"]},\"range\":{\"description\":\"Optional A1 range the table was extracted from (e.g. \\\"A3:F42\\\")\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
           "name": "table_name",
@@ -42888,6 +43026,74 @@
       ],
       "impure": true,
       "doc": "Register a DuckDB database table for federated queries. Uses real database connection."
+    },
+    {
+      "node_type": "df_register_excel",
+      "display": "dfRegisterExcel",
+      "friendly": "Register Excel (DataFusion)",
+      "category": "Data/DataFusion",
+      "inputs": [
+        {
+          "name": "session",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "DataFusion session to register the tables into",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"DataFusionSession\",\"type\":\"object\",\"properties\":{\"cache_key\":{\"type\":\"string\"}},\"required\":[\"cache_key\"]}"
+        },
+        {
+          "name": "file",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Excel file",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "sheet",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Worksheet name (optional - if empty, registers all sheets)"
+        },
+        {
+          "name": "mode",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "'Sheet as table' registers each sheet's used range as one table; 'Detect tables' finds and registers every table on each sheet"
+        },
+        {
+          "name": "prefix",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Optional prefix for the registered table names"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "table_names",
+          "ty": {
+            "base": "string",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Names the tables were registered under. Connecting this pin makes the workbook parse eagerly at this node instead of at the first query."
+        }
+      ],
+      "impure": true,
+      "doc": "Registers an Excel workbook's sheets as SQL tables in a DataFusion session. Tables are named after their normalized sheet names (e.g. 'Sales Data (2024)' becomes 'sales_data_2024'); additional tables on the same sheet get numeric suffixes. The download and parse are deferred until a query actually uses the session — unless the Table Names output is connected, which requires parsing here."
     },
     {
       "node_type": "df_register_flightsql",
@@ -43718,7 +43924,7 @@
           },
           "optional": false,
           "doc": "Query results as a CSVTable (columnar format, good for analytics)",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"title\":{\"description\":\"Optional title text found above the table in the source sheet\",\"type\":[\"string\",\"null\"]},\"range\":{\"description\":\"Optional A1 range the table was extracted from (e.g. \\\"A3:F42\\\")\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
           "name": "rows",
@@ -43741,6 +43947,101 @@
       ],
       "impure": true,
       "doc": "Execute a SQL query against a DataFusion session. Returns results as both a CSVTable (for analytics) and array of row objects (for iteration)."
+    },
+    {
+      "node_type": "df_sql_query_cached",
+      "display": "dfSqlQueryCached",
+      "friendly": "Cached SQL Query",
+      "category": "Data/DataFusion",
+      "inputs": [
+        {
+          "name": "session",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "DataFusion session with registered tables",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"DataFusionSession\",\"type\":\"object\",\"properties\":{\"cache_key\":{\"type\":\"string\"}},\"required\":[\"cache_key\"]}"
+        },
+        {
+          "name": "query",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "SQL query to execute (e.g., SELECT * FROM mytable WHERE column > 10)"
+        },
+        {
+          "name": "scope",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "App shares cached results with everyone who can run this app. User keeps them private to whoever triggered the run."
+        },
+        {
+          "name": "namespace",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Group name for the cached results. Invalidating this namespace (Invalidate Cache Namespace node) clears them in one call; it also keeps results from unrelated flows apart."
+        },
+        {
+          "name": "ttl_seconds",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Seconds until a cached result expires and the query runs again. 0 keeps it until it is deleted."
+        }
+      ],
+      "outputs": [
+        {
+          "name": "table",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Query results as a CSVTable (columnar format, good for analytics)",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"title\":{\"description\":\"Optional title text found above the table in the source sheet\",\"type\":[\"string\",\"null\"]},\"range\":{\"description\":\"Optional A1 range the table was extracted from (e.g. \\\"A3:F42\\\")\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
+        },
+        {
+          "name": "rows",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Query results as array of row structs with Flow-Like-compatible values. Rows derive from the Table representation so cached and fresh runs are identical: date-like strings are normalized to ISO form and unsigned values beyond the signed 64-bit range become strings."
+        },
+        {
+          "name": "row_count",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Number of rows in the result"
+        },
+        {
+          "name": "from_cache",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "True when the result was served from the cache and the query never ran"
+        }
+      ],
+      "impure": true,
+      "doc": "Execute a SQL query against a DataFusion session, remembering the result in the app's cache. While a live cached result exists for this node's session and query, the query — and any deferred table mounting — is skipped entirely and the cached rows are returned. Cached results do not notice changes to the underlying data; pick a lifetime that matches how fresh the data must be."
     },
     {
       "node_type": "df_time_bin_aggregation",
@@ -45434,6 +45735,46 @@
       "outputs": [],
       "impure": true,
       "doc": "Remove an index from a database table"
+    },
+    {
+      "node_type": "drop_table_local_db",
+      "display": "dropTableLocalDb",
+      "friendly": "Drop Table",
+      "category": "Data/Database/Delete",
+      "inputs": [
+        {
+          "name": "database",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Database Connection Reference",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NodeDBConnection\",\"type\":\"object\",\"properties\":{\"cache_key\":{\"type\":\"string\"}},\"required\":[\"cache_key\"]}"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "dropped",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "True when the table existed and was removed"
+        },
+        {
+          "name": "references",
+          "ty": {
+            "base": "string",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Names of the graph overlays that referenced the table and were pruned"
+        }
+      ],
+      "impure": true,
+      "doc": "Permanently deletes the entire table, both its rows and its schema, so it can be recreated later with a different schema. This is irreversible and cannot be undone. Buffered writes that have not been flushed yet are discarded instead of written back. Graph overlays referencing the table are pruned and reported on References; saved queries are never modified. Known limitation: a DataFusion table provider registered from this table earlier in the same run keeps pointing at the deleted dataset, because mounts are only refreshed when the credential generation changes."
     },
     {
       "node_type": "email_get_attachments",
@@ -62171,6 +62512,121 @@
       "doc": "Extract face embedding for recognition. Download models from: ArcFace (https://huggingface.co/onnx-community/arcface_torch/tree/main), FaceNet (https://huggingface.co/rocca/facenet-onnx)"
     },
     {
+      "node_type": "onnx_gliner",
+      "display": "onnxGliner",
+      "friendly": "Zero-Shot NER (GLiNER)",
+      "category": "AI/ML/ONNX/NLP",
+      "inputs": [
+        {
+          "name": "model",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "ONNX GLiNER Model Session",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"NodeOnnxSession\",\"description\":\"ONNX Runtime Session Reference\",\"type\":\"object\",\"properties\":{\"session_ref\":{\"description\":\"Cache ID for Session\",\"type\":\"string\"}},\"required\":[\"session_ref\"]}"
+        },
+        {
+          "name": "tokenizer",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "HuggingFace tokenizer.json from the same model repository",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"FlowPath\",\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}"
+        },
+        {
+          "name": "text",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Input text to analyze for named entities"
+        },
+        {
+          "name": "labels",
+          "ty": {
+            "base": "string",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Entity types to look for, in plain language (e.g. person, company, medication, invoice number)"
+        },
+        {
+          "name": "threshold",
+          "ty": {
+            "base": "float",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Minimum confidence for a span to be reported (0.0-1.0)"
+        },
+        {
+          "name": "max_width",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Longest entity in words. Must match the model's max_width from gliner_config.json (12 for most GLiNER models, 1 for NuNER Zero)"
+        },
+        {
+          "name": "multi_label",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Report every label that clears the threshold for a span instead of only the best one"
+        },
+        {
+          "name": "merge_adjacent",
+          "ty": {
+            "base": "bool",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Join neighbouring same-label entities separated only by whitespace. Required for token-level models such as NuNER Zero, which score one word at a time"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "result",
+          "ty": {
+            "base": "Struct",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Full zero-shot result with entities and the labels that were requested",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GlinerResult\",\"description\":\"Result of a zero-shot extraction pass\",\"type\":\"object\",\"properties\":{\"entities\":{\"description\":\"Accepted entities, ordered by position\",\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/GlinerEntity\"}},\"text\":{\"description\":\"Original input text\",\"type\":\"string\"},\"labels\":{\"description\":\"Labels the model was asked about\",\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"word_count\":{\"description\":\"Words the text was split into\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0}},\"required\":[\"entities\",\"text\",\"labels\",\"word_count\"],\"$defs\":{\"GlinerEntity\":{\"description\":\"A span GLiNER assigned one of the runtime labels\",\"type\":\"object\",\"properties\":{\"text\":{\"description\":\"The entity text, sliced from the input\",\"type\":\"string\"},\"label\":{\"description\":\"The runtime label this span matched\",\"type\":\"string\"},\"start_char\":{\"description\":\"Character start position in the original text\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_char\":{\"description\":\"Character end position in the original text (exclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"start_word\":{\"description\":\"Index of the first word in the span\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_word\":{\"description\":\"Index of the last word in the span (inclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"score\":{\"description\":\"Sigmoid score for this span/label pair\",\"type\":\"number\",\"format\":\"float\"}},\"required\":[\"text\",\"label\",\"start_char\",\"end_char\",\"start_word\",\"end_word\",\"score\"]}}}"
+        },
+        {
+          "name": "entities",
+          "ty": {
+            "base": "Struct",
+            "container": "Array"
+          },
+          "optional": false,
+          "doc": "Extracted entities as array",
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"GlinerEntity\",\"description\":\"A span GLiNER assigned one of the runtime labels\",\"type\":\"object\",\"properties\":{\"text\":{\"description\":\"The entity text, sliced from the input\",\"type\":\"string\"},\"label\":{\"description\":\"The runtime label this span matched\",\"type\":\"string\"},\"start_char\":{\"description\":\"Character start position in the original text\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_char\":{\"description\":\"Character end position in the original text (exclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"start_word\":{\"description\":\"Index of the first word in the span\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"end_word\":{\"description\":\"Index of the last word in the span (inclusive)\",\"type\":\"integer\",\"format\":\"uint\",\"minimum\":0},\"score\":{\"description\":\"Sigmoid score for this span/label pair\",\"type\":\"number\",\"format\":\"float\"}},\"required\":[\"text\",\"label\",\"start_char\",\"end_char\",\"start_word\",\"end_word\",\"score\"]}"
+        },
+        {
+          "name": "entity_count",
+          "ty": {
+            "base": "int",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Number of entities found"
+        }
+      ],
+      "impure": true,
+      "doc": "Extract entities for any labels you name at runtime, with no fixed label set and no retraining. Load a GLiNER ONNX export (e.g. https://huggingface.co/onnx-community/gliner_small-v2.1, gliner_multi-v2.1, gliner_medium_news-v2.1, gliner_multi_pii-v1, NuNER_Zero) plus the tokenizer.json from the same repository. For models with a fixed label set, use the Named Entity Recognition node instead."
+    },
+    {
       "node_type": "onnx_model_info",
       "display": "onnxModelInfo",
       "friendly": "Model Info",
@@ -71206,7 +71662,7 @@
           },
           "optional": false,
           "doc": "CSVTable to read",
-          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
+          "schema": "{\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"title\":\"CSVTable\",\"type\":\"object\",\"properties\":{\"name\":{\"description\":\"Optional name/identifier for this table\",\"type\":[\"string\",\"null\"]},\"title\":{\"description\":\"Optional title text found above the table in the source sheet\",\"type\":[\"string\",\"null\"]},\"range\":{\"description\":\"Optional A1 range the table was extracted from (e.g. \\\"A3:F42\\\")\",\"type\":[\"string\",\"null\"]},\"headers\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"rows\":{\"type\":\"array\",\"items\":{\"type\":\"array\",\"items\":{\"$ref\":\"#/$defs/Cell\"}}},\"source\":{\"anyOf\":[{\"$ref\":\"#/$defs/FlowPath\"},{\"type\":\"null\"}]}},\"required\":[\"headers\",\"rows\"],\"$defs\":{\"Cell\":{\"anyOf\":[{\"type\":\"null\"},{\"type\":\"boolean\"},{\"type\":\"integer\",\"format\":\"int64\"},{\"type\":\"number\",\"format\":\"double\"},{\"type\":\"string\"},{\"type\":\"object\",\"properties\":{\"iso\":{\"type\":\"string\"},\"ms\":{\"type\":\"integer\",\"format\":\"int64\"}},\"required\":[\"iso\",\"ms\"]}]},\"FlowPath\":{\"type\":\"object\",\"properties\":{\"path\":{\"type\":\"string\"},\"store_ref\":{\"type\":\"string\"},\"cache_store_ref\":{\"type\":[\"string\",\"null\"]}},\"required\":[\"path\",\"store_ref\"]}}}"
         },
         {
           "name": "row_index",

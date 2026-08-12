@@ -19,9 +19,11 @@ import { createId } from "@paralleldrive/cuid2";
 import {
 	ArrowDownIcon,
 	ArrowUpIcon,
+	DatabaseIcon,
 	EllipsisVerticalIcon,
 	GripIcon,
 	GripVerticalIcon,
+	InfoIcon,
 	ListIcon,
 	PlusIcon,
 	SaveIcon,
@@ -40,10 +42,14 @@ import {
 	type IPinOptions,
 	IValueType,
 	IVariableType,
+	describeCacheLifetime,
 } from "../../lib";
 import {
 	type IBoard,
 	type ILayer,
+	type ILayerCache,
+	ILayerCacheScope,
+	ILayerType,
 	IPinType,
 } from "../../lib/schema/flow/board";
 import type { INode } from "../../lib/schema/flow/node";
@@ -68,6 +74,7 @@ import {
 	SelectTrigger,
 	SelectValue,
 	Separator,
+	Switch,
 	Tabs,
 	TabsContent,
 	TabsList,
@@ -119,6 +126,18 @@ const sortByIndex = <T extends { index: number }>(arr: T[]) =>
 
 const reindex = <T extends { index: number }>(arr: T[]) =>
 	arr.map((p, i) => ({ ...p, index: i + 1 }));
+
+const DEFAULT_LAYER_CACHE: ILayerCache = {
+	enabled: false,
+	prefix: "",
+	ttl_seconds: null,
+	scope: ILayerCacheScope.App,
+};
+
+const buildInitialCache = (layer?: ILayer): ILayerCache => ({
+	...DEFAULT_LAYER_CACHE,
+	...(layer?.cache ?? {}),
+});
 
 const useGroupedPins = (edits: Record<string, PinEdit>) => {
 	return useMemo(() => {
@@ -212,20 +231,27 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 	const isNodeMode =
 		mode === "node" || (node !== undefined && layer === undefined);
 	const isGenericEvent = isNodeMode && node?.name === "events_generic";
+	// Only function layers have a call boundary to cache at — a collapsed layer runs
+	// inline with the rest of the graph.
+	const isFunctionLayer = !isNodeMode && layer?.type === ILayerType.Function;
 
 	const [edits, setEdits] = useState<Record<string, PinEdit>>(() =>
 		entity ? buildInitialEdits(entity, boardRef) : {},
 	);
 	const [nodeName, setNodeName] = useState<string>("");
 	const [nodeDescription, setNodeDescription] = useState<string>("");
+	const [cache, setCache] = useState<ILayerCache>(() =>
+		buildInitialCache(layer),
+	);
 	const { inputs, outputs } = useGroupedPins(edits);
-	const [tab, setTab] = useState<"inputs" | "outputs" | "metadata">(
+	const [tab, setTab] = useState<"inputs" | "outputs" | "metadata" | "caching">(
 		isGenericEvent ? "metadata" : "inputs",
 	);
 
 	useEffect(() => {
 		if (open && entity) {
 			setEdits(buildInitialEdits(entity, boardRef));
+			setCache(buildInitialCache(layer));
 			setTab(isGenericEvent ? "metadata" : "inputs");
 			if (isNodeMode && node) {
 				setNodeName(node.friendly_name || "");
@@ -242,7 +268,7 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 				setNodeDescription(desc);
 			}
 		}
-	}, [open, entity, boardRef, isNodeMode, node, isGenericEvent]);
+	}, [open, entity, boardRef, isNodeMode, node, isGenericEvent, layer]);
 
 	const setPin = useCallback((id: string, updater: (p: PinEdit) => PinEdit) => {
 		setEdits((prev) => {
@@ -405,6 +431,11 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 			const updated: ILayer = {
 				...layer,
 				pins: nextPins as unknown as ILayer["pins"],
+				// Collapsed layers never reach a call boundary, so they must not carry a
+				// setting that silently does nothing.
+				cache: isFunctionLayer
+					? { ...cache, prefix: (cache.prefix ?? "").trim() }
+					: null,
 			};
 			await onApply(updated);
 		}
@@ -417,6 +448,8 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 		isNodeMode,
 		nodeName,
 		nodeDescription,
+		cache,
+		isFunctionLayer,
 	]);
 
 	return (
@@ -442,13 +475,19 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 					className="mt-2"
 				>
 					<TabsList
-						className={`grid w-full ${isGenericEvent ? "grid-cols-2" : isNodeMode ? "grid-cols-1" : "grid-cols-2"}`}
+						className={`grid w-full ${isGenericEvent ? "grid-cols-2" : isNodeMode ? "grid-cols-1" : isFunctionLayer ? "grid-cols-3" : "grid-cols-2"}`}
 					>
 						{isGenericEvent && (
 							<TabsTrigger value="metadata">Node Info</TabsTrigger>
 						)}
 						{!isNodeMode && <TabsTrigger value="inputs">Inputs</TabsTrigger>}
 						<TabsTrigger value="outputs">Outputs</TabsTrigger>
+						{isFunctionLayer && (
+							<TabsTrigger value="caching" className="gap-1.5">
+								<DatabaseIcon className="h-3.5 w-3.5" />
+								Caching
+							</TabsTrigger>
+						)}
 					</TabsList>
 					{isGenericEvent && (
 						<TabsContent value="metadata" className="mt-3 space-y-4">
@@ -513,6 +552,11 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 							isGenericEvent={isGenericEvent}
 						/>
 					</TabsContent>
+					{isFunctionLayer && (
+						<TabsContent value="caching" className="mt-3">
+							<CacheSettings cache={cache} onChange={setCache} />
+						</TabsContent>
+					)}
 				</Tabs>{" "}
 				<Separator className="my-3" />
 				<DialogFooter className="gap-2">
@@ -526,6 +570,121 @@ export const LayerEditMenu: React.FC<LayerEditMenuProps> = ({
 				</DialogFooter>
 			</DialogContent>
 		</Dialog>
+	);
+};
+
+const CacheSettings: React.FC<{
+	cache: ILayerCache;
+	onChange: (next: ILayerCache) => void;
+}> = ({ cache, onChange }) => {
+	const enabled = Boolean(cache.enabled);
+	const patch = useCallback(
+		(next: Partial<ILayerCache>) => onChange({ ...cache, ...next }),
+		[cache, onChange],
+	);
+
+	return (
+		<div className="space-y-4">
+			<div className="flex items-start justify-between gap-4 rounded-md border p-3">
+				<div className="space-y-1">
+					<Label htmlFor="layer-cache-enabled" className="text-sm">
+						Cache results
+					</Label>
+					<p className="text-xs text-muted-foreground">
+						Reuse a previous result whenever this layer is called with the same
+						inputs.
+					</p>
+				</div>
+				<Switch
+					id="layer-cache-enabled"
+					checked={enabled}
+					onCheckedChange={(checked) => patch({ enabled: checked })}
+				/>
+			</div>
+
+			<div
+				className={`space-y-4 ${enabled ? "" : "pointer-events-none opacity-50"}`}
+			>
+				<div className="space-y-1.5">
+					<Label className="text-xs">Prefix</Label>
+					<Input
+						className="h-8"
+						value={cache.prefix ?? ""}
+						onChange={(e) => patch({ prefix: e.target.value })}
+						placeholder="e.g. pricing"
+						disabled={!enabled}
+					/>
+					<p className="text-xs text-muted-foreground">
+						Groups this layer's entries so they can be cleared in one go with
+						the Invalidate Cache Namespace node — without a prefix they can only
+						be deleted one key at a time. Changing it also drops everything
+						cached so far.
+					</p>
+				</div>
+
+				<div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+					<div className="space-y-1.5">
+						<Label className="text-xs">Lifetime (seconds)</Label>
+						<Input
+							className="h-8"
+							type="number"
+							min={0}
+							value={cache.ttl_seconds ?? ""}
+							onChange={(e) =>
+								patch({
+									ttl_seconds:
+										e.target.value === ""
+											? null
+											: Math.max(0, Number(e.target.value)),
+								})
+							}
+							placeholder="0"
+							disabled={!enabled}
+						/>
+						<p className="text-xs text-muted-foreground">
+							{describeCacheLifetime(cache.ttl_seconds)}
+						</p>
+					</div>
+
+					<div className="space-y-1.5">
+						<Label className="text-xs">Scope</Label>
+						<Select
+							value={cache.scope ?? ILayerCacheScope.App}
+							onValueChange={(value) =>
+								patch({ scope: value as ILayerCacheScope })
+							}
+							disabled={!enabled}
+						>
+							<SelectTrigger className="h-8 w-full text-xs">
+								<SelectValue placeholder="Scope" />
+							</SelectTrigger>
+							<SelectContent>
+								<SelectItem value={ILayerCacheScope.App}>
+									App — shared by everyone
+								</SelectItem>
+								<SelectItem value={ILayerCacheScope.User}>
+									User — private per user
+								</SelectItem>
+							</SelectContent>
+						</Select>
+						<p className="text-xs text-muted-foreground">
+							Pick User when the result depends on who triggered the run.
+						</p>
+					</div>
+				</div>
+
+				{enabled && (
+					<div className="flex gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs">
+						<InfoIcon className="h-4 w-4 shrink-0 text-destructive" />
+						<span className="text-muted-foreground">
+							A cache hit replaces the whole call — the layer's nodes never run,
+							so any side effects they have are skipped too. Only cache layers
+							whose outputs depend solely on their inputs.
+						</span>
+					</div>
+				)}
+			</div>
+		</div>
 	);
 };
 

@@ -9,6 +9,7 @@ import {
 	EmptyEventState,
 	EmptyGraphState,
 	EmptyHelperState,
+	EmptyQueryState,
 	EmptyRoleState,
 	EmptyRouteState,
 	EmptyStorageState,
@@ -29,6 +30,7 @@ import {
 	type IGraphState,
 	type IHelperState,
 	type IPageState,
+	type IQueryState,
 	type IRegistryState,
 	type IRoleState,
 	type IStorageState,
@@ -70,6 +72,7 @@ export class EmptyBackend implements IBackendState {
 	templateState: ITemplateState = new EmptyTemplateState();
 	userState: IUserState = new EmptyUserState();
 	dbState: IDatabaseState = new EmptyDatabaseState();
+	queryState: IQueryState = new EmptyQueryState();
 	graphState: IGraphState = new EmptyGraphState();
 	widgetState: IWidgetState = unavailableState<IWidgetState>("WidgetState");
 	pageState: IPageState = unavailableState<IPageState>("PageState");

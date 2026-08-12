@@ -222,10 +222,10 @@ declare function a2uiSetElementValue({ elementRef: Struct, value: string }): voi
 /**
  * Shows or hides an element
  * @param elementRef — Element ID string or element object from Get Element
- * @param visible — Whether the element should be visible
+ * @param visible (optional) — Whether the element should be visible
  * @impure has side effects / drives control flow
  */
-declare function a2uiSetElementVisibility({ elementRef: any, visible: bool }): void;
+declare function a2uiSetElementVisibility({ elementRef: any, visible?: bool }): void;
 
 
 // === UI/Elements/Button ===

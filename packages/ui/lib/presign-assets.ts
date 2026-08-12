@@ -60,6 +60,11 @@ export interface AssetPrefixInfo {
 	boundValue: BoundValue | string;
 }
 
+/** The canvas fields that can carry a storage path. */
+export interface CanvasSettingsLike {
+	backgroundImage?: string;
+}
+
 /**
  * Extracts all storage prefixes from page components that need presigning
  */
@@ -96,49 +101,29 @@ export function extractAssetPrefixes(
 	return assets;
 }
 
-/**
- * Presigns all asset URLs in page components
- * Returns a new components array with presigned URLs
- */
-export async function presignPageAssets(
+async function signPrefixes(
 	appId: string,
-	components: SurfaceComponent[],
+	prefixes: string[],
 	storageState: IStorageState,
-): Promise<SurfaceComponent[]> {
-	const assets = extractAssetPrefixes(components);
-
-	console.log("[presignPageAssets] Found assets:", assets);
-
-	if (assets.length === 0) {
-		return components;
-	}
-
-	// Get unique prefixes
-	const uniquePrefixes = [...new Set(assets.map((a) => a.prefix))];
-
-	console.log(
-		"[presignPageAssets] Requesting presigned URLs for:",
-		uniquePrefixes,
-	);
-
-	// Presign all prefixes in a single call
-	const signedUrls = await storageState.downloadStorageItems(
-		appId,
-		uniquePrefixes,
-	);
-
-	console.log("[presignPageAssets] Received signed URLs:", signedUrls);
-
-	// Create a map of prefix -> signed URL
+): Promise<Map<string, string>> {
 	const urlMap = new Map<string, string>();
+	if (prefixes.length === 0) return urlMap;
+
+	const signedUrls = await storageState.downloadStorageItems(appId, prefixes);
 	for (const result of signedUrls) {
 		if (result.url && !result.error) {
 			urlMap.set(result.prefix, result.url);
 		}
 	}
+	return urlMap;
+}
 
-	// Clone components and update URLs
-	const updatedComponents = components.map((component) => {
+function applySignedUrls(
+	components: SurfaceComponent[],
+	assets: AssetPrefixInfo[],
+	urlMap: Map<string, string>,
+): SurfaceComponent[] {
+	return components.map((component) => {
 		const relevantAssets = assets.filter((a) => a.componentId === component.id);
 		if (relevantAssets.length === 0) return component;
 
@@ -165,8 +150,73 @@ export async function presignPageAssets(
 
 		return updatedComponent;
 	});
+}
 
-	return updatedComponents;
+/**
+ * Presigns all asset URLs in page components
+ * Returns a new components array with presigned URLs
+ */
+export async function presignPageAssets(
+	appId: string,
+	components: SurfaceComponent[],
+	storageState: IStorageState,
+): Promise<SurfaceComponent[]> {
+	const assets = extractAssetPrefixes(components);
+	if (assets.length === 0) return components;
+
+	const urlMap = await signPrefixes(
+		appId,
+		[...new Set(assets.map((a) => a.prefix))],
+		storageState,
+	);
+	return applySignedUrls(components, assets, urlMap);
+}
+
+/**
+ * Presigns everything a page renders in one request.
+ *
+ * The component assets and the canvas background were signed by two awaited calls in sequence,
+ * so every page open paid two round trips to render one screen. They address the same storage
+ * and the same endpoint takes a list, so one batch answers both.
+ */
+export async function presignPageContent(
+	appId: string,
+	components: SurfaceComponent[],
+	canvasSettings: CanvasSettingsLike | undefined,
+	storageState: IStorageState,
+): Promise<{
+	components: SurfaceComponent[];
+	backgroundImage: string | undefined;
+}> {
+	const assets = extractAssetPrefixes(components);
+	const background = canvasSettings?.backgroundImage;
+	const backgroundNeedsSigning = Boolean(
+		background && isStoragePrefix(background),
+	);
+
+	const prefixes = [
+		...new Set([
+			...assets.map((a) => a.prefix),
+			...(backgroundNeedsSigning && background ? [background] : []),
+		]),
+	];
+
+	if (prefixes.length === 0) {
+		return { components, backgroundImage: background };
+	}
+
+	const urlMap = await signPrefixes(appId, prefixes, storageState);
+
+	return {
+		components:
+			assets.length > 0
+				? applySignedUrls(components, assets, urlMap)
+				: components,
+		backgroundImage:
+			backgroundNeedsSigning && background
+				? (urlMap.get(background) ?? background)
+				: background,
+	};
 }
 
 /**

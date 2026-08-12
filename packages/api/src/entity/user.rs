@@ -42,8 +42,6 @@ pub struct Model {
     pub accepted_terms_version: Option<String>,
     #[sea_orm(column_name = "tutorialCompleted")]
     pub tutorial_completed: bool,
-    #[sea_orm(column_name = "devMode")]
-    pub dev_mode: bool,
     pub status: UserStatus,
     pub tier: UserTier,
     #[sea_orm(column_name = "totalSize")]
@@ -58,6 +56,8 @@ pub struct Model {
     pub created_at: DateTime,
     #[sea_orm(column_name = "updatedAt")]
     pub updated_at: DateTime,
+    #[sea_orm(column_name = "devMode")]
+    pub dev_mode: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

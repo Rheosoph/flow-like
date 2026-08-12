@@ -104,11 +104,24 @@ export interface OntologyActionDefinition {
 	exposed?: boolean;
 }
 
+export interface GraphEdgeLabelCount {
+	label: string;
+	count: number;
+}
+
+export interface SubgraphNodeStats {
+	out_by_label: GraphEdgeLabelCount[];
+	/** False when the counts were read off a sampling window, making them lower bounds. */
+	exact: boolean;
+}
+
 export interface SubgraphNode {
 	id: string;
 	label: string;
 	caption?: string;
 	props: Record<string, unknown>;
+	/** Only the seedless sampler knows a node's whole-population fan-out. */
+	stats?: SubgraphNodeStats;
 	/** Not sent by the server — resolved client-side from the overlay. */
 	style?: LabelStyle;
 }

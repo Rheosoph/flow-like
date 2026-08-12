@@ -34,6 +34,7 @@ members = [
     "packages/catalog/web",
     "packages/catalog/media",
     "packages/catalog/ml",
+    "packages/ordinal",
     "packages/catalog/onnx",
     "packages/catalog/llm",
     "packages/catalog/processing",
@@ -67,6 +68,7 @@ flow-like-catalog-data = { path = "packages/catalog/data" }
 flow-like-catalog-web = { path = "packages/catalog/web" }
 flow-like-catalog-media = { path = "packages/catalog/media" }
 flow-like-catalog-ml = { path = "packages/catalog/ml" }
+flow-like-ordinal = { path = "packages/ordinal" }
 flow-like-catalog-onnx = { path = "packages/catalog/onnx" }
 flow-like-catalog-llm = { path = "packages/catalog/llm" }
 flow-like-catalog-processing = { path = "packages/catalog/processing" }
@@ -166,22 +168,14 @@ sourcemap = "9.3"
 
 rdev = { git = "https://github.com/Rheosoph/rdev", branch = "macos-thread-safety" }
 
-wasmtime = { version = "45.0.0", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
-wasmtime-wasi = "45.0.0"
-wasmtime-wasi-http = "45.0.0"
+wasmtime = { version = "47.0.3", features = ["async", "cranelift", "parallel-compilation", "gc", "pulley"] }
+wasmtime-wasi = "47.0.3"
+wasmtime-wasi-http = "47.0.3"
 
 [patch.crates-io]
 # Fix Windows CRT mismatch (upstream hardcodes static CRT /MT,
 # conflicting with ort_sys which uses dynamic CRT /MD -> LNK2038).
 esaxx-rs = { git = "https://github.com/Rheosoph/esaxx-rs.git", branch = "main" }
-# Fix smartstring's allocator_api probe on newer stable Rust toolchains.
-smartstring = { git = "https://github.com/Rheosoph/smartstring.git", rev = "ea5608253d061dbc90a8f66022ebc3326bd65514" }
-# Fix io-extras's unstable vector feature probes on newer stable Rust toolchains.
-io-extras = { git = "https://github.com/Rheosoph/io-extras.git", rev = "515df16351274387cb14d661874ed731fff1350b" }
-# Fix cap-primitives's unstable io_error feature probes on newer stable Rust toolchains.
-cap-primitives = { git = "https://github.com/Rheosoph/cap-std.git", rev = "dca01d25b31c91da1aa7f2050c0eca4d4f361871" }
-# Fix cap-std's unstable vector feature probes on newer stable Rust toolchains.
-cap-std = { git = "https://github.com/Rheosoph/cap-std.git", rev = "dca01d25b31c91da1aa7f2050c0eca4d4f361871" }
 # Fix erasable's unstable extern type / never type probes on newer stable Rust toolchains.
 erasable = { git = "https://github.com/Rheosoph/pointer-utils.git", rev = "e1c31813a156e656f8d0b2c194410ac7192ffbd4" }
 

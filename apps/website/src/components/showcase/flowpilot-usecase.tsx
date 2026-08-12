@@ -1,5 +1,6 @@
 "use client";
 
+import { FlowPilotBubbleOrb } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-orb";
 import type {
 	IMessage,
 	IPlanStep,
@@ -11,7 +12,6 @@ import {
 	type ISendMessageFunction,
 } from "@flow-like/flow-like-ui/components/interfaces/chat-default/chatbox";
 import { MessageComponent } from "@flow-like/flow-like-ui/components/interfaces/chat-default/message";
-import { FlowPilotBubbleOrb } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-orb";
 import { Badge } from "@flow-like/flow-like-ui/components/ui/badge";
 import { IRole } from "@flow-like/flow-like-ui/lib/schema/llm/history";
 import { cn } from "@flow-like/flow-like-ui/lib/utils";
@@ -130,8 +130,7 @@ export default function FlowPilotUseCase({
 		const root = rootRef.current;
 		if (!root) return;
 		cancelledRef.current = false;
-		const sleep = (ms: number) =>
-			new Promise<void>((r) => setTimeout(r, ms));
+		const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 		const reduced = window.matchMedia(
 			"(prefers-reduced-motion: reduce)",
 		).matches;

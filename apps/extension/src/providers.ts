@@ -510,9 +510,9 @@ function toDocumentSymbol(sym: FlowSymbol): vscode.DocumentSymbol {
 			? vscode.SymbolKind.Variable
 			: sym.kind === "interface"
 				? vscode.SymbolKind.Interface
-			: sym.kind === "event"
-				? vscode.SymbolKind.Event
-				: vscode.SymbolKind.Function;
+				: sym.kind === "event"
+					? vscode.SymbolKind.Event
+					: vscode.SymbolKind.Function;
 	return new vscode.DocumentSymbol(
 		sym.name,
 		sym.detail,

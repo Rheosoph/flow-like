@@ -2609,14 +2609,14 @@ fn strip_board_secrets(board: &mut proto::Board) {
 }
 
 fn register_node_pin_ids(nodes: &HashMap<String, proto::Node>, maps: &mut ForkIdMap) {
-    for (_, node) in nodes.iter() {
+    for node in nodes.values() {
         maps.nodes.entry(node.id.clone()).or_insert_with(create_id);
         register_pin_ids(&node.pins, maps);
     }
 }
 
 fn register_pin_ids(pins: &HashMap<String, proto::Pin>, maps: &mut ForkIdMap) {
-    for (_, pin) in pins.iter() {
+    for pin in pins.values() {
         maps.pins.entry(pin.id.clone()).or_insert_with(create_id);
     }
 }
@@ -3341,10 +3341,10 @@ fn translate_bound_string(
             }
         }
         flow_like_types::Value::Object(obj) => {
-            if let Some(flow_like_types::Value::String(s)) = obj.get_mut("literalString") {
-                if let Some(new_id) = mapping.get(s.as_str()) {
-                    *s = new_id.clone();
-                }
+            if let Some(flow_like_types::Value::String(s)) = obj.get_mut("literalString")
+                && let Some(new_id) = mapping.get(s.as_str())
+            {
+                *s = new_id.clone();
             }
         }
         _ => {}
@@ -3369,10 +3369,10 @@ fn translate_app_id(target: Option<&mut flow_like_types::Value>, maps: &ForkIdMa
             }
         }
         flow_like_types::Value::Object(obj) => {
-            if let Some(flow_like_types::Value::String(s)) = obj.get_mut("literalString") {
-                if s == src {
-                    *s = dst;
-                }
+            if let Some(flow_like_types::Value::String(s)) = obj.get_mut("literalString")
+                && s == src
+            {
+                *s = dst;
             }
         }
         _ => {}
@@ -3389,10 +3389,10 @@ fn remap_widget_instance(instance: &mut proto::WidgetInstance, maps: &ForkIdMap)
     if let Some(new_id) = maps.widgets.get(&instance.widget_id) {
         instance.widget_id = new_id.clone();
     }
-    if let Some(widget_ref) = instance.widget_ref.as_mut() {
-        if let Some(new_id) = maps.widgets.get(&widget_ref.widget_id) {
-            widget_ref.widget_id = new_id.clone();
-        }
+    if let Some(widget_ref) = instance.widget_ref.as_mut()
+        && let Some(new_id) = maps.widgets.get(&widget_ref.widget_id)
+    {
+        widget_ref.widget_id = new_id.clone();
     }
     for binding in instance.action_bindings.values_mut() {
         if let Some(binding_type) = binding.binding_type.as_mut() {

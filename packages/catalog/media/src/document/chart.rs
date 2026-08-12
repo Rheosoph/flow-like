@@ -116,6 +116,7 @@ pub struct ChartInput {
 }
 
 /// Flattened chart data ready for Office XML / PDF rendering.
+#[derive(Debug, Clone)]
 pub struct OfficeChartData {
     pub chart_type: ChartType,
     pub title: Option<String>,
@@ -126,6 +127,7 @@ pub struct OfficeChartData {
     pub layout: ChartLayout,
 }
 
+#[derive(Debug, Clone)]
 pub struct ChartSeries {
     pub name: String,
     pub values: Vec<f64>,
@@ -293,7 +295,13 @@ pub fn parse_chart_block(content: &str) -> Option<ChartInput> {
 // Conversion to Office-ready data
 // ---------------------------------------------------------------------------
 
-const DEFAULT_CHART_COLORS: &[&str] = &["FF4343", "FF6B6B", "4B5563", "9CA3AF", "D1D5DB"];
+/// The Flow-Like categorical ramp (`--fl-chat-chart-1..8`), brand ember first.
+///
+/// The `--chart-1..5` tokens span only ~40° of hue, so a multi-series chart drawn from them
+/// reads as a single colour; this ramp is spaced across the wheel for exactly that reason.
+const DEFAULT_CHART_COLORS: &[&str] = &[
+    "FB562D", "8B61E3", "09AEAE", "EBA42C", "2B7AD6", "42AA60", "DA529C", "62778D",
+];
 
 /// Convert parsed chart input into flat data suitable for DrawingML / PDF rendering.
 /// Returns `None` for JSON mode (pass-through only) or empty data.

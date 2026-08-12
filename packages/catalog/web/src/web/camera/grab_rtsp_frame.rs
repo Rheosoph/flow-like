@@ -557,7 +557,7 @@ fn has_decodable_hevc_nal(nals: &[&[u8]]) -> bool {
 
 #[cfg(all(feature = "execute", any(target_os = "macos", target_os = "ios")))]
 fn hevc_nal_is_parameter_set(nal: &[u8]) -> bool {
-    matches!(hevc_nal_unit_type(nal), Some(32 | 33 | 34))
+    matches!(hevc_nal_unit_type(nal), Some(32..=34))
 }
 
 #[cfg(feature = "execute")]

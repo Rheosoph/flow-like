@@ -7,13 +7,13 @@
 #[cfg(test)]
 use super::PropertyProjectionMode;
 use super::{
-    GraphOverlayDef, LanceGraphStore, filter_identifier, load_overlay, resolve_object_mapping,
-    resolve_property_names, value_sql_literal, value_to_id_string,
+    GraphOverlayDef, LanceGraphStore, dedupe_and_limit_subgraph, filter_identifier, load_overlay,
+    resolve_object_mapping, resolve_property_names, value_sql_literal, value_to_id_string,
 };
 use crate::arrow_utils::record_batch_to_value;
 use crate::databases::graph::{
-    GraphAnalyticsResult, GraphPath, GraphPathsResult, LabelCount, NodeMetric, SubgraphEdge,
-    SubgraphNode, SubgraphResult, TraversalDirection,
+    EdgeLabelCount, GraphAnalyticsResult, GraphPath, GraphPathsResult, LabelCount, NodeMetric,
+    SubgraphEdge, SubgraphNode, SubgraphNodeStats, SubgraphResult, TraversalDirection,
 };
 use flow_like_types::{Result, Value, anyhow};
 use futures::TryStreamExt;
@@ -25,6 +25,22 @@ const IN_CHUNK_SIZE: usize = 400;
 const ANALYTICS_MAX_EDGES: usize = 100_000;
 const TOP_METRIC_NODES: usize = 25;
 const MAX_ALTERNATIVE_PATHS: usize = 3;
+/// Rows the seedless sampler looks at to work out which objects a relationship
+/// table is actually about. Only the two endpoint columns are read, so this is
+/// far cheaper than the projected scan that follows it.
+const CENSUS_MAX_ROWS: usize = 20_000;
+const CENSUS_MIN_ROWS: usize = 2_000;
+const CENSUS_BUDGET_FACTOR: usize = 24;
+/// How many distinct sources the first view aims to show, and how many of each
+/// source's neighbours it carries.
+const HUB_TARGET: usize = 24;
+const MAX_CHILDREN_PER_HUB: usize = 8;
+/// Ceiling on the projected re-read that puts edge properties back onto the
+/// sampled pairs.
+const SAMPLE_PROPS_MAX_ROWS: usize = 4_000;
+/// Rows read per chosen pair: the filter matches a whole source, so the window
+/// has to overshoot for the wanted pairs to be inside it.
+const SAMPLE_PROPS_OVERSCAN: usize = 8;
 
 /// A node discovered during expansion, keyed by its full `label:id` identity.
 #[derive(Clone)]
@@ -39,6 +55,57 @@ struct ExpansionState {
     seen_edge_ids: HashSet<String>,
     warnings: Vec<String>,
     truncated: bool,
+    /// Population counts, keyed by full `label:id`. Only the seedless sampler
+    /// fills this — every other path leaves it empty.
+    node_stats: HashMap<String, SubgraphNodeStats>,
+}
+
+impl ExpansionState {
+    fn new() -> Self {
+        Self {
+            nodes: HashMap::new(),
+            edges: Vec::new(),
+            seen_edge_ids: HashSet::new(),
+            warnings: Vec::new(),
+            truncated: false,
+            node_stats: HashMap::new(),
+        }
+    }
+
+    fn record_fan_out(&mut self, full_id: &str, label: &str, count: usize, exact: bool) {
+        let stats = self
+            .node_stats
+            .entry(full_id.to_string())
+            .or_insert_with(|| SubgraphNodeStats {
+                out_by_label: Vec::new(),
+                exact: true,
+            });
+        stats.exact = stats.exact && exact;
+        match stats
+            .out_by_label
+            .iter_mut()
+            .find(|entry| entry.label == label)
+        {
+            Some(entry) => entry.count = entry.count.saturating_add(count),
+            None => stats.out_by_label.push(EdgeLabelCount {
+                label: label.to_string(),
+                count,
+            }),
+        }
+    }
+}
+
+/// What the seedless sampler took from one relationship table.
+struct SampledEdgeRows {
+    rows: Vec<Value>,
+    /// Fan-out of each chosen source within the census window, keyed by the
+    /// source's raw id string.
+    fan_out: Vec<(String, usize)>,
+    /// True when the census window covered the whole table, which makes every
+    /// fan-out an exact count rather than a lower bound.
+    exact: bool,
+    /// True when the table holds rows this sample left behind.
+    more_rows: bool,
 }
 
 impl LanceGraphStore {
@@ -60,6 +127,34 @@ impl LanceGraphStore {
         Ok(table)
     }
 
+    async fn edge_rows(
+        &self,
+        table: &lancedb::Table,
+        columns: &[String],
+        predicate: Option<String>,
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        let mut query = table
+            .query()
+            .select(lancedb::query::Select::Columns(columns.to_vec()))
+            .limit(limit);
+        if let Some(predicate) = predicate {
+            query = query.only_if(predicate);
+        }
+        let batches = query
+            .execute()
+            .await
+            .map_err(|e| anyhow!("Failed to scan edge table: {}", e))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| anyhow!("Failed to collect edge rows: {}", e))?;
+        let mut rows = Vec::new();
+        for batch in &batches {
+            rows.extend(record_batch_to_value(batch)?);
+        }
+        Ok(rows)
+    }
+
     async fn edge_rows_for_ids(
         &self,
         table: &lancedb::Table,
@@ -77,22 +172,43 @@ impl LanceGraphStore {
             filter_identifier(filter_column),
             literals.join(", ")
         );
-        let batches = table
-            .query()
-            .only_if(predicate)
-            .select(lancedb::query::Select::Columns(columns.to_vec()))
-            .limit(limit)
-            .execute()
-            .await
-            .map_err(|e| anyhow!("Failed to scan edge table: {}", e))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|e| anyhow!("Failed to collect edge rows: {}", e))?;
-        let mut rows = Vec::new();
-        for batch in &batches {
-            rows.extend(record_batch_to_value(batch)?);
-        }
-        Ok(rows)
+        self.edge_rows(table, columns, Some(predicate), limit).await
+    }
+
+    /// Column projection and property names for one edge mapping.
+    async fn edge_projection(
+        &self,
+        edge: &super::EdgeMappingDef,
+        schema_cache: &mut HashMap<String, Vec<String>>,
+    ) -> Result<(Vec<String>, Vec<String>)> {
+        let excluded = HashSet::from([edge.src_column.clone(), edge.dst_column.clone()]);
+        let prop_names = resolve_property_names(
+            &self.connection,
+            &edge.table,
+            &edge.property_columns,
+            self.overlay.property_projection_mode,
+            schema_cache,
+            &excluded,
+            &[],
+        )
+        .await?;
+        let mut columns = vec![edge.src_column.clone(), edge.dst_column.clone()];
+        columns.extend(prop_names.iter().cloned());
+        let mut seen_columns = HashSet::new();
+        columns.retain(|column| seen_columns.insert(column.clone()));
+        Ok((columns, prop_names))
+    }
+
+    fn edge_endpoints_mapped(&self, edge: &super::EdgeMappingDef) -> bool {
+        self.overlay
+            .nodes
+            .iter()
+            .any(|node| node.label == edge.src_label)
+            && self
+                .overlay
+                .nodes
+                .iter()
+                .any(|node| node.label == edge.dst_label)
     }
 
     /// Breadth-first expansion from seed objects across all edge mappings,
@@ -108,13 +224,7 @@ impl LanceGraphStore {
         let node_limit = node_limit.max(1);
         let edge_limit = node_limit.saturating_mul(3);
 
-        let mut state = ExpansionState {
-            nodes: HashMap::new(),
-            edges: Vec::new(),
-            seen_edge_ids: HashSet::new(),
-            warnings: Vec::new(),
-            truncated: false,
-        };
+        let mut state = ExpansionState::new();
         let mut table_cache: HashMap<String, lancedb::Table> = HashMap::new();
         let mut schema_cache: HashMap<String, Vec<String>> = HashMap::new();
 
@@ -184,18 +294,7 @@ impl LanceGraphStore {
                         false,
                     ));
                 }
-                if sides.is_empty()
-                    || !self
-                        .overlay
-                        .nodes
-                        .iter()
-                        .any(|node| node.label == edge.src_label)
-                    || !self
-                        .overlay
-                        .nodes
-                        .iter()
-                        .any(|node| node.label == edge.dst_label)
-                {
+                if sides.is_empty() || !self.edge_endpoints_mapped(edge) {
                     continue;
                 }
 
@@ -208,30 +307,16 @@ impl LanceGraphStore {
                         continue;
                     }
                 };
-                let excluded = HashSet::from([edge.src_column.clone(), edge.dst_column.clone()]);
-                let prop_names = match resolve_property_names(
-                    &self.connection,
-                    &edge.table,
-                    &edge.property_columns,
-                    self.overlay.property_projection_mode,
-                    &mut schema_cache,
-                    &excluded,
-                    &[],
-                )
-                .await
-                {
-                    Ok(names) => names,
-                    Err(error) => {
-                        state
-                            .warnings
-                            .push(format!("Edge mapping '{}': {}", edge.label, error));
-                        continue;
-                    }
-                };
-                let mut columns = vec![edge.src_column.clone(), edge.dst_column.clone()];
-                columns.extend(prop_names.iter().cloned());
-                let mut seen_columns = HashSet::new();
-                columns.retain(|column| seen_columns.insert(column.clone()));
+                let (columns, prop_names) =
+                    match self.edge_projection(edge, &mut schema_cache).await {
+                        Ok(projection) => projection,
+                        Err(error) => {
+                            state
+                                .warnings
+                                .push(format!("Edge mapping '{}': {}", edge.label, error));
+                            continue;
+                        }
+                    };
 
                 for (filter_col, filter_label, neighbor_label, _neighbor_col, filter_is_source) in
                     sides
@@ -321,8 +406,552 @@ impl LanceGraphStore {
             frontier = next_frontier;
         }
 
+        self.close_edges_among_discovered(
+            &mut state,
+            edge_limit,
+            &mut table_cache,
+            &mut schema_cache,
+        )
+        .await;
+
         self.hydrate_expansion(state, &mut table_cache, &mut schema_cache)
             .await
+    }
+
+    /// Adds the edges that run between objects already in the result.
+    ///
+    /// Frontier expansion only records the edges it traversed, so two neighbors
+    /// found on the same hop come back looking unconnected even though the data
+    /// links them. Without this pass the viewer renders a star per expansion and
+    /// the real structure only appears once every node is expanded by hand.
+    async fn close_edges_among_discovered(
+        &self,
+        state: &mut ExpansionState,
+        edge_limit: usize,
+        table_cache: &mut HashMap<String, lancedb::Table>,
+        schema_cache: &mut HashMap<String, Vec<String>>,
+    ) {
+        if state.nodes.len() < 2 || state.edges.len() >= edge_limit {
+            return;
+        }
+
+        let mut ids_by_label: HashMap<String, Vec<Value>> = HashMap::new();
+        for node in state.nodes.values() {
+            ids_by_label
+                .entry(node.label.clone())
+                .or_default()
+                .push(node.raw_id.clone());
+        }
+
+        for edge in &self.overlay.edges {
+            if state.edges.len() >= edge_limit {
+                state.truncated = true;
+                break;
+            }
+            if !self.edge_endpoints_mapped(edge) {
+                continue;
+            }
+            let Some(src_ids) = ids_by_label.get(&edge.src_label) else {
+                continue;
+            };
+            if !ids_by_label.contains_key(&edge.dst_label) {
+                continue;
+            }
+
+            let table = match self.open_table_cached(&edge.table, table_cache).await {
+                Ok(table) => table,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+            let (columns, prop_names) = match self.edge_projection(edge, schema_cache).await {
+                Ok(projection) => projection,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+
+            for chunk in src_ids.chunks(IN_CHUNK_SIZE) {
+                let remaining = edge_limit.saturating_sub(state.edges.len());
+                if remaining == 0 {
+                    state.truncated = true;
+                    break;
+                }
+                let rows = match self
+                    .edge_rows_for_ids(&table, &edge.src_column, &columns, chunk, remaining)
+                    .await
+                {
+                    Ok(rows) => rows,
+                    Err(error) => {
+                        state
+                            .warnings
+                            .push(format!("Edge mapping '{}': {}", edge.label, error));
+                        continue;
+                    }
+                };
+                // Only edges whose other end is already on screen are kept — this
+                // pass connects the current result, it never grows it.
+                self.absorb_edge_rows(state, edge, &prop_names, rows, edge_limit, None);
+            }
+        }
+    }
+
+    /// Turns raw edge rows into [`SubgraphEdge`]s.
+    ///
+    /// With `node_limit` set, the endpoints are added to the result until that
+    /// budget is spent; with `None`, rows whose endpoints are not already in the
+    /// result are dropped. Either way no edge is kept unless both of its
+    /// endpoints are, so the result never carries a dangling edge.
+    fn absorb_edge_rows(
+        &self,
+        state: &mut ExpansionState,
+        edge: &super::EdgeMappingDef,
+        prop_names: &[String],
+        rows: Vec<Value>,
+        edge_limit: usize,
+        node_limit: Option<usize>,
+    ) {
+        for row in rows {
+            let Value::Object(map) = row else { continue };
+            let src_raw = map.get(&edge.src_column).cloned();
+            let dst_raw = map.get(&edge.dst_column).cloned();
+            let src_key = value_to_id_string(src_raw.as_ref());
+            let dst_key = value_to_id_string(dst_raw.as_ref());
+            if src_key.is_empty() || dst_key.is_empty() {
+                continue;
+            }
+            let src_full = format!("{}:{}", edge.src_label, src_key);
+            let dst_full = format!("{}:{}", edge.dst_label, dst_key);
+
+            match node_limit {
+                Some(node_limit) => {
+                    let (Some(src_raw), Some(dst_raw)) = (src_raw, dst_raw) else {
+                        continue;
+                    };
+                    let admitted = usize::from(!state.nodes.contains_key(&src_full))
+                        + usize::from(src_full != dst_full && !state.nodes.contains_key(&dst_full));
+                    if state.nodes.len() + admitted > node_limit {
+                        state.truncated = true;
+                        break;
+                    }
+                    for (full_id, label, raw_id) in [
+                        (&src_full, &edge.src_label, src_raw),
+                        (&dst_full, &edge.dst_label, dst_raw),
+                    ] {
+                        if state.nodes.contains_key(full_id) {
+                            continue;
+                        }
+                        state.nodes.insert(
+                            full_id.clone(),
+                            Discovered {
+                                label: label.clone(),
+                                raw_id,
+                            },
+                        );
+                    }
+                }
+                None => {
+                    if !state.nodes.contains_key(&src_full) || !state.nodes.contains_key(&dst_full)
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            let edge_id = format!("{}-{}->{}", src_full, edge.label, dst_full);
+            if !state.seen_edge_ids.insert(edge_id.clone()) {
+                continue;
+            }
+            if state.edges.len() >= edge_limit {
+                state.truncated = true;
+                break;
+            }
+            let mut props = serde_json::Map::new();
+            for name in prop_names {
+                if let Some(value) = map.get(name) {
+                    props.insert(name.clone(), value.clone());
+                }
+            }
+            state.edges.push(SubgraphEdge {
+                id: edge_id,
+                source: src_full,
+                target: dst_full,
+                label: edge.label.clone(),
+                props: Value::Object(props),
+            });
+        }
+    }
+
+    /// The seedless view of an overlay: read the mapped edge tables first and
+    /// materialise the objects they connect.
+    ///
+    /// Sampling node tables instead would return an arbitrary slice per label,
+    /// which almost never contains both ends of the same edge — so the first
+    /// render shows a cloud of unlinked nodes and the structure only appears
+    /// after the user expands nodes one by one.
+    pub(super) async fn scan_subgraph(&self, node_limit: usize) -> Result<SubgraphResult> {
+        let node_limit = node_limit.max(1);
+        let edge_limit = node_limit.saturating_mul(3);
+
+        let mut state = ExpansionState::new();
+        let mut table_cache: HashMap<String, lancedb::Table> = HashMap::new();
+        let mut schema_cache: HashMap<String, Vec<String>> = HashMap::new();
+
+        let mapped_edges = self
+            .overlay
+            .edges
+            .iter()
+            .filter(|edge| self.edge_endpoints_mapped(edge))
+            .collect::<Vec<_>>();
+        // Every mapping gets a share of the budget so one large relationship
+        // table cannot crowd the others out of the first view.
+        let share = edge_limit.div_ceil(mapped_edges.len().max(1)).max(1);
+
+        for edge in mapped_edges {
+            if state.nodes.len() >= node_limit || state.edges.len() >= edge_limit {
+                state.truncated = true;
+                break;
+            }
+
+            let table = match self.open_table_cached(&edge.table, &mut table_cache).await {
+                Ok(table) => table,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+            let (columns, prop_names) = match self.edge_projection(edge, &mut schema_cache).await {
+                Ok(projection) => projection,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+
+            let budget = share
+                .min(edge_limit.saturating_sub(state.edges.len()))
+                // Each row can introduce two objects, so the node budget bounds
+                // the scan as well.
+                .min(node_limit.saturating_sub(state.nodes.len()))
+                .max(1);
+            let sampled = match self
+                .sample_edge_rows(
+                    &table,
+                    edge,
+                    &columns,
+                    &prop_names,
+                    budget,
+                    &mut state.warnings,
+                )
+                .await
+            {
+                Ok(sampled) => sampled,
+                Err(error) => {
+                    state
+                        .warnings
+                        .push(format!("Edge mapping '{}': {}", edge.label, error));
+                    continue;
+                }
+            };
+            self.absorb_edge_rows(
+                &mut state,
+                edge,
+                &prop_names,
+                sampled.rows,
+                edge_limit,
+                Some(node_limit),
+            );
+            for (src_key, count) in sampled.fan_out {
+                let full_id = format!("{}:{}", edge.src_label, src_key);
+                if state.nodes.contains_key(&full_id) {
+                    state.record_fan_out(&full_id, &edge.label, count, sampled.exact);
+                }
+            }
+            if sampled.more_rows {
+                state.truncated = true;
+            }
+        }
+
+        let covered_labels = state
+            .nodes
+            .values()
+            .map(|node| node.label.clone())
+            .collect::<HashSet<_>>();
+
+        let mut result = self
+            .hydrate_expansion(state, &mut table_cache, &mut schema_cache)
+            .await?;
+        let mut truncated = result.truncated;
+
+        // Labels no edge mapping reached would otherwise be invisible. Each one
+        // gets a share of what is left, so the first uncovered label cannot
+        // spend the whole remainder and hide the rest.
+        let uncovered = self
+            .overlay
+            .nodes
+            .iter()
+            .filter(|node| !covered_labels.contains(&node.label))
+            .collect::<Vec<_>>();
+        for (index, node) in uncovered.iter().enumerate() {
+            let remaining = node_limit.saturating_sub(result.nodes.len());
+            if remaining == 0 {
+                truncated = true;
+                break;
+            }
+            let quota = (remaining / (uncovered.len() - index)).max(1);
+            // One row past the quota: a label that returned exactly its quota is
+            // otherwise indistinguishable from one the quota cut off, and calling
+            // a complete view truncated is its own kind of wrong.
+            match self.load_nodes_for_label(&node.label, quota + 1).await {
+                Ok(mut nodes) => {
+                    truncated = truncated || nodes.len() > quota;
+                    nodes.truncate(quota);
+                    result.nodes.extend(nodes);
+                }
+                Err(error) => result
+                    .warnings
+                    .push(format!("Node mapping '{}': {}", node.label, error)),
+            }
+        }
+
+        // dedupe_and_limit_subgraph truncates in vector order, so the objects
+        // that carry population counts must be dropped last.
+        result.nodes.sort_by_key(|node| node.stats.is_none());
+
+        let mut limited =
+            dedupe_and_limit_subgraph(result.nodes, result.edges, node_limit, result.warnings);
+        limited.truncated = limited.truncated || truncated;
+        Ok(limited)
+    }
+
+    /// Picks the rows one relationship table contributes to the seedless view.
+    ///
+    /// Reading the head of the table hands the whole budget to whichever object
+    /// happens to have been written first, so a corpus of a thousand documents
+    /// arrives as one document and its chunks. A census over the two endpoint
+    /// columns — cheap enough to run before the projected read — says which
+    /// sources the table is about, and the budget is then spread across the
+    /// busiest of them.
+    async fn sample_edge_rows(
+        &self,
+        table: &lancedb::Table,
+        edge: &super::EdgeMappingDef,
+        columns: &[String],
+        prop_names: &[String],
+        budget: usize,
+        warnings: &mut Vec<String>,
+    ) -> Result<SampledEdgeRows> {
+        let census_window = CENSUS_MAX_ROWS.min(
+            budget
+                .saturating_mul(CENSUS_BUDGET_FACTOR)
+                .max(CENSUS_MIN_ROWS),
+        );
+        let mut census_columns = vec![edge.src_column.clone()];
+        if edge.dst_column != edge.src_column {
+            census_columns.push(edge.dst_column.clone());
+        }
+        let census = self
+            .edge_rows(table, &census_columns, None, census_window)
+            .await?;
+        let census_len = census.len();
+        let exact = census_len < census_window;
+
+        if census_len <= budget {
+            let rows = if prop_names.is_empty() {
+                census
+            } else {
+                self.edge_rows(table, columns, None, budget).await?
+            };
+            return Ok(SampledEdgeRows {
+                rows,
+                fan_out: Vec::new(),
+                exact,
+                more_rows: !exact,
+            });
+        }
+
+        let mut order: Vec<String> = Vec::new();
+        let mut pairs_by_src: HashMap<String, Vec<(Value, Value)>> = HashMap::new();
+        for row in &census {
+            let Value::Object(map) = row else { continue };
+            let (Some(src_raw), Some(dst_raw)) =
+                (map.get(&edge.src_column), map.get(&edge.dst_column))
+            else {
+                continue;
+            };
+            let src_key = value_to_id_string(Some(src_raw));
+            if src_key.is_empty() || value_to_id_string(Some(dst_raw)).is_empty() {
+                continue;
+            }
+            pairs_by_src
+                .entry(src_key.clone())
+                .or_insert_with(|| {
+                    order.push(src_key.clone());
+                    Vec::new()
+                })
+                .push((src_raw.clone(), dst_raw.clone()));
+        }
+        if order.is_empty() {
+            return Ok(SampledEdgeRows {
+                rows: Vec::new(),
+                fan_out: Vec::new(),
+                exact,
+                more_rows: true,
+            });
+        }
+
+        // Busiest first, ties broken by where the source appeared in the table,
+        // so two runs of the same data always pick the same objects.
+        let mut ranked = order.iter().enumerate().collect::<Vec<_>>();
+        ranked.sort_by(|(left_seen, left), (right_seen, right)| {
+            pairs_by_src[*right]
+                .len()
+                .cmp(&pairs_by_src[*left].len())
+                .then(left_seen.cmp(right_seen))
+        });
+
+        let per_hub = (budget / HUB_TARGET)
+            .saturating_sub(1)
+            .clamp(1, MAX_CHILDREN_PER_HUB);
+        let hubs = (budget / per_hub.saturating_add(1)).clamp(1, ranked.len());
+
+        // Slot-major: one child for every source before any source gets a
+        // second. absorb_edge_rows stops at the first row that would overrun the
+        // node budget, so breadth has to come before depth.
+        let mut chosen: Vec<(Value, Value)> = Vec::new();
+        let mut taken: HashMap<&str, usize> = HashMap::new();
+
+        for slot in 0..per_hub {
+            if chosen.len() >= budget {
+                break;
+            }
+            for (_, src_key) in &ranked[..hubs] {
+                if chosen.len() >= budget {
+                    break;
+                }
+                if let Some(pair) = pairs_by_src[*src_key].get(slot) {
+                    chosen.push(pair.clone());
+                    taken.insert(src_key.as_str(), slot + 1);
+                }
+            }
+        }
+        // Whatever budget the hubs could not spend goes to the long tail, so the
+        // view does not imply that every object is a large one.
+        for (_, src_key) in &ranked[hubs..] {
+            if chosen.len() >= budget {
+                break;
+            }
+            if let Some(pair) = pairs_by_src[*src_key].first() {
+                chosen.push(pair.clone());
+                taken.insert(src_key.as_str(), 1);
+            }
+        }
+        // A corpus of two enormous documents cannot fill the view breadth-first,
+        // and a near-empty first paint is worse than a deep one. Round-robin the
+        // remaining budget so depth is only ever bought after every source has
+        // had its turn.
+        while chosen.len() < budget {
+            let before = chosen.len();
+            for (_, src_key) in &ranked {
+                if chosen.len() >= budget {
+                    break;
+                }
+                let next = taken.entry(src_key.as_str()).or_insert(0);
+                if let Some(pair) = pairs_by_src[*src_key].get(*next) {
+                    chosen.push(pair.clone());
+                    *next += 1;
+                }
+            }
+            if chosen.len() == before {
+                break;
+            }
+        }
+
+        let mut seen_src = HashSet::new();
+        let mut fan_out = Vec::new();
+        for (src_raw, _) in &chosen {
+            let src_key = value_to_id_string(Some(src_raw));
+            if !seen_src.insert(src_key.clone()) {
+                continue;
+            }
+            fan_out.push((src_key.clone(), pairs_by_src[&src_key].len()));
+        }
+
+        // The census carries no properties, so the chosen pairs are read back with
+        // the full projection. The window is scoped to each chunk of chosen pairs
+        // rather than shared across the scan: one global limit would be filled from
+        // the head of the busiest source, which is the bias this whole path exists
+        // to remove.
+        let mut projected: HashMap<(String, String), serde_json::Map<String, Value>> =
+            HashMap::new();
+        if !prop_names.is_empty() {
+            for pairs in chosen.chunks(IN_CHUNK_SIZE) {
+                let mut seen_chunk_src = HashSet::new();
+                let chunk_src = pairs
+                    .iter()
+                    .filter(|(src_raw, _)| seen_chunk_src.insert(value_to_id_string(Some(src_raw))))
+                    .map(|(src_raw, _)| src_raw.clone())
+                    .collect::<Vec<_>>();
+                let window = pairs
+                    .len()
+                    .saturating_mul(SAMPLE_PROPS_OVERSCAN)
+                    .min(SAMPLE_PROPS_MAX_ROWS);
+                match self
+                    .edge_rows_for_ids(table, &edge.src_column, columns, &chunk_src, window)
+                    .await
+                {
+                    Ok(rows) => {
+                        for row in rows {
+                            let Value::Object(map) = row else { continue };
+                            let key = (
+                                value_to_id_string(map.get(&edge.src_column)),
+                                value_to_id_string(map.get(&edge.dst_column)),
+                            );
+                            projected.insert(key, map);
+                        }
+                    }
+                    Err(error) => {
+                        warnings.push(format!(
+                            "Edge mapping '{}': properties were not loaded: {}",
+                            edge.label, error
+                        ));
+                        break;
+                    }
+                }
+            }
+        }
+
+        let mut rows = Vec::with_capacity(chosen.len());
+        for (src_raw, dst_raw) in chosen {
+            let key = (
+                value_to_id_string(Some(&src_raw)),
+                value_to_id_string(Some(&dst_raw)),
+            );
+            let map = projected.remove(&key).unwrap_or_else(|| {
+                let mut map = serde_json::Map::new();
+                map.insert(edge.src_column.clone(), src_raw);
+                map.insert(edge.dst_column.clone(), dst_raw);
+                map
+            });
+            rows.push(Value::Object(map));
+        }
+
+        Ok(SampledEdgeRows {
+            rows,
+            fan_out,
+            exact,
+            more_rows: true,
+        })
     }
 
     async fn hydrate_expansion(
@@ -336,6 +965,7 @@ impl LanceGraphStore {
             edges,
             warnings: mut collected_warnings,
             truncated,
+            mut node_stats,
             ..
         } = state;
 
@@ -431,6 +1061,7 @@ impl LanceGraphStore {
                             label: label.clone(),
                             caption,
                             props: Value::Object(map),
+                            stats: node_stats.remove(full_id),
                         });
                     }
                 }
@@ -493,13 +1124,7 @@ impl LanceGraphStore {
         let mut table_cache: HashMap<String, lancedb::Table> = HashMap::new();
         let mut schema_cache: HashMap<String, Vec<String>> = HashMap::new();
 
-        let mut state = ExpansionState {
-            nodes: HashMap::new(),
-            edges: Vec::new(),
-            seen_edge_ids: HashSet::new(),
-            warnings: Vec::new(),
-            truncated: false,
-        };
+        let mut state = ExpansionState::new();
         // Seed the parent so it hydrates and its child edges survive the
         // dangling-edge prune in hydrate_expansion.
         state.nodes.insert(
@@ -839,6 +1464,7 @@ impl LanceGraphStore {
                         label: label.clone(),
                         caption,
                         props: Value::Object(map),
+                        stats: None,
                     });
                     if let Some(child_edges) = edges_by_raw.get(&raw_key) {
                         edges.extend(child_edges.iter().cloned());
@@ -1464,6 +2090,177 @@ mod tests {
             "the budget is global, not per mapping"
         );
         assert!(analytics.truncated);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seedless_subgraph_returns_the_edges_between_its_nodes() -> Result<()> {
+        let (store, test_path) =
+            graph_fixture(5, &[("1", "2"), ("2", "3"), ("3", "4"), ("4", "5")]).await?;
+
+        let result = store.subgraph(Vec::new(), 1, Some(100)).await?;
+
+        assert_eq!(result.nodes.len(), 5);
+        assert_eq!(
+            result.edges.len(),
+            4,
+            "the first view must arrive connected, not as unlinked nodes"
+        );
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seedless_subgraph_still_lists_labels_no_edge_reaches() -> Result<()> {
+        let (store, test_path) = graph_fixture(4, &[]).await?;
+
+        let result = store.subgraph(Vec::new(), 1, Some(100)).await?;
+
+        assert_eq!(result.nodes.len(), 4);
+        assert!(result.edges.is_empty());
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seedless_subgraph_keeps_edges_within_the_node_budget() -> Result<()> {
+        let (store, test_path) =
+            graph_fixture(6, &[("1", "2"), ("2", "3"), ("3", "4"), ("5", "6")]).await?;
+
+        let result = store.subgraph(Vec::new(), 1, Some(3)).await?;
+
+        assert!(result.nodes.len() <= 3);
+        assert!(result.truncated);
+        let node_ids = result
+            .nodes
+            .iter()
+            .map(|node| node.id.as_str())
+            .collect::<HashSet<_>>();
+        for edge in &result.edges {
+            assert!(
+                node_ids.contains(edge.source.as_str()) && node_ids.contains(edge.target.as_str()),
+                "truncation must not leave dangling edges"
+            );
+        }
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seedless_subgraph_spreads_across_parents() -> Result<()> {
+        // One parent with fifty children written first, then nine parents with
+        // one child each — reading the head of this table returns the first
+        // parent and nothing else.
+        let ids = (1..=69).map(|id| id.to_string()).collect::<Vec<_>>();
+        let mut pairs = (1..=50)
+            .map(|child| (ids[0].as_str(), ids[child].as_str()))
+            .collect::<Vec<_>>();
+        for (offset, parent) in (51..60).enumerate() {
+            pairs.push((ids[parent].as_str(), ids[60 + offset].as_str()));
+        }
+        let (store, test_path) = graph_fixture(69, &pairs).await?;
+
+        let result = store.subgraph(Vec::new(), 1, Some(12)).await?;
+
+        let sources = result
+            .edges
+            .iter()
+            .map(|edge| edge.source.as_str())
+            .collect::<HashSet<_>>();
+        assert!(
+            sources.len() >= 5,
+            "the first view must spread across parents, got {sources:?}"
+        );
+
+        let busiest = result
+            .nodes
+            .iter()
+            .find(|node| node.id == "Person:1")
+            .expect("the busiest parent must survive truncation");
+        let stats = busiest
+            .stats
+            .as_ref()
+            .expect("a sampled parent carries its fan-out");
+        assert!(stats.exact, "the census window covers the whole fixture");
+        assert_eq!(stats.out_by_label.len(), 1);
+        assert_eq!(stats.out_by_label[0].label, "KNOWS");
+        assert_eq!(stats.out_by_label[0].count, 50);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seedless_subgraph_fills_the_budget_from_a_single_parent() -> Result<()> {
+        // Spreading across parents is impossible when there is only one, and a
+        // near-empty first paint is worse than a deep one.
+        let ids = (1..=61).map(|id| id.to_string()).collect::<Vec<_>>();
+        let pairs = (1..=60)
+            .map(|child| (ids[0].as_str(), ids[child].as_str()))
+            .collect::<Vec<_>>();
+        let (store, test_path) = graph_fixture(61, &pairs).await?;
+
+        let result = store.subgraph(Vec::new(), 1, Some(30)).await?;
+
+        assert_eq!(
+            result.nodes.len(),
+            30,
+            "one busy parent must still fill the view, got {} nodes",
+            result.nodes.len()
+        );
+        assert!(result.truncated);
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn seedless_subgraph_reports_a_complete_view_as_untruncated() -> Result<()> {
+        // Two labels with no mapped edges, both fully inside the limit: the fair
+        // share must not make a complete result look like a sample.
+        let (store, test_path) = graph_fixture(4, &[]).await?;
+
+        let result = store.subgraph(Vec::new(), 1, Some(50)).await?;
+
+        assert_eq!(result.nodes.len(), 4);
+        assert!(
+            !result.truncated,
+            "the whole population fits, so nothing was cut off"
+        );
+
+        std::fs::remove_dir_all(&test_path).ok();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn expansion_links_neighbors_discovered_on_the_same_hop() -> Result<()> {
+        // 2 and 3 are both neighbors of 1, and are linked to each other.
+        let (store, test_path) = graph_fixture(3, &[("1", "2"), ("1", "3"), ("2", "3")]).await?;
+
+        let result = store
+            .neighbors(
+                "Person",
+                Value::String("1".to_string()),
+                1,
+                TraversalDirection::Both,
+                Some(100),
+            )
+            .await?;
+
+        assert_eq!(result.nodes.len(), 3);
+        assert!(
+            result
+                .edges
+                .iter()
+                .any(|edge| edge.source == "Person:2" && edge.target == "Person:3"),
+            "an expansion must show how its neighbors connect to each other"
+        );
 
         std::fs::remove_dir_all(&test_path).ok();
         Ok(())

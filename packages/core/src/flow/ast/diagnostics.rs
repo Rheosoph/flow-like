@@ -865,7 +865,8 @@ fn backtick_values(message: &str) -> Vec<String> {
     message
         .split('`')
         .enumerate()
-        .filter_map(|(index, value)| (index % 2 == 1).then(|| value.to_string()))
+        .filter(|&(index, value)| (index % 2 == 1))
+        .map(|(index, value)| value.to_string())
         .collect()
 }
 

@@ -119,7 +119,6 @@ export const ko = {
 	"design.feature3.desc":
 		"동일한 플로우가 로컬, 스테이징, 프로덕션에서 실행 — 재작성 필요 없음.",
 
-
 	// Portability
 	"portability.tagline": "어디서나 자동화",
 	"portability.headline": "한 번 구축, 어디서나 실행",
@@ -673,7 +672,6 @@ export const ko = {
 	"usecases.learnmore": "자세히 알아보기",
 
 	"design.headline.highlight": "시각적으로",
-
 
 	"portability.headline.start": "시작은",
 	"portability.headline.offline": "오프라인",

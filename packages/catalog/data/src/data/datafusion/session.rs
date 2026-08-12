@@ -20,10 +20,42 @@ pub struct DataFusionSession {
     pub cache_key: String,
 }
 
+/// A table registration whose expensive work — file downloads, parsing, schema
+/// inference, connection setup — is postponed until a node actually queries the engine.
+///
+/// Mount nodes enqueue one of these via [`CachedDataFusionSession::defer_mount`] instead
+/// of registering immediately; [`DataFusionSession::load`] applies the queue before any
+/// consumer touches `ctx`. A cached query that never loads the session therefore never
+/// pays for the mounts either.
+#[async_trait]
+pub trait DeferredMount: Send + Sync {
+    /// Short human-readable description used in logs and error messages, e.g.
+    /// "Excel workbook 'sales.xlsx'".
+    fn describe(&self) -> String;
+
+    /// Identity used to collapse repeats: deferring a mount evicts any queued mount
+    /// with the same key (a mount node re-run in a loop replaces its earlier self
+    /// instead of growing the queue and colliding at registration time). `None` never
+    /// dedupes.
+    fn dedupe_key(&self) -> Option<String> {
+        None
+    }
+
+    /// Perform the registration. A failed materialization leaves the mount queued for
+    /// the next consumer, so implementations must tolerate running again — deregister
+    /// the target table name before registering it.
+    async fn mount(
+        &self,
+        session: &CachedDataFusionSession,
+        context: &mut ExecutionContext,
+    ) -> flow_like_types::Result<()>;
+}
+
 #[derive(Clone)]
 pub struct CachedDataFusionSession {
     pub ctx: Arc<SessionContext>,
     lance_tables: Arc<Mutex<HashMap<String, LanceTableRegistration>>>,
+    pending_mounts: Arc<Mutex<Vec<Arc<dyn DeferredMount>>>>,
 }
 
 #[derive(Clone)]
@@ -43,9 +75,24 @@ impl Cacheable for CachedDataFusionSession {
 }
 
 impl DataFusionSession {
+    /// Load the session and make it fully queryable: queued deferred mounts are applied
+    /// and Lance registrations refreshed. Every node that reads from `ctx` must use
+    /// this.
     pub async fn load(
         &self,
         context: &mut ExecutionContext,
+    ) -> flow_like_types::Result<CachedDataFusionSession> {
+        let session = self.load_lazy(context).await?;
+        session.materialize(context).await?;
+        session.refresh_lance_tables(context).await?;
+        Ok(session)
+    }
+
+    /// Load the session handle without applying queued mounts. For mount nodes only:
+    /// they add work to the session and must not force earlier deferred mounts to run.
+    pub async fn load_lazy(
+        &self,
+        context: &ExecutionContext,
     ) -> flow_like_types::Result<CachedDataFusionSession> {
         let cached = context
             .cache
@@ -62,13 +109,39 @@ impl DataFusionSession {
             .ok_or(flow_like_types::anyhow!(
                 "Could not downcast to DataFusion session"
             ))?;
-        let session = session.clone();
-        session.refresh_lance_tables(context).await?;
-        Ok(session)
+        Ok(session.clone())
     }
 }
 
 impl CachedDataFusionSession {
+    /// Queue a mount to run when the session is next materialized by a consumer. A
+    /// queued mount with the same dedupe key is replaced, not duplicated.
+    pub async fn defer_mount(&self, mount: Arc<dyn DeferredMount>) {
+        let mut pending = self.pending_mounts.lock().await;
+        if let Some(key) = mount.dedupe_key() {
+            pending.retain(|queued| queued.dedupe_key().as_deref() != Some(key.as_str()));
+        }
+        pending.push(mount);
+    }
+
+    /// Apply queued mounts in the order they were deferred.
+    ///
+    /// The queue lock is held across the whole drain: two consumers materializing
+    /// concurrently must not both run the same mount. A mount leaves the queue only
+    /// once it has succeeded — a failed (or cancelled) one stays queued and is retried
+    /// by the next consumer, so a transient error cannot silently cost the session a
+    /// table. The failure itself propagates with the mount's description attached.
+    pub async fn materialize(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        let mut pending = self.pending_mounts.lock().await;
+        while let Some(mount) = pending.first().cloned() {
+            mount.mount(self, context).await.map_err(|err| {
+                flow_like_types::anyhow!("Deferred mount of {} failed: {err}", mount.describe())
+            })?;
+            pending.remove(0);
+        }
+        Ok(())
+    }
+
     /// Remembers a Lance registration so derived DataFusion providers can be
     /// replaced when a remote database rotates its scoped credentials.
     pub async fn track_lance_table(
@@ -102,6 +175,10 @@ impl CachedDataFusionSession {
             let db_guard = cached_db.db.read().await;
             let adapter = db_guard.inner().to_datafusion().await?;
             drop(db_guard);
+            // The catalog rejects registering an existing name, so the stale provider
+            // must be dropped before the rotated one can take its place.
+            self.ctx
+                .deregister_table(TableReference::bare(table_name.clone()))?;
             self.ctx
                 .register_table(TableReference::bare(table_name.clone()), Arc::new(adapter))?;
             registration.generation = generation;
@@ -319,6 +396,7 @@ impl NodeLogic for CreateDataFusionSessionNode {
             let cached = CachedDataFusionSession {
                 ctx: Arc::new(ctx),
                 lance_tables: Arc::new(Mutex::new(HashMap::new())),
+                pending_mounts: Arc::new(Mutex::new(Vec::new())),
             };
             let cacheable: Arc<dyn Cacheable> = Arc::new(cached);
             context

@@ -1,89 +1,53 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "BitModelPreference",
-  "type": "object",
-  "properties": {
-    "multimodal": {
-      "type": [
-        "boolean",
-        "null"
-      ]
-    },
-    "cost_weight": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    },
-    "speed_weight": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    },
-    "reasoning_weight": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    },
-    "creativity_weight": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    },
-    "factuality_weight": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    },
-    "function_calling_weight": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    },
-    "safety_weight": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    },
-    "openness_weight": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    },
-    "multilinguality_weight": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    },
-    "coding_weight": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "float"
-    },
-    "model_hint": {
-      "type": [
-        "string",
-        "null"
-      ]
-    }
-  }
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"title": "BitModelPreference",
+	"type": "object",
+	"properties": {
+		"multimodal": {
+			"type": ["boolean", "null"]
+		},
+		"cost_weight": {
+			"type": ["number", "null"],
+			"format": "float"
+		},
+		"speed_weight": {
+			"type": ["number", "null"],
+			"format": "float"
+		},
+		"reasoning_weight": {
+			"type": ["number", "null"],
+			"format": "float"
+		},
+		"creativity_weight": {
+			"type": ["number", "null"],
+			"format": "float"
+		},
+		"factuality_weight": {
+			"type": ["number", "null"],
+			"format": "float"
+		},
+		"function_calling_weight": {
+			"type": ["number", "null"],
+			"format": "float"
+		},
+		"safety_weight": {
+			"type": ["number", "null"],
+			"format": "float"
+		},
+		"openness_weight": {
+			"type": ["number", "null"],
+			"format": "float"
+		},
+		"multilinguality_weight": {
+			"type": ["number", "null"],
+			"format": "float"
+		},
+		"coding_weight": {
+			"type": ["number", "null"],
+			"format": "float"
+		},
+		"model_hint": {
+			"type": ["string", "null"]
+		}
+	}
 }

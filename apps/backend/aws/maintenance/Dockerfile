@@ -20,7 +20,7 @@ RUN yum update -y && \
     curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v25.3/protoc-25.3-linux-aarch_64.zip && \
     unzip protoc-25.3-linux-aarch_64.zip -d /usr/local && \
     rm protoc-25.3-linux-aarch_64.zip && \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.93.0 && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.97.1 && \
     yum remove -y xz && \
     yum clean all
 
@@ -30,9 +30,9 @@ ARG CARGO_BUILD_JOBS
 
 COPY . .
 
-RUN --mount=type=cache,id=flow-like-rust-1.93-amazonlinux2023-arm64-registry,target=/root/.cargo/registry,sharing=locked \
-    --mount=type=cache,id=flow-like-rust-1.93-amazonlinux2023-arm64-git,target=/root/.cargo/git,sharing=locked \
-    --mount=type=cache,id=flow-like-rust-1.93-amazonlinux2023-arm64-target,target=/app/target,sharing=locked \
+RUN --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-arm64-registry,target=/root/.cargo/registry,sharing=locked \
+    --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-arm64-git,target=/root/.cargo/git,sharing=locked \
+    --mount=type=cache,id=flow-like-rust-1.97.1-amazonlinux2023-arm64-target,target=/app/target,sharing=locked \
     if [ -n "${CARGO_BUILD_JOBS:-}" ]; then export CARGO_BUILD_JOBS; fi && \
     cargo build --locked --release --manifest-path apps/backend/aws/maintenance/Cargo.toml && \
     cp /app/target/release/aws-maintenance /tmp/bootstrap && \

@@ -1,6 +1,7 @@
 export const frCompare = {
 	// Meta
-	"compare.meta.title": "Flow-Like vs Alternatives | Données, AI, Automatisation & Apps",
+	"compare.meta.title":
+		"Flow-Like vs Alternatives | Données, AI, Automatisation & Apps",
 	"compare.meta.description":
 		"Comparez Flow-Like sur l'automatisation de workflows, les couches de données enterprise, les AI agents, la BI et la création d'apps. Une plateforme gouvernée pour les solutions d'entreprise.",
 
@@ -29,7 +30,8 @@ export const frCompare = {
 	"compare.category.enterprise_data": "Plateformes de Données Enterprise",
 	"compare.category.enterprise_data.desc":
 		"Plateformes pilotées par ontologie ou ERP autour de modèles de données d'entreprise propriétaires. Puissantes pour les grands groupes, mais longues à déployer, onéreuses et liées à un seul fournisseur.",
-	"compare.category.enterprise_automation": "Suites d'Automatisation Enterprise",
+	"compare.category.enterprise_automation":
+		"Suites d'Automatisation Enterprise",
 	"compare.category.enterprise_automation.desc":
 		"Suites de processus et workflows construites autour du CRM, du service management ou des agents IA. Fortes pour des flux métier spécifiques, mais SaaS, lourdement licenciées et peu portables.",
 	"compare.category.rpa": "Robotic Process Automation",
@@ -121,8 +123,10 @@ export const frCompare = {
 	"compare.matrix.plot.axis.production_scale.low": "S'effondre à l'échelle",
 	"compare.matrix.plot.axis.production_scale.high": "Rejouable & haut volume",
 	"compare.matrix.plot.axis.customer_distribution": "Distribution Client",
-	"compare.matrix.plot.axis.customer_distribution.low": "Outils internes navigateur uniquement",
-	"compare.matrix.plot.axis.customer_distribution.high": "Desktop, mobile, hors-ligne",
+	"compare.matrix.plot.axis.customer_distribution.low":
+		"Outils internes navigateur uniquement",
+	"compare.matrix.plot.axis.customer_distribution.high":
+		"Desktop, mobile, hors-ligne",
 	"compare.matrix.plot.axis.ai_native": "Profondeur IA-Native",
 	"compare.matrix.plot.axis.ai_native.low": "IA rajoutée",
 	"compare.matrix.plot.axis.ai_native.high": "Agents + data-native",

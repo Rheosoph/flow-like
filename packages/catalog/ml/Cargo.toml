@@ -18,6 +18,13 @@ execute = [
     "dep:linfa-svm",
     "dep:linfa-bayes",
     "dep:linfa-trees",
+    "dep:linfa-logistic",
+    "dep:linfa-elasticnet",
+    "dep:linfa-ensemble",
+    "dep:linfa-preprocessing",
+    "dep:linfa-tsne",
+    "dep:rand_xoshiro",
+    "dep:flow-like-ordinal",
     "dep:fory",
     "dep:fory-core",
     "dep:rmp-serde",
@@ -52,6 +59,19 @@ linfa-reduction = { version = "0.8.0", features = ["serde"], optional = true }
 linfa-svm = { version = "0.8.0", features = ["serde"], optional = true }
 linfa-bayes = { version = "0.8.1", features = ["serde"], optional = true }
 linfa-trees = { version = "0.8.1", features = ["serde"], optional = true }
+linfa-logistic = { version = "0.8.1", features = ["serde"], optional = true }
+linfa-elasticnet = { version = "0.8.1", features = ["serde"], optional = true }
+linfa-ensemble = { version = "0.8.1", optional = true }
+linfa-preprocessing = { version = "0.8.1", features = ["serde"], optional = true }
+# linfa-tsne publishes no serde feature; t-SNE is transductive, so nothing is persisted.
+linfa-tsne = { version = "0.8.1", optional = true }
+# linfa 0.8 is built against rand 0.8, while flow_like_types::rand is 0.9. Seeded RNGs handed to
+# linfa must therefore come from the rand 0.8 ecosystem; rand_xoshiro is what linfa itself uses.
+rand_xoshiro = { version = "0.6", optional = true }
+
+# Ordinal targets (low < medium < high). linfa has no estimator for ordered classes, so these live
+# in a dependency-light crate of their own rather than bloating this catalog's build.
+flow-like-ordinal = { workspace = true, optional = true, features = ["serde"] }
 
 # Binary serialization - schema-safe, fast, cross-language
 fory = { version = "0.14.1", optional = true }

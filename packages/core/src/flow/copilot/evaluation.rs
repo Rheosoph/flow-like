@@ -170,7 +170,7 @@ impl FlowPilotDurationMetric {
         let samples = values.len() as u64;
         let total = values.iter().map(|value| *value as u128).sum::<u128>();
         let middle = values.len() / 2;
-        let median_ms = if values.len() % 2 == 0 {
+        let median_ms = if values.len().is_multiple_of(2) {
             (values[middle - 1] as f64 + values[middle] as f64) / 2.0
         } else {
             values[middle] as f64

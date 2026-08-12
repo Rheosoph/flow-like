@@ -1,0 +1,19 @@
+[package]
+name = "flow-like-ordinal"
+version = "0.1.0"
+edition = "2024"
+description = "Ordinal regression models for flow-like: targets whose classes have a meaningful order (low < medium < high), which linfa does not cover."
+
+[features]
+default = []
+# Off by default, matching linfa's own convention. The ML catalog turns it on because it persists
+# fitted models.
+serde = ["dep:serde", "ndarray/serde"]
+
+# Deliberately light. `linfa` here is the CORE crate only — Fit/Predict/ParamGuard/DatasetBase — not
+# any of the algorithm crates, and its LAPACK backend (ndarray-linalg) is optional and stays off. The
+# linear algebra below is hand-rolled for the same reason.
+[dependencies]
+linfa = { version = "0.8.0", default-features = false }
+ndarray = "0.16"
+serde = { workspace = true, features = ["derive"], optional = true }

@@ -1128,7 +1128,7 @@ export function NavUser({
 		backend.userState.getNotifications,
 		backend.userState,
 		[],
-		Boolean(auth?.isAuthenticated),
+		true, // getNotifications returns local counts offline; keep it enabled signed-out
 		[auth?.user?.profile?.sub, auth?.isAuthenticated],
 		0, // staleTime: 0 to always refetch on mount
 	);

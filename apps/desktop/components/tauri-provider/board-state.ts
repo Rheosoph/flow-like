@@ -12,7 +12,9 @@ import {
 	type IApplyFlowIrCommitResponse,
 	type IApplyFlowScriptResponse,
 	type IBoard,
+	type IBoardServerResetResult,
 	type IBoardState,
+	type IBoardSyncStatus,
 	type ICheckFlowScriptReconcileResponse,
 	ICommentType,
 	IConnectionMode,
@@ -37,6 +39,8 @@ import {
 	type UnifiedChatMessage,
 	type UnifiedCopilotResponse,
 	checkOAuthTokens,
+	dispatchBoardSyncChanged,
+	dispatchBoardSyncRecoveryRequest,
 	extractOAuthRequirementsFromBoard,
 	finishAllProgressToasts,
 	injectDataFunction,
@@ -54,6 +58,7 @@ import { createId } from "@paralleldrive/cuid2";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 import { isObject } from "lodash-es";
+import type { CSSProperties } from "react";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
 import {
@@ -83,6 +88,8 @@ import {
 	evaluateCommandSyncRemoteIdentity,
 	findUnresolvedPinReferences,
 	repairUnreplayableCommandBatch,
+	selectDiscardableSyncRows,
+	summarizeBoardSyncQueue,
 	systemTimeToNanos,
 } from "./command-sync";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
@@ -112,14 +119,41 @@ interface OfflineSyncDrainResult {
 }
 
 /**
+ * A server-authoritative reset was requested while undelivered edits are still queued.
+ *
+ * Carries the queue it refused to destroy so the caller can itemize it before asking again with
+ * `discardQueuedEdits`.
+ */
+export class BoardSyncDiscardRequiredError extends Error {
+	constructor(readonly status: IBoardSyncStatus) {
+		super(
+			`Fetching the server board would discard ${status.pendingBatches} queued edit ${
+				status.pendingBatches === 1 ? "batch" : "batches"
+			} that the server has not accepted.`,
+		);
+		this.name = "BoardSyncDiscardRequiredError";
+	}
+}
+
+/**
+ * Command-batch rejections carry an index, an entity id and a rollback trace, which overflow a
+ * toast. The full text stays on the queued row and is shown in the recovery dialog.
+ */
+const MAX_TOAST_FAILURE_CHARS = 160;
+
+/**
  * A stalled queue is only actionable if the user can tell an outage apart from a payload the
  * server will never accept. Surface the transport's own status and message rather than a generic
  * "sync incomplete".
  */
 function describeOfflineSyncFailure(failure?: OfflineSyncFailure): string {
 	if (!failure) return "The server did not accept the queued edits.";
-	if (failure.status === undefined) return failure.message;
-	return `HTTP ${failure.status}: ${failure.message}`;
+	const detail =
+		failure.message.length > MAX_TOAST_FAILURE_CHARS
+			? `${failure.message.slice(0, MAX_TOAST_FAILURE_CHARS).trimEnd()}…`
+			: failure.message;
+	if (failure.status === undefined) return detail;
+	return `HTTP ${failure.status}: ${detail}`;
 }
 
 // Hub configuration cache
@@ -1989,15 +2023,26 @@ export class BoardState implements IBoardState {
 		if (now - lastQueuedEditsToastAt < QUEUED_EDITS_TOAST_DEBOUNCE_MS) return;
 		lastQueuedEditsToastAt = now;
 
-		toast.warning("Server sync is incomplete — your queued edits were kept.", {
+		toast.warning("Server sync is incomplete — queued edits were kept.", {
 			description: describeOfflineSyncFailure(failure),
+			// Two actions plus a transport error do not fit the default toast width.
+			style: {
+				"--width": "min(28rem, calc(100vw - 2rem))",
+			} as CSSProperties,
 			action: {
-				label: "Retry now",
+				label: "Retry",
 				onClick: () => {
 					void this.retryOfflineSync(appId, boardId);
 				},
 			},
+			// A queue the server permanently refuses cannot be retried out of. This opens the
+			// recovery dialog rather than resetting directly — discarding an edit needs consent.
+			cancel: {
+				label: "Fetch from server",
+				onClick: () => dispatchBoardSyncRecoveryRequest(appId, boardId),
+			},
 		});
+		dispatchBoardSyncChanged(appId, boardId);
 	}
 
 	/**
@@ -2233,7 +2278,10 @@ export class BoardState implements IBoardState {
 				// Only a batch the server has provably never seen may be rewritten: the durable
 				// receipt is keyed on the payload digest, so repairing a partially delivered batch
 				// would turn every later retry into an idempotency conflict.
-				if ((commandSync.chunkOffset ?? 0) === 0 && !commandSync.pendingReceiptAck) {
+				if (
+					(commandSync.chunkOffset ?? 0) === 0 &&
+					!commandSync.pendingReceiptAck
+				) {
 					const repaired = await this.repairUnreplayableChunks(
 						appId,
 						boardId,
@@ -2324,7 +2372,161 @@ export class BoardState implements IBoardState {
 			await this.recordLineageAfterPush(appId, boardId);
 		}
 
+		if (pushedBatches > 0 || failed) dispatchBoardSyncChanged(appId, boardId);
+
 		return { failed, pushedBatches, failure };
+	}
+
+	/** The account/Hub a drain would use right now — undefined while signed out. */
+	private currentTransportIdentity(): CommandSyncRemoteIdentity | undefined {
+		if (!this.backend.profile) return undefined;
+		return {
+			remoteIdentityVersion: 1,
+			remoteProfileId: this.backend.profile.id,
+			remotePrincipalId: this.backend.auth?.user?.profile.sub,
+			remoteHub: this.backend.profile.hub,
+		};
+	}
+
+	async getBoardSyncStatus(
+		appId: string,
+		boardId: string,
+	): Promise<IBoardSyncStatus> {
+		try {
+			const rows = await this.backend.getOfflineSyncCommands(appId, boardId);
+			const summary = summarizeBoardSyncQueue(
+				rows,
+				this.currentTransportIdentity() ?? {},
+			);
+			return { supported: true, ...summary };
+		} catch (error) {
+			// The status surface must never be the reason a board fails to render.
+			console.warn("Failed to read the board sync queue:", error);
+			return {
+				supported: true,
+				pendingBatches: 0,
+				blockedBatches: 0,
+				partiallyDeliveredBatches: 0,
+				entries: [],
+			};
+		}
+	}
+
+	async exportBoardSyncArchive(
+		appId: string,
+		boardId: string,
+	): Promise<unknown[]> {
+		return await this.backend.listOfflineSyncArchive(appId, boardId);
+	}
+
+	/**
+	 * Make the server's board authoritative again for a client whose outbox cannot drain.
+	 *
+	 * A queued batch bound to another account/Hub, or one the server permanently rejects, blocks
+	 * every remote→local path for that board and every further edit. Delivery is attempted first,
+	 * the snapshot is fetched before anything is destroyed, and only then — with explicit consent —
+	 * are the undelivered batches archived out of the queue.
+	 */
+	async resetBoardFromServer(
+		appId: string,
+		boardId: string,
+		options: { discardQueuedEdits: boolean },
+	): Promise<IBoardServerResetResult> {
+		const app = await invoke<{ visibility?: IAppVisibility }>("get_app", {
+			appId,
+		});
+		if ((app.visibility ?? IAppVisibility.Offline) === IAppVisibility.Offline) {
+			throw new Error(
+				"This app is local-only, so there is no server board to fetch. Queued edits are the only copy of those changes.",
+			);
+		}
+		// Freeze one authenticated destination for the whole reset: a profile switch midway must
+		// not read the board from a different Hub than the one just validated.
+		const transportProfile = this.backend.profile;
+		const transportAuth = this.backend.auth;
+		if (!transportProfile || !transportAuth?.user?.profile.sub) {
+			throw new Error(
+				"Sign in to fetch the server board — the account and Hub to read it from are unavailable.",
+			);
+		}
+		await this.assertNoPendingNativeBoardDelivery(appId, boardId);
+
+		return await this.sequenceBoardMutation(appId, boardId, async () => {
+			// Anything the server will still accept must be delivered before it can be discarded.
+			const { pushedBatches } = await this.drainOfflineSyncQueue(
+				appId,
+				boardId,
+			);
+
+			const queued = await this.backend.getOfflineSyncCommands(appId, boardId);
+			const discardable = selectDiscardableSyncRows(queued);
+			if (discardable.length > 0 && !options.discardQueuedEdits) {
+				throw new BoardSyncDiscardRequiredError(
+					await this.getBoardSyncStatus(appId, boardId),
+				);
+			}
+
+			// Fetch before discarding: a transport failure then leaves the queue exactly as it was.
+			const remoteData = await fetcher<IBoard>(
+				transportProfile,
+				`apps/${appId}/board/${boardId}`,
+				{ method: "GET" },
+				transportAuth,
+			);
+			if (!remoteData) {
+				throw new Error(
+					`The server returned no board for ${boardId}; nothing was discarded.`,
+				);
+			}
+
+			const discardedBatches = await this.backend.archiveOfflineSyncCommands(
+				appId,
+				boardId,
+				discardable.map((entry) => entry.commandId),
+				"Discarded by an explicit fetch-from-server board reset.",
+			);
+			// The recorded lineage can be newer than every server revision (local clock skew), which
+			// would make the snapshot fetched above be refused by the next background sync.
+			await this.backend.clearBoardLineage(appId, boardId);
+
+			const localBoard = await invoke<IBoard>("get_board", {
+				appId,
+				boardId,
+			}).catch(() => undefined);
+			const { merged } = await mergeBoardOffThread(remoteData, localBoard);
+
+			await invoke("upsert_board", {
+				appId,
+				boardId,
+				name: merged.name,
+				description: merged.description,
+				logLevel: merged.log_level,
+				stage: merged.stage,
+				executionMode: merged.execution_mode,
+				boardData: merged,
+				authoritativeUpdatedAt: remoteData.updated_at,
+			});
+			await this.recordAppliedRemoteLineage(appId, boardId, remoteData);
+
+			this.backend.queryClient?.setQueryData(
+				[this.getBoard.name || "backendFn", appId, boardId],
+				merged,
+			);
+			void this.backend.queryClient?.invalidateQueries({
+				queryKey: [this.getBoards.name || "backendFn", appId],
+			});
+			dispatchRemoteBoardApplied(appId, boardId);
+			dispatchBoardSyncChanged(appId, boardId);
+
+			console.warn("Reset board from the server copy:", {
+				appId,
+				boardId,
+				pushedBatches,
+				discardedBatches,
+			});
+
+			return { board: merged, discardedBatches, pushedBatches };
+		});
 	}
 
 	async retryOfflineSync(
@@ -2413,6 +2615,7 @@ export class BoardState implements IBoardState {
 			toast.info("No queued edits to sync.");
 		}
 
+		dispatchBoardSyncChanged(appId, boardId);
 		return { pushedBatches, remainingBatches };
 	}
 

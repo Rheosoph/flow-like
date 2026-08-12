@@ -195,7 +195,6 @@ export const en = {
 	"design.feature3.desc":
 		"Snapshots of inputs and outputs make finding mismatches straightforward.",
 
-
 	// Portability
 	"portability.tagline": "Lifecycle with context",
 	"portability.headline.start": "Start",

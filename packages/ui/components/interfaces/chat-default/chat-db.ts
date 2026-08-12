@@ -10,7 +10,8 @@ export type IAttachment =
 			preview_text?: string;
 			thumbnail_url?: string;
 			name?: string;
-			size?: number;
+			/** Nullable on the wire: `ComplexAttachment.size` is an `Option<u64>` that serialises as `null`. */
+			size?: number | null;
 			type?: string;
 			anchor?: string;
 			page?: number;

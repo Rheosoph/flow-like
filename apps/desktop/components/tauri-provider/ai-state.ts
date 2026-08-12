@@ -1,4 +1,3 @@
-import { Channel, invoke } from "@tauri-apps/api/core";
 import type {
 	IHistoryMessage,
 	IIntercomEvent,
@@ -6,6 +5,7 @@ import type {
 	IResponseChunk,
 } from "@flow-like/flow-like-ui";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import type { TauriBackend } from "../tauri-provider";
 
 export class AiState implements IAIState {

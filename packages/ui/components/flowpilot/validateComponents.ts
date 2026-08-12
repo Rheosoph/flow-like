@@ -332,6 +332,88 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The action names `ActionHandler.tsx` dispatches. Anything else falls through its `default`
+ * branch into a no-op `userAction`, so the control renders but never runs. Keep in sync with
+ * `executeAction` there and with `BUILTIN_ACTION_NAMES` in the Rust emit_ui validator
+ * (apps/desktop/src-tauri/src/functions/ai/copilot_sdk_tools.rs).
+ */
+export const BUILTIN_ACTION_NAMES = [
+	"workflow_event",
+	"widget_event",
+	"navigate_page",
+	"external_link",
+	"navigate_app_config",
+	"navigate_app_overview",
+	"submit_feedback",
+] as const;
+
+const BUILTIN_ACTION_NAME_SET: ReadonlySet<string> = new Set(
+	BUILTIN_ACTION_NAMES,
+);
+
+/** Routing actions that are inert without their target id. */
+const REQUIRED_ACTION_CONTEXT_KEY: Readonly<Record<string, string>> = {
+	workflow_event: "nodeId",
+	widget_event: "actionId",
+};
+
+/**
+ * Warn about actions the runtime cannot dispatch. This is deliberately non-destructive: the
+ * action is kept so the builder's inspector can still show it as `Custom: <name>` for a human to
+ * repair, while the warning travels back to the model as a tool result so it self-corrects.
+ */
+function warnUnroutableAction(
+	action: Action,
+	componentId: string,
+	path: string,
+	warnings: string[],
+): void {
+	if (!BUILTIN_ACTION_NAME_SET.has(action.name)) {
+		warnings.push(
+			`${componentId}: ${path}.name "${action.name}" is not a built-in action and will not run. The name is a fixed verb, never a board node / event / widget action id — put that id in the context. Valid: ${BUILTIN_ACTION_NAMES.join(", ")}.`,
+		);
+		return;
+	}
+
+	const requiredKey = REQUIRED_ACTION_CONTEXT_KEY[action.name];
+	if (!requiredKey) return;
+	const target = action.context?.[requiredKey];
+	if (typeof target !== "string" || target.trim().length === 0) {
+		warnings.push(
+			`${componentId}: ${path} is a "${action.name}" action without context.${requiredKey}, so it renders a control that does nothing.`,
+		);
+	}
+}
+
+/**
+ * Legacy `actions` stay verbatim — the list is an intentionally permissive extension point, so
+ * entries that are not `{name, context}` objects are left alone. Only named actions the runtime
+ * cannot route are reported, and even those are kept: dropping one would turn a mis-wired control
+ * into a silently action-less one and lose the evidence a human needs to repair it.
+ */
+function reportLegacyActions(
+	value: unknown,
+	componentId: string,
+	warnings: string[],
+): void {
+	if (!Array.isArray(value)) return;
+	for (const [index, rawAction] of value.entries()) {
+		if (!isPlainObject(rawAction) || typeof rawAction.name !== "string") {
+			continue;
+		}
+		warnUnroutableAction(
+			{
+				name: rawAction.name,
+				context: isPlainObject(rawAction.context) ? rawAction.context : {},
+			},
+			componentId,
+			`actions[${index}]`,
+			warnings,
+		);
+	}
+}
+
 function sanitizeEventHandlers(
 	value: unknown,
 	componentId: string,
@@ -396,7 +478,14 @@ function sanitizeEventHandlers(
 				continue;
 			}
 
-			actions.push({ name, context: { ...context } });
+			const action: Action = { name, context: { ...context } };
+			warnUnroutableAction(
+				action,
+				componentId,
+				`eventHandlers.${eventName}[${index}]`,
+				warnings,
+			);
+			actions.push(action);
 		}
 
 		// An authored empty list explicitly suppresses legacy fallback. Do not turn
@@ -492,6 +581,9 @@ export function validateComponents(
 					const handlers = sanitizeEventHandlers(value, componentId, warnings);
 					if (handlers !== undefined) cleaned[key] = handlers;
 				} else {
+					if (key === "actions") {
+						reportLegacyActions(value, componentId, warnings);
+					}
 					cleaned[key] = value;
 				}
 				continue;

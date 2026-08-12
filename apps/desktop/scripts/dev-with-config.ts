@@ -51,7 +51,9 @@ function prepareWindowsPrereqs(): void {
 	if (result.error || result.status !== 0) {
 		const reason =
 			result.error?.message ??
-			(result.signal ? `signal ${result.signal}` : `exit code ${result.status}`);
+			(result.signal
+				? `signal ${result.signal}`
+				: `exit code ${result.status}`);
 		throw new Error(`Failed to prepare Windows prerequisites: ${reason}`);
 	}
 }
@@ -59,8 +61,7 @@ function prepareWindowsPrereqs(): void {
 async function main() {
 	try {
 		if (platform() === "darwin") {
-			process.env.ORT_LIB_LOCATION ??=
-				`${process.cwd()}/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64`;
+			process.env.ORT_LIB_LOCATION ??= `${process.cwd()}/src-tauri/gen/apple/thirdparty/onnxruntime.xcframework/macos-arm64_x86_64`;
 			process.env.MACOSX_DEPLOYMENT_TARGET ??= "14.0";
 		}
 

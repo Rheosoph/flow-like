@@ -1,6 +1,5 @@
 "use client";
 
-import { invoke } from "@tauri-apps/api/core";
 import {
 	IAppVisibility,
 	useBackend,
@@ -9,6 +8,7 @@ import {
 import type { IBeginForkResponse } from "@flow-like/flow-like-ui/components/settings/forking/fork-app-dialog";
 import type { IBeginOfflineForkResponse } from "@flow-like/flow-like-ui/lib/schema/app/fork";
 import type { IProfileApp } from "@flow-like/flow-like-ui/lib/schema/profile/profile";
+import { invoke } from "@tauri-apps/api/core";
 import { useCallback } from "react";
 import { toast } from "sonner";
 import { appsDB } from "./apps-db";

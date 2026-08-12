@@ -1,7 +1,7 @@
-import fs from "node:fs";
-import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -147,7 +147,10 @@ function sortNewestFirst(paths: string[]): string[] {
 	);
 }
 
-function findCaseInsensitiveFile(dir: string, fileName: string): string | undefined {
+function findCaseInsensitiveFile(
+	dir: string,
+	fileName: string,
+): string | undefined {
 	try {
 		const target = fileName.toLowerCase();
 		for (const entry of fs.readdirSync(dir)) {
@@ -385,7 +388,9 @@ function stageDirectMlDll(arch: Architecture, options: CliOptions): void {
 	);
 	if (!options.force && fs.existsSync(destination)) {
 		if (fileHash(source) === fileHash(destination)) {
-			console.log(`Already staged: ${path.relative(process.cwd(), destination)}`);
+			console.log(
+				`Already staged: ${path.relative(process.cwd(), destination)}`,
+			);
 			return;
 		}
 		console.log(
